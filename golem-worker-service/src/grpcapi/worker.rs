@@ -14,18 +14,7 @@
 
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
-use golem_api_grpc::proto::golem::worker::{
-    complete_promise_response, delete_worker_response, get_worker_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
-    DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse,
-};
+use golem_api_grpc::proto::golem::worker::{complete_promise_response, delete_worker_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, InvokeResultTyped};
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvokeResult, WorkerError as GrpcWorkerError,
     WorkerExecutionError, WorkerMetadata,
@@ -398,7 +387,7 @@ impl WorkerGrpcApi {
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
-    ) -> Result<InvokeResult, GrpcWorkerError> {
+    ) -> Result<InvokeResultTyped, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         let params = request

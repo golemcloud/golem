@@ -28,7 +28,7 @@ use crate::service::component::ComponentService;
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{InvokeResultTyped as ProtoInvokeResult, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
@@ -457,9 +457,9 @@ where
 
         results_val
             .result
-            .validate_function_result(function_results, *calling_convention)
+            .ok_or(WorkerServiceError::TypeChecker("Empty result".to_string()))
             .map(|result| TypedResult {
-                result,
+                result: result,
                 function_result_types: function_type.results,
             })
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
@@ -1266,5 +1266,49 @@ where
             worker_name: worker_id.worker_name.to_json_string(),
         };
         Err(WorkerServiceError::WorkerNotFound(worker_id))
+    }
+}
+
+// TODO; Not needed once TypeAnnotatedValue is in wasm-rpc proto files
+mod internal {
+    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_api_grpc::proto::golem::worker::type_annotated_value::Value as ProtoTypeAnnotatedvalue;
+
+    fn conver_to_type_annotated_value(type_annotated_value: ProtoTypeAnnotatedvalue) -> TypeAnnotatedValue {
+        match type_annotated_value {
+            ProtoTypeAnnotatedvalue::Tuple(t) => TypeAnnotatedValue::Tuple {
+                value: t.value.into_iter().map(conver_to_type_annotated_value).collect(),
+                typ: t.typ.into_iter().map(conver_to_type_annotated_value).collect(),
+            },
+            ProtoTypeAnnotatedvalue::ListValue(l) => TypeAnnotatedValue::List {
+                value: l.value.into_iter().map(conver_to_type_annotated_value).collect(),
+                typ: l.typ.into_iter().map(conver_to_type_annotated_value).collect(),
+            },
+
+            ProtoTypeAnnotatedvalue::RecordValue(s) => TypeAnnotatedValue::Record {
+                value: s.value.into_iter().map(|(k, v)| (k, conver_to_type_annotated_value(v))).collect(),
+                typ: s.typ.into_iter().map(conver_to_type_annotated_value).collect(),
+            },
+            ProtoTypeAnnotatedvalue::FlagsValue(f) => TypeAnnotatedValue::Flags {
+                values: f.values,
+                typ: f.typ
+            },
+            ProtoTypeAnnotatedvalue::OptionValue(o) => TypeAnnotatedValue::Option {
+                value: o.value.map(|v| Box::new(conver_to_type_annotated_value(*v))),
+                typ: o.typ.map(|v| Box::new(conver_to_type_annotated_value(*v))),
+            },
+            ProtoTypeAnnotatedvalue::BoolValue(value) => TypeAnnotatedValue::Bool(value),
+            ProtoTypeAnnotatedvalue::U8Value(value) => TypeAnnotatedValue::U8(value),
+            ProtoTypeAnnotatedvalue::U16Value(value) => TypeAnnotatedValue::U16(value),
+            ProtoTypeAnnotatedvalue::U32Value(value) => TypeAnnotatedValue::U32(value),
+            ProtoTypeAnnotatedvalue::U64Value(value) => TypeAnnotatedValue::U64(value),
+            ProtoTypeAnnotatedvalue::S8Value(value) => TypeAnnotatedValue::S8(value),
+            ProtoTypeAnnotatedvalue::S16Value(value) => TypeAnnotatedValue::S16(value),
+            ProtoTypeAnnotatedvalue::S32Value(value) => TypeAnnotatedValue::S32(value),
+            ProtoTypeAnnotatedvalue::S64Value(value) => TypeAnnotatedValue::S64(value),
+            ProtoTypeAnnotatedvalue::F32Value(value) => TypeAnnotatedValue::F32(value),
+            ProtoTypeAnnotatedvalue::F64Value(value) => TypeAnnotatedValue::F64(value),
+
+        }
     }
 }
