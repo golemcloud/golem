@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Value;
-use golem_wasm_ast::analysis::AnalysedFunctionParameter;
+use crate::protobuf::typed_result::ResultValue;
+use crate::{Uri, Value};
+use golem_wasm_ast::analysis::{
+    AnalysedFunctionParameter, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+};
+use std::ops::Deref;
 include!(concat!(env!("OUT_DIR"), "/wasm.rpc.rs"));
 
 // Conversion from WIT WitValue to Protobuf WitValue
@@ -56,10 +60,7 @@ impl From<super::WitNode> for WitNode {
             super::WitNode::ResultValue(type_idx) => WitNode {
                 value: Some(wit_node::Value::Result(WitResultNode {
                     discriminant: if type_idx.is_ok() { 0 } else { 1 },
-                    value: match type_idx {
-                        Ok(index) => index,
-                        Err(index) => index,
-                    },
+                    value: type_idx.unwrap_or_else(|index| index),
                 })),
             },
             super::WitNode::PrimU8(value) => WitNode {
@@ -224,6 +225,505 @@ impl From<super::WitValue> for Val {
     fn from(value: super::WitValue) -> Self {
         let value: Value = value.into();
         value.into()
+    }
+}
+
+impl TryFrom<&type_annotated_value::TypeAnnotatedValue> for Type {
+    type Error = String;
+
+    fn try_from(value: &type_annotated_value::TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let r#type = match value {
+            type_annotated_value::TypeAnnotatedValue::Bool(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Bool as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::S8(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::S8 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::U8(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::U8 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::S16(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::S16 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::U16(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::U16 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::S32(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::S32 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::U32(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::U32 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::S64(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::S64 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::U64(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::U64 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::F32(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::F32 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::F64(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::F64 as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::Char(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Chr as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::Str(_) => {
+                Ok(r#type::Type::Primitive(TypePrimitive {
+                    primitive: PrimitiveType::Str as i32,
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::List(TypedList { typ, values: _ }) => {
+                if let Some(typ) = typ.clone() {
+                    Ok(r#type::Type::List(Box::new(TypeList {
+                        elem: Some(Box::new(typ)),
+                    })))
+                } else {
+                    Err("Missing type for List".to_string())
+                }
+            }
+            type_annotated_value::TypeAnnotatedValue::Tuple(TypedTuple { typ, value: _ }) => {
+                Ok(r#type::Type::Tuple(TypeTuple { elems: typ.clone() }))
+            }
+            type_annotated_value::TypeAnnotatedValue::Record(TypedRecord { typ, value: _ }) => {
+                Ok(r#type::Type::Record(TypeRecord {
+                    fields: typ.clone(),
+                }))
+            }
+            type_annotated_value::TypeAnnotatedValue::Flags(TypedFlags { typ, values: _ }) => {
+                Ok(r#type::Type::Flags(TypeFlags { names: typ.clone() }))
+            }
+            type_annotated_value::TypeAnnotatedValue::Enum(TypedEnum { typ, value: _ }) => {
+                Ok(r#type::Type::Enum(TypeEnum { names: typ.clone() }))
+            }
+            type_annotated_value::TypeAnnotatedValue::Option(option) => {
+                let typ = option.typ.clone();
+                Ok(r#type::Type::Option(Box::new(TypeOption {
+                    elem: typ.map(Box::new),
+                })))
+            }
+            type_annotated_value::TypeAnnotatedValue::Result(result0) => {
+                Ok(r#type::Type::Result(Box::new(TypeResult {
+                    ok: result0.ok.clone().map(Box::new),
+                    err: result0.error.clone().map(Box::new),
+                })))
+            }
+            type_annotated_value::TypeAnnotatedValue::Handle(TypedHandle { typ, .. }) => {
+                if let Some(typ) = typ.clone() {
+                    Ok(r#type::Type::Handle(typ))
+                } else {
+                    Err("Missing type for Handle".to_string())
+                }
+            }
+            type_annotated_value::TypeAnnotatedValue::Variant(variant) => {
+                if let Some(typ) = variant.clone().typ {
+                    Ok(r#type::Type::Variant(typ))
+                } else {
+                    Err("Missing type for Variant".to_string())
+                }
+            }
+        };
+
+        r#type.map(|r#type| Type {
+            r#type: Some(r#type),
+        })
+    }
+}
+
+impl TryFrom<&type_annotated_value::TypeAnnotatedValue> for AnalysedType {
+    type Error = String;
+    fn try_from(value: &type_annotated_value::TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let typ = Type::try_from(value)?;
+        AnalysedType::try_from(&typ)
+    }
+}
+
+impl TryFrom<type_annotated_value::TypeAnnotatedValue> for super::WitValue {
+    type Error = String;
+
+    fn try_from(value: type_annotated_value::TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let value: Value = value.try_into()?;
+        Ok(super::WitValue::from(value))
+    }
+}
+
+impl TryFrom<&Type> for AnalysedType {
+    type Error = String;
+
+    fn try_from(typ: &Type) -> Result<Self, Self::Error> {
+        match &typ.r#type {
+            Some(r#type::Type::Primitive(primitive)) => {
+                match PrimitiveType::try_from(primitive.primitive) {
+                    Ok(PrimitiveType::Bool) => Ok(AnalysedType::Bool),
+                    Ok(PrimitiveType::S8) => Ok(AnalysedType::S8),
+                    Ok(PrimitiveType::U8) => Ok(AnalysedType::U8),
+                    Ok(PrimitiveType::S16) => Ok(AnalysedType::S16),
+                    Ok(PrimitiveType::U16) => Ok(AnalysedType::U16),
+                    Ok(PrimitiveType::S32) => Ok(AnalysedType::S32),
+                    Ok(PrimitiveType::U32) => Ok(AnalysedType::U32),
+                    Ok(PrimitiveType::S64) => Ok(AnalysedType::S64),
+                    Ok(PrimitiveType::U64) => Ok(AnalysedType::U64),
+                    Ok(PrimitiveType::F32) => Ok(AnalysedType::F32),
+                    Ok(PrimitiveType::F64) => Ok(AnalysedType::F64),
+                    Ok(PrimitiveType::Chr) => Ok(AnalysedType::Chr),
+                    Ok(PrimitiveType::Str) => Ok(AnalysedType::Str),
+                    Err(_) => Err("Unknown primitive type".to_string()),
+                }
+            }
+            Some(r#type::Type::List(inner)) => {
+                let elem_type = inner
+                    .elem
+                    .as_ref()
+                    .ok_or_else(|| "List element type is None".to_string())?;
+                let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
+                Ok(AnalysedType::List(Box::new(analysed_type)))
+            }
+            Some(r#type::Type::Tuple(inner)) => {
+                let elems = inner
+                    .elems
+                    .iter()
+                    .map(AnalysedType::try_from)
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(AnalysedType::Tuple(elems))
+            }
+            Some(r#type::Type::Record(inner)) => {
+                let fields = inner
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let field_type = field
+                            .typ
+                            .as_ref()
+                            .ok_or_else(|| format!("Record field {} type is None", field.name))?;
+                        let analysed_type = AnalysedType::try_from(field_type)?;
+                        Ok((field.name.clone(), analysed_type))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(AnalysedType::Record(fields))
+            }
+            Some(r#type::Type::Flags(inner)) => Ok(AnalysedType::Flags(inner.names.clone())),
+            Some(r#type::Type::Enum(inner)) => Ok(AnalysedType::Enum(inner.names.clone())),
+            Some(r#type::Type::Option(inner)) => {
+                let elem_type = inner
+                    .elem
+                    .as_ref()
+                    .ok_or_else(|| "Option element type is None".to_string())?;
+                let analysed_type = AnalysedType::try_from(elem_type.as_ref())?;
+                Ok(AnalysedType::Option(Box::new(analysed_type)))
+            }
+            Some(r#type::Type::Result(inner)) => {
+                let ok_type = inner
+                    .ok
+                    .as_ref()
+                    .map(|tpe| AnalysedType::try_from(tpe.as_ref()))
+                    .transpose()?;
+                let err_type = inner
+                    .err
+                    .as_ref()
+                    .map(|tpe| AnalysedType::try_from(tpe.as_ref()))
+                    .transpose()?;
+                Ok(AnalysedType::Result {
+                    ok: ok_type.map(Box::new),
+                    error: err_type.map(Box::new),
+                })
+            }
+            Some(r#type::Type::Variant(inner)) => {
+                let cases = inner
+                    .cases
+                    .iter()
+                    .map(|case| {
+                        let case_type =
+                            case.typ.as_ref().map(AnalysedType::try_from).transpose()?;
+                        Ok((case.name.clone(), case_type))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(AnalysedType::Variant(cases))
+            }
+            Some(r#type::Type::Handle(inner)) => {
+                let resource_mode = match inner.mode {
+                    0 => Ok(AnalysedResourceMode::Owned),
+                    1 => Ok(AnalysedResourceMode::Borrowed),
+                    _ => Err("Invalid resource mode".to_string()),
+                }?;
+                Ok(AnalysedType::Resource {
+                    id: AnalysedResourceId {
+                        value: inner.resource_id,
+                    },
+                    resource_mode,
+                })
+            }
+            None => Err("Type is None".to_string()),
+        }
+    }
+}
+
+impl From<&AnalysedType> for Type {
+    fn from(value: &AnalysedType) -> Type {
+        let r#type = match value {
+            AnalysedType::Bool => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::Bool as i32,
+            })),
+            AnalysedType::S8 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::S8 as i32,
+            })),
+            AnalysedType::U8 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::U8 as i32,
+            })),
+            AnalysedType::S16 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::S16 as i32,
+            })),
+            AnalysedType::U16 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::U16 as i32,
+            })),
+            AnalysedType::S32 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::S32 as i32,
+            })),
+            AnalysedType::U32 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::U32 as i32,
+            })),
+            AnalysedType::S64 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::S64 as i32,
+            })),
+            AnalysedType::U64 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::U64 as i32,
+            })),
+            AnalysedType::F32 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::F32 as i32,
+            })),
+            AnalysedType::F64 => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::F64 as i32,
+            })),
+            AnalysedType::Chr => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::Chr as i32,
+            })),
+            AnalysedType::Str => Some(r#type::Type::Primitive(TypePrimitive {
+                primitive: PrimitiveType::Str as i32,
+            })),
+            AnalysedType::List(inner) => Some(r#type::Type::List(Box::new(TypeList {
+                elem: Some(Box::new(Type::from(inner.deref()))),
+            }))),
+            AnalysedType::Tuple(elems) => Some(r#type::Type::Tuple(TypeTuple {
+                elems: elems
+                    .iter()
+                    .map(|analysed_type| analysed_type.into())
+                    .collect(),
+            })),
+            AnalysedType::Record(fields) => Some(r#type::Type::Record(TypeRecord {
+                fields: fields
+                    .iter()
+                    .map(|(name, analysed_type)| NameTypePair {
+                        name: name.clone(),
+                        typ: Some(analysed_type.into()),
+                    })
+                    .collect(),
+            })),
+            AnalysedType::Flags(names) => Some(r#type::Type::Flags(TypeFlags {
+                names: names.clone(),
+            })),
+            AnalysedType::Enum(names) => Some(r#type::Type::Enum(TypeEnum {
+                names: names.clone(),
+            })),
+            AnalysedType::Option(inner) => Some(r#type::Type::Option(Box::new(TypeOption {
+                elem: Some(Box::new(Type::from(inner.deref()))),
+            }))),
+            AnalysedType::Result { ok, error } => {
+                Some(r#type::Type::Result(Box::new(TypeResult {
+                    ok: ok
+                        .clone()
+                        .map(|ok_type| Box::new(Type::from(ok_type.as_ref()))),
+                    err: error
+                        .clone()
+                        .map(|err_type| Box::new(Type::from(err_type.as_ref()))),
+                })))
+            }
+            AnalysedType::Variant(cases) => Some(r#type::Type::Variant(TypeVariant {
+                cases: cases
+                    .iter()
+                    .map(|(name, typ)| NameOptionTypePair {
+                        name: name.clone(),
+                        typ: typ.as_ref().map(|analysed_type| analysed_type.into()),
+                    })
+                    .collect(),
+            })),
+            AnalysedType::Resource { id, resource_mode } => {
+                Some(r#type::Type::Handle(TypeHandle {
+                    resource_id: id.value,
+                    mode: match resource_mode {
+                        AnalysedResourceMode::Owned => 0,
+                        AnalysedResourceMode::Borrowed => 1,
+                    },
+                }))
+            }
+        };
+
+        Type { r#type }
+    }
+}
+
+impl TryFrom<type_annotated_value::TypeAnnotatedValue> for Value {
+    type Error = String;
+
+    fn try_from(value: type_annotated_value::TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        match value {
+            type_annotated_value::TypeAnnotatedValue::Bool(value) => Ok(Value::Bool(value)),
+            type_annotated_value::TypeAnnotatedValue::S8(value) => Ok(Value::S8(value as i8)),
+            type_annotated_value::TypeAnnotatedValue::U8(value) => Ok(Value::U8(value as u8)),
+            type_annotated_value::TypeAnnotatedValue::S16(value) => Ok(Value::S16(value as i16)),
+            type_annotated_value::TypeAnnotatedValue::U16(value) => Ok(Value::U16(value as u16)),
+            type_annotated_value::TypeAnnotatedValue::S32(value) => Ok(Value::S32(value)),
+            type_annotated_value::TypeAnnotatedValue::U32(value) => Ok(Value::U32(value)),
+            type_annotated_value::TypeAnnotatedValue::S64(value) => Ok(Value::S64(value)),
+            type_annotated_value::TypeAnnotatedValue::U64(value) => Ok(Value::U64(value)),
+            type_annotated_value::TypeAnnotatedValue::F32(value) => Ok(Value::F32(value)),
+            type_annotated_value::TypeAnnotatedValue::F64(value) => Ok(Value::F64(value)),
+            type_annotated_value::TypeAnnotatedValue::Char(value) => char::from_u32(value as u32)
+                .map(Value::Char)
+                .ok_or_else(|| "Invalid char value".to_string()),
+            type_annotated_value::TypeAnnotatedValue::Str(value) => Ok(Value::String(value)),
+            type_annotated_value::TypeAnnotatedValue::List(TypedList { typ: _, values }) => {
+                let mut list_values = Vec::new();
+                for value in values {
+                    let type_annotated_value = value
+                        .clone()
+                        .type_annotated_value
+                        .ok_or_else(|| "Missing type_annotated_value in List".to_string())?;
+                    list_values.push(type_annotated_value.try_into()?);
+                }
+                Ok(Value::List(list_values))
+            }
+            type_annotated_value::TypeAnnotatedValue::Tuple(TypedTuple { typ: _, value }) => {
+                let mut tuple_values = Vec::new();
+                for value in value {
+                    let type_annotated_value = value
+                        .type_annotated_value
+                        .ok_or_else(|| "Missing type_annotated_value in Tuple".to_string())?;
+                    tuple_values.push(type_annotated_value.try_into()?);
+                }
+                Ok(Value::Tuple(tuple_values))
+            }
+            type_annotated_value::TypeAnnotatedValue::Record(TypedRecord { typ: _, value }) => {
+                let mut record_values = Vec::new();
+                for name_value in value {
+                    let type_annotated_value = name_value
+                        .value
+                        .ok_or_else(|| "Missing value in Record".to_string())?
+                        .type_annotated_value
+                        .ok_or_else(|| "Missing type_annotated_value in Record".to_string())?;
+                    record_values.push(type_annotated_value.try_into()?);
+                }
+                Ok(Value::Record(record_values))
+            }
+            type_annotated_value::TypeAnnotatedValue::Flags(TypedFlags { typ, values }) => {
+                let mut bools = Vec::new();
+                for expected_flag in typ {
+                    bools.push(values.contains(&expected_flag));
+                }
+                Ok(Value::Flags(bools))
+            }
+            type_annotated_value::TypeAnnotatedValue::Enum(TypedEnum { typ, value }) => typ
+                .iter()
+                .position(|expected_enum| expected_enum == &value)
+                .map(|index| Value::Enum(index as u32))
+                .ok_or_else(|| "Enum value not found in the list of expected enums".to_string()),
+            type_annotated_value::TypeAnnotatedValue::Option(option) => match option.value {
+                Some(value) => {
+                    let type_annotated_value = value
+                        .type_annotated_value
+                        .ok_or_else(|| "Missing type_annotated_value in Option".to_string())?;
+                    let value = type_annotated_value.try_into()?;
+                    Ok(Value::Option(Some(Box::new(value))))
+                }
+                None => Ok(Value::Option(None)),
+            },
+            type_annotated_value::TypeAnnotatedValue::Result(result) => {
+                let value = result
+                    .result_value
+                    .ok_or_else(|| "Missing value in Result".to_string())?;
+
+                match value {
+                    ResultValue::OkValue(ok_value) => {
+                        let type_annotated_value =
+                            ok_value.type_annotated_value.ok_or_else(|| {
+                                "Missing type_annotated_value in Result Ok".to_string()
+                            })?;
+                        let value = type_annotated_value.try_into()?;
+                        Ok(Value::Result(Ok(Some(Box::new(value)))))
+                    }
+
+                    ResultValue::ErrorValue(err_value) => {
+                        let type_annotated_value =
+                            err_value.type_annotated_value.ok_or_else(|| {
+                                "Missing type_annotated_value in Result Err".to_string()
+                            })?;
+                        let value = type_annotated_value.try_into()?;
+                        Ok(Value::Result(Err(Some(Box::new(value)))))
+                    }
+                }
+            }
+            type_annotated_value::TypeAnnotatedValue::Handle(handle) => Ok(Value::Handle {
+                uri: Uri { value: handle.uri },
+                resource_id: handle.resource_id,
+            }),
+            type_annotated_value::TypeAnnotatedValue::Variant(variant) => {
+                let case_value = variant.case_value;
+                let case_name = variant.case_name;
+                let typ = variant
+                    .typ
+                    .ok_or_else(|| "Missing typ in Variant".to_string())?
+                    .cases
+                    .iter()
+                    .map(|nt| (nt.name.clone(), nt.typ.clone()))
+                    .collect::<Vec<_>>();
+
+                let case_idx = typ
+                    .iter()
+                    .position(|(name, _)| name == &case_name)
+                    .ok_or_else(|| "Case name not found in Variant".to_string())?
+                    as u32;
+
+                match case_value {
+                    Some(value) => {
+                        let type_annotated_value = value
+                            .type_annotated_value
+                            .ok_or_else(|| "Missing type_annotated_value in Variant".to_string())?;
+                        let result = type_annotated_value.try_into()?;
+                        Ok(Value::Variant {
+                            case_idx,
+                            case_value: Some(Box::new(result)),
+                        })
+                    }
+                    None => Ok(Value::Variant {
+                        case_idx,
+                        case_value: None,
+                    }),
+                }
+            }
+        }
     }
 }
 
