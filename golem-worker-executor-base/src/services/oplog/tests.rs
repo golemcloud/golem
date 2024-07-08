@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
+use assert2::check;
+use nonempty_collections::nev;
+use tracing::{debug, info};
+use uuid::Uuid;
+
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
 use crate::storage::blob::memory::InMemoryBlobStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
-use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::ComponentId;
 use golem_common::redis::RedisPool;
-use nonempty_collections::nev;
-use tracing::{debug, info};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
-use uuid::Uuid;
+use golem_common::tracing::{init_tracing, TracingConfig};
+
+use super::*;
 
 fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
@@ -567,14 +567,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
 }
 
 fn init_logging() {
-    let ansi_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(true)
-        .with_filter(
-            EnvFilter::builder()
-                .with_default_directive("debug".parse().unwrap())
-                .from_env_lossy(),
-        );
-    let _ = tracing_subscriber::registry().with(ansi_layer).try_init();
+    init_tracing(&TracingConfig::local_dev("op-log-tests"), |_output| {
+        golem_common::tracing::filter::boxed::debug_env_with_directives(Vec::new())
+    });
 }
 
 #[tokio::test]

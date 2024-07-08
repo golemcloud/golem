@@ -17,13 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ctor::{ctor, dtor};
-use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use tracing::Level;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::rdb::Rdb;
@@ -221,29 +218,9 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        // let console_layer = console_subscriber::spawn().with_filter(
-        //     EnvFilter::try_new("trace").unwrap()
-        //);
-        let ansi_layer = tracing_subscriber::fmt::layer()
-            .event_format(tracing_subscriber::fmt::format().without_time().pretty())
-            .with_ansi(true)
-            .with_filter(
-                EnvFilter::builder()
-                    .with_default_directive("debug".parse().unwrap())
-                    .from_env_lossy()
-                    .add_directive("cranelift_codegen=warn".parse().unwrap())
-                    .add_directive("wasmtime_cranelift=warn".parse().unwrap())
-                    .add_directive("wasmtime_jit=warn".parse().unwrap())
-                    .add_directive("h2=warn".parse().unwrap())
-                    .add_directive("hyper=warn".parse().unwrap())
-                    .add_directive("tower=warn".parse().unwrap())
-                    .add_directive("fred=warn".parse().unwrap()),
-            );
-
-        tracing_subscriber::registry()
-            // .with(console_layer) // Uncomment this to use tokio-console. Also needs RUSTFLAGS="--cfg tokio_unstable"
-            .with(ansi_layer)
-            .init();
+        init_tracing_with_default_debug_env_filter(&TracingConfig::local_dev(
+            "worker-executor-tests-base",
+        ));
 
         Self
     }

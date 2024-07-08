@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use clap::{Parser, Subcommand};
+use golem_common::tracing::{init_tracing, TracingConfig};
+use itertools::Itertools;
+use tracing::Level;
+
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
@@ -53,16 +63,6 @@ use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{TestDependencies, TestService};
 use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
-use clap::{Parser, Subcommand};
-use itertools::Itertools;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-use tracing::Level;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
 
 /// Test dependencies created from command line arguments
 ///
@@ -315,15 +315,15 @@ impl TestMode {
 
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
-        // console_subscriber::init();
-
-        let ansi_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(true)
-            .with_filter(
-                EnvFilter::try_new(format!("{},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn,fred=warn", params.default_log_level())).unwrap()
-            );
-
-        tracing_subscriber::registry().with(ansi_layer).init();
+        init_tracing(&TracingConfig::local_dev("cli-tests"), |_output| {
+            golem_common::tracing::filter::boxed::env_with_directives(
+                params
+                    .default_log_level()
+                    .parse()
+                    .expect("Failed to parse log cli test log level"),
+                golem_common::tracing::directive::default_deps(),
+            )
+        });
     }
 
     async fn make_docker(
