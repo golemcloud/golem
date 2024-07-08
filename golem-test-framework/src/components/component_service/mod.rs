@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::component::component_service_client::Component
 use golem_common::model::ComponentId;
 
 use crate::components::rdb::Rdb;
-use crate::components::wait_for_startup_grpc;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 
 pub mod docker;
 pub mod filesystem;
@@ -314,45 +314,31 @@ fn env_vars(
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
-    let vars: &[(&str, &str)] = &[
-        ("RUST_LOG"                     , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
-        ("RUST_BACKTRACE"               , "1"),
-        ("GOLEM__COMPONENT_STORE__TYPE", "Local"),
-        ("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", ""),
-        ("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "/tmp/ittest-local-object-store/golem"),
-        ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT", &http_port.to_string()),
-    ];
-
-    let mut vars: HashMap<String, String> =
-        HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    let mut builder = EnvVarBuilder::golem_service(verbosity)
+        .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
+        .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
+        .with_str(
+            "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
+            "/tmp/ittest-local-object-store/golem",
+        )
+        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_all(rdb.info().env("golem_component"));
 
     match component_compilation_service {
         Some((host, port)) => {
-            vars.insert(
-                "GOLEM__COMPILATION__TYPE".to_string(),
-                "Enabled".to_string(),
-            );
-            vars.insert(
-                "GOLEM__COMPILATION__CONFIG__HOST".to_string(),
-                host.to_string(),
-            );
-            vars.insert(
-                "GOLEM__COMPILATION__CONFIG__PORT".to_string(),
-                port.to_string(),
-            );
+            builder = builder
+                .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
+                .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
+                .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
         }
         _ => {
-            vars.insert(
-                "GOLEM__COMPILATION__TYPE".to_string(),
-                "Disabled".to_string(),
-            );
+            builder = builder
+                .with_str("GOLEM__COMPILATION__TYPE", "Disabled")
         }
     };
 
-    vars.extend(rdb.info().env("golem_component").clone());
-    vars
+    builder.build()
 }
 
 #[derive(Debug)]

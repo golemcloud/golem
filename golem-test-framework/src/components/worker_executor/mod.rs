@@ -25,8 +25,8 @@ use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::Worker
 use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::wait_for_startup_grpc;
 use crate::components::worker_service::WorkerService;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 
 pub mod docker;
 pub mod k8s;
@@ -80,37 +80,76 @@ fn env_vars(
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
-
-    let vars: &[(&str, &str)] = &[
-        ("RUST_LOG"                                      , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
-        ("ENVIRONMENT"                    , "local"),
-        ("WASMTIME_BACKTRACE_DETAILS"                    , "1"),
-        ("RUST_BACKTRACE"                                , "1"),
-        ("GOLEM__KEY_VALUE_STORAGE__TYPE"                , "Redis"),
-        ("GOLEM__INDEXED_STORAGE__TYPE"                  , "KVStoreRedis"),
-        ("GOLEM__BLOB_STORAGE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem"),
-        ("GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST"        , &redis.private_host()),
-        ("GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT"        , &redis.private_port().to_string()),
-        ("GOLEM__KEY_VALUE_STORAGE__CONFIG__PREFIX"      , redis.prefix()),
-        ("GOLEM__BLOB_STORAGE__TYPE"                     , "LocalFileSystem"),
-        ("GOLEM__PUBLIC_WORKER_API__HOST"                , &worker_service.private_host()),
-        ("GOLEM__PUBLIC_WORKER_API__PORT"                , &worker_service.private_grpc_port().to_string()),
-        ("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN"        , "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__COMPONENT_SERVICE__CONFIG__HOST"        , &component_service.private_host()),
-        ("GOLEM__COMPONENT_SERVICE__CONFIG__PORT"        , &component_service.private_grpc_port().to_string()),
-        ("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE"       , "Enabled"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__TYPE"            , "Grpc"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST"    , &shard_manager.private_host()),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT"    , &shard_manager.private_grpc_port().to_string()),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS"    , "5"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY"    , "100ms"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY"    , "2s"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER"    , "2"),
-        ("GOLEM__PORT"                                   , &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT"                              , &http_port.to_string()),
-    ];
-
-    HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+    EnvVarBuilder::golem_service(verbosity)
+        .with_str("ENVIRONMENT", "local")
+        .with_str("WASMTIME_BACKTRACE_DETAILS", "1")
+        .with_str("GOLEM__KEY_VALUE_STORAGE__TYPE", "Redis")
+        .with_str("GOLEM__INDEXED_STORAGE__TYPE", "KVStoreRedis")
+        .with_str(
+            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "/tmp/ittest-local-object-store/golem",
+        )
+        .with_str(
+            "GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST",
+            &redis.private_host(),
+        )
+        .with_str(
+            "GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT",
+            &redis.private_port().to_string(),
+        )
+        .with_str("GOLEM__KEY_VALUE_STORAGE__CONFIG__PREFIX", redis.prefix())
+        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str(
+            "GOLEM__PUBLIC_WORKER_API__HOST",
+            &worker_service.private_host(),
+        )
+        .with(
+            "GOLEM__PUBLIC_WORKER_API__PORT",
+            worker_service.private_grpc_port().to_string(),
+        )
+        .with_str(
+            "GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN",
+            "2A354594-7A63-4091-A46B-CC58D379F677",
+        )
+        .with_str(
+            "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
+            &component_service.private_host(),
+        )
+        .with(
+            "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
+            component_service.private_grpc_port().to_string(),
+        )
+        .with_str(
+            "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
+            "2A354594-7A63-4091-A46B-CC58D379F677",
+        )
+        .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
+        .with_str("GOLEM__SHARD_MANAGER_SERVICE__TYPE", "Grpc")
+        .with_str(
+            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST",
+            &shard_manager.private_host(),
+        )
+        .with(
+            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT",
+            shard_manager.private_grpc_port().to_string(),
+        )
+        .with_str(
+            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS",
+            "5",
+        )
+        .with_str(
+            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY",
+            "100ms",
+        )
+        .with_str(
+            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY",
+            "2s",
+        )
+        .with_str(
+            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
+            "2",
+        )
+        .with("GOLEM__PORT", grpc_port.to_string())
+        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .build()
 }
