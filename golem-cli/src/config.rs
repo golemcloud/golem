@@ -20,11 +20,13 @@ use derive_more::FromStr;
 use indoc::printdoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::warn;
 use url::Url;
 
@@ -275,5 +277,51 @@ impl Config {
             .ok_or(GolemError(format!("Profile {name} not found")))?;
 
         config.store_file(config_dir)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpClientConfig {
+    pub timeout: Option<Duration>,
+    pub connect_timeout: Option<Duration>,
+    pub read_timeout: Option<Duration>,
+}
+
+impl HttpClientConfig {
+    pub fn env() -> Self {
+        fn env_duration(name: &str) -> Option<Duration> {
+            let duration_str = std::env::var(name).ok()?;
+            Some(iso8601::duration(&duration_str).ok()?.into())
+        }
+
+        let timeout = env_duration("GOLEM_TIMEOUT");
+        let connect_timeout = env_duration("GOLEM_CONNECT_TIMEOUT");
+        let read_timeout = env_duration("GOLEM_READ_TIMEOUT");
+
+        Self {
+            timeout,
+            connect_timeout,
+            read_timeout,
+        }
+    }
+
+    pub fn health_check() -> Self {
+        fn min_opt(d1: Duration, opt_d2: Option<Duration>) -> Duration {
+            match opt_d2 {
+                None => d1,
+                Some(d2) => min(d1, d2),
+            }
+        }
+
+        let from_env = Self::env();
+
+        let timeout = Some(min_opt(Duration::from_secs(2), from_env.timeout));
+        let connect_timeout = Some(min_opt(Duration::from_secs(1), from_env.connect_timeout));
+        let read_timeout = Some(min_opt(Duration::from_secs(1), from_env.read_timeout));
+        Self {
+            timeout,
+            connect_timeout,
+            read_timeout,
+        }
     }
 }
