@@ -3,9 +3,9 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cloud_common::model::{ProjectAction, ProjectActions};
+use cloud_common::model::{ProjectAction, ProjectActions, Role};
 use cloud_common::model::{ProjectAuthorisedActions, ProjectPolicyId};
-use golem_common::model::ProjectId;
+use golem_common::model::{AccountId, ProjectId};
 use tracing::info;
 
 use crate::auth::AccountAuthorisation;
@@ -101,14 +101,13 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError> {
         info!("Get project authorisations for project: {}", project_id);
-
         let project = self.project_repo.get(&project_id.0).await?;
-
         if let Some(project) = project {
-            if project.owner_account_id == auth.token.account_id.value {
+            let owner_account_id = AccountId::from(project.owner_account_id.as_str());
+            if auth.has_account_or_role(&owner_account_id, &Role::Admin) {
                 Ok(ProjectAuthorisedActions {
                     project_id: project_id.clone(),
-                    owner_account_id: auth.token.account_id.clone(),
+                    owner_account_id,
                     actions: ProjectActions::all(),
                 })
             } else {
@@ -137,7 +136,7 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
 
                 Ok(ProjectAuthorisedActions {
                     project_id: project_id.clone(),
-                    owner_account_id: auth.token.account_id.clone(),
+                    owner_account_id,
                     actions,
                 })
             }
