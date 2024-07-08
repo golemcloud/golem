@@ -20,6 +20,15 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 
 mod worker;
 
+struct Tracing;
+
+impl Tracing {
+    pub fn init() -> Self {
+        init_tracing_with_default_debug_env_filter(&TracingConfig::local_dev("integration-tests"));
+        Self
+    }
+}
+
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
     let deps = EnvBasedTestDependencies::blocking_new(3);
@@ -45,6 +54,4 @@ unsafe fn drop_deps() {
 // cannot access a Thread Local Storage value during or after destruction: AccessError
 // This will be solved by our new test library in the future
 #[ctor]
-pub static TRACING: () = {
-    init_tracing_with_default_debug_env_filter(&TracingConfig::local_dev("integration-tests"));
-};
+pub static TRACING: Tracing = Tracing::init();
