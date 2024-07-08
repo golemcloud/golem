@@ -126,7 +126,7 @@ impl TracingConfig {
             stdout: OutputConfig::text_ansi(),
             file: OutputConfig {
                 enabled: false,
-                ..OutputConfig::json_flatten()
+                ..OutputConfig::json_flatten_span()
             },
             file_dir: None,
             file_name: Some(format!("{}.log", service_name)),
@@ -138,10 +138,10 @@ impl TracingConfig {
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
-            stdout: OutputConfig::json_flatten(),
+            stdout: OutputConfig::json_flatten_span(),
             file: OutputConfig {
                 enabled: false,
-                ..OutputConfig::json_flatten()
+                ..OutputConfig::json_flatten_span()
             },
             file_dir: None,
             file_name: None,

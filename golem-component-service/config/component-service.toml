@@ -32,7 +32,7 @@ ansi = false
 enabled = false
 json = true
 json_flatten = true
-json_flatten_span = false
+json_flatten_span = true
 span_events_active = false
 span_events_full = false
 
@@ -82,7 +82,7 @@ span_events_full = false
 # enabled = false
 # json = true
 # json_flatten = true
-# json_flatten_span = false
+# json_flatten_span = true
 # span_events_active = false
 # span_events_full = false
 # 
