@@ -66,67 +66,67 @@ jobs:
 
           echo "Starting cold start large benchmark"
           ./target/release/benchmark_cold_start_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_large.json
-          cat benchmark-data-current/benchmark_cold_start_large.json
+          # cat benchmark-data-current/benchmark_cold_start_large.json
           echo "Successfully ran cold start large benchmark"
 
           echo "Starting cold start medium benchmark"
-          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_medium.json
-          cat benchmark-data-current/benchmark_cold_start_medium.json
+          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_medium.json
+          # cat benchmark-data-current/benchmark_cold_start_medium.json
           echo "Successfully ran cold start medium benchmark"
 
           echo "Starting cold start small benchmark"
-          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_small.json
-          cat benchmark-data-current/benchmark_cold_start_small.json
+          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_cold_start_small.json
+          # cat benchmark-data-current/benchmark_cold_start_small.json
           echo "Successfully ran cold start small benchmark"
 
           echo "Starting cold start large benchmark without component compilation"
           ./target/release/benchmark_cold_start_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_large_no_compilation.json
-          cat benchmark-data-current/benchmark_cold_start_large_no_compilation.json
+          # cat benchmark-data-current/benchmark_cold_start_large_no_compilation.json
           echo "Successfully ran cold start large benchmark without component compilation"
 
           echo "Starting cold start medium benchmark without component compilation"
-          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
-          cat benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          ./target/release/benchmark_cold_start_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
+          # cat benchmark-data-current/benchmark_cold_start_medium_no_compilation.json
           echo "Successfully ran cold start medium benchmark without component compilation"
 
           echo "Starting cold start small benchmark without component compilation"
-          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_small_no_compilation.json
-          cat benchmark-data-current/benchmark_cold_start_small_no_compilation.json
+          ./target/release/benchmark_cold_start_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child --compilation-service-disabled > benchmark-data-current/benchmark_cold_start_small_no_compilation.json
+          # cat benchmark-data-current/benchmark_cold_start_small_no_compilation.json
           echo "Successfully ran cold start small benchmark without component compilation"
 
           echo "Starting durability overhead benchmark"
-          ./target/release/benchmark_durability_overhead --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_durability_overhead.json
-          cat benchmark-data-current/benchmark_durability_overhead.json
+          ./target/release/benchmark_durability_overhead --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_durability_overhead.json
+          # cat benchmark-data-current/benchmark_durability_overhead.json
           echo "Successfully durability overhead benchmark"
 
           echo "Starting latency large benchmark"
-          ./target/release/benchmark_latency_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_large.json
-          cat benchmark-data-current/benchmark_latency_large.json
+          ./target/release/benchmark_latency_large --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_large.json
+          # cat benchmark-data-current/benchmark_latency_large.json
           echo "Successfully ran latency large benchmark"
 
           echo "Starting latency medium benchmark"
-          ./target/release/benchmark_latency_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_medium.json
-          cat benchmark-data-current/benchmark_latency_medium.json
+          ./target/release/benchmark_latency_medium --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_medium.json
+          # cat benchmark-data-current/benchmark_latency_medium.json
           echo "Successfully ran latency medium benchmark"
 
           echo "Starting latency small benchmark"
-          ./target/release/benchmark_latency_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_small.json
-          cat benchmark-data-current/benchmark_latency_small.json
+          ./target/release/benchmark_latency_small --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_latency_small.json
+          # cat benchmark-data-current/benchmark_latency_small.json
           echo "Successfully ran latency small benchmark"
 
           echo "Starting suspend benchmark"
-          ./target/release/benchmark_suspend_worker --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --size 1000 --size 2000 --length 10 spawned --mute-child > benchmark-data-current/benchmark_suspend_worker.json
-          cat benchmark-data-current/benchmark_suspend_worker.json
+          ./target/release/benchmark_suspend_worker --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_suspend_worker.json
+          # cat benchmark-data-current/benchmark_suspend_worker.json
           echo "Successfully ran suspend benchmark"
 
           echo "Starting RPC benchmark"
-          ./target/release/benchmark_rpc --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 50 --size 100 --size 250 --length 10 spawned --mute-child > benchmark-data-current/benchmark_rpc.json
-          cat benchmark-data-current/benchmark_rpc.json
+          ./target/release/benchmark_rpc --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 20 --size 50 --length 10 spawned --mute-child > benchmark-data-current/benchmark_rpc.json
+          # cat benchmark-data-current/benchmark_rpc.json
           echo "Successfully ran RPC benchmark"
 
           echo "Starting throughput benchmark"
-          ./target/release/benchmark_throughput --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 50 --size 100 --size 250 --length 10 spawned --mute-child > benchmark-data-current/benchmark_throughput.json
-          cat benchmark-data-current/benchmark_throughput.json
+          ./target/release/benchmark_throughput --quiet --json --primary-only --iterations 1 --cluster-size 1 --size 1 --size 10 --size 50 --size 100 --size 250 --size 500 --length 10 spawned --mute-child > benchmark-data-current/benchmark_throughput.json
+          # cat benchmark-data-current/benchmark_throughput.json
           echo "Successfully ran throughput benchmark"
 
           echo "Finished Running Benchmark Jobs"

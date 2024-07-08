@@ -27,6 +27,7 @@ exclude = [
     "test-components/clock-service",
     "test-components/clocks",
     "test-components/directories",
+    "test-components/durability-overhead",
     "test-components/environment-service",
     "test-components/failing-component",
     "test-components/file-service",

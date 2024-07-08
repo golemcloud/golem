@@ -4070,13 +4070,6 @@ pub mod exports {
                     }
                     _rt::cabi_dealloc(base6, len6 * 24, 4);
                 }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_not_durable_cabi<T: Guest>() {
-                    #[cfg(target_arch = "wasm32")]
-                    _rt::run_ctors_once();
-                    T::not_durable();
-                }
                 pub trait Guest {
                     fn initialize_cart(user_id: _rt::String);
                     fn add_item(item: ProductItem);
@@ -4084,51 +4077,46 @@ pub mod exports {
                     fn update_item_quantity(product_id: _rt::String, quantity: u32);
                     fn checkout() -> CheckoutResult;
                     fn get_cart_contents() -> _rt::Vec<ProductItem>;
-                    fn not_durable();
                 }
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-                          ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+                            ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-                            #[export_name = "golem:it/api#initialize-cart"]
-                            unsafe extern "C" fn export_initialize_cart(arg0: *mut u8,arg1: usize,) {
-                              $($path_to_types)*::_export_initialize_cart_cabi::<$ty>(arg0, arg1)
-                            }
-                            #[export_name = "golem:it/api#add-item"]
-                            unsafe extern "C" fn export_add_item(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,arg4: f32,arg5: i32,) {
-                              $($path_to_types)*::_export_add_item_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
-                            }
-                            #[export_name = "golem:it/api#remove-item"]
-                            unsafe extern "C" fn export_remove_item(arg0: *mut u8,arg1: usize,) {
-                              $($path_to_types)*::_export_remove_item_cabi::<$ty>(arg0, arg1)
-                            }
-                            #[export_name = "golem:it/api#update-item-quantity"]
-                            unsafe extern "C" fn export_update_item_quantity(arg0: *mut u8,arg1: usize,arg2: i32,) {
-                              $($path_to_types)*::_export_update_item_quantity_cabi::<$ty>(arg0, arg1, arg2)
-                            }
-                            #[export_name = "golem:it/api#checkout"]
-                            unsafe extern "C" fn export_checkout() -> *mut u8 {
-                              $($path_to_types)*::_export_checkout_cabi::<$ty>()
-                            }
-                            #[export_name = "cabi_post_golem:it/api#checkout"]
-                            unsafe extern "C" fn _post_return_checkout(arg0: *mut u8,) {
-                              $($path_to_types)*::__post_return_checkout::<$ty>(arg0)
-                            }
-                            #[export_name = "golem:it/api#get-cart-contents"]
-                            unsafe extern "C" fn export_get_cart_contents() -> *mut u8 {
-                              $($path_to_types)*::_export_get_cart_contents_cabi::<$ty>()
-                            }
-                            #[export_name = "cabi_post_golem:it/api#get-cart-contents"]
-                            unsafe extern "C" fn _post_return_get_cart_contents(arg0: *mut u8,) {
-                              $($path_to_types)*::__post_return_get_cart_contents::<$ty>(arg0)
-                            }
-                            #[export_name = "golem:it/api#not-durable"]
-                            unsafe extern "C" fn export_not_durable() {
-                              $($path_to_types)*::_export_not_durable_cabi::<$ty>()
-                            }
-                          };);
-                        }
+                              #[export_name = "golem:it/api#initialize-cart"]
+                              unsafe extern "C" fn export_initialize_cart(arg0: *mut u8,arg1: usize,) {
+                                $($path_to_types)*::_export_initialize_cart_cabi::<$ty>(arg0, arg1)
+                              }
+                              #[export_name = "golem:it/api#add-item"]
+                              unsafe extern "C" fn export_add_item(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,arg4: f32,arg5: i32,) {
+                                $($path_to_types)*::_export_add_item_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
+                              }
+                              #[export_name = "golem:it/api#remove-item"]
+                              unsafe extern "C" fn export_remove_item(arg0: *mut u8,arg1: usize,) {
+                                $($path_to_types)*::_export_remove_item_cabi::<$ty>(arg0, arg1)
+                              }
+                              #[export_name = "golem:it/api#update-item-quantity"]
+                              unsafe extern "C" fn export_update_item_quantity(arg0: *mut u8,arg1: usize,arg2: i32,) {
+                                $($path_to_types)*::_export_update_item_quantity_cabi::<$ty>(arg0, arg1, arg2)
+                              }
+                              #[export_name = "golem:it/api#checkout"]
+                              unsafe extern "C" fn export_checkout() -> *mut u8 {
+                                $($path_to_types)*::_export_checkout_cabi::<$ty>()
+                              }
+                              #[export_name = "cabi_post_golem:it/api#checkout"]
+                              unsafe extern "C" fn _post_return_checkout(arg0: *mut u8,) {
+                                $($path_to_types)*::__post_return_checkout::<$ty>(arg0)
+                              }
+                              #[export_name = "golem:it/api#get-cart-contents"]
+                              unsafe extern "C" fn export_get_cart_contents() -> *mut u8 {
+                                $($path_to_types)*::_export_get_cart_contents_cabi::<$ty>()
+                              }
+                              #[export_name = "cabi_post_golem:it/api#get-cart-contents"]
+                              unsafe extern "C" fn _post_return_get_cart_contents(arg0: *mut u8,) {
+                                $($path_to_types)*::__post_return_get_cart_contents::<$ty>(arg0)
+                              }
+                            };);
+                          }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
                 #[repr(align(4))]
@@ -4444,19 +4432,19 @@ mod _rt {
 #[doc(hidden)]
 
 macro_rules! __export_shopping_cart_impl {
-                  ($ty:ident) => (self::export!($ty with_types_in self););
-                  ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
-                  $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
-                  )
-                }
+                    ($ty:ident) => (self::export!($ty with_types_in self););
+                    ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
+                    $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
+                    )
+                  }
 #[doc(inline)]
 pub(crate) use __export_shopping_cart_impl as export;
 
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:shopping-cart:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3940] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe0\x1d\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3919] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xcb\x1d\x01A\x02\x01\
 A\x0d\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
@@ -4527,7 +4515,7 @@ istence-level\x01H\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01I\x01@\x01\x0ai
 dempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01J\x01@\0\0\x09\x04\0\x18gen\
 erate-idempotency-key\x01K\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mo\
 de\x15\x01\0\x04\0\x0dupdate-worker\x01L\x03\x01\x14golem:api/host@0.2.0\x05\x06\
-\x01B\x17\x01r\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cprodu\
+\x01B\x15\x01r\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cprodu\
 ct-item\x03\0\0\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\x09timesta\
 mpw\x04\0\x05order\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\
 \0\x05\x01q\x02\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\
@@ -4535,10 +4523,9 @@ mpw\x04\0\x05order\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x
 tem\x01\x01\0\x04\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0br\
 emove-item\x01\x0b\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-it\
 em-quantity\x01\x0c\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11\
-get-cart-contents\x01\x0e\x01@\0\x01\0\x04\0\x0bnot-durable\x01\x0f\x04\x01\x0cg\
-olem:it/api\x05\x07\x04\x01\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dsho\
-pping-cart\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070\
-.208.1\x10wit-bindgen-rust\x060.25.0";
+get-cart-contents\x01\x0e\x04\x01\x0cgolem:it/api\x05\x07\x04\x01\x16golem:it/sh\
+opping-cart\x04\0\x0b\x13\x01\0\x0dshopping-cart\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]
