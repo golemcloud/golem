@@ -49,7 +49,7 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
 
@@ -240,7 +240,7 @@ mod test {
     use super::*;
     use crate::worker_binding::TypedHttRequestDetails;
     use crate::worker_bridge_execution::to_response::internal::ResolvedResponseHeaders;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use http::header::CONTENT_TYPE;
     use std::collections::HashMap;
 

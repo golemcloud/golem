@@ -1,5 +1,5 @@
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use crate::worker_bridge_execution::WorkerResponse;
 
@@ -59,7 +59,7 @@ mod tests {
     use crate::service::worker::TypedResult;
     use golem_service_base::model::{FunctionResult, Type, TypeU32};
     use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerResponse;

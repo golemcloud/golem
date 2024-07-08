@@ -5,10 +5,12 @@ use crate::primitive::GetPrimitive;
 use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Record};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use golem_wasm_rpc::{convert_analysed_type, get_analysed_type_from_typed_value};
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -220,15 +222,24 @@ impl From<TypedKeyValueCollection> for AnalysedType {
 
 impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
     fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
-        let mut typ: Vec<(String, AnalysedType)> = vec![];
-        let mut value: Vec<(String, TypeAnnotatedValue)> = vec![];
+        let mut typ: Vec<NameTypePair> = vec![];
+        let mut value: Vec<NameValuePair> = vec![];
 
         for record in typed_key_value_collection.fields {
-            typ.push((record.name.clone(), AnalysedType::from(&record.value)));
-            value.push((record.name, record.value));
-        }
+            typ.push(NameTypePair {
+                name: record.name.clone(),
+                typ: Some(convert_analysed_type(get_analysed_type_from_typed_value(&record.value))),
+            });
 
-        TypeAnnotatedValue::Record { typ, value }
+            value.push(NameValuePair {
+                name: record.name.clone(),
+                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(record.value.clone()),
+                }),
+            });
+        }
+        
+        TypeAnnotatedValue::Record (Record { typ, value })
     }
 }
 
@@ -241,7 +252,7 @@ pub struct TypedKeyValue {
 mod internal {
 
     use crate::primitive::{Number, Primitive};
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     pub(crate) fn get_typed_value_from_primitive(value: impl AsRef<str>) -> TypeAnnotatedValue {
         let primitive = Primitive::from(value.as_ref().to_string());

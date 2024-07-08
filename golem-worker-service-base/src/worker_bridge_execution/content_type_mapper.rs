@@ -1,5 +1,5 @@
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem::web::headers::ContentType;
 use poem::web::WithContentType;
 use poem::Body;
@@ -156,7 +156,7 @@ mod internal {
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::web::headers::ContentType;
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};

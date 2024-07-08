@@ -3,7 +3,7 @@ use crate::evaluator::{DefaultEvaluator, Evaluator};
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{ArmPattern, Expr, MatchArm};
 use std::ops::Deref;
 use std::sync::Arc;

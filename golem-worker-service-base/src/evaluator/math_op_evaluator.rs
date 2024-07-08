@@ -1,6 +1,6 @@
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
 use crate::primitive::{GetPrimitive, Primitive};
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 pub(crate) fn compare_typed_value<F>(
     left: &TypeAnnotatedValue,

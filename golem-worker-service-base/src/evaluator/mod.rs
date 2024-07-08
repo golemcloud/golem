@@ -9,7 +9,7 @@ mod pattern_match_evaluator;
 
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
@@ -503,7 +503,7 @@ mod internal {
         RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor,
     };
     use golem_common::model::{ComponentId, IdempotencyKey};
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use rib::ParsedFunctionName;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -584,7 +584,7 @@ mod tests {
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use http::{HeaderMap, Uri};
     use rib::Expr;
     use serde_json::{json, Value};
@@ -1818,7 +1818,7 @@ mod tests {
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
-        use golem_wasm_rpc::TypeAnnotatedValue;
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;

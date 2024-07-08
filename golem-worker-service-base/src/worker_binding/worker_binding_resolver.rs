@@ -11,7 +11,7 @@ use crate::primitive::GetPrimitive;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;

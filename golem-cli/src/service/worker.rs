@@ -27,7 +27,7 @@ use golem_client::model::{
     InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator, Type, WorkerFilter,
     WorkerNameFilter,
 };
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{error, info};

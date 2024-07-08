@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use golem_service_base::model::FunctionResult;
 
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 
 #[async_trait]
