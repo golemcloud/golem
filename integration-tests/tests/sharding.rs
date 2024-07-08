@@ -113,10 +113,7 @@ async fn coordinated_scenario1() {
             Step::Sleep(Duration::from_secs(3)),
             Step::StartShards(4),
             Step::WaitForInvokeAndAwaitResult,
-            // TODO drop
-            Step::StopShards(4),
-            // TODO: separate cases and add one which mixes them randomly
-            /*Step::StopAllShards,
+            Step::StopAllShards,
             Step::RestartShardManager,
             Step::StartShards(4),
             Step::RestartShardManager,
@@ -130,7 +127,7 @@ async fn coordinated_scenario1() {
             Step::StopShards(3),
             Step::Sleep(Duration::from_secs(3)),
             Step::InvokeAndAwaitWorkersAsync("StartShards(4), StopShards(3), Invoke".to_string()),
-            Step::WaitForInvokeAndAwaitResult,*/
+            Step::WaitForInvokeAndAwaitResult,
         ],
     )
     .await;
