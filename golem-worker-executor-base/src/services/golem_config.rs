@@ -300,8 +300,8 @@ impl MemoryConfig {
         })
     }
 
-    pub fn worker_memory(&self) -> u64 {
-        (self.system_memory() as f64 * self.worker_memory_ratio) as u64
+    pub fn worker_memory(&self) -> usize {
+        (self.total_system_memory() as f64 * self.worker_memory_ratio) as usize
     }
 }
 

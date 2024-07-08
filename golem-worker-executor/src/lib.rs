@@ -54,8 +54,8 @@ struct ServerBootstrap {}
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
-    fn create_active_workers(&self, _golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
-        Arc::new(ActiveWorkers::<Context>::unbounded())
+    fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
+        Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
     async fn create_services(
