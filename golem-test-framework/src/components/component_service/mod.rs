@@ -332,10 +332,7 @@ fn env_vars(
                 .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
                 .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
         }
-        _ => {
-            builder = builder
-                .with_str("GOLEM__COMPILATION__TYPE", "Disabled")
-        }
+        _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
     };
 
     builder.build()

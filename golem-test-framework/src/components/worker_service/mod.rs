@@ -235,4 +235,4 @@ fn env_vars(
         .with("GOLEM__PORT", http_port.to_string())
         .with_all(rdb.info().env("golem_worker"))
         .build()
-}   
+}
