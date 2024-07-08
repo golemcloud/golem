@@ -567,7 +567,7 @@ export RUST_BACKTRACE=1
 [tasks.check-configs]
 description = "Generates configs from code and checks if it's committed"
 dependencies = [
-
+    "generate-configs"
 ]
 
 script = '''
