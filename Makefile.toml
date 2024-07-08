@@ -15,7 +15,7 @@
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
-# TODO - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
+# - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
 # - `cargo make generate-configs`: generates configs from code defaults
 
 [config]
@@ -92,7 +92,7 @@ command = "cargo"
 args = [
     "build",
     "-p",
-    "golem-shard-manager",                                               # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
     "-p",
     "golem-worker-executor",
     "-p",
@@ -541,6 +541,8 @@ kill $router_pid || true
 kill $redis_pid || true
 '''
 
+## ** GENERATE CONFIGS **
+
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
 dependencies = ["build"]
@@ -558,4 +560,26 @@ export RUST_BACKTRACE=1
 ./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+'''
+
+## ** CHECK CONFIGS **
+
+[tasks.check-configs]
+description = "Generates configs from code and checks if it's committed"
+dependencies = [
+
+]
+
+script = '''
+git diff --exit-code \
+    golem-shard-manager/config/shard-manager.toml \
+    golem-shard-manager/config/shard-manager.sample.env \
+    golem-component-compilation-service/config/component-compilation-service.toml \
+    golem-component-compilation-service/config/component-compilation-service.sample.env \
+    golem-component-service/config/component-service.toml \
+    golem-component-service/config/component-service.sample.env \
+    golem-worker-service/config/worker-service.toml \
+    golem-worker-service/config/worker-service.sample.env \
+    golem-worker-executor/config/worker-executor.toml \
+    golem-worker-executor/config/worker-executor.sample.env
 '''
