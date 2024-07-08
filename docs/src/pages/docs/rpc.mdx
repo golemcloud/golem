@@ -20,6 +20,8 @@ The low-level host interface this technique uses is defined in [wasm-rpc.wit](ht
 package golem:rpc@0.1.0;
 
 interface types {
+  use wasi:io/poll@0.2.0.{pollable};
+
   type node-index = s32;
 
   record wit-value {
@@ -65,6 +67,10 @@ interface types {
     constructor(location: uri);
 
     invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
+
+    invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
+
+    async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
   }
 }
 
@@ -76,7 +82,7 @@ world wit-value {
 ### Worker URI
 
 The **worker URI** that has to be passed to the remote interface as a parameter identifies a specific **Golem worker**, consisting of the **component ID** and the **worker name**.
-It can be constructed by hand using the pattern `worker://component-id/worker-name`, and a running worker can get its own URI using the Golem-specific host function `golem:api/host/get-self-uri`.
+It can be constructed by hand using the pattern `worker://component-id/worker-name`, and a running worker can get its own URI using the Golem-specific host function `golem:api/host.{get-self-uri}`.
 
 ### Stub generator
 

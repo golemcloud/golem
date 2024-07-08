@@ -26,6 +26,12 @@ For example if you generated your code using `golem new` and did not specify a c
 package golem:component
 ```
 
+This package name can optionally specify a package **version** as well, such as:
+
+```rust
+package golem:component@0.3.2
+```
+
 You can have any other pair of names following the above syntax.
 
 The WIT definition should contain a **single world** (otherwise the world to be used have to be specified for the tools used during compilation). The name of this world does not matter for **Golem** - it won't be part of the function's fully qualified name.
@@ -70,9 +76,11 @@ The name of the interface(s) and function(s) are completely user defined, there 
 
 In the above example we have **3 exported functions** and we can refer to them in the `--function` parameter with the following fully qualified names, consisting of the package name and the exported path:
 
-- `golem:component/api/add-item`
-- `golem:component/api/remove-item`
-- `golem:component/dump`
+- `golem:component/api.{add-item}`
+- `golem:component/api.{remove-item}`
+- `golem:component.{dump}`
+
+Note that the syntax is the same as the one used for the `use` statements in the WIT file.
 
 #### Resources
 
@@ -100,11 +108,25 @@ world my-world {
 
 For this WIT specification, the following **function names** are valid when using Golem's invocation API or CLI:
 
-- `golem:component/api/counter/new` - refers to the above defined **constructor**
-- `golem:component/api/counter/inc-by`
-- `golem:component/api/counter/get-value`
-- `golem:component/api/counter/merge-counters`
-- `golem:component/api/counter/drop` - special function that drops the instance while the worker continues running
+- `golem:component/api.{counter.new}` - refers to the above defined **constructor**
+- `golem:component/api.{counter.inc-by}`
+- `golem:component/api.{counter.get-value}`
+- `golem:component/api.{counter.merge-counters}`
+- `golem:component/api.{counter.drop}` - special function that drops the instance while the worker continues running
+
+#### Implicit resource creation
+
+With the above described naming conventions it is possible to manually create instances of resources, and then use the returned resource handle to invoke methods on them.
+
+There is an easier way to work with resources in Golem, that assumes that a given resource instance is associated with the constructor parameters it is created with. This way it is possible to target a specific instance just by using the **function name**, and the resource instance will be automatically selected or created if it does not exist yet.
+
+To use this feature, pass the target constructor parameters in the function name's resource name part in parentheses. For example, with the above defined `counter` resource we can immediately create and a new counter and increment it by calling:
+
+- `golem:component/api.{counter("my-counter").inc-by}`
+
+This will create a new counter instance with the name `my-counter` and increment it. If the counter with the name `my-counter` already exists, it will be used.
+
+The syntax for passing inlined parameters to the constructor is using the [WAVE syntax](https://github.com/lann/wasm-wave).
 
 ### Parameters and results
 
@@ -149,16 +171,14 @@ For **Tier 2 languages** you cannot define more than one function to be exported
 
 The function name for **tier 2** languages that you need to pass to the `--function` parameter of [Golem CLI](/docs/golem-cli) is always:
 
-- `wasi:cli/run@0.2.0/run`
+- `wasi:cli/run@0.2.0.{run}`
 
 ### Parameters and results
 
 As you cannot define any parameter or result types in **tier 2** the only option is to use **the stdio mode or the stdio event loop mode**.
 
-This is enabled in the [Golem CLI](/docs/golem-cli) using the `--use-stdio` or `--use-stdio-eventloop` commands when invoking an instance.
+This is enabled in the [Golem CLI](/docs/golem-cli) using the `--use-stdio` command when invoking an instance.
 
 Once it is enabled, the JSON you pass to the `--parameters` parameter will be directly available to read from the worker's **standard input**, and **Golem** expects the `run` function to write a result JSON to the **standard output**.
 
 No further type checking is performed, but both the input and the output is expected to be JSONs.
-
-When using an **event loop** the worker is expected to run an infinite loop in which each iteration reads a **single line** and parses it as JSON, and outputs a single line JSON as the invocation's results before reading the next one.

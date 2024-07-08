@@ -21,4 +21,4 @@ golem_await_promise(&promise_id)
 
 Once you have created a Promise, you can provide it to another Golem program or an external service. That service can then complete the Promise either by using the Golem Runtime API as discussed above or by using the REST API.
 
-To complete a Promise using the Rest API use the complete promise endpoint at `POST/v2/components/{component-id}/workers/{worker-name}/complete`. The body should include the promise identifier and the payload, for example `{”oplogIdx” : “10”, "data": [<bytes>]}`.
+To complete a Promise using the Rest API use the complete promise endpoint at `POST /v2/components/{component-id}/workers/{worker-name}/complete`. The body should include the promise identifier and the payload, for example `{”oplogIdx” : “10”, "data": [<bytes>]}`.
