@@ -1,0 +1,9 @@
+package golem:it;
+
+interface api {
+  run: func(value: u64, not-durable: bool, commit: bool) -> u64;
+}
+
+world durability-overhead {
+  export api;
+}
