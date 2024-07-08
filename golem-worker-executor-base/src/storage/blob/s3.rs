@@ -140,7 +140,7 @@ impl S3BlobStorage {
             let response = with_retries(
                 target_label,
                 op_label,
-                Some(format!("{} - {}", bucket, prefix)),
+                Some(format!("{bucket} - {prefix}")),
                 &self.config.retries,
                 &(self.client.clone(), bucket, prefix, cont),
                 |(client, bucket, prefix, cont)| {
@@ -238,7 +238,7 @@ impl BlobStorage for S3BlobStorage {
         let result = with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, key)),
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
@@ -286,7 +286,7 @@ impl BlobStorage for S3BlobStorage {
         let result = with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, key)),
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
@@ -423,7 +423,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, key)),
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key, data),
             |(client, bucket, key, bytes)| {
@@ -457,7 +457,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, key)),
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
@@ -502,7 +502,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, prefix)),
+            Some(format!("{bucket} - {prefix:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, to_delete),
             |(client, bucket, to_delete)| {
@@ -542,7 +542,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, key)),
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, marker),
             |(client, bucket, marker)| {
@@ -631,7 +631,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?}", bucket, key)),
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, to_delete),
             |(client, bucket, to_delete)| {
@@ -741,7 +741,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries(
             target_label,
             op_label,
-            Some(format!("{} - {:?} -> {:?}", bucket, from_key, to_key)),
+            Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, from_key, to_key),
             |(client, bucket, from_key, to_key)| {
