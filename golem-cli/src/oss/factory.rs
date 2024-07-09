@@ -17,6 +17,7 @@ use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::component::ComponentClient;
 use crate::clients::health_check::HealthCheckClient;
 use crate::clients::worker::WorkerClient;
+use crate::config::HttpClientConfig;
 use crate::factory::{FactoryWithAuth, ServiceFactory};
 use crate::model::GolemError;
 use crate::oss::clients::api_definition::ApiDefinitionClientLive;
@@ -37,26 +38,55 @@ pub struct OssServiceFactory {
 }
 
 impl OssServiceFactory {
-    fn client(&self) -> Result<reqwest::Client, GolemError> {
+    fn client(&self, http_client_config: &HttpClientConfig) -> Result<reqwest::Client, GolemError> {
         let mut builder = reqwest::Client::builder();
         if self.allow_insecure {
             builder = builder.danger_accept_invalid_certs(true);
         }
 
+        if let Some(timeout) = http_client_config.timeout {
+            builder = builder.timeout(timeout);
+        }
+        if let Some(connect_timeout) = http_client_config.connect_timeout {
+            builder = builder.connect_timeout(connect_timeout);
+        }
+        if let Some(read_timeout) = http_client_config.read_timeout {
+            builder = builder.read_timeout(read_timeout);
+        }
+
         Ok(builder.connection_verbose(true).build()?)
     }
 
-    fn component_context(&self) -> Result<Context, GolemError> {
+    fn component_context_base(
+        &self,
+        http_client_config: &HttpClientConfig,
+    ) -> Result<Context, GolemError> {
         Ok(Context {
             base_url: self.component_url.clone(),
-            client: self.client()?,
+            client: self.client(http_client_config)?,
         })
     }
-    fn worker_context(&self) -> Result<Context, GolemError> {
+    fn worker_context_base(
+        &self,
+        http_client_config: &HttpClientConfig,
+    ) -> Result<Context, GolemError> {
         Ok(Context {
             base_url: self.worker_url.clone(),
-            client: self.client()?,
+            client: self.client(http_client_config)?,
         })
+    }
+
+    fn component_context(&self) -> Result<Context, GolemError> {
+        self.component_context_base(&HttpClientConfig::env())
+    }
+    fn component_context_health_check(&self) -> Result<Context, GolemError> {
+        self.component_context_base(&HttpClientConfig::health_check())
+    }
+    fn worker_context(&self) -> Result<Context, GolemError> {
+        self.worker_context_base(&HttpClientConfig::env())
+    }
+    fn worker_context_health_check(&self) -> Result<Context, GolemError> {
+        self.worker_context_base(&HttpClientConfig::health_check())
     }
 }
 
@@ -147,12 +177,12 @@ impl ServiceFactory for OssServiceFactory {
         Ok(vec![
             Box::new(HealthCheckClientLive {
                 client: golem_client::api::HealthCheckClientLive {
-                    context: self.component_context()?,
+                    context: self.component_context_health_check()?,
                 },
             }),
             Box::new(HealthCheckClientLive {
                 client: golem_client::api::HealthCheckClientLive {
-                    context: self.worker_context()?,
+                    context: self.worker_context_health_check()?,
                 },
             }),
         ])
