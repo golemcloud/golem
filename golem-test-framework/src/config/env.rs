@@ -56,12 +56,12 @@ pub struct EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    pub fn blocking_new(worker_executor_cluster_size: usize) -> Self {
+    pub fn blocking_new(worker_executor_cluster_size: usize, bin_dir: PathBuf) -> Self {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async move { Self::new(worker_executor_cluster_size, false).await })
+            .block_on(async move { Self::new(worker_executor_cluster_size, false, bin_dir).await })
     }
 
     async fn make_rdb() -> Arc<dyn Rdb + Send + Sync + 'static> {
@@ -106,6 +106,7 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_shard_manager(
+        bin_dir: PathBuf,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
         if Self::use_docker() {
@@ -113,7 +114,7 @@ impl EnvBasedTestDependencies {
         } else {
             Arc::new(
                 SpawnedShardManager::new(
-                    Path::new("../target/debug/golem-shard-manager"),
+                    &bin_dir.join("golem-shard-manager"),
                     Path::new("../golem-shard-manager"),
                     9021,
                     9020,
@@ -128,6 +129,7 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_component_service(
+        bin_dir: &Path,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         shared_client: bool,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
@@ -147,7 +149,7 @@ impl EnvBasedTestDependencies {
         } else {
             Arc::new(
                 SpawnedComponentService::new(
-                    Path::new("../target/debug/golem-component-service"),
+                    &bin_dir.join("golem-component-service"),
                     Path::new("../golem-component-service"),
                     8081,
                     9091,
@@ -164,6 +166,7 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_component_compilation_service(
+        bin_dir: &Path,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
         if Self::use_docker() {
@@ -177,7 +180,7 @@ impl EnvBasedTestDependencies {
         } else {
             Arc::new(
                 SpawnedComponentCompilationService::new(
-                    Path::new("../target/debug/golem-component-compilation-service"),
+                    &bin_dir.join("golem-component-compilation-service"),
                     Path::new("../golem-component-compilation-service"),
                     8083,
                     9094,
@@ -192,6 +195,7 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_worker_service(
+        bin_dir: &Path,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -211,7 +215,7 @@ impl EnvBasedTestDependencies {
         } else {
             Arc::new(
                 SpawnedWorkerService::new(
-                    Path::new("../target/debug/golem-worker-service"),
+                    &bin_dir.join("golem-worker-service"),
                     Path::new("../golem-worker-service"),
                     8082,
                     9092,
@@ -230,6 +234,7 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_worker_executor_cluster(
+        bin_dir: &Path,
         worker_executor_cluster_size: usize,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
@@ -258,7 +263,7 @@ impl EnvBasedTestDependencies {
                     worker_executor_cluster_size,
                     9000,
                     9100,
-                    Path::new("../target/debug/worker-executor"),
+                    &bin_dir.join("worker-executor"),
                     Path::new("../golem-worker-executor"),
                     redis,
                     component_service,
@@ -274,18 +279,19 @@ impl EnvBasedTestDependencies {
         }
     }
 
-    pub async fn new(worker_executor_cluster_size: usize, shared_client: bool) -> Self {
+    pub async fn new(worker_executor_cluster_size: usize, shared_client: bool, bin_dir: PathBuf) -> Self {
+        let bin_dir_clone = bin_dir.clone();
         let rdb_and_component_service_join = tokio::spawn(async move {
             let rdb = Self::make_rdb().await;
-            let component_service = Self::make_component_service(rdb.clone(), shared_client).await;
+            let component_service = Self::make_component_service(&bin_dir_clone, rdb.clone(), shared_client).await;
             let component_compilation_service =
-                Self::make_component_compilation_service(component_service.clone()).await;
+                Self::make_component_compilation_service(&bin_dir_clone, component_service.clone()).await;
             (rdb, component_service, component_compilation_service)
         });
 
         let redis = Self::make_redis().await;
         let redis_monitor_join = tokio::spawn(Self::make_redis_monitor(redis.clone()));
-        let shard_manager_join = tokio::spawn(Self::make_shard_manager(redis.clone()));
+        let shard_manager_join = tokio::spawn(Self::make_shard_manager(bin_dir.clone(), redis.clone()));
 
         let (rdb, component_service, component_compilation_service) =
             rdb_and_component_service_join
@@ -295,6 +301,7 @@ impl EnvBasedTestDependencies {
         let shard_manager = shard_manager_join.await.expect("Failed to join");
 
         let worker_service = Self::make_worker_service(
+            &bin_dir,
             component_service.clone(),
             shard_manager.clone(),
             rdb.clone(),
@@ -302,6 +309,7 @@ impl EnvBasedTestDependencies {
         )
         .await;
         let worker_executor_cluster = Self::make_worker_executor_cluster(
+            &bin_dir,
             worker_executor_cluster_size,
             component_service.clone(),
             shard_manager.clone(),

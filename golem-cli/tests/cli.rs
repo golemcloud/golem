@@ -75,7 +75,7 @@ impl CliLive {
         let config_dir = PathBuf::from(format!("../target/cli_conf/{conf_dir_name}"));
         let _ = fs::remove_dir_all(&config_dir);
 
-        let golem_cli_path = PathBuf::from("../target/debug/golem-cli");
+        let golem_cli_path = PathBuf::from("../target/release/golem-cli");
 
         println!(
             "CLI with component port {} and worker port {}",

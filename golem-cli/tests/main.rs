@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use libtest_mimic::{Arguments, Conclusion, Failed};
 use std::sync::Arc;
@@ -30,7 +31,7 @@ fn main() -> Result<(), Failed> {
     env_logger::init();
 
     let deps: Arc<dyn TestDependencies + Send + Sync + 'static> =
-        Arc::new(EnvBasedTestDependencies::blocking_new(3));
+        Arc::new(EnvBasedTestDependencies::blocking_new(3, PathBuf::from("../target/release")));
     let cluster = deps.worker_executor_cluster(); // forcing startup by getting it
     info!("Using cluster with {:?} worker executors", cluster.size());
 

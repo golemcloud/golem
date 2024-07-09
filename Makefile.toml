@@ -47,6 +47,11 @@ description = "Builds all executables in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--bins"]
 
+[tasks.build-bins-release]
+description = "Builds all executables in debug mode"
+command = "cargo"
+args = ["build", "--workspace", "--bins", "--release"]
+
 [tasks.build-worker-service]
 description = "Builds the worker-service"
 command = "cargo"
@@ -253,7 +258,7 @@ args = [
 
 [tasks.cli-tests]
 description = "Runs CLI tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-release"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [

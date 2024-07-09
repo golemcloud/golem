@@ -15,6 +15,7 @@
 use ctor::{ctor, dtor};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::ops::Deref;
+use std::path::PathBuf;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -45,7 +46,7 @@ impl Tracing {
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::blocking_new(3);
+    let deps = EnvBasedTestDependencies::blocking_new(3, PathBuf::from("../target/debug"));
 
     deps.redis_monitor().assert_valid();
     println!(

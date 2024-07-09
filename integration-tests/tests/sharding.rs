@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ctor::{ctor, dtor};
@@ -38,7 +39,7 @@ impl Tracing {
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::blocking_new(10);
+    let deps = EnvBasedTestDependencies::blocking_new(10, PathBuf::from("../target/debug"));
 
     deps.redis_monitor().assert_valid();
     println!(
