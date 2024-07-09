@@ -28,6 +28,7 @@ use golem_client::model::{
     WorkerNameFilter,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::type_annotated_value_from_str;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -217,7 +218,8 @@ fn wave_parameters_to_json(
 }
 
 fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
-    match wasm_wave::from_str(&type_to_analysed(typ), wave) {
+    // Avoid converting from typ to AnalysedType
+    match type_annotated_value_from_str(&type_to_analysed(typ), wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"

@@ -16,13 +16,11 @@ use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{type_annotated_value_from, Value};
+use golem_wasm_rpc::{get_value, type_annotated_value_from_str, TypeAnnotatedValue};
+use golem_wasm_rpc::{Value};
 use semver::{BuildMetadata, Prerelease};
 use std::borrow::Cow;
 use std::fmt::Display;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::get_value_from_typed_value;
-use golem_wasm_rpc::type_annotated_value_to_string;
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionSite {
@@ -321,9 +319,9 @@ impl ParsedFunctionReference {
                 let mut result = Vec::new();
                 for (raw_param, param_type) in raw_params.iter().zip(types.iter()) {
                     let type_annotated_value: TypeAnnotatedValue =
-                        type_annotated_value_from(param_type, raw_param)
+                        type_annotated_value_from_str(param_type, raw_param)
                             .map_err(|err| err.to_string())?;
-                    let value = get_value_from_typed_value(type_annotated_value)?;
+                    let value = get_value(type_annotated_value)?;
                     result.push(value);
                 }
                 Ok(Some(result))
