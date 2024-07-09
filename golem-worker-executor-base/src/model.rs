@@ -74,6 +74,7 @@ pub struct WorkerConfig {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub deleted_regions: DeletedRegions,
+    pub total_linear_memory_size: u64,
 }
 
 impl WorkerConfig {
@@ -83,6 +84,7 @@ impl WorkerConfig {
         worker_args: Vec<String>,
         mut worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
+        total_linear_memory_size: u64,
     ) -> WorkerConfig {
         let worker_name = worker_id.worker_name.clone();
         let component_id = worker_id.component_id;
@@ -99,6 +101,7 @@ impl WorkerConfig {
             args: worker_args,
             env: worker_env,
             deleted_regions,
+            total_linear_memory_size,
         }
     }
 }

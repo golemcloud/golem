@@ -190,6 +190,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         worker_config.deleted_regions.clone(),
                         last_oplog_index,
                         component_metadata,
+                        worker_config.total_linear_memory_size,
                     ),
                     temp_dir,
                     execution_status,
@@ -325,6 +326,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         status
             .current_idempotency_key
             .clone_from(&self.state.current_idempotency_key);
+        status.total_linear_memory_size = self.state.total_linear_memory_size;
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
         self.public_state.worker().update_status(status).await;
@@ -375,6 +377,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn worker_proxy(&self) -> Arc<dyn WorkerProxy + Send + Sync> {
         self.state.worker_proxy.clone()
+    }
+
+    pub fn total_linear_memory_size(&self) -> u64 {
+        self.state.total_linear_memory_size
+    }
+
+    pub async fn increase_memory(&mut self, delta: u64) -> Result<bool, GolemError> {
+        if self.state.is_replay() {
+            // The increased amount was already recorded in live mode, so our worker
+            // was initialized with the correct amount of memory.
+            Ok(true)
+        } else {
+            // In live mode we need to try to get more memory permits and if we can't,
+            // we fail the worker, unload it from memory and schedule a retry.
+            // let current_size = self.update_worker_status();
+            self.state
+                .oplog
+                .add_and_commit(OplogEntry::grow_memory(delta))
+                .await;
+            self.update_worker_status(|_| {}).await;
+
+            self.public_state.worker().increase_memory(delta).await?;
+            Ok(true)
+        }
     }
 
     fn get_recovery_decision_on_trap(
@@ -1260,6 +1286,8 @@ pub struct PrivateDurableWorkerState {
 
     indexed_resources: HashMap<IndexedResourceKey, u64>,
     component_metadata: ComponentMetadata,
+
+    total_linear_memory_size: u64,
 }
 
 impl PrivateDurableWorkerState {
@@ -1281,6 +1309,7 @@ impl PrivateDurableWorkerState {
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
         component_metadata: ComponentMetadata,
+        total_linear_memory_size: u64,
     ) -> Self {
         let mut result = Self {
             oplog_service,
@@ -1309,6 +1338,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),
             component_metadata,
+            total_linear_memory_size,
         };
         result.move_replay_idx(OplogIndex::INITIAL); // By this we handle initial deleted regions applied by manual updates correctly
         result

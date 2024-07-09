@@ -284,6 +284,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_metadata.args.clone(),
                     worker_metadata.env.clone(),
                     worker_metadata.last_known_status.deleted_regions.clone(),
+                    worker_metadata.last_known_status.total_linear_memory_size,
                 ),
                 this.execution_status.clone(),
             )
@@ -352,6 +353,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.stop_internal(false).await;
     }
 
+    /// This method is supposed to be called on a worker for what `is_currently_idle_but_running`
+    /// previously returned true.
+    ///
+    /// It is not guaranteed that the worker is still "running (loaded in memory) but idle" when
+    /// this method is called, so it rechecks this condition and only stops the worker if it
+    /// is still true. If it was not true, it returns false.
+    ///
+    /// There are two conditions to this:
+    /// - the ExecutionStatus must be suspended; this means the worker is currently not running any invocations
+    /// - there must be no more pending invocations in the invocation queue
+    ///
+    /// Here we first acquire the `running` lock. This means the worker cannot be started/stopped while we
+    /// are processing this method.
+    /// If it was not running, then we don't have to stop it.
+    /// If it was running then we recheck the conditions and then stop the worker.
+    ///
+    /// We know that the conditions remain true because:
+    /// - the invocation queue is empty so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
+    /// - nothing can be added to the invocation queue because we are holding the `running` lock
+    ///
+    /// By passing the running lock to `stop_internal_running` it is never released and the stop eventually
+    /// drops the `RunningWorker` instance.
+    ///
+    /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
+    /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
         let running_guard = self.running.lock().await;
         match running_guard.as_ref() {
@@ -719,6 +745,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().timestamp()
     }
 
+    pub async fn increase_memory(&self, delta: u64) -> Result<(), GolemError> {
+        match self.running.lock().await.as_mut() {
+            Some(running) => {
+                if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
+                    running.merge_extra_permits(new_permits);
+                    Ok(())
+                } else {
+                    Err(GolemError::runtime("Not enough memory available")) // TODO: custom error that we can catch
+                }
+            }
+            None => Ok(()),
+        }
+    }
+
     /// Enqueue invocation of an exported function
     async fn enqueue(
         &self,
@@ -957,7 +997,7 @@ struct RunningWorker {
 
     oplog: Arc<dyn Oplog + Send + Sync>,
 
-    _permit: OwnedSemaphorePermit,
+    permit: OwnedSemaphorePermit,
 }
 
 impl RunningWorker {
@@ -999,8 +1039,12 @@ impl RunningWorker {
             queue,
             oplog,
             execution_status,
-            _permit: permit,
+            permit,
         }
+    }
+
+    pub fn merge_extra_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+        self.permit.merge(extra_permit);
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
@@ -1501,7 +1545,8 @@ where
             &new_entries,
         );
 
-        let total_linear_memory_size = last_known.total_linear_memory_size; // TODO: recalculate this once we record memory grow events in oplog
+        let total_linear_memory_size =
+            calculate_total_linear_memory_size(last_known.total_linear_memory_size, &new_entries);
 
         let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -1603,6 +1648,7 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
+            OplogEntry::GrowMemory { .. } => {}
         }
     }
     result
@@ -1796,6 +1842,19 @@ fn calculate_invocation_results(
     }
 
     (invocation_results, current_idempotency_key)
+}
+
+fn calculate_total_linear_memory_size(
+    total: u64,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> u64 {
+    let mut result = total;
+    for entry in entries.values() {
+        if let OplogEntry::GrowMemory { delta, .. } = entry {
+            result += *delta;
+        }
+    }
+    result
 }
 
 pub fn is_worker_error_retriable(

@@ -699,7 +699,13 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             current,
             desired
         );
-        Ok(true)
+        let current_known = self.durable_ctx.total_linear_memory_size();
+        let delta = (desired as u64).saturating_sub(current_known);
+        if delta > 0 {
+            Ok(self.durable_ctx.increase_memory(delta).await?)
+        } else {
+            Ok(true)
+        }
     }
 
     async fn table_growing(

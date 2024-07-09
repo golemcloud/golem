@@ -101,13 +101,10 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .expect("requested memory size is too large");
 
         loop {
+            let available = self.worker_memory.available_permits();
             match self.worker_memory.clone().try_acquire_many_owned(mem32) {
                 Ok(permit) => {
-                    debug!(
-                        "Acquired {} memory of {}",
-                        mem32,
-                        self.worker_memory.available_permits()
-                    );
+                    debug!("Acquired {} memory of {}", mem32, available);
                     break permit;
                 }
                 Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
@@ -138,6 +135,24 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    pub async fn try_acquire(&self, memory: u64) -> Option<OwnedSemaphorePermit> {
+        let mem32: u32 = memory
+            .try_into()
+            .expect("requested memory size is too large");
+        let available = self.worker_memory.available_permits();
+        match self.worker_memory.clone().try_acquire_many_owned(mem32) {
+            Ok(permit) => {
+                debug!("Acquired {} memory of {}", mem32, available);
+                Some(permit)
+            }
+            Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
+            Err(TryAcquireError::NoPermits) => {
+                debug!("Not enough available memory to acquire {}", mem32);
+                None
             }
         }
     }
