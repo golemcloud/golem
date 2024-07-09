@@ -315,7 +315,7 @@ impl TestMode {
 
 impl CliTestDependencies {
     pub fn init_logging(params: &CliParams) {
-        init_tracing(&TracingConfig::local_dev("cli-tests"), |_output| {
+        init_tracing(&TracingConfig::test("cli-tests"), |_output| {
             golem_common::tracing::filter::boxed::env_with_directives(
                 params
                     .default_log_level()

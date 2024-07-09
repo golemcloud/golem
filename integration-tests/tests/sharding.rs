@@ -16,7 +16,7 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::local_dev("sharding-tests"));
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test("sharding-tests"));
         Self
     }
 }

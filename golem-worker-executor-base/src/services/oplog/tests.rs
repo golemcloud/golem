@@ -38,7 +38,7 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        init_tracing(&TracingConfig::local_dev("op-log-tests"), |_output| {
+        init_tracing(&TracingConfig::test("op-log-tests"), |_output| {
             golem_common::tracing::filter::boxed::debug_env_with_directives(Vec::new())
         });
         Self

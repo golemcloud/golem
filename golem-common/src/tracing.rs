@@ -118,6 +118,7 @@ pub struct TracingConfig {
     pub file_dir: Option<String>,
     pub file_name: Option<String>,
     pub console: bool,
+    pub dtor_friendly: bool,
 }
 
 impl TracingConfig {
@@ -131,6 +132,14 @@ impl TracingConfig {
             file_dir: None,
             file_name: Some(format!("{}.log", service_name)),
             console: false,
+            dtor_friendly: false,
+        }
+    }
+
+    pub fn test(service_name: &str) -> Self {
+        Self {
+            dtor_friendly: true,
+            ..Self::local_dev(service_name)
         }
     }
 }
@@ -146,6 +155,7 @@ impl Default for TracingConfig {
             file_dir: None,
             file_name: None,
             console: false,
+            dtor_friendly: false,
         }
     }
 }
@@ -316,11 +326,15 @@ where
 
     tracing_subscriber::registry().with(layers).init();
 
-    info!(
-        // NOTE: intentionally logged as string and not as structured
-        tracing_config = serde_json::to_string(&config).expect("cannot serialize log config"),
-        "Tracing initialized"
-    );
+    if config.dtor_friendly {
+        println!("Tracing initialized, config: {:?}", config);
+    } else {
+        info!(
+            // NOTE: intentionally logged as string and not as structured
+            tracing_config = serde_json::to_string(&config).expect("cannot serialize log config"),
+            "Tracing initialized"
+        );
+    }
 }
 
 pub fn init_tracing_with_default_env_filter(config: &TracingConfig) {
