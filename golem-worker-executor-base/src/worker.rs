@@ -19,15 +19,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use golem_wasm_rpc::Value;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
-use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level};
-use wasmtime::{Store, UpdateDeadline};
-
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -38,6 +29,15 @@ use golem_common::model::{
     SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
+use golem_wasm_rpc::Value;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
+use tokio::task::JoinHandle;
+use tracing::{debug, info, span, warn, Instrument, Level};
+use wasmtime::component::Instance;
+use wasmtime::{Store, UpdateDeadline};
 
 use crate::error::GolemError;
 use crate::invocation::{invoke_worker, InvokeResult};
@@ -227,110 +227,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
         let mut running = this.running.lock().await;
+        warn!("ACQUIRED RUNNING LOCK IN START_IF_NEEDED");
         if running.is_none() {
+            // TODO: this should not keep running locked
             let permit = this
                 .active_workers()
                 .acquire(this.memory_requirement().await?)
                 .await;
-
-            let component_id = this.owned_worker_id.component_id();
-            let worker_metadata = this.get_metadata().await?;
-
-            let component_version = worker_metadata
-                .last_known_status
-                .pending_updates
-                .front()
-                .map_or(
-                    worker_metadata.last_known_status.component_version,
-                    |update| {
-                        let target_version = *update.description.target_version();
-                        info!(
-                            "Attempting {} update from {} to version {target_version}",
-                            match update.description {
-                                UpdateDescription::Automatic { .. } => "automatic",
-                                UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                            },
-                            worker_metadata.last_known_status.component_version
-                        );
-                        target_version
-                    },
-                );
-            let (component, component_metadata) = this
-                .component_service()
-                .get(&this.engine(), &component_id, component_version)
-                .await?;
-
-            let context = Ctx::create(
-                OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
-                component_metadata,
-                this.promise_service(),
-                this.worker_service(),
-                this.worker_enumeration_service(),
-                this.key_value_service(),
-                this.blob_store_service(),
-                this.event_service.clone(),
-                this.active_workers(),
-                this.oplog_service(),
-                this.oplog.clone(),
-                Arc::downgrade(&this),
-                this.scheduler_service(),
-                this.rpc(),
-                this.worker_proxy(),
-                this.extra_deps(),
-                this.config(),
-                WorkerConfig::new(
-                    worker_metadata.worker_id.clone(),
-                    worker_metadata.last_known_status.component_version,
-                    worker_metadata.args.clone(),
-                    worker_metadata.env.clone(),
-                    worker_metadata.last_known_status.deleted_regions.clone(),
-                    worker_metadata.last_known_status.total_linear_memory_size,
-                ),
-                this.execution_status.clone(),
-            )
-            .await?;
-
-            let mut store = Store::new(&this.engine(), context);
-            store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            let worker_id_clone = worker_metadata.worker_id.clone();
-            store.epoch_deadline_callback(move |mut store| {
-                let current_level = store.get_fuel().unwrap_or(0);
-                if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                    store.data_mut().borrow_fuel_sync();
-                }
-
-                match store.data_mut().check_interrupt() {
-                    Some(kind) => Err(kind.into()),
-                    None => Ok(UpdateDeadline::Yield(1)),
-                }
-            });
-
-            store.set_fuel(i64::MAX as u64)?;
-            store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
-
-            store.limiter_async(|ctx| ctx.resource_limiter());
-
-            let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
-                GolemError::worker_creation_failed(
-                    this.owned_worker_id.worker_id(),
-                    format!(
-                        "Failed to pre-instantiate worker {}: {e}",
-                        this.owned_worker_id
-                    ),
-                )
-            })?;
-
-            let instance = instance_pre
-                .instantiate_async(&mut store)
-                .await
-                .map_err(|e| {
-                    GolemError::worker_creation_failed(
-                        this.owned_worker_id.worker_id(),
-                        format!("Failed to instantiate worker {}: {e}", this.owned_worker_id),
-                    )
-                })?;
-            let store = async_mutex::Mutex::new(store);
 
             *running = Some(RunningWorker::new(
                 this.owned_worker_id.clone(),
@@ -338,10 +241,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.clone(),
                 this.oplog(),
                 this.execution_status.clone(),
-                instance,
-                store,
                 permit,
             ));
+            warn!("DROPPING RUNNING LOCK IN START_IF_NEEDED");
         } else {
             debug!("Worker is already running");
         }
@@ -746,16 +648,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn increase_memory(&self, delta: u64) -> Result<(), GolemError> {
+        warn!("INCREASE MEMORY START");
         match self.running.lock().await.as_mut() {
             Some(running) => {
+                warn!("INCREASE MEMORY GOT LOCK ON RUNNING WORKER");
                 if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
+                    warn!("INCREASE MEMORY MERGING PERMITS");
                     running.merge_extra_permits(new_permits);
                     Ok(())
                 } else {
+                    warn!("INCREASE MEMORY FAILING");
                     Err(GolemError::runtime("Not enough memory available")) // TODO: custom error that we can catch
                 }
             }
-            None => Ok(()),
+            None => {
+                warn!("INCREASE MEMORY WORKER IS NOT RUNNING");
+                Ok(())
+            }
         }
     }
 
@@ -1007,8 +916,6 @@ impl RunningWorker {
         parent: Arc<Worker<Ctx>>,
         oplog: Arc<dyn Oplog + Send + Sync>,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        instance: wasmtime::component::Instance,
-        store: async_mutex::Mutex<Store<Ctx>>,
         permit: OwnedSemaphorePermit,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -1021,16 +928,9 @@ impl RunningWorker {
         let active_clone = queue.clone();
         let owned_worker_id_clone = owned_worker_id.clone();
         let handle = tokio::task::spawn(async move {
-            RunningWorker::invocation_loop(
-                receiver,
-                active_clone,
-                owned_worker_id_clone,
-                parent,
-                instance,
-                store,
-            )
-            .in_current_span()
-            .await;
+            RunningWorker::invocation_loop(receiver, active_clone, owned_worker_id_clone, parent)
+                .in_current_span()
+                .await;
         });
 
         RunningWorker {
@@ -1094,14 +994,130 @@ impl RunningWorker {
         self.sender.send(WorkerCommand::Interrupt(kind)).unwrap();
     }
 
+    async fn create_instance<Ctx: WorkerCtx>(
+        parent: Arc<Worker<Ctx>>,
+    ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
+        let component_id = parent.owned_worker_id.component_id();
+        let worker_metadata = parent.get_metadata().await?;
+
+        let component_version = worker_metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .map_or(
+                worker_metadata.last_known_status.component_version,
+                |update| {
+                    let target_version = *update.description.target_version();
+                    info!(
+                        "Attempting {} update from {} to version {target_version}",
+                        match update.description {
+                            UpdateDescription::Automatic { .. } => "automatic",
+                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        },
+                        worker_metadata.last_known_status.component_version
+                    );
+                    target_version
+                },
+            );
+        let (component, component_metadata) = parent
+            .component_service()
+            .get(&parent.engine(), &component_id, component_version)
+            .await?;
+
+        let context = Ctx::create(
+            OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+            component_metadata,
+            parent.promise_service(),
+            parent.worker_service(),
+            parent.worker_enumeration_service(),
+            parent.key_value_service(),
+            parent.blob_store_service(),
+            parent.event_service.clone(),
+            parent.active_workers(),
+            parent.oplog_service(),
+            parent.oplog.clone(),
+            Arc::downgrade(&parent),
+            parent.scheduler_service(),
+            parent.rpc(),
+            parent.worker_proxy(),
+            parent.extra_deps(),
+            parent.config(),
+            WorkerConfig::new(
+                worker_metadata.worker_id.clone(),
+                worker_metadata.last_known_status.component_version,
+                worker_metadata.args.clone(),
+                worker_metadata.env.clone(),
+                worker_metadata.last_known_status.deleted_regions.clone(),
+                worker_metadata.last_known_status.total_linear_memory_size,
+            ),
+            parent.execution_status.clone(),
+        )
+        .await?;
+
+        let mut store = Store::new(&parent.engine(), context);
+        store.set_epoch_deadline(parent.config().limits.epoch_ticks);
+        let worker_id_clone = worker_metadata.worker_id.clone();
+        store.epoch_deadline_callback(move |mut store| {
+            let current_level = store.get_fuel().unwrap_or(0);
+            if store.data().is_out_of_fuel(current_level as i64) {
+                debug!("{worker_id_clone} ran out of fuel, borrowing more");
+                store.data_mut().borrow_fuel_sync();
+            }
+
+            match store.data_mut().check_interrupt() {
+                Some(kind) => Err(kind.into()),
+                None => Ok(UpdateDeadline::Yield(1)),
+            }
+        });
+
+        store.set_fuel(i64::MAX as u64)?;
+        store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
+
+        store.limiter_async(|ctx| ctx.resource_limiter());
+
+        let instance_pre = parent.linker().instantiate_pre(&component).map_err(|e| {
+            GolemError::worker_creation_failed(
+                parent.owned_worker_id.worker_id(),
+                format!(
+                    "Failed to pre-instantiate worker {}: {e}",
+                    parent.owned_worker_id
+                ),
+            )
+        })?;
+
+        let instance = instance_pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| {
+                GolemError::worker_creation_failed(
+                    parent.owned_worker_id.worker_id(),
+                    format!(
+                        "Failed to instantiate worker {}: {e}",
+                        parent.owned_worker_id
+                    ),
+                )
+            })?;
+        let store = async_mutex::Mutex::new(store);
+        Ok((instance, store))
+    }
+
     async fn invocation_loop<Ctx: WorkerCtx>(
         mut receiver: UnboundedReceiver<WorkerCommand>,
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         owned_worker_id: OwnedWorkerId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
-        instance: wasmtime::component::Instance,
-        store: async_mutex::Mutex<Store<Ctx>>,
     ) {
+        debug!("Invocation queue loop creating the instance");
+
+        let (instance, store) = match Self::create_instance(parent.clone()).await {
+            Ok((instance, store)) => (instance, store),
+            Err(err) => {
+                warn!("Failed to start the worker: {err}");
+                parent.stop_internal(true).await;
+                return; // early return, we can't retry this
+            }
+        };
+
         debug!("Invocation queue loop preparing the instance");
 
         let mut final_decision = {
