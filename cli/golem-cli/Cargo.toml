@@ -65,6 +65,7 @@ textwrap = "0.16.1"
 anyhow.workspace = true
 colored = "2.1.0"
 inquire = "0.7.5"
+iso8601 = "0.6.1"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
