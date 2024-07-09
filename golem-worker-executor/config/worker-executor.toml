@@ -114,6 +114,7 @@ suspend_after = "10s"
 
 [tracing]
 console = false
+dtor_friendly = false
 file_name = "worker-executor.log"
 
 [tracing.file]
@@ -253,6 +254,7 @@ span_events_full = false
 # 
 # [tracing]
 # console = false
+# dtor_friendly = false
 # file_name = "worker-executor.log"
 # 
 # [tracing.file]
@@ -372,6 +374,7 @@ span_events_full = false
 # 
 # [tracing]
 # console = false
+# dtor_friendly = false
 # file_name = "worker-executor.log"
 # 
 # [tracing.file]

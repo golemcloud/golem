@@ -25,6 +25,7 @@ max_connections = 10
 
 [tracing]
 console = false
+dtor_friendly = false
 file_name = "component-service.log"
 
 [tracing.file]
@@ -75,6 +76,7 @@ span_events_full = false
 # 
 # [tracing]
 # console = false
+# dtor_friendly = false
 # file_name = "component-service.log"
 # 
 # [tracing.file]

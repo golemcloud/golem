@@ -27,6 +27,7 @@ multiplier = 2
 
 [tracing]
 console = false
+dtor_friendly = false
 file_name = "shard-manager.log"
 
 [tracing.file]
@@ -89,6 +90,7 @@ multiplier = 2
 # 
 # [tracing]
 # console = false
+# dtor_friendly = false
 # file_name = "shard-manager.log"
 # 
 # [tracing.file]
