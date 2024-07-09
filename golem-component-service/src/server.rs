@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_service::api::make_open_api_service;
-use golem_component_service::config::ComponentServiceConfig;
+use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
 use golem_component_service::service::Services;
 use golem_component_service::{api, grpcapi, metrics};
 use golem_service_base::config::DbConfig;
@@ -27,34 +28,16 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::select;
 use tracing::{error, info};
-use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         let service = make_open_api_service(&Services::noop());
         println!("{}", service.spec_yaml());
         Ok(())
-    } else {
-        let prometheus = metrics::register_all();
-        let config = ComponentServiceConfig::new();
+    } else if let Some(config) = make_config_loader().load_or_dump_config() {
+        init_tracing_with_default_env_filter(&config.tracing);
 
-        if config.enable_tracing_console {
-            // NOTE: also requires RUSTFLAGS="--cfg tokio_unstable" cargo build
-            console_subscriber::init();
-        } else if config.enable_json_log {
-            tracing_subscriber::fmt()
-                .json()
-                .flatten_event(true)
-                .with_span_events(FmtSpan::FULL) // NOTE: enable to see span events
-                .with_env_filter(EnvFilter::from_default_env())
-                .init();
-        } else {
-            tracing_subscriber::fmt()
-                .with_env_filter(EnvFilter::from_default_env())
-                .with_ansi(true)
-                .init();
-        }
+        let prometheus = metrics::register_all();
 
         let exporter = opentelemetry_prometheus::exporter()
             .with_registry(prometheus.clone())
@@ -72,6 +55,8 @@ fn main() -> Result<(), std::io::Error> {
             .build()
             .unwrap()
             .block_on(async_main(&config, prometheus))
+    } else {
+        Ok(())
     }
 }
 

@@ -1,36 +1,13 @@
-enable_tracing_console = false
-enable_json_log = false
-
+## Generated from default config
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
-
 http_port = 8082
 port = 9000
+tracing_file_name_with_port = true
 
-[memory]
-# system_memory_override = 4294967296
-worker_memory_ratio = 0.8
-worker_estimate_coefficient = 1.1
-
-[key_value_storage]
-type = "Redis"
-
-[key_value_storage.config]
-host = "localhost"
-port = 6380
-database = 0
-tracing = false
-pool_size = 8
-key_prefix = ""
-
-[key_value_storage.config.retries]
-max_attempts = 5
-min_delay = "100ms"
-max_delay = "2s"
-multiplier = 2
-
-[indexed_storage]
-type = "KVStoreRedis"
+[active_workers]
+drop_when_full = 0.25
+ttl = "8h"
 
 [blob_storage]
 type = "LocalFileSystem"
@@ -38,45 +15,10 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
-# S3 defaults
-# region
-# aws_endpoint_url
-object_prefix = ""
-compilation_cache_bucket = "compilation-cache"
-custom_data_bucket = "custom-data"
-oplog_payload_bucket = "oplog-payload"
-compressed_oplog_buckets = ["oplog-archive-1"]
-use_minio_credentials = false
+[compiled_component_service]
+type = "Enabled"
 
-[blob_storage.config.retries]
-max_attempts = 3
-min_delay = "100ms"
-max_delay = "1s"
-multiplier = 3
-
-[oplog]
-max_operations_before_commit = 128
-max_payload_size = 65536
-indexed_storage_layers = 2
-blob_storage_layers = 1
-entry_count_limit = 1024
-archive_interval = "24h"
-
-[limits]
-max_active_workers = 1024
-invocation_result_broadcast_capacity = 100000
-max_concurrent_streams = 1024
-event_broadcast_capacity = 16
-event_history_size = 128
-fuel_to_borrow = 10000
-epoch_interval = "10ms"
-epoch_ticks = 1
-
-[retry]
-max_attempts = 3
-min_delay = "100ms"
-max_delay = "1s"
-multiplier = 3
+[compiled_component_service.config]
 
 [component_cache]
 max_capacity = 32
@@ -87,20 +29,72 @@ time_to_idle = "12h"
 type = "Grpc"
 
 [component_service.config]
-max_component_size = 52428800                         # 50 Mb
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 host = "localhost"
+max_component_size = 52428800
 port = 9090
-access_token = "2A354594-7A63-4091-A46B-CC58D379F677"
 
 [component_service.config.retries]
 max_attempts = 3
-min_delay = "100ms"
 max_delay = "1s"
+min_delay = "100ms"
 multiplier = 3
 
-[compiled_component_service]
-type = "Enabled"
-[compiled_component_service.config]
+[indexed_storage]
+type = "KVStoreRedis"
+
+[key_value_storage]
+type = "Redis"
+
+[key_value_storage.config]
+database = 0
+host = "localhost"
+key_prefix = ""
+pool_size = 8
+port = 6380
+tracing = false
+
+[key_value_storage.config.retries]
+max_attempts = 5
+max_delay = "2s"
+min_delay = "100ms"
+multiplier = 2
+
+[limits]
+epoch_interval = "10ms"
+epoch_ticks = 1
+event_broadcast_capacity = 16
+event_history_size = 128
+fuel_to_borrow = 10000
+invocation_result_broadcast_capacity = 100000
+max_active_workers = 1024
+max_concurrent_streams = 1024
+
+[memory]
+worker_estimate_coefficient = 1.1
+worker_memory_ratio = 0.8
+
+[oplog]
+archive_interval = "1day"
+blob_storage_layers = 1
+entry_count_limit = 1024
+indexed_storage_layers = 2
+max_operations_before_commit = 128
+max_payload_size = 65536
+
+[public_worker_api]
+access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+host = "localhost"
+port = 9007
+
+[retry]
+max_attempts = 3
+max_delay = "1s"
+min_delay = "100ms"
+multiplier = 3
+
+[scheduler]
+refresh_interval = "2s"
 
 [shard_manager_service]
 type = "Grpc"
@@ -111,25 +105,310 @@ port = 9002
 
 [shard_manager_service.config.retries]
 max_attempts = 5
-min_delay = "100ms"
 max_delay = "2s"
+min_delay = "100ms"
 multiplier = 2
-
-[scheduler]
-refresh_interval = "2s"
 
 [suspend]
 suspend_after = "10s"
 
-[active_workers]
-drop_when_full = 0.25
-ttl = "8h"
+[tracing]
+console = false
+dtor_friendly = false
+file_name = "worker-executor.log"
 
-[invocation_keys]
-pending_key_retention = "1m"
-confirm_queue_capacity = 1024
+[tracing.file]
+ansi = false
+compact = false
+enabled = false
+json = true
+json_flatten = true
+json_flatten_span = true
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
 
-[public_worker_api]
-host = "localhost"
-port = 9007
-access_token = "2A354594-7A63-4091-A46B-CC58D379F677"
+[tracing.stdout]
+ansi = true
+compact = false
+enabled = true
+json = false
+json_flatten = true
+json_flatten_span = false
+pretty = false
+span_events_active = false
+span_events_full = false
+without_time = false
+
+
+## Generated from example config: with redis indexed_storage, s3 blob storage, single shard manager service
+# grpc_address = "0.0.0.0"
+# http_address = "0.0.0.0"
+# http_port = 8082
+# port = 9000
+# tracing_file_name_with_port = true
+# 
+# [active_workers]
+# drop_when_full = 0.25
+# ttl = "8h"
+# 
+# [blob_storage]
+# type = "S3"
+# 
+# [blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# region = "us-east-1"
+# use_minio_credentials = false
+# 
+# [blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# min_delay = "100ms"
+# multiplier = 3
+# 
+# [compiled_component_service]
+# type = "Enabled"
+# 
+# [compiled_component_service.config]
+# 
+# [component_cache]
+# max_capacity = 32
+# max_metadata_capacity = 16384
+# time_to_idle = "12h"
+# 
+# [component_service]
+# type = "Grpc"
+# 
+# [component_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# max_component_size = 52428800
+# port = 9090
+# 
+# [component_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# min_delay = "100ms"
+# multiplier = 3
+# 
+# [indexed_storage]
+# type = "Redis"
+# 
+# [indexed_storage.config]
+# database = 0
+# host = "localhost"
+# key_prefix = ""
+# pool_size = 8
+# port = 6380
+# tracing = false
+# 
+# [indexed_storage.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# min_delay = "100ms"
+# multiplier = 2
+# 
+# [key_value_storage]
+# type = "InMemory"
+# 
+# [limits]
+# epoch_interval = "10ms"
+# epoch_ticks = 1
+# event_broadcast_capacity = 16
+# event_history_size = 128
+# fuel_to_borrow = 10000
+# invocation_result_broadcast_capacity = 100000
+# max_active_workers = 1024
+# max_concurrent_streams = 1024
+# 
+# [memory]
+# worker_estimate_coefficient = 1.1
+# worker_memory_ratio = 0.8
+# 
+# [oplog]
+# archive_interval = "1day"
+# blob_storage_layers = 1
+# entry_count_limit = 1024
+# indexed_storage_layers = 2
+# max_operations_before_commit = 128
+# max_payload_size = 65536
+# 
+# [public_worker_api]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# port = 9007
+# 
+# [retry]
+# max_attempts = 3
+# max_delay = "1s"
+# min_delay = "100ms"
+# multiplier = 3
+# 
+# [scheduler]
+# refresh_interval = "2s"
+# 
+# [shard_manager_service]
+# type = "SingleShard"
+# 
+# [suspend]
+# suspend_after = "10s"
+# 
+# [tracing]
+# console = false
+# dtor_friendly = false
+# file_name = "worker-executor.log"
+# 
+# [tracing.file]
+# ansi = false
+# compact = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [tracing.stdout]
+# ansi = true
+# compact = false
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = false
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+
+## Generated from example config: with in-memory key value storage, indexed storage and blob storage
+# grpc_address = "0.0.0.0"
+# http_address = "0.0.0.0"
+# http_port = 8082
+# port = 9000
+# tracing_file_name_with_port = true
+# 
+# [active_workers]
+# drop_when_full = 0.25
+# ttl = "8h"
+# 
+# [blob_storage]
+# type = "InMemory"
+# 
+# [compiled_component_service]
+# type = "Enabled"
+# 
+# [compiled_component_service.config]
+# 
+# [component_cache]
+# max_capacity = 32
+# max_metadata_capacity = 16384
+# time_to_idle = "12h"
+# 
+# [component_service]
+# type = "Grpc"
+# 
+# [component_service.config]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# max_component_size = 52428800
+# port = 9090
+# 
+# [component_service.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# min_delay = "100ms"
+# multiplier = 3
+# 
+# [indexed_storage]
+# type = "InMemory"
+# 
+# [key_value_storage]
+# type = "InMemory"
+# 
+# [limits]
+# epoch_interval = "10ms"
+# epoch_ticks = 1
+# event_broadcast_capacity = 16
+# event_history_size = 128
+# fuel_to_borrow = 10000
+# invocation_result_broadcast_capacity = 100000
+# max_active_workers = 1024
+# max_concurrent_streams = 1024
+# 
+# [memory]
+# worker_estimate_coefficient = 1.1
+# worker_memory_ratio = 0.8
+# 
+# [oplog]
+# archive_interval = "1day"
+# blob_storage_layers = 1
+# entry_count_limit = 1024
+# indexed_storage_layers = 2
+# max_operations_before_commit = 128
+# max_payload_size = 65536
+# 
+# [public_worker_api]
+# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
+# host = "localhost"
+# port = 9007
+# 
+# [retry]
+# max_attempts = 3
+# max_delay = "1s"
+# min_delay = "100ms"
+# multiplier = 3
+# 
+# [scheduler]
+# refresh_interval = "2s"
+# 
+# [shard_manager_service]
+# type = "Grpc"
+# 
+# [shard_manager_service.config]
+# host = "localhost"
+# port = 9002
+# 
+# [shard_manager_service.config.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# min_delay = "100ms"
+# multiplier = 2
+# 
+# [suspend]
+# suspend_after = "10s"
+# 
+# [tracing]
+# console = false
+# dtor_friendly = false
+# file_name = "worker-executor.log"
+# 
+# [tracing.file]
+# ansi = false
+# compact = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = true
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+# 
+# [tracing.stdout]
+# ansi = true
+# compact = false
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = false
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false

@@ -54,8 +54,9 @@ pub fn deserialize_with_version<T: Decode>(data: &[u8], version: u8) -> Result<T
         Some(value) => Ok(value),
         None => {
             error!(
-                "invalid serialization version: {}, full data set: {:?}",
-                version, data
+                version,
+                data = format!("{:?}", data),
+                "invalid serialization version"
             );
             panic!("invalid serialization version: {}", version)
         }

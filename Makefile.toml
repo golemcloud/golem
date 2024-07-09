@@ -15,6 +15,8 @@
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
+# - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
+# - `cargo make generate-configs`: generates configs from code defaults
 
 [config]
 default_to_workspace = false # by default, we run cargo commands on top level instead of per member
@@ -90,7 +92,7 @@ command = "cargo"
 args = [
     "build",
     "-p",
-    "golem-shard-manager",                                               # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
     "-p",
     "golem-worker-executor",
     "-p",
@@ -482,28 +484,34 @@ redis_pid=$!
 
 export RUST_BACKTRACE=1
 
+export GOLEM__TRACING__FILE_DIR="${GOLEM__TRACING__FILE_DIR:=../logs}"
+export GOLEM__TRACING__FILE__ANSI="${GOLEM__TRACING__FILE__ANSI:=true}"
+export GOLEM__TRACING__FILE__ENABLED="${GOLEM__TRACING__FILE__ENABLED:=true}"
+export GOLEM__TRACING__FILE__JSON="${GOLEM__TRACING__FILE__JSON:=false}"
+export GOLEM__TRACING__STDOUT__ENABLED="${GOLEM__TRACING__STDOUT__ENABLED:=false}"
+
 pushd golem-shard-manager || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &> ../logs/shard-manager.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &
 shard_manager_pid=$!
 popd || exit
 
 pushd golem-component-compilation-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &> ../logs/component-compilation-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &
 component_compilation_service_pid=$!
 popd || exit
 
 pushd golem-component-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &> ../logs/component-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &
 component_service_pid=$!
 popd || exit
 
 pushd golem-worker-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &> ../logs/worker-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &
 worker_service_pid=$!
 popd || exit
 
 pushd golem-worker-executor || exit
-RUST_LOG=info ../target/debug/worker-executor &> ../logs/worker-executor.log &
+RUST_LOG=info ../target/debug/worker-executor &
 worker_executor_pid=$!
 popd || exit
 
@@ -531,4 +539,47 @@ kill $component_compilation_service_pid || true
 kill $shard_manager_pid || true
 kill $router_pid || true
 kill $redis_pid || true
+'''
+
+## ** GENERATE CONFIGS **
+
+[tasks.generate-configs]
+description = "Generates default and exmaple config files"
+dependencies = ["build"]
+
+script = '''
+export RUST_BACKTRACE=1
+
+./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
+./target/debug/golem-shard-manager --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
+./target/debug/golem-component-compilation-service --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
+./target/debug/golem-component-compilation-service --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
+./target/debug/golem-component-service --dump-config-default-toml > golem-component-service/config/component-service.toml
+./target/debug/golem-component-service --dump-config-default-env-var > golem-component-service/config/component-service.sample.env
+./target/debug/golem-worker-service --dump-config-default-toml > golem-worker-service/config/worker-service.toml
+./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
+./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
+./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+'''
+
+## ** CHECK CONFIGS **
+
+[tasks.check-configs]
+description = "Generates configs from code and checks if it's committed"
+dependencies = [
+    "generate-configs"
+]
+
+script = '''
+git diff --exit-code \
+    golem-shard-manager/config/shard-manager.toml \
+    golem-shard-manager/config/shard-manager.sample.env \
+    golem-component-compilation-service/config/component-compilation-service.toml \
+    golem-component-compilation-service/config/component-compilation-service.sample.env \
+    golem-component-service/config/component-service.toml \
+    golem-component-service/config/component-service.sample.env \
+    golem-worker-service/config/worker-service.toml \
+    golem-worker-service/config/worker-service.sample.env \
+    golem-worker-executor/config/worker-executor.toml \
+    golem-worker-executor/config/worker-executor.sample.env
 '''

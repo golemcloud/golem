@@ -23,7 +23,7 @@ use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::{Store, UpdateDeadline};
@@ -79,6 +79,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     initial_worker_metadata: WorkerMetadata,
     stopping: AtomicBool,
+    worker_estimate_coefficient: f64,
 
     running: Arc<Mutex<Option<RunningWorker>>>,
 }
@@ -110,29 +111,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        let this_clone = deps.clone();
-        let owned_worker_id_clone = owned_worker_id.clone();
-
-        let worker_details = deps
-            .active_workers()
-            .get_with(&owned_worker_id.worker_id, || {
-                Box::pin(async move {
-                    Ok(Arc::new(
-                        Self::new(
-                            &this_clone,
-                            owned_worker_id_clone,
-                            worker_args,
-                            worker_env,
-                            component_version,
-                            parent,
-                        )
-                        .in_current_span()
-                        .await?,
-                    ))
-                })
-            })
-            .await?;
-        Ok(worker_details)
+        deps.active_workers()
+            .get_or_add(
+                deps,
+                owned_worker_id,
+                worker_args,
+                worker_env,
+                component_version,
+                parent,
+            )
+            .await
     }
 
     /// Gets or creates a worker and makes sure it is running
@@ -160,13 +148,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(worker)
     }
 
-    async fn new<T: HasAll<Ctx>>(
+    pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
         owned_worker_id: OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        worker_estimate_coefficient: f64,
     ) -> Result<Self, GolemError> {
         let worker_metadata = Self::get_or_create_worker_metadata(
             deps,
@@ -212,6 +201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
             last_known_status: worker_metadata.last_known_status.clone(),
+            timestamp: Timestamp::now_utc(),
         }));
 
         let stopping = AtomicBool::new(false);
@@ -231,12 +221,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             execution_status,
             stopping,
             initial_worker_metadata: worker_metadata,
+            worker_estimate_coefficient,
         })
     }
 
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
         let mut running = this.running.lock().await;
         if running.is_none() {
+            let permit = this
+                .active_workers()
+                .acquire(this.memory_requirement().await?)
+                .await;
+
             let component_id = this.owned_worker_id.component_id();
             let worker_metadata = this.get_metadata().await?;
 
@@ -343,6 +339,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.execution_status.clone(),
                 instance,
                 store,
+                permit,
             ));
         } else {
             debug!("Worker is already running");
@@ -353,6 +350,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn stop(&self) {
         self.stop_internal(false).await;
+    }
+
+    pub async fn stop_if_idle(&self) -> bool {
+        let running_guard = self.running.lock().await;
+        match running_guard.as_ref() {
+            Some(running) => {
+                if is_running_worker_idle(running) {
+                    if self.stopping.compare_exchange(
+                        false,
+                        true,
+                        Ordering::Acquire,
+                        Ordering::Relaxed,
+                    ) == Ok(false)
+                    {
+                        self.stop_internal_running(running_guard, false).await;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
 
     pub async fn restart(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
@@ -410,12 +432,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { last_known_status } => {
+            ExecutionStatus::Running {
+                last_known_status, ..
+            } => {
                 let (sender, receiver) = tokio::sync::broadcast::channel(1);
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,
                     await_interruption: Arc::new(sender),
                     last_known_status,
+                    timestamp: Timestamp::now_utc(),
                 };
                 Some(receiver)
             }
@@ -657,6 +682,43 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .set_last_known_status(status_value);
     }
 
+    /// Gets the estimated memory requirement of the worker
+    pub async fn memory_requirement(&self) -> Result<u64, GolemError> {
+        let metadata = self.get_metadata().await?;
+
+        let ml = metadata.last_known_status.total_linear_memory_size as f64;
+        let sw = metadata.last_known_status.component_size as f64;
+        let c = 2.0;
+        let x = self.worker_estimate_coefficient;
+        Ok((x * (ml + c * sw)) as u64)
+    }
+
+    /// Returns true if the worker is running but it is not performing any invocations at the moment
+    /// (ExecutionStatus::Suspended) and has no pending invocation in its invocation queue.
+    ///
+    /// These workers can be stopped to free up available worker memory.
+    pub fn is_currently_idle_but_running(&self) -> bool {
+        match self.running.try_lock() {
+            Ok(guard) => match guard.as_ref() {
+                Some(running) => {
+                    let status = running.execution_status.read().unwrap();
+                    if matches!(&*status, ExecutionStatus::Suspended { .. }) {
+                        self.pending_invocations().is_empty()
+                    } else {
+                        false
+                    }
+                }
+                None => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// Gets the timestamp of the last time the execution status changed
+    pub async fn last_execution_state_change(&self) -> Timestamp {
+        self.execution_status.read().unwrap().timestamp()
+    }
+
     /// Enqueue invocation of an exported function
     async fn enqueue(
         &self,
@@ -791,30 +853,40 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             == Ok(false)
         {
-            let mut running = self.running.lock().await;
-            if let Some(running) = running.take() {
-                debug!("Stopping running worker ({called_from_invocation_loop})");
-                let queued_items = running
-                    .queue
-                    .write()
-                    .unwrap()
-                    .drain(..)
-                    .collect::<VecDeque<_>>();
-
-                *self.queue.write().unwrap() = queued_items;
-
-                if !called_from_invocation_loop {
-                    // If stop was called from outside, we wait until the invocation queue stops
-                    // (it happens by `running` getting dropped)
-                    let run_loop_handle = running.stop();
-                    run_loop_handle.await.expect("Worker run loop failed");
-                }
-            } else {
-                debug!("Worker was already stopped");
-            }
-            self.stopping.store(false, Ordering::Release);
+            let running = self.running.lock().await;
+            self.stop_internal_running(running, called_from_invocation_loop)
+                .await;
         }
     }
+
+    async fn stop_internal_running<'a>(
+        &self,
+        mut running: MutexGuard<'a, Option<RunningWorker>>,
+        called_from_invocation_loop: bool,
+    ) {
+        if let Some(running) = running.take() {
+            debug!("Stopping running worker ({called_from_invocation_loop})");
+            let queued_items = running
+                .queue
+                .write()
+                .unwrap()
+                .drain(..)
+                .collect::<VecDeque<_>>();
+
+            *self.queue.write().unwrap() = queued_items;
+
+            if !called_from_invocation_loop {
+                // If stop was called from outside, we wait until the invocation queue stops
+                // (it happens by `running` getting dropped)
+                let run_loop_handle = running.stop(); // this drops `running`
+                run_loop_handle.await.expect("Worker run loop failed");
+            }
+        } else {
+            debug!("Worker was already stopped");
+        }
+        self.stopping.store(false, Ordering::Release);
+    }
+
     async fn restart_internal(
         this: Arc<Worker<Ctx>>,
         called_from_invocation_loop: bool,
@@ -884,6 +956,8 @@ struct RunningWorker {
     execution_status: Arc<RwLock<ExecutionStatus>>,
 
     oplog: Arc<dyn Oplog + Send + Sync>,
+
+    _permit: OwnedSemaphorePermit,
 }
 
 impl RunningWorker {
@@ -895,6 +969,7 @@ impl RunningWorker {
         execution_status: Arc<RwLock<ExecutionStatus>>,
         instance: wasmtime::component::Instance,
         store: async_mutex::Mutex<Store<Ctx>>,
+        permit: OwnedSemaphorePermit,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -924,6 +999,7 @@ impl RunningWorker {
             queue,
             oplog,
             execution_status,
+            _permit: permit,
         }
     }
 
@@ -1731,4 +1807,10 @@ pub fn is_worker_error_retriable(
         WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
         WorkerError::StackOverflow => false,
     }
+}
+
+fn is_running_worker_idle(running: &RunningWorker) -> bool {
+    let status = running.execution_status.read().unwrap();
+    matches!(&*status, ExecutionStatus::Suspended { .. })
+        && running.queue.read().unwrap().is_empty()
 }

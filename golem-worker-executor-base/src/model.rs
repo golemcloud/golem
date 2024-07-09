@@ -23,7 +23,7 @@ use wasmtime::Trap;
 
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{ShardAssignment, ShardId, WorkerId, WorkerStatusRecord};
+use golem_common::model::{ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord};
 
 use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
@@ -125,14 +125,17 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 pub enum ExecutionStatus {
     Running {
         last_known_status: WorkerStatusRecord,
+        timestamp: Timestamp,
     },
     Suspended {
         last_known_status: WorkerStatusRecord,
+        timestamp: Timestamp,
     },
     Interrupting {
         interrupt_kind: InterruptKind,
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
         last_known_status: WorkerStatusRecord,
+        timestamp: Timestamp,
     },
 }
 
@@ -143,8 +146,12 @@ impl ExecutionStatus {
 
     pub fn last_known_status(&self) -> &WorkerStatusRecord {
         match self {
-            ExecutionStatus::Running { last_known_status } => last_known_status,
-            ExecutionStatus::Suspended { last_known_status } => last_known_status,
+            ExecutionStatus::Running {
+                last_known_status, ..
+            } => last_known_status,
+            ExecutionStatus::Suspended {
+                last_known_status, ..
+            } => last_known_status,
             ExecutionStatus::Interrupting {
                 last_known_status, ..
             } => last_known_status,
@@ -153,11 +160,23 @@ impl ExecutionStatus {
 
     pub fn set_last_known_status(&mut self, status: WorkerStatusRecord) {
         match self {
-            ExecutionStatus::Running { last_known_status } => *last_known_status = status,
-            ExecutionStatus::Suspended { last_known_status } => *last_known_status = status,
+            ExecutionStatus::Running {
+                last_known_status, ..
+            } => *last_known_status = status,
+            ExecutionStatus::Suspended {
+                last_known_status, ..
+            } => *last_known_status = status,
             ExecutionStatus::Interrupting {
                 last_known_status, ..
             } => *last_known_status = status,
+        }
+    }
+
+    pub fn timestamp(&self) -> Timestamp {
+        match self {
+            ExecutionStatus::Running { timestamp, .. } => *timestamp,
+            ExecutionStatus::Suspended { timestamp, .. } => *timestamp,
+            ExecutionStatus::Interrupting { timestamp, .. } => *timestamp,
         }
     }
 }

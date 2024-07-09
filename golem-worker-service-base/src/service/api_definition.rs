@@ -157,7 +157,11 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
                     .get_latest(id, auth_ctx)
                     .await
                     .map_err(|e| {
-                        error!("Error getting latest component: {:?}", e);
+                        error!(
+                            error = e.to_string(),
+                            component_id = id.to_string(),
+                            "Error getting latest component"
+                        );
                         id.clone()
                     })
             })
