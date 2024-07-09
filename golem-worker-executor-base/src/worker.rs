@@ -227,7 +227,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
         let mut running = this.running.lock().await;
-        warn!("ACQUIRED RUNNING LOCK IN START_IF_NEEDED");
         if running.is_none() {
             // TODO: this should not keep running locked
             let permit = this
@@ -243,7 +242,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 this.execution_status.clone(),
                 permit,
             ));
-            warn!("DROPPING RUNNING LOCK IN START_IF_NEEDED");
         } else {
             debug!("Worker is already running");
         }
@@ -648,21 +646,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn increase_memory(&self, delta: u64) -> Result<(), GolemError> {
-        warn!("INCREASE MEMORY START");
         match self.running.lock().await.as_mut() {
             Some(running) => {
-                warn!("INCREASE MEMORY GOT LOCK ON RUNNING WORKER");
                 if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
-                    warn!("INCREASE MEMORY MERGING PERMITS");
                     running.merge_extra_permits(new_permits);
                     Ok(())
                 } else {
-                    warn!("INCREASE MEMORY FAILING");
                     Err(GolemError::runtime("Not enough memory available")) // TODO: custom error that we can catch
                 }
             }
             None => {
-                warn!("INCREASE MEMORY WORKER IS NOT RUNNING");
                 Ok(())
             }
         }
