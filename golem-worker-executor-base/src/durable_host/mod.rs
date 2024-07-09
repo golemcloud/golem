@@ -49,7 +49,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, Wrap
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -248,8 +248,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { last_known_status } => {
-                *execution_status = ExecutionStatus::Suspended { last_known_status };
+            ExecutionStatus::Running {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
             }
             ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
@@ -257,7 +262,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 last_known_status,
                 ..
             } => {
-                *execution_status = ExecutionStatus::Suspended { last_known_status };
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
                 await_interruption.send(()).ok();
             }
         }
@@ -268,8 +276,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let current_execution_status = execution_status.clone();
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended { last_known_status } => {
-                *execution_status = ExecutionStatus::Running { last_known_status };
+            ExecutionStatus::Suspended {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
             }
             ExecutionStatus::Interrupting { .. } => {}
         }
@@ -967,6 +980,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let start = Instant::now();
         let mut count = 0;
 
+        store.as_context_mut().data_mut().set_running();
+
         // Handle the case when recovery immediately starts in a deleted region
         // (for example due to a manual update)
         store
@@ -1101,6 +1116,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             debug!("Retrying prepare_instance after failed update attempt");
             Ok(final_decision)
         } else {
+            store.as_context_mut().data_mut().set_suspended();
             debug!("Finished prepare_instance");
             result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
         }
