@@ -1,6 +1,7 @@
 use clap::Parser;
 use golem_test_framework::dsl::benchmark::{BenchmarkResult, RunConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::time::Duration;
 
@@ -76,16 +77,13 @@ impl BenchmarkComparisonReport {
 
             for run_config_report in report.comparison_results.results.iter() {
                 table.push(format!(
-                    r#"| {} | {} | {} | {} | {:?} | {:?} |"#,
+                    r#"| {} | {} | {} | {} | {} | {} |"#,
                     run_config_report.report_key.result_key,
                     run_config_report.report_key.run_config.cluster_size,
                     run_config_report.report_key.run_config.size,
                     run_config_report.report_key.run_config.length,
-                    run_config_report.comparison.previous_avg,
-                    run_config_report
-                        .comparison
-                        .current_avg
-                        .map_or("Unavailable".to_string(), |x| format!("{:?}", x))
+                    display_optional_duration(run_config_report.comparison.previous_avg),
+                    display_optional_duration(run_config_report.comparison.current_avg)
                 ));
             }
 
@@ -194,16 +192,23 @@ struct BenchmarkReportPerRunConfig {
 
 impl ComparisonForAllRunConfigs {
     fn from_results(previous: &BenchmarkResult, current: &BenchmarkResult) -> Self {
-        let previous_avg = calculate_mean_avg_time(previous);
-        let current_avg = calculate_mean_avg_time(current);
+        let previous_avg_report: HashMap<ReportKey, Duration> = calculate_mean_avg_time(previous);
+        let current_avg_report: HashMap<ReportKey, Duration> = calculate_mean_avg_time(current);
 
         let mut comparison_results = Vec::new();
 
-        for (report_key, previous_avg_time) in previous_avg {
-            let current_avg_time = current_avg.get(&report_key);
+        let all_keys: HashSet<&ReportKey> = previous_avg_report
+            .keys()
+            .chain(current_avg_report.keys())
+            .collect();
+
+        for report_key in all_keys {
+            let previous_avg = previous_avg_report.get(report_key).cloned();
+            let current_avg = current_avg_report.get(report_key).cloned();
+
             let comparison = Comparison {
-                previous_avg: previous_avg_time,
-                current_avg: current_avg_time.cloned(),
+                previous_avg,
+                current_avg,
             };
 
             comparison_results.push(ComparisonPerRunConfig {
@@ -220,7 +225,7 @@ impl ComparisonForAllRunConfigs {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Comparison {
-    previous_avg: Duration,
+    previous_avg: Option<Duration>,
     current_avg: Option<Duration>,
 }
 
@@ -244,7 +249,7 @@ mod internal {
     use std::io::BufReader;
     use std::time::Duration;
 
-    pub fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
+    pub(crate) fn load_json(file_path: &str) -> Result<BenchmarkResult, String> {
         let file = File::open(file_path)
             .map_err(|err| format!("Failed to open file {}. {}", file_path, err))?;
         let reader = BufReader::new(file);
@@ -254,12 +259,12 @@ mod internal {
     }
 
     #[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
-    pub struct ReportKey {
+    pub(crate) struct ReportKey {
         pub run_config: RunConfig,
         pub result_key: ResultKey,
     }
 
-    pub fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<ReportKey, Duration> {
+    pub(crate) fn calculate_mean_avg_time(json: &BenchmarkResult) -> HashMap<ReportKey, Duration> {
         let mut result_map = HashMap::new();
         let result = &json.results;
         for (run_config, benchmark) in result {
@@ -276,12 +281,18 @@ mod internal {
         result_map
     }
 
-    pub fn wrap_with_subtitle(subtitle: &str, content: &String) -> String {
+    pub(crate) fn wrap_with_subtitle(subtitle: &str, content: &String) -> String {
         format!(r#"\n## {}\n{}\n"#, subtitle, content)
     }
 
-    pub fn wrap_with_title(main_title: &str, content: &String) -> String {
+    pub(crate) fn wrap_with_title(main_title: &str, content: &String) -> String {
         format!(r#"\n# {}\n{}\n"#, main_title, content)
+    }
+
+    pub(crate) fn display_optional_duration(duration: Option<Duration>) -> String {
+        duration.map_or("Unavailable".to_string(), |duration| {
+            format!("{:?}", duration)
+        })
     }
 }
 
