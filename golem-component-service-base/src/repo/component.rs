@@ -101,23 +101,17 @@ where
 pub trait ComponentRepo {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
 
-    async fn get(
-        &self,
-        namespace: &str,
-        component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError>;
+    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_latest_version(
         &self,
-        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError>;
 
     async fn get_by_version(
         &self,
-        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError>;
@@ -198,11 +192,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
         Ok(())
     }
 
-    async fn get(
-        &self,
-        namespace: &str,
-        component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
+    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
@@ -214,10 +204,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.namespace = $1 AND c.component_id = $2
+                WHERE c.component_id = $1
                 "#,
         )
-        .bind(namespace)
         .bind(component_id)
         .fetch_all(self.db_pool.deref())
         .await
@@ -247,7 +236,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
 
     async fn get_latest_version(
         &self,
-        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
@@ -261,11 +249,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.namespace = $1 AND c.component_id = $2
+                WHERE c.component_id = $1
                 ORDER BY cv.version DESC LIMIT 1
                 "#,
         )
-        .bind(namespace)
         .bind(component_id)
         .fetch_optional(self.db_pool.deref())
         .await
@@ -274,7 +261,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
 
     async fn get_by_version(
         &self,
-        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
@@ -289,10 +275,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.namespace = $1 AND c.component_id = $2 AND cv.version = $3
+                WHERE c.component_id = $1 AND cv.version = $2
                 "#,
         )
-        .bind(namespace)
         .bind(component_id)
         .bind(version as i64)
         .fetch_optional(self.db_pool.deref())
@@ -423,11 +408,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(
-        &self,
-        namespace: &str,
-        component_id: &Uuid,
-    ) -> Result<Vec<ComponentRecord>, RepoError> {
+    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
@@ -439,10 +420,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.namespace = $1 AND c.component_id = $2
+                WHERE c.component_id = $1
                 "#,
         )
-        .bind(namespace)
         .bind(component_id)
         .fetch_all(self.db_pool.deref())
         .await
@@ -472,7 +452,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
     async fn get_latest_version(
         &self,
-        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
@@ -486,11 +465,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.namespace = $1 AND c.component_id = $2
+                WHERE c.component_id = $1
                 ORDER BY cv.version DESC LIMIT 1
                 "#,
         )
-        .bind(namespace)
         .bind(component_id)
         .fetch_optional(self.db_pool.deref())
         .await
@@ -499,7 +477,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
     async fn get_by_version(
         &self,
-        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
@@ -514,10 +491,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.metadata AS metadata
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.namespace = $1 AND c.component_id = $2 AND cv.version = $3
+                WHERE c.component_id = $1 AND cv.version = $2
                 "#,
         )
-        .bind(namespace)
         .bind(component_id)
         .bind(version as i64)
         .fetch_optional(self.db_pool.deref())

@@ -167,6 +167,12 @@ pub trait ComponentService<Namespace> {
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<Namespace>, ComponentError>;
+
+    async fn delete(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<(), ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -253,8 +259,9 @@ where
 
         let next_component = self
             .component_repo
-            .get_latest_version(namespace.to_string().as_str(), &component_id.0)
+            .get_latest_version(&component_id.0)
             .await?
+            .filter(|c| c.namespace == namespace.to_string())
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))
             .and_then(|c| {
                 c.try_into()
@@ -305,29 +312,11 @@ where
         version: Option<u64>,
         namespace: &Namespace,
     ) -> Result<Vec<u8>, ComponentError> {
-        let versioned_component_id = {
-            match version {
-                Some(version) => {
-                    let stored_namespace: Option<Namespace> =
-                        self.get_namespace(component_id).await?;
-                    match stored_namespace {
-                        Some(stored_namespace) if stored_namespace == namespace.clone() => {
-                            VersionedComponentId {
-                                component_id: component_id.clone(),
-                                version,
-                            }
-                        }
-                        _ => return Err(ComponentError::UnknownComponentId(component_id.clone())),
-                    }
-                }
-                None => self
-                    .component_repo
-                    .get_latest_version(namespace.to_string().as_str(), &component_id.0)
-                    .await?
-                    .map(|c| c.into())
-                    .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?,
-            }
-        };
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, version, namespace)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+
         info!(
             "Downloading component - namespace: {}, id: {}, version: {}",
             namespace, component_id, versioned_component_id.version
@@ -350,29 +339,11 @@ where
         version: Option<u64>,
         namespace: &Namespace,
     ) -> Result<ByteStream, ComponentError> {
-        let versioned_component_id = {
-            match version {
-                Some(version) => {
-                    let stored_namespace: Option<Namespace> =
-                        self.get_namespace(component_id).await?;
-                    match stored_namespace {
-                        Some(stored_namespace) if stored_namespace == namespace.clone() => {
-                            VersionedComponentId {
-                                component_id: component_id.clone(),
-                                version,
-                            }
-                        }
-                        _ => return Err(ComponentError::UnknownComponentId(component_id.clone())),
-                    }
-                }
-                None => self
-                    .component_repo
-                    .get_latest_version(namespace.to_string().as_str(), &component_id.0)
-                    .await?
-                    .map(|c| c.into())
-                    .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?,
-            }
-        };
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, version, namespace)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+
         info!(
             "Downloading component - namespace: {}, id: {}, version: {}",
             namespace, component_id, versioned_component_id.version
@@ -402,43 +373,27 @@ where
             version.map_or("N/A".to_string(), |v| v.to_string())
         );
 
-        let latest_component = self
-            .component_repo
-            .get_latest_version(namespace.to_string().as_str(), &component_id.0)
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, version, namespace)
             .await?;
 
-        let v = match latest_component {
-            Some(component) => match version {
-                Some(v) if v <= component.version as u64 => v,
-                None => component.version as u64,
-                _ => {
-                    return Ok(None);
-                }
-            },
-            None => {
-                return Ok(None);
+        match versioned_component_id {
+            Some(versioned_component_id) => {
+                let id = ProtectedComponentId {
+                    versioned_component_id,
+                };
+                let data = self
+                    .object_store
+                    .get(&self.get_protected_object_store_key(&id))
+                    .await
+                    .tap_err(|e| error!("Error retrieving component: {}", e))
+                    .map_err(|e| {
+                        ComponentError::internal(e.to_string(), "Error retrieving component")
+                    })?;
+                Ok(Some(data))
             }
-        };
-
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.clone(),
-            version: v,
-        };
-
-        let protected_id = ProtectedComponentId {
-            versioned_component_id,
-        };
-
-        let object_key = self.get_protected_object_store_key(&protected_id);
-
-        let result = self
-            .object_store
-            .get(&object_key)
-            .await
-            .tap_err(|e| error!("Error retrieving component: {}", e))
-            .map_err(|e| ComponentError::internal(e.to_string(), "Error retrieving component"))?;
-
-        Ok(Some(result))
+            None => Ok(None),
+        }
     }
 
     async fn find_id_by_name(
@@ -479,7 +434,7 @@ where
 
         let values: Vec<Component<Namespace>> = records
             .iter()
-            .map(|d| d.clone().try_into())
+            .map(|c| c.clone().try_into())
             .collect::<Result<Vec<Component<Namespace>>, _>>()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
 
@@ -495,14 +450,12 @@ where
             "Getting component - namespace: {}, id: {}",
             namespace, component_id
         );
-        let records = self
-            .component_repo
-            .get(namespace.to_string().as_str(), &component_id.0)
-            .await?;
+        let records = self.component_repo.get(&component_id.0).await?;
 
         let values: Vec<Component<Namespace>> = records
             .iter()
-            .map(|d| d.clone().try_into())
+            .filter(|d| d.namespace == namespace.to_string())
+            .map(|c| c.clone().try_into())
             .collect::<Result<Vec<Component<Namespace>>, _>>()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
 
@@ -521,21 +474,17 @@ where
 
         let result = self
             .component_repo
-            .get_by_version(
-                namespace.to_string().as_str(),
-                &component_id.component_id.0,
-                component_id.version,
-            )
+            .get_by_version(&component_id.component_id.0, component_id.version)
             .await?;
 
         match result {
-            Some(c) => {
+            Some(c) if c.namespace == namespace.to_string() => {
                 let value = c.try_into().map_err(|e| {
                     ComponentError::internal(e, "Failed to convert record".to_string())
                 })?;
                 Ok(Some(value))
             }
-            None => Ok(None),
+            _ => Ok(None),
         }
     }
 
@@ -550,17 +499,17 @@ where
         );
         let result = self
             .component_repo
-            .get_latest_version(namespace.to_string().as_str(), &component_id.0)
+            .get_latest_version(&component_id.0)
             .await?;
 
         match result {
-            Some(c) => {
+            Some(c) if c.namespace == namespace.to_string() => {
                 let value = c.try_into().map_err(|e| {
                     ComponentError::internal(e, "Failed to convert record".to_string())
                 })?;
                 Ok(Some(value))
             }
-            None => Ok(None),
+            _ => Ok(None),
         }
     }
 
@@ -577,6 +526,29 @@ where
             Ok(Some(value))
         } else {
             Ok(None)
+        }
+    }
+
+    async fn delete(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<(), ComponentError> {
+        info!(
+            "Deleting component - namespace: {}, id: {}, version: latest",
+            namespace, component_id
+        );
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, None, namespace)
+            .await?;
+        if versioned_component_id.is_some() {
+            // TODO delete from object store
+            self.component_repo
+                .delete(namespace.to_string().as_str(), &component_id.0)
+                .await?;
+            Ok(())
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
         }
     }
 }
@@ -625,6 +597,35 @@ impl ComponentServiceDefault {
             .map_err(|e| {
                 ComponentError::internal(e.to_string(), "Failed to upload protected component")
             })
+    }
+
+    async fn get_versioned_component_id<Namespace: Display + Clone>(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+    ) -> Result<Option<VersionedComponentId>, ComponentError> {
+        let stored = self
+            .component_repo
+            .get_latest_version(&component_id.0)
+            .await?;
+
+        match stored {
+            Some(stored) if stored.namespace == namespace.to_string() => {
+                let stored_version = stored.version as u64;
+                let requested_version = version.unwrap_or(stored_version);
+
+                if requested_version <= stored_version {
+                    Ok(Some(VersionedComponentId {
+                        component_id: component_id.clone(),
+                        version: requested_version,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
     }
 }
 
@@ -780,5 +781,13 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentS
         _component_id: &ComponentId,
     ) -> Result<Option<Namespace>, ComponentError> {
         Ok(None)
+    }
+
+    async fn delete(
+        &self,
+        _component_id: &ComponentId,
+        _namespace: &Namespace,
+    ) -> Result<(), ComponentError> {
+        Ok(())
     }
 }

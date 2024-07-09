@@ -244,6 +244,36 @@ mod tests {
         assert!(!component2_result.is_empty());
 
         let component1_result = component_service
+            .get_protected_data(
+                &component1v2.versioned_component_id.component_id,
+                Some(component1v2.versioned_component_id.version),
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component1_result.is_some());
+
+        let component1_result = component_service
+            .get_protected_data(
+                &component1v2.versioned_component_id.component_id,
+                Some(10000000),
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component1_result.is_none());
+
+        let component2_result = component_service
+            .get_protected_data(
+                &component1v2.versioned_component_id.component_id,
+                None,
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component2_result.is_some());
+
+        let component1_result = component_service
             .find_id_by_name(&component1.component_name, &DefaultNamespace::default())
             .await
             .unwrap();
@@ -278,6 +308,23 @@ mod tests {
             .await
             .unwrap();
         assert!(component_result.len() == 3);
+
+        component_service
+            .delete(
+                &component1v2.versioned_component_id.component_id,
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+
+        let component1_result = component_service
+            .get(
+                &component1.versioned_component_id.component_id,
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component1_result.is_empty());
     }
 
     async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
@@ -372,10 +419,7 @@ mod tests {
             .await;
 
         let result2 = component_repo
-            .get(
-                &namespace1,
-                &component1.versioned_component_id.component_id.0,
-            )
+            .get(&component1.versioned_component_id.component_id.0)
             .await;
 
         let result3 = component_repo
@@ -386,10 +430,7 @@ mod tests {
             .await;
 
         let result4 = component_repo
-            .get(
-                &namespace1,
-                &component1.versioned_component_id.component_id.0,
-            )
+            .get(&component1.versioned_component_id.component_id.0)
             .await;
 
         assert!(result1.is_ok());
