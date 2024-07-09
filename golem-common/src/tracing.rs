@@ -41,6 +41,9 @@ pub struct OutputConfig {
     pub json_flatten: bool,
     pub json_flatten_span: bool,
     pub ansi: bool,
+    pub compact: bool,
+    pub pretty: bool,
+    pub without_time: bool, // only applied for non-json
     pub span_events_active: bool,
     pub span_events_full: bool,
 }
@@ -57,6 +60,9 @@ impl OutputConfig {
             json_flatten: true,
             json_flatten_span: false,
             ansi: false,
+            compact: false,
+            pretty: false,
+            without_time: false,
             span_events_active: false,
             span_events_full: false,
         }
@@ -69,6 +75,9 @@ impl OutputConfig {
             json_flatten: true,
             json_flatten_span: false,
             ansi: true,
+            compact: false,
+            pretty: false,
+            without_time: false,
             span_events_active: false,
             span_events_full: false,
         }
@@ -81,6 +90,9 @@ impl OutputConfig {
             json_flatten: false,
             json_flatten_span: false,
             ansi: false,
+            compact: false,
+            pretty: false,
+            without_time: false,
             span_events_active: false,
             span_events_full: false,
         }
@@ -93,6 +105,9 @@ impl OutputConfig {
             json_flatten: true,
             json_flatten_span: false,
             ansi: false,
+            compact: false,
+            pretty: false,
+            without_time: false,
             span_events_active: false,
             span_events_full: false,
         }
@@ -105,6 +120,9 @@ impl OutputConfig {
             json_flatten: true,
             json_flatten_span: true,
             ansi: false,
+            compact: false,
+            pretty: false,
+            without_time: false,
             span_events_active: false,
             span_events_full: false,
         }
@@ -141,6 +159,25 @@ impl TracingConfig {
             dtor_friendly: true,
             ..Self::local_dev(service_name)
         }
+    }
+
+    pub fn test_pretty(service_name: &str) -> Self {
+        let mut config = Self::test(service_name);
+        config.stdout.pretty = true;
+        config
+    }
+
+    pub fn test_pretty_without_time(service_name: &str) -> Self {
+        let mut config = Self::test(service_name);
+        config.stdout.pretty = true;
+        config.stdout.without_time = true;
+        config
+    }
+
+    pub fn test_compact(service_name: &str) -> Self {
+        let mut config = Self::test(service_name);
+        config.stdout.compact = true;
+        config
     }
 }
 
@@ -345,6 +382,7 @@ pub fn init_tracing_with_default_debug_env_filter(config: &TracingConfig) {
     init_tracing(config, filter::for_all_outputs::default_debug_env());
 }
 
+#[allow(clippy::collapsible_else_if)]
 fn make_layer<W>(
     config: &OutputConfig,
     filter: filter::Boxed,
@@ -382,12 +420,32 @@ where
                 .boxed()
         }
     } else {
-        tracing_subscriber::fmt::layer()
+        let layer = tracing_subscriber::fmt::layer()
             .with_ansi(config.ansi)
             .with_span_events(span_events)
-            .with_writer(writer)
-            .with_filter(filter)
-            .boxed()
+            .with_writer(writer);
+
+        let layer = if config.pretty {
+            if config.without_time {
+                layer.pretty().without_time().boxed()
+            } else {
+                layer.pretty().boxed()
+            }
+        } else if config.compact {
+            if config.without_time {
+                layer.compact().without_time().boxed()
+            } else {
+                layer.compact().boxed()
+            }
+        } else {
+            if config.without_time {
+                layer.without_time().boxed()
+            } else {
+                layer.boxed()
+            }
+        };
+
+        layer.with_filter(filter).boxed()
     }
 }
 

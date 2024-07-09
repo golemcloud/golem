@@ -119,21 +119,27 @@ file_name = "worker-executor.log"
 
 [tracing.file]
 ansi = false
+compact = false
 enabled = false
 json = true
 json_flatten = true
 json_flatten_span = true
+pretty = false
 span_events_active = false
 span_events_full = false
+without_time = false
 
 [tracing.stdout]
 ansi = true
+compact = false
 enabled = true
 json = false
 json_flatten = true
 json_flatten_span = false
+pretty = false
 span_events_active = false
 span_events_full = false
+without_time = false
 
 
 ## Generated from example config: with redis indexed_storage, s3 blob storage, single shard manager service
@@ -259,21 +265,27 @@ span_events_full = false
 # 
 # [tracing.file]
 # ansi = false
+# compact = false
 # enabled = false
 # json = true
 # json_flatten = true
 # json_flatten_span = true
+# pretty = false
 # span_events_active = false
 # span_events_full = false
+# without_time = false
 # 
 # [tracing.stdout]
 # ansi = true
+# compact = false
 # enabled = true
 # json = false
 # json_flatten = true
 # json_flatten_span = false
+# pretty = false
 # span_events_active = false
 # span_events_full = false
+# without_time = false
 
 ## Generated from example config: with in-memory key value storage, indexed storage and blob storage
 # grpc_address = "0.0.0.0"
@@ -379,18 +391,24 @@ span_events_full = false
 # 
 # [tracing.file]
 # ansi = false
+# compact = false
 # enabled = false
 # json = true
 # json_flatten = true
 # json_flatten_span = true
+# pretty = false
 # span_events_active = false
 # span_events_full = false
+# without_time = false
 # 
 # [tracing.stdout]
 # ansi = true
+# compact = false
 # enabled = true
 # json = false
 # json_flatten = true
 # json_flatten_span = false
+# pretty = false
 # span_events_active = false
 # span_events_full = false
+# without_time = false
