@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::sync::Arc;
+use serde::Serialize;
 use tonic::transport::Channel;
 
 use golem_api_grpc::proto::golem::shardmanager;
@@ -28,7 +30,7 @@ pub enum RoutingTableError {
     Unexpected(String),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RoutingTableConfig {
     host: String,
     port: u16,
@@ -46,7 +48,7 @@ impl Default for RoutingTableConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9001,
+            port: 9002,
         }
     }
 }

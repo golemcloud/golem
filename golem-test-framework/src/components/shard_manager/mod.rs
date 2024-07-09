@@ -23,7 +23,7 @@ use tracing::Level;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
 
 use crate::components::redis::Redis;
-use crate::components::wait_for_startup_grpc;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 
 pub mod docker;
 pub mod k8s;
@@ -80,18 +80,12 @@ fn env_vars(
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
-
-    let env: &[(&str, &str)] = &[
-        ("RUST_LOG", &format!("{log_level},h2=warn,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn")),
-        ("RUST_BACKTRACE", "1"),
-        ("REDIS__HOST", &redis.private_host()),
-        ("GOLEM__REDIS__HOST", &redis.private_host()),
-        ("GOLEM__REDIS__PORT", &redis.private_port().to_string()),
-        ("GOLEM__REDIS__KEY_PREFIX", redis.prefix()),
-        ("GOLEM_SHARD_MANAGER_PORT", &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT", &http_port.to_string()),
-    ];
-
-    HashMap::from_iter(env.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+    EnvVarBuilder::golem_service(verbosity)
+        .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
+        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with("GOLEM__REDIS__HOST", redis.private_host())
+        .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
+        .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
+        .with("REDIS__HOST", redis.private_host())
+        .build()
 }

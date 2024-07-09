@@ -24,7 +24,6 @@ use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
-use crate::service::component::ComponentService;
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
 };
@@ -50,6 +49,8 @@ use golem_service_base::{
     routing_table::RoutingTableService,
 };
 use rib::ParsedFunctionName;
+
+use crate::service::component::ComponentService;
 
 use super::{
     AllExecutors, ConnectWorkerStream, HasWorkerExecutorClients, RandomExecutor, ResponseMapResult,

@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use gethostname::gethostname;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-
 use std::sync::Arc;
+
+use gethostname::gethostname;
+use golem_wasm_rpc::protobuf::Val;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
+use tracing::{debug, error, info, warn, Instrument};
+use uuid::Uuid;
+use wasmtime::Error;
 
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
@@ -28,25 +35,23 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     UpdateWorkerRequest, UpdateWorkerResponse,
 };
-use golem_common::model as common_model;
+use golem_common::grpc::{
+    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
+    proto_promise_id_string, proto_worker_id_string,
+};
+use golem_common::metrics::grpc::{
+    record_closed_grpc_active_stream, record_new_grpc_active_stream,
+};
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId,
-    ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, CallingConvention, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
-use golem_wasm_rpc::protobuf::Val;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status};
-use tracing::{debug, error, info, warn, Instrument};
-use uuid::Uuid;
-use wasmtime::Error;
+use golem_common::{model as common_model, recorded_grpc_request};
 
 use crate::error::*;
-use crate::metrics::grpc::{record_closed_grpc_active_stream, record_new_grpc_active_stream};
 use crate::model::{InterruptKind, LastError};
-use crate::recorded_grpc_request;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
@@ -156,7 +161,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let host = gethostname().to_string_lossy().to_string();
 
-        info!("Registering worker executor as {}:{}", host, port);
+        info!(host, port, "Registering worker executor");
 
         let shard_assignment = worker_executor
             .shard_manager_service()
@@ -1145,49 +1150,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn all(&self) -> &All<Ctx> {
         self.services.all()
     }
-}
-
-fn proto_component_id_string(
-    component_id: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
-) -> Option<String> {
-    component_id
-        .clone()
-        .and_then(|v| TryInto::<ComponentId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
-fn proto_worker_id_string(
-    worker_id: &Option<golem_api_grpc::proto::golem::worker::WorkerId>,
-) -> Option<String> {
-    worker_id
-        .clone()
-        .and_then(|v| TryInto::<WorkerId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
-fn proto_idempotency_key_string(
-    idempotency_key: &Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
-) -> Option<String> {
-    idempotency_key
-        .clone()
-        .map(|v| Into::<IdempotencyKey>::into(v).to_string())
-}
-
-fn proto_account_id_string(
-    account_id: &Option<golem_api_grpc::proto::golem::common::AccountId>,
-) -> Option<String> {
-    account_id
-        .clone()
-        .map(|v| Into::<AccountId>::into(v).to_string())
-}
-
-fn proto_promise_id_string(
-    promise_id: &Option<golem_api_grpc::proto::golem::worker::PromiseId>,
-) -> Option<String> {
-    promise_id
-        .clone()
-        .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
-        .map(|v| v.to_string())
 }
 
 #[tonic::async_trait]

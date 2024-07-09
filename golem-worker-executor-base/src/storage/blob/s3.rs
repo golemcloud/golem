@@ -133,15 +133,14 @@ impl S3BlobStorage {
         bucket: &str,
         prefix: &str,
     ) -> Result<Vec<Object>, String> {
-        let description = format!("Listing objects in {bucket} with prefix {prefix}");
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
 
         loop {
             let response = with_retries(
-                &description,
                 target_label,
                 op_label,
+                Some(format!("{bucket} - {prefix}")),
                 &self.config.retries,
                 &(self.client.clone(), bucket, prefix, cont),
                 |(client, bucket, prefix, cont)| {
@@ -235,11 +234,11 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<Bytes>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Downloading blob from {bucket}::{key:?}");
+
         let result = with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
@@ -283,11 +282,11 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<Bytes>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Downloading blob from {bucket}::{key:?}");
+
         let result = with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
@@ -330,11 +329,12 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BlobMetadata>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Getting metadata of blob storage entry {bucket}::{key:?}");
+        let op_id = format!("{} - {:?}", bucket, key);
+
         let file_head_result = with_retries(
-            &description,
             target_label,
             op_label,
+            Some(op_id.clone()),
             &self.config.retries,
             &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
@@ -366,9 +366,9 @@ impl BlobStorage for S3BlobStorage {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
                     let dir_marker_head_result = with_retries(
-                        &description,
                         target_label,
                         op_label,
+                        Some(op_id),
                         &self.config.retries,
                         &(self.client.clone(), bucket, marker),
                         |(client, bucket, marker)| {
@@ -419,12 +419,11 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Uploading blob to {bucket}::{key:?}");
 
         with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key, data),
             |(client, bucket, key, bytes)| {
@@ -454,12 +453,11 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Deleting blob at {bucket}::{key:?}");
 
         with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
@@ -490,8 +488,6 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let prefix = self.prefix_of(&namespace);
 
-        let description = format!("Deleting blobs in {bucket}");
-
         let to_delete = paths
             .iter()
             .map(|path| {
@@ -504,9 +500,9 @@ impl BlobStorage for S3BlobStorage {
             .collect::<Result<Vec<_>, String>>()?;
 
         with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {prefix:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, to_delete),
             |(client, bucket, to_delete)| {
@@ -541,13 +537,12 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Creating directory {bucket}::{key:?}");
         let marker = key.join("__dir_marker");
 
         with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, marker),
             |(client, bucket, marker)| {
@@ -618,7 +613,6 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Deleting directory {bucket}::{key:?}");
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key.to_string_lossy())
@@ -635,9 +629,9 @@ impl BlobStorage for S3BlobStorage {
             .collect::<Result<Vec<_>, _>>()?;
 
         with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, to_delete),
             |(client, bucket, to_delete)| {
@@ -672,11 +666,12 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<ExistsResult, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
-        let description = format!("Checking existence of blob at {bucket}::{key:?}");
+        let op_id = format!("{} - {:?}", bucket, key);
+
         let file_head_result = with_retries(
-            &description,
             target_label,
             op_label,
+            Some(op_id.clone()),
             &self.config.retries,
             &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
@@ -698,9 +693,9 @@ impl BlobStorage for S3BlobStorage {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
                     let dir_marker_head_result = with_retries(
-                        &description,
                         target_label,
                         op_label,
+                        Some(op_id),
                         &self.config.retries,
                         &(self.client.clone(), bucket, marker),
                         |(client, bucket, marker)| {
@@ -742,13 +737,11 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);
-        let description =
-            format!("Copying blob from {bucket}::{from_key:?} to {bucket}::{to_key:?}");
 
         with_retries(
-            &description,
             target_label,
             op_label,
+            Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, from_key, to_key),
             |(client, bucket, from_key, to_key)| {
