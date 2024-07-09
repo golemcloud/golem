@@ -484,11 +484,11 @@ redis_pid=$!
 
 export RUST_BACKTRACE=1
 
-export GOLEM__TRACING__FILE_DIR=../logs
-export GOLEM__TRACING__FILE__ANSI=true
-export GOLEM__TRACING__FILE__ENABLED=true
-export GOLEM__TRACING__FILE__JSON=false
-export GOLEM__TRACING__STDOUT__ENABLED=false
+export GOLEM__TRACING__FILE_DIR="${GOLEM__TRACING__FILE_DIR:=../logs}"
+export GOLEM__TRACING__FILE__ANSI="${GOLEM__TRACING__FILE__ANSI:=true}"
+export GOLEM__TRACING__FILE__ENABLED="${GOLEM__TRACING__FILE__ENABLED:=true}"
+export GOLEM__TRACING__FILE__JSON="${GOLEM__TRACING__FILE__JSON:=false}"
+export GOLEM__TRACING__STDOUT__ENABLED="${GOLEM__TRACING__STDOUT__ENABLED:=false}"
 
 pushd golem-shard-manager || exit
 RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &
