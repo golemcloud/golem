@@ -316,12 +316,10 @@ async fn download_via_grpc(
     component_id: &ComponentId,
     component_version: ComponentVersion,
 ) -> Result<Vec<u8>, GolemError> {
-    let desc = format!("Downloading component {component_id}");
-    debug!("{}", &desc);
     with_retries(
-        &desc,
         "components",
         "download",
+        Some(component_id.to_string()),
         retry_config,
         &(
             client.clone(),
@@ -379,9 +377,9 @@ async fn get_metadata_via_grpc(
     let desc = format!("Getting component metadata of {component_id}");
     debug!("{}", &desc);
     with_retries(
-        &desc,
         "components",
         "get_metadata",
+        Some(component_id.to_string()),
         retry_config,
         &(
             client.clone(),

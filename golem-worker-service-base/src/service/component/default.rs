@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use http::Uri;
 use tonic::transport::Channel;
-use tracing::info;
 
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::{
@@ -67,13 +66,10 @@ where
         component_id: &ComponentId,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let desc = format!("Getting latest version of component: {}", component_id);
-        info!("{}", &desc);
-
         let value = with_retries(
-            &desc,
             "component",
             "get_latest",
+            Some(component_id.to_string()),
             &self.retry_config,
             &(self.client.clone(), component_id.clone(), metadata.clone()),
             |(client, id, metadata)| {
@@ -131,21 +127,13 @@ where
         version: u64,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let desc = format!("Getting component: {}", component_id);
-        info!("{}", &desc);
-
         let value = with_retries(
-            &desc,
             "component",
             "get_component",
+            Some(component_id.to_string()),
             &self.retry_config,
-            &(
-                self.client.clone(),
-                component_id.clone(),
-                metadata.clone(),
-                desc.clone(),
-            ),
-            |(client, id, metadata, desc)| {
+            &(self.client.clone(), component_id.clone(), metadata.clone()),
+            |(client, id, metadata)| {
                 Box::pin(async move {
                     let response = client
                         .call(move |client| {
@@ -165,7 +153,6 @@ where
                         None => Err(ComponentServiceError::internal("Empty response")),
 
                         Some(get_component_metadata_response::Result::Success(response)) => {
-                            info!("Got response from component service for {desc}");
                             let component_view: Result<
                                 golem_service_base::model::Component,
                                 ComponentServiceError,
@@ -186,7 +173,6 @@ where
                             Ok(component_view?)
                         }
                         Some(get_component_metadata_response::Result::Error(error)) => {
-                            info!("Got failure from component service: {error:?}");
                             Err(error.into())
                         }
                     }

@@ -57,7 +57,7 @@ spec:
               value: "1"
             - name: RUST_LOG
               value: "info,h2=warn,hyper=warn,tower=warn"
-            - name: GOLEM__ENABLE_JSON_LOG
+            - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.shardManager.ports.http }}"
@@ -167,7 +167,7 @@ spec:
               value: "1"
             - name: RUST_LOG
               value: "info"
-            - name: GOLEM__ENABLE_JSON_LOG
+            - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.workerExecutor.ports.http }}"
@@ -295,7 +295,7 @@ spec:
               value: "1"
             - name: RUST_LOG
               value: "info"
-            - name: GOLEM__ENABLE_JSON_LOG
+            - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__CUSTOM_REQUEST_PORT
               value: "{{ .Values.workerService.ports.requestHttp }}"
@@ -361,7 +361,7 @@ spec:
               value: "1"
             - name: RUST_LOG
               value: "info,h2=warn,hyper=warn,tower=warn"
-            - name: GOLEM__ENABLE_JSON_LOG
+            - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__DB__TYPE
               value: "Postgres"
@@ -490,7 +490,7 @@ spec:
               value: "1"
             - name: RUST_LOG
               value: "info"
-            - name: GOLEM__ENABLE_JSON_LOG
+            - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.componentCompilationService.ports.http }}"

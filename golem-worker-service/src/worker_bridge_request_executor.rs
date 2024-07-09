@@ -40,7 +40,7 @@ mod internal {
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
     };
-    use tracing::info;
+    use tracing::{debug, info};
 
     pub(crate) async fn execute(
         default_executor: &UnauthorisedWorkerRequestExecutor,
@@ -52,13 +52,6 @@ mod internal {
 
         let worker_id = WorkerId::new(component_id.clone(), worker_name.clone())?;
 
-        info!(
-            "Executing request for component: {}, worker: {}, function: {}",
-            component_id,
-            worker_name.clone(),
-            worker_request_params.function_name
-        );
-
         let invoke_parameters = worker_request_params.function_params;
 
         let idempotency_key_str = worker_request_params
@@ -67,9 +60,23 @@ mod internal {
             .map(|k| k.to_string())
             .unwrap_or("N/A".to_string());
 
+        // TODO: check if these are already added from span
         info!(
-            "Executing request for component: {}, worker: {}, idempotency key: {}, invocation params: {:?}",
-            component_id, worker_name.clone(), idempotency_key_str, invoke_parameters
+            component_id = component_id.to_string(),
+            worker_name,
+            function_name = worker_request_params.function_name.to_string(),
+            idempotency_key = idempotency_key_str,
+            "Executing request",
+        );
+
+        // TODO: check if these are already added from span
+        debug!(
+            component_id = component_id.to_string(),
+            worker_name,
+            function_name = worker_request_params.function_name.to_string(),
+            idempotency_key = idempotency_key_str,
+            invocation_params = format!("{:?}", invoke_parameters),
+            "Invocation parameters"
         );
 
         let mut invoke_parameters_values = vec![];
