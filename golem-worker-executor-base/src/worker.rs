@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::mem;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -81,7 +82,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     stopping: AtomicBool,
     worker_estimate_coefficient: f64,
 
-    running: Arc<Mutex<Option<RunningWorker>>>,
+    instance: Arc<Mutex<WorkerInstance>>,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -197,7 +198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
             }),
         )));
-        let running = Arc::new(Mutex::new(None));
+        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
 
         let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
             last_known_status: worker_metadata.last_known_status.clone(),
@@ -217,7 +218,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             queue,
             pending_updates,
             invocation_results,
-            running,
+            instance,
             execution_status,
             stopping,
             initial_worker_metadata: worker_metadata,
@@ -226,27 +227,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
-        let mut running = this.running.lock().await;
-        if running.is_none() {
-            // TODO: this should not keep running locked
-            let permit = this
-                .active_workers()
-                .acquire(this.memory_requirement().await?)
-                .await;
-
-            *running = Some(RunningWorker::new(
-                this.owned_worker_id.clone(),
-                this.queue.clone(),
+        let mut instance = this.instance.lock().await;
+        if instance.is_unloaded() {
+            *instance = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                 this.clone(),
-                this.oplog(),
-                this.execution_status.clone(),
-                permit,
+                this.memory_requirement().await?,
             ));
         } else {
-            debug!("Worker is already running");
+            debug!("Worker is already running or waiting for permit");
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn start_with_permit(this: Arc<Worker<Ctx>>, permit: OwnedSemaphorePermit) {
+        let mut instance = this.instance.lock().await;
+        *instance = WorkerInstance::Running(RunningWorker::new(
+            this.owned_worker_id.clone(),
+            this.queue.clone(),
+            this.clone(),
+            this.oplog(),
+            this.execution_status.clone(),
+            permit,
+        ));
     }
 
     pub async fn stop(&self) {
@@ -264,14 +267,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// - the ExecutionStatus must be suspended; this means the worker is currently not running any invocations
     /// - there must be no more pending invocations in the invocation queue
     ///
-    /// Here we first acquire the `running` lock. This means the worker cannot be started/stopped while we
+    /// Here we first acquire the `instance` lock. This means the worker cannot be started/stopped while we
     /// are processing this method.
     /// If it was not running, then we don't have to stop it.
     /// If it was running then we recheck the conditions and then stop the worker.
     ///
     /// We know that the conditions remain true because:
-    /// - the invocation queue is empty so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
-    /// - nothing can be added to the invocation queue because we are holding the `running` lock
+    /// - the invocation queue is empty, so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
+    /// - nothing can be added to the invocation queue because we are holding the `instance` lock
     ///
     /// By passing the running lock to `stop_internal_running` it is never released and the stop eventually
     /// drops the `RunningWorker` instance.
@@ -279,9 +282,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
     /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
-        let running_guard = self.running.lock().await;
-        match running_guard.as_ref() {
-            Some(running) => {
+        let instance_guard = self.instance.lock().await;
+        match &*instance_guard {
+            WorkerInstance::Running(running) => {
                 if is_running_worker_idle(running) {
                     if self.stopping.compare_exchange(
                         false,
@@ -290,7 +293,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         Ordering::Relaxed,
                     ) == Ok(false)
                     {
-                        self.stop_internal_running(running_guard, false).await;
+                        self.stop_internal_running(instance_guard, false).await;
                         true
                     } else {
                         false
@@ -299,7 +302,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     false
                 }
             }
-            None => false,
+            WorkerInstance::WaitingForPermit(_) => false,
+            WorkerInstance::Unloaded => false,
         }
     }
 
@@ -351,7 +355,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///    automatically resumed when the worker is needed again. This only works if the worker context
     ///    supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        if let Some(running) = self.running.lock().await.as_ref() {
+        if let WorkerInstance::Running(running) = &*self.instance.lock().await {
             running.interrupt(interrupt_kind.clone());
         }
 
@@ -475,11 +479,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// This enqueues a special function invocation that saves the component's state and
     /// triggers a restart immediately.
     pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
-        match self.running.lock().await.as_ref() {
-            Some(running) => {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
                 running.enqueue_manual_update(target_version).await;
             }
-            None => {
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
                 debug!("Worker is initializing, persisting manual update request");
                 let invocation = WorkerInvocation::ManualUpdate { target_version };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
@@ -619,14 +623,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((x * (ml + c * sw)) as u64)
     }
 
-    /// Returns true if the worker is running but it is not performing any invocations at the moment
+    /// Returns true if the worker is running, but it is not performing any invocations at the moment
     /// (ExecutionStatus::Suspended) and has no pending invocation in its invocation queue.
     ///
     /// These workers can be stopped to free up available worker memory.
     pub fn is_currently_idle_but_running(&self) -> bool {
-        match self.running.try_lock() {
-            Ok(guard) => match guard.as_ref() {
-                Some(running) => {
+        match self.instance.try_lock() {
+            Ok(guard) => match &*guard {
+                WorkerInstance::Running(running) => {
                     let status = running.execution_status.read().unwrap();
                     if matches!(&*status, ExecutionStatus::Suspended { .. }) {
                         self.pending_invocations().is_empty()
@@ -634,7 +638,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         false
                     }
                 }
-                None => false,
+                WorkerInstance::WaitingForPermit(_) => false,
+                WorkerInstance::Unloaded => false,
             },
             Err(_) => false,
         }
@@ -646,8 +651,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn increase_memory(&self, delta: u64) -> Result<(), GolemError> {
-        match self.running.lock().await.as_mut() {
-            Some(running) => {
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(ref mut running) => {
                 if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
                     running.merge_extra_permits(new_permits);
                     Ok(())
@@ -655,9 +660,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Err(GolemError::runtime("Not enough memory available")) // TODO: custom error that we can catch
                 }
             }
-            None => {
-                Ok(())
-            }
+            WorkerInstance::WaitingForPermit(_) => Ok(()),
+            WorkerInstance::Unloaded => Ok(()),
         }
     }
 
@@ -669,8 +673,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
     ) {
-        match self.running.lock().await.as_ref() {
-            Some(running) => {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
                 running
                     .enqueue(
                         idempotency_key,
@@ -680,7 +684,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await;
             }
-            None => {
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
                 debug!("Worker is initializing, persisting pending invocation");
                 let invocation = WorkerInvocation::ExportedFunction {
                     idempotency_key,
@@ -795,18 +799,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             == Ok(false)
         {
-            let running = self.running.lock().await;
-            self.stop_internal_running(running, called_from_invocation_loop)
+            let instance = self.instance.lock().await;
+            self.stop_internal_running(instance, called_from_invocation_loop)
                 .await;
         }
     }
 
     async fn stop_internal_running<'a>(
         &self,
-        mut running: MutexGuard<'a, Option<RunningWorker>>,
+        mut instance: MutexGuard<'a, WorkerInstance>,
         called_from_invocation_loop: bool,
     ) {
-        if let Some(running) = running.take() {
+        if let WorkerInstance::Running(running) = instance.unload() {
             debug!("Stopping running worker ({called_from_invocation_loop})");
             let queued_items = running
                 .queue
@@ -887,6 +891,57 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?,
                 ..previous_metadata
             }),
+        }
+    }
+}
+
+enum WorkerInstance {
+    Unloaded,
+    #[allow(dead_code)]
+    WaitingForPermit(WaitingWorker),
+    Running(RunningWorker),
+}
+
+impl WorkerInstance {
+    pub fn is_unloaded(&self) -> bool {
+        matches!(self, WorkerInstance::Unloaded)
+    }
+
+    #[allow(unused)]
+    pub fn is_running(&self) -> bool {
+        matches!(self, WorkerInstance::Running(_))
+    }
+
+    #[allow(unused)]
+    pub fn is_waiting_for_permit(&self) -> bool {
+        matches!(self, WorkerInstance::WaitingForPermit(_))
+    }
+
+    pub fn unload(&mut self) -> WorkerInstance {
+        mem::replace(self, WorkerInstance::Unloaded)
+    }
+}
+
+struct WaitingWorker {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl WaitingWorker {
+    pub fn new<Ctx: WorkerCtx>(parent: Arc<Worker<Ctx>>, memory_requirement: u64) -> Self {
+        let handle = tokio::task::spawn(async move {
+            let permit = parent.active_workers().acquire(memory_requirement).await;
+            Worker::start_with_permit(parent, permit).await;
+        });
+        WaitingWorker {
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for WaitingWorker {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
         }
     }
 }
