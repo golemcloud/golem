@@ -16,10 +16,9 @@ use crate::api_definition::http::HttpApiDefinition;
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use sqlx::{Database, Pool, Row};
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
@@ -371,118 +370,6 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
             .fetch_all(self.db_pool.deref())
             .await
             .map_err(|e| e.into())
-    }
-}
-
-pub struct InMemoryApiDefinitionRepo {
-    registry: Mutex<HashMap<(String, String, String), ApiDefinitionRecord>>,
-}
-
-impl Default for InMemoryApiDefinitionRepo {
-    fn default() -> Self {
-        Self {
-            registry: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-#[async_trait]
-impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
-    async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let key = (
-            definition.namespace.clone(),
-            definition.id.clone(),
-            definition.version.clone(),
-        );
-        let mut registry = self.registry.lock().unwrap();
-        if let std::collections::hash_map::Entry::Vacant(e) = registry.entry(key.clone()) {
-            e.insert(definition.clone());
-            Ok(())
-        } else {
-            Err(RepoError::Internal(
-                "ApiDefinition already exists".to_string(),
-            ))
-        }
-    }
-
-    async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let key = (
-            definition.namespace.clone(),
-            definition.id.clone(),
-            definition.version.clone(),
-        );
-        let mut registry = self.registry.lock().unwrap();
-        registry.insert(key.clone(), definition.clone());
-        Ok(())
-    }
-
-    async fn set_not_draft(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<(), RepoError> {
-        match self.get(namespace, id, version).await? {
-            Some(v) if v.draft => {
-                let mut registry = self.registry.lock().unwrap();
-                let key = (namespace.to_string(), id.to_string(), version.to_string());
-                registry.entry(key.clone()).and_modify(|v| v.draft = false);
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    async fn get(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        let key = (namespace.to_string(), id.to_string(), version.to_string());
-        let registry = self.registry.lock().unwrap();
-        Ok(registry.get(&key).cloned())
-    }
-
-    async fn get_draft(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<Option<bool>, RepoError> {
-        let value = self.get(namespace, id, version).await?;
-        Ok(value.map(|v| v.draft))
-    }
-
-    async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        let key = (namespace.to_string(), id.to_string(), version.to_string());
-        let mut registry = self.registry.lock().unwrap();
-        let result = registry.remove(&key);
-        Ok(result.is_some())
-    }
-
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let registry = self.registry.lock().unwrap();
-        let result: Vec<ApiDefinitionRecord> = registry
-            .iter()
-            .filter(|(k, _)| k.0 == *namespace)
-            .map(|(_, v)| v.clone())
-            .collect();
-        Ok(result)
-    }
-
-    async fn get_all_versions(
-        &self,
-        namespace: &str,
-        id: &str,
-    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let registry = self.registry.lock().unwrap();
-        let result = registry
-            .iter()
-            .filter(|(k, _)| k.0 == *namespace && k.1 == *id)
-            .map(|(_, v)| v.clone())
-            .collect();
-        Ok(result)
     }
 }
 

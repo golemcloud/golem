@@ -535,14 +535,37 @@ where
         namespace: &Namespace,
     ) -> Result<(), ComponentError> {
         info!(
-            "Deleting component - namespace: {}, id: {}, version: latest",
+            "Deleting component - namespace: {}, id: {}",
             namespace, component_id
         );
-        let versioned_component_id = self
-            .get_versioned_component_id(component_id, None, namespace)
-            .await?;
-        if versioned_component_id.is_some() {
-            // TODO delete from object store
+
+        let records = self.component_repo.get(&component_id.0).await?;
+
+        let versioned_component_ids: Vec<VersionedComponentId> = records
+            .into_iter()
+            .filter(|d| d.namespace == namespace.to_string())
+            .map(|c| c.into())
+            .collect();
+
+        if !versioned_component_ids.is_empty() {
+            for versioned_component_id in versioned_component_ids {
+                self.object_store
+                    .delete(&self.get_protected_object_store_key(&ProtectedComponentId {
+                        versioned_component_id: versioned_component_id.clone(),
+                    }))
+                    .await
+                    .map_err(|e| {
+                        ComponentError::internal(e.to_string(), "Failed to delete component")
+                    })?;
+                self.object_store
+                    .delete(&self.get_user_object_store_key(&UserComponentId {
+                        versioned_component_id: versioned_component_id.clone(),
+                    }))
+                    .await
+                    .map_err(|e| {
+                        ComponentError::internal(e.to_string(), "Failed to delete component")
+                    })?;
+            }
             self.component_repo
                 .delete(namespace.to_string().as_str(), &component_id.0)
                 .await?;
