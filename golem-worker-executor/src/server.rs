@@ -21,7 +21,8 @@ use golem_worker_executor_base::services::golem_config::make_config_loader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match make_config_loader().load_or_dump_config() {
-        Some(config) => {
+        Some(mut config) => {
+            config.add_port_to_tracing_file_name_if_enabled();
             init_tracing_with_default_env_filter(&config.tracing);
 
             let prometheus = metrics::register_all();

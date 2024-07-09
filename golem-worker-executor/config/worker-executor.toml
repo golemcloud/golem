@@ -3,6 +3,7 @@ grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
 port = 9000
+tracing_file_name_with_port = true
 
 [active_workers]
 drop_when_full = 0.25
@@ -139,6 +140,7 @@ span_events_full = false
 # http_address = "0.0.0.0"
 # http_port = 8082
 # port = 9000
+# tracing_file_name_with_port = true
 # 
 # [active_workers]
 # drop_when_full = 0.25
@@ -276,6 +278,7 @@ span_events_full = false
 # http_address = "0.0.0.0"
 # http_port = 8082
 # port = 9000
+# tracing_file_name_with_port = true
 # 
 # [active_workers]
 # drop_when_full = 0.25

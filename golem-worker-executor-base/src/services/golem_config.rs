@@ -32,6 +32,7 @@ use golem_common::tracing::TracingConfig;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GolemConfig {
     pub tracing: TracingConfig,
+    pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -150,6 +151,21 @@ impl GolemConfig {
                 .context("http_address configuration")?,
             self.http_port,
         ))
+    }
+
+    pub fn add_port_to_tracing_file_name_if_enabled(&mut self) {
+        if self.tracing_file_name_with_port {
+            if let Some(file_name) = &self.tracing.file_name {
+                let elems: Vec<&str> = file_name.split('.').collect();
+                self.tracing.file_name = {
+                    if elems.len() == 2 {
+                        Some(format!("{}.{}.{}", elems[0], self.port, elems[1]))
+                    } else {
+                        Some(format!("{}.{}", file_name, self.port))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -303,6 +319,7 @@ impl Default for GolemConfig {
     fn default() -> Self {
         Self {
             tracing: TracingConfig::local_dev("worker-executor"),
+            tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
