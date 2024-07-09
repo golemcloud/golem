@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-#[cfg(any(feature = "mocks", test))]
-use std::time::Duration;
-
 use crate::services::worker_activator::WorkerActivator;
+use std::sync::Arc;
 
 use crate::services::events::Events;
-use tokio::runtime::Handle;
-
 use crate::workerctx::WorkerCtx;
+use tokio::runtime::Handle;
 
 pub mod active_workers;
 pub mod blob_store;
@@ -296,10 +292,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
 
     #[cfg(any(feature = "mocks", test))]
     pub async fn mocked(mocked_extra_deps: Ctx::ExtraDeps) -> Self {
-        let active_workers = Arc::new(active_workers::ActiveWorkers::bounded(
-            100,
-            0.01,
-            Duration::from_secs(60),
+        let active_workers = Arc::new(active_workers::ActiveWorkers::new(
+            &crate::services::golem_config::MemoryConfig::default(),
         ));
         let engine = Arc::new(wasmtime::Engine::default());
         let linker = Arc::new(wasmtime::component::Linker::new(&engine));
