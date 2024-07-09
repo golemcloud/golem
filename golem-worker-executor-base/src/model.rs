@@ -25,7 +25,7 @@ use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord};
 
-use crate::error::GolemError;
+use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
 
 pub trait ShardAssignmentCheck {
@@ -203,7 +203,10 @@ impl TrapType {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
                     Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
-                    _ => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                    _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
+                        Some(_) => TrapType::Error(WorkerError::OutOfMemory),
+                        None => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                    },
                 },
             },
         }

@@ -459,6 +459,7 @@ pub enum WrappedFunctionType {
 pub enum WorkerError {
     Unknown(String),
     StackOverflow,
+    OutOfMemory,
 }
 
 impl Display for WorkerError {
@@ -466,6 +467,7 @@ impl Display for WorkerError {
         match self {
             WorkerError::Unknown(message) => write!(f, "{}", message),
             WorkerError::StackOverflow => write!(f, "Stack overflow"),
+            WorkerError::OutOfMemory => write!(f, "Out of memory"),
         }
     }
 }

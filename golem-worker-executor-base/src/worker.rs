@@ -40,7 +40,7 @@ use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
 
-use crate::error::GolemError;
+use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
 use crate::services::events::Event;
@@ -650,14 +650,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().timestamp()
     }
 
-    pub async fn increase_memory(&self, delta: u64) -> Result<(), GolemError> {
+    pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(ref mut running) => {
                 if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
                     running.merge_extra_permits(new_permits);
                     Ok(())
                 } else {
-                    Err(GolemError::runtime("Not enough memory available")) // TODO: custom error that we can catch
+                    Err(anyhow!(WorkerOutOfMemory))
                 }
             }
             WorkerInstance::WaitingForPermit(_) => Ok(()),
@@ -1929,6 +1929,7 @@ pub fn is_worker_error_retriable(
     match error {
         WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
         WorkerError::StackOverflow => false,
+        WorkerError::OutOfMemory => true,
     }
 }
 
