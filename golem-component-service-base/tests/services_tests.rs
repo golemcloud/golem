@@ -325,6 +325,16 @@ mod tests {
             .await
             .unwrap();
         assert!(component1_result.is_empty());
+
+        let component1_result = component_service
+            .get_protected_data(
+                &component1v2.versioned_component_id.component_id,
+                Some(component1v2.versioned_component_id.version),
+                &DefaultNamespace::default(),
+            )
+            .await
+            .unwrap();
+        assert!(component1_result.is_none());
     }
 
     async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {

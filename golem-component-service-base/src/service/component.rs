@@ -323,13 +323,21 @@ where
         );
 
         let id = ProtectedComponentId {
-            versioned_component_id,
+            versioned_component_id: versioned_component_id.clone(),
         };
 
         self.object_store
             .get(&self.get_protected_object_store_key(&id))
             .await
-            .tap_err(|e| error!("Error downloading component: {}", e))
+            .tap_err(|e| {
+                error!(
+                    "Error downloading component - namespace: {}, id: {}, version: {}, error: {}",
+                    namespace,
+                    versioned_component_id.component_id,
+                    versioned_component_id.version,
+                    e
+                )
+            })
             .map_err(|e| ComponentError::internal(e.to_string(), "Error downloading component"))
     }
 
@@ -380,13 +388,20 @@ where
         match versioned_component_id {
             Some(versioned_component_id) => {
                 let id = ProtectedComponentId {
-                    versioned_component_id,
+                    versioned_component_id: versioned_component_id.clone(),
                 };
                 let data = self
                     .object_store
                     .get(&self.get_protected_object_store_key(&id))
                     .await
-                    .tap_err(|e| error!("Error retrieving component: {}", e))
+                    .tap_err(|e| {
+                        error!("Error getting component data - namespace: {}, id: {}, version: {}, error: {}",
+                            namespace,
+                            versioned_component_id.component_id,
+                            versioned_component_id.version,
+                            e
+                        )
+                    })
                     .map_err(|e| {
                         ComponentError::internal(e.to_string(), "Error retrieving component")
                     })?;
@@ -656,7 +671,7 @@ impl ComponentServiceDefault {
 pub struct ComponentServiceNoop {}
 
 #[async_trait]
-impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync> ComponentService<Namespace>
+impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
     for ComponentServiceNoop
 {
     async fn create(
