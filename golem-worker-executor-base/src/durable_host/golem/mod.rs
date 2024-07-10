@@ -31,6 +31,7 @@ use crate::model::InterruptKind;
 use crate::preview2::golem;
 use crate::preview2::golem::api::host::{
     ComponentVersion, HostGetWorkers, PersistenceLevel, RetryPolicy, UpdateMode, Uri,
+    WorkerMetadata,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
@@ -462,6 +463,26 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
+
+    async fn get_self_metadata(&mut self) -> anyhow::Result<golem::api::host::WorkerMetadata> {
+        record_host_function_call("golem::api", "get_self_metadata");
+        let metadata = self.state.worker_service.get(&self.owned_worker_id).await;
+        match metadata {
+            Some(metadata) => Ok(metadata.into()),
+            None => Err(anyhow!("Worker metadata not found")),
+        }
+    }
+
+    async fn get_worker_metadata(
+        &mut self,
+        worker_id: golem::api::host::WorkerId,
+    ) -> anyhow::Result<Option<golem::api::host::WorkerMetadata>> {
+        record_host_function_call("golem::api", "get_worker_metadata");
+        let worker_id: WorkerId = worker_id.into();
+        let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.account_id, &worker_id);
+        let metadata = self.state.worker_service.get(&owned_worker_id).await;
+        Ok(metadata.map(|m| m.into()))
+    }
 }
 
 #[async_trait]
@@ -585,6 +606,17 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for &mut DurableWorkerCtx<Ctx> {
         mode: UpdateMode,
     ) -> anyhow::Result<()> {
         (*self).update_worker(worker_id, target_version, mode).await
+    }
+
+    async fn get_self_metadata(&mut self) -> anyhow::Result<WorkerMetadata> {
+        (*self).get_self_metadata().await
+    }
+
+    async fn get_worker_metadata(
+        &mut self,
+        worker_id: golem::api::host::WorkerId,
+    ) -> anyhow::Result<Option<WorkerMetadata>> {
+        (*self).get_worker_metadata(worker_id).await
     }
 }
 

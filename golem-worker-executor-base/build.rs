@@ -20,7 +20,23 @@ fn find_package_root(name: &str) -> String {
         .manifest_path("./Cargo.toml")
         .exec()
         .unwrap();
-    let package = metadata.packages.iter().find(|p| p.name == name).unwrap();
+
+    let package = metadata
+        .packages
+        .into_iter()
+        .fold(None, |acc, p| {
+            if p.name == name {
+                match acc {
+                    None => Some(p),
+                    Some(cp) if cp.version < p.version => Some(p),
+                    _ => acc,
+                }
+            } else {
+                acc
+            }
+        })
+        .unwrap();
+
     package.manifest_path.parent().unwrap().to_string()
 }
 
