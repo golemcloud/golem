@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::service::auth::CloudAuthCtx;
-use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::auth::WrappedGolemSecuritySchema;
+use cloud_common::model::TokenSecret;
 use futures_util::StreamExt;
 use golem_common::model::ComponentId;
 use golem_service_base::model::WorkerId;
@@ -11,7 +12,6 @@ use http::StatusCode;
 use poem::web::websocket::WebSocket;
 use poem::web::{Data, Path};
 use poem::*;
-use poem_openapi::{ApiExtractor, ExtractParamOptions};
 use tap::TapFallible;
 
 use crate::service::worker::{ConnectWorkerStream, WorkerService};
@@ -32,21 +32,10 @@ pub async fn ws(
     Path((component_id, worker_name)): Path<(ComponentId, String)>,
     websocket: WebSocket,
     Data(service): Data<&ConnectService>,
-    request: &Request,
+    token: WrappedGolemSecuritySchema,
 ) -> Response {
-    // FIXME figure out how to do this better
-    let token = match GolemSecurityScheme::from_request(
-        request,
-        &mut RequestBody::new(Body::empty()),
-        ExtractParamOptions::default(),
-    )
-    .await
-    {
-        Ok(token) => token,
-        Err(err @ Error { .. }) => return err.into_response(),
-    };
-
-    get_worker_stream(service, component_id, worker_name, token)
+    tracing::info!("Connect worker {}/{}", component_id, worker_name);
+    get_worker_stream(service, component_id, worker_name, token.0.secret())
         .await
         .map(|(worker_id, worker_stream)| {
             websocket
@@ -73,14 +62,14 @@ async fn get_worker_stream(
     service: &ConnectService,
     component_id: ComponentId,
     worker_name: String,
-    token: GolemSecurityScheme,
+    token: TokenSecret,
 ) -> Result<(WorkerId, ConnectWorkerStream), Response> {
     let worker_id = WorkerId::new(component_id, worker_name)
         .map_err(|e| single_error(StatusCode::BAD_REQUEST, format!("Invalid worker id: {e}")))?;
 
     let worker_stream = service
         .worker_service
-        .connect(&worker_id, &CloudAuthCtx::new(token.secret()))
+        .connect(&worker_id, &CloudAuthCtx::new(token))
         .await
         .tap_err(|e| tracing::info!("Error connecting to worker {e}"))
         .map_err(|e| e.into_response())?;

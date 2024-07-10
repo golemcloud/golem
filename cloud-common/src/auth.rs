@@ -37,6 +37,30 @@ impl AsRef<TokenSecret> for GolemSecurityScheme {
     }
 }
 
+// For use in non-openapi handlers
+// Needs to be wrapped due to conflicting auto trait impls of inner type
+pub struct WrappedGolemSecuritySchema(pub GolemSecurityScheme);
+
+impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
+    async fn from_request(req: &'a Request, body: &mut poem::RequestBody) -> poem::Result<Self> {
+        tracing::info!("Extracting security scheme");
+        let result = <GolemSecurityScheme as poem_openapi::ApiExtractor<'a>>::from_request(
+            req,
+            body,
+            Default::default(),
+        )
+        .await;
+
+        match result {
+            Ok(scheme) => Ok(WrappedGolemSecuritySchema(scheme)),
+            Err(e) => {
+                tracing::info!("Failed to extract security scheme: {e}");
+                Err(e)
+            }
+        }
+    }
+}
+
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
 pub struct GolemBearer(TokenSecret);
