@@ -124,10 +124,10 @@ async fn async_main(
     let http_server = tokio::spawn(async move {
         let prometheus_registry = Arc::new(prometheus_registry);
         let app = api::combined_routes(prometheus_registry, &http_services)
-            .with(CookieJarManager::new())
-            .with(cors)
             .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+            .with(Tracing)
+            .with(CookieJarManager::new())
+            .with(cors);
 
         poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", http_port)))
             .run(app)

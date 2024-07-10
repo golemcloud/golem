@@ -22,7 +22,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::PrometheusExporter;
 use poem::listener::TcpListener;
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -116,10 +116,16 @@ async fn async_main(
     let grpc_services = services.clone();
 
     let http_server = tokio::spawn(async move {
+        let cors = Cors::new()
+            .allow_origin_regex("https://*.golem.cloud")
+            .allow_credentials(true);
+
         let app = api::combined_routes(&http_services)
             .nest("/metrics", PrometheusExporter::new(prometheus_registry))
             .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+            .with(Tracing)
+            .with(CookieJarManager::new())
+            .with(cors);
 
         poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", http_port)))
             .run(app)

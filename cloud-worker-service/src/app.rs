@@ -1,7 +1,7 @@
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::PrometheusExporter;
-use poem::middleware::{Cors, OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
 use poem::{EndpointExt, Route};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::select;
@@ -67,6 +67,7 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
             .nest("/metrics", PrometheusExporter::new(prometheus_registry))
             .with(OpenTelemetryMetrics::new())
             .with(Tracing)
+            .with(CookieJarManager::new())
             .with(cors);
 
         poem::Server::new(poem::listener::TcpListener::bind(("0.0.0.0", config.port)))
