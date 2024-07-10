@@ -7,7 +7,7 @@ use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::TypeAnnotatedValue;
 
 #[derive(Debug, Clone)]
 pub struct EvaluationContext {
@@ -96,7 +96,7 @@ impl EvaluationContext {
 
 mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::TypeAnnotatedValue;
 
     use crate::worker_binding::RequestDetails;
 

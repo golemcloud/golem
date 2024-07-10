@@ -1,4 +1,4 @@
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Record;
 pub(crate) trait Merge {
     fn merge(&mut self, other: &Self) -> &mut Self;

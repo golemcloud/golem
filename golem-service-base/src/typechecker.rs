@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use golem_common::model::CallingConvention;
-use golem_wasm_rpc::protobuf::{TypePrimitive, val, Val};
-use golem_wasm_rpc::protobuf::r#type::Type;
+use golem_wasm_rpc::protobuf::{val, Val};
 
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
-use golem_wasm_rpc::{convert_analysed_type, json, protobuf};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::Option;
+use golem_wasm_rpc::{json, protobuf, TypeExt};
+use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedOption;
 use serde_json::Value;
 
 pub trait TypeCheckIn {
@@ -132,12 +131,11 @@ impl TypeCheckOut for Vec<Val> {
                     match value_opt {
                         Some(val::Val::String(s)) => {
                             let analysed_typ = AnalysedType::Str;
-                            let typ = convert_analysed_type(analysed_typ);
                             if s.is_empty() {
                                 Ok(TypeAnnotatedValue::Option(
-                                    Box::new(Option {
+                                    Box::new(TypedOption {
                                         value: None,
-                                        typ: Some(typ),
+                                        typ: Some(analysed_typ.to_type()),
                                     })
                                 ))
                             } else {
