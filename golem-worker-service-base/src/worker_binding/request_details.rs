@@ -6,11 +6,11 @@ use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Record};
+use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-use golem_wasm_rpc::{convert_analysed_type, get_analysed_type_from_typed_value};
+use golem_wasm_rpc::get_type;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -52,10 +52,10 @@ impl TypedHttRequestDetails {
     pub fn empty() -> TypedHttRequestDetails {
         TypedHttRequestDetails {
             typed_path_key_values: TypedPathKeyValues(TypedKeyValueCollection::default()),
-            typed_request_body: TypedRequestBody(TypeAnnotatedValue::Record {
+            typed_request_body: TypedRequestBody(TypeAnnotatedValue::Record(TypedRecord {
                 value: vec![],
                 typ: vec![],
-            }),
+            })),
             typed_query_values: TypedQueryKeyValues(TypedKeyValueCollection::default()),
             typed_header_values: TypedHeaderValues(TypedKeyValueCollection::default()),
         }
@@ -75,7 +75,7 @@ impl TypedHttRequestDetails {
         let typed_query_values: TypeAnnotatedValue = self.typed_query_values.clone().0.into();
         let merged_type_annotated_value = typed_path_values.merge(&typed_query_values).clone();
 
-        TypeAnnotatedValue::Record {
+        TypeAnnotatedValue::Record(TypedRecord {
             typ: vec![
                 (
                     "path".to_string(),
@@ -95,7 +95,7 @@ impl TypedHttRequestDetails {
                     self.typed_header_values.clone().0.into(),
                 ),
             ],
-        }
+        })
     }
 
     fn from_input_http_request(
@@ -228,7 +228,7 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
         for record in typed_key_value_collection.fields {
             typ.push(NameTypePair {
                 name: record.name.clone(),
-                typ: Some(convert_analysed_type(get_analysed_type_from_typed_value(&record.value))),
+                typ: Some(get_type(&record.value).expect("Internal error: Failed to retrieve type from Type Annotated Value")),
             });
 
             value.push(NameValuePair {
@@ -239,7 +239,7 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
             });
         }
         
-        TypeAnnotatedValue::Record (Record { typ, value })
+        TypeAnnotatedValue::Record (TypedRecord { typ, value })
     }
 }
 

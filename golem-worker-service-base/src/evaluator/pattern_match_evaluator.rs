@@ -1,5 +1,5 @@
 use crate::evaluator::evaluator_context::EvaluationContext;
-use crate::evaluator::{DefaultEvaluator, Evaluator};
+use crate::evaluator::{DefaultEvaluator, Evaluator, internal};
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use golem_wasm_rpc::protobuf::{TypedOption, TypedRecord};
 use golem_wasm_rpc::protobuf::typed_result::{ResultValue as ProtoResultValue};
 use golem_wasm_rpc::protobuf::NameTypePair as ProtoNameTypePair;
-use golem_wasm_rpc::protobuf::NameValuePair as ProotoNameValuePair;
+use golem_wasm_rpc::protobuf::NameValuePair as ProtoNameValuePair;
 use golem_wasm_rpc::{get_analysed_type, TypeExt};
 
 
@@ -60,7 +60,7 @@ pub(crate) async fn evaluate_pattern_match(
                 if let Some(binding_variable) = &match_result.binding_variable {
                     let analysed_typ = AnalysedType::from(&match_result.result);
 
-                    let name_value_pair = ProotoNameValuePair {
+                    let name_value_pair = ProtoNameValuePair {
                         name: binding_variable.0.clone(),
                         value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value:  Some(match_result.result.clone()) }),
                     };
@@ -358,30 +358,3 @@ fn handle_variant(
     }
 }
 
-mod internal {
-    use golem_wasm_rpc::protobuf::TypedRecord;
-    use golem_wasm_rpc::{get_analysed_type, TypeAnnotatedValue, TypeExt};
-    use golem_wasm_rpc::protobuf::NameValuePair;
-    use golem_wasm_rpc::protobuf::NameTypePair;
-    use crate::evaluator::EvaluationError;
-
-    pub(crate) fn create_record(binding_variable: &str,  value: &TypeAnnotatedValue) -> Result<TypeAnnotatedValue, EvaluationError> {
-        let name_value_pair = NameValuePair {
-            name: binding_variable.to_string(),
-            value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value:  Some(value.clone()) }),
-        };
-
-        let typ =
-            get_analysed_type(value).map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
-
-        let name_type_pair = NameTypePair {
-            name: binding_variable.to_string(),
-            typ: Some(typ.to_type()),
-        };
-
-        Ok(TypeAnnotatedValue::Record (TypedRecord{
-            value: vec![name_value_pair],
-            typ: vec![name_type_pair],
-        }))
-    }
-}

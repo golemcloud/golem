@@ -19,7 +19,7 @@ use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::Tuple;
+use golem_wasm_rpc::protobuf::TypedTuple;
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tonic::transport::Channel;
@@ -1133,7 +1133,7 @@ where
     ) -> WorkerResult<TypedResult> {
         Ok(TypedResult {
             result: TypeAnnotatedValue::Tuple(
-                Tuple {
+                TypedTuple {
                     value: vec![],
                     typ: vec![],
                 }

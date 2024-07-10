@@ -7,7 +7,10 @@ mod math_op_evaluator;
 pub(crate) mod path;
 mod pattern_match_evaluator;
 
+mod internal;
+
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::get_analysed_type;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -17,6 +20,7 @@ use getter::Getter;
 use path::Path;
 use rib::Expr;
 use rib::Number;
+
 
 use crate::worker_bridge_execution::{
     NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequestExecutor,
@@ -263,12 +267,7 @@ impl Evaluator for DefaultEvaluator {
                     eval_result
                         .get_value()
                         .map_or(Ok(ExprEvaluationResult::Unit), |value| {
-                            let typ = AnalysedType::from(&value);
-
-                            let result = TypeAnnotatedValue::Record {
-                                value: vec![(str.to_string(), value)],
-                                typ: vec![(str.to_string(), typ)],
-                            };
+                            let result = internal::create_record(str, &value)?;
 
                             input.merge_variables(&result);
 
@@ -490,88 +489,6 @@ impl Evaluator for DefaultEvaluator {
 
         let mut input = input.clone();
         go(expr, &mut input, &executor).await
-    }
-}
-
-mod internal {
-    use crate::evaluator::getter::Getter;
-    use crate::evaluator::path::Path;
-    use crate::evaluator::EvaluationContext;
-    use crate::evaluator::EvaluationError;
-    use crate::primitive::GetPrimitive;
-    use crate::worker_bridge_execution::{
-        RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor,
-    };
-    use golem_common::model::{ComponentId, IdempotencyKey};
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use rib::ParsedFunctionName;
-    use std::str::FromStr;
-    use std::sync::Arc;
-
-    pub(crate) async fn call_worker_function(
-        runtime: &EvaluationContext,
-        function_name: &ParsedFunctionName,
-        json_params: Vec<TypeAnnotatedValue>,
-        executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
-    ) -> Result<RefinedWorkerResponse, EvaluationError> {
-        let variables = runtime.clone().variables.ok_or(EvaluationError::Message(
-            "No variables found in the context".to_string(),
-        ))?;
-
-        let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {
-            EvaluationError::Message("No worker variables found in the context".to_string())
-        })?;
-
-        let worker_name_typed = worker_variables.get(&Path::from_key("name")).map_err(|_| {
-            EvaluationError::Message("No worker name found in the context".to_string())
-        })?;
-
-        let worker_name = worker_name_typed
-            .get_primitive()
-            .ok_or(EvaluationError::Message(
-                "Worker name is not a string".to_string(),
-            ))?
-            .as_string();
-
-        let idempotency_key = worker_variables
-            .get(&Path::from_key("idempotency-key"))
-            .ok()
-            .and_then(|v| v.get_primitive())
-            .map(|p| IdempotencyKey::new(p.as_string()));
-
-        let component_id = worker_variables
-            .get(&Path::from_key("component_id"))
-            .map_err(|_| {
-                EvaluationError::Message("No component_id found in the context".to_string())
-            })?;
-
-        let component_id_string = component_id
-            .get_primitive()
-            .ok_or(EvaluationError::Message(
-                "Component_id is not a string".to_string(),
-            ))?
-            .as_string();
-
-        let component_id = ComponentId::from_str(component_id_string.as_str())
-            .map_err(|err| EvaluationError::Message(err.to_string()))?;
-
-        let worker_request = WorkerRequest {
-            component_id,
-            worker_name,
-            function_name: function_name.clone(),
-            function_params: json_params,
-            idempotency_key,
-        };
-
-        let worker_response = executor.execute(worker_request).await.map_err(|err| {
-            EvaluationError::Message(format!("Failed to execute worker function: {}", err))
-        })?;
-
-        let refined_worker_response = worker_response.refined().map_err(|err| {
-            EvaluationError::Message(format!("Failed to refine worker response: {}", err))
-        })?;
-
-        Ok(refined_worker_response)
     }
 }
 

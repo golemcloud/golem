@@ -1,5 +1,7 @@
+use futures_util::stream::iter;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
 
 use crate::evaluator::path::{Path, PathComponent};
 
@@ -31,11 +33,14 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
             if index < size {
                 match &paths[index] {
                     PathComponent::KeyName(key) => match type_annotated_value {
-                        TypeAnnotatedValue::Record { value, .. } => {
-                            let new_value = value.iter().find(|(k, _)| k == &key.0).map(|(_, v)| v);
+                        TypeAnnotatedValue::Record(TypedRecord { value, .. }) => {
+                            let new_value =
+                                value.into_iter().find(|name_value| name_value.name == key.0)
+                                    .map(|v| v.value.clone().map(|vv| vv.type_annotated_value)).flatten().flatten();
+
                             match new_value {
-                                Some(new_value) => go(new_value, paths, index + 1, size),
-                                None => Err(GetError::KeyNotFound(key.0.clone())),
+                                Some(new_value) => go(&new_value, paths, index + 1, size),
+                                _ => Err(GetError::KeyNotFound(key.0.clone())),
                             }
                         }
                         _ => Err(GetError::NotRecord {
@@ -69,9 +74,14 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
 
 fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
     match value {
-        TypeAnnotatedValue::List { values, .. } => Some(values.clone()),
-        TypeAnnotatedValue::Tuple { value, .. } => Some(value.clone()),
-
+        TypeAnnotatedValue::List (TypedList { values, .. }) => {
+            let vec = values.into_iter()    .filter_map(|v| v.type_annotated_value.as_ref()).collect::<Vec<_>>();
+            Some(vec.cloned())
+        },
+        TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) =>{
+            let vec = value.into_iter().filter_map(|v| v.type_annotated_value.as_ref()).collect::<Vec<_>>();
+            Some(vec.cloned())
+        }
         _ => None,
     }
 }

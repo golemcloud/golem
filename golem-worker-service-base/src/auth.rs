@@ -1,7 +1,6 @@
 use std::fmt::{Display, Formatter};
 
 use serde::Deserialize;
-use golem_wasm_rpc::get_value_from_typed_value;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyAuthCtx();
