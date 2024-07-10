@@ -65,7 +65,7 @@ mod tests {
         let cli = Cli::default();
         let (db_config, _container) = start_docker_postgres(&cli);
 
-        db::postgres_migrate(&db_config, "tests/db/migration/postgres")
+        db::postgres_migrate(&db_config, "../golem-worker-service/db/migration/postgres")
             .await
             .unwrap();
 
@@ -91,7 +91,7 @@ mod tests {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "tests/db/migration/sqlite")
+        db::sqlite_migrate(&db_config, "../golem-worker-service/db/migration/sqlite")
             .await
             .unwrap();
 

@@ -144,16 +144,17 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
-        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
+        let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
             .bind(component.component_id)
             .fetch_optional(&mut *transaction)
             .await?;
 
         if let Some(result) = result {
             let namespace: String = result.get("namespace");
-            if namespace != component.namespace {
+            let name: String = result.get("name");
+            if namespace != component.namespace || name != component.name {
                 return Err(RepoError::Internal(
-                    "Component namespace invalid".to_string(),
+                    "Component namespace and name invalid".to_string(),
                 ));
             }
         } else {
@@ -360,16 +361,17 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
-        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
+        let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
             .bind(component.component_id)
             .fetch_optional(&mut *transaction)
             .await?;
 
         if let Some(result) = result {
             let namespace: String = result.get("namespace");
-            if namespace != component.namespace {
+            let name: String = result.get("name");
+            if namespace != component.namespace || name != component.name {
                 return Err(RepoError::Internal(
-                    "Component namespace invalid".to_string(),
+                    "Component namespace and name invalid".to_string(),
                 ));
             }
         } else {

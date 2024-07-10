@@ -5,8 +5,6 @@ CREATE TABLE components
     name                text    NOT NULL
 );
 
-CREATE INDEX components_namespace_id_idx ON components (namespace, component_id);
-
 CREATE UNIQUE INDEX components_namespace_name_idx ON components (namespace, name);
 
 CREATE TABLE component_versions
