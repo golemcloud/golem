@@ -5,12 +5,10 @@ use ctor::{ctor, dtor};
 use golem_wasm_rpc::Value;
 use rand::prelude::*;
 use tracing::info;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
 
 use golem_api_grpc::proto::golem::worker;
 use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 
@@ -18,20 +16,7 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        // let console_layer = console_subscriber::spawn().with_filter(
-        //     EnvFilter::try_new("trace").unwrap()
-        //);
-        let ansi_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(true)
-            .with_filter(
-                EnvFilter::try_new("debug,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn,fred=warn").unwrap()
-            );
-
-        tracing_subscriber::registry()
-            // .with(console_layer) // Uncomment this to use tokio-console. Also needs RUSTFLAGS="--cfg tokio_unstable"
-            .with(ansi_layer)
-            .init();
-
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test("sharding-tests"));
         Self
     }
 }

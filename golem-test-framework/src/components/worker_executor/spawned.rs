@@ -136,7 +136,7 @@ impl SpawnedWorkerExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("Failed to start golem-shard-manager");
+            .expect("Failed to start worker");
 
         let logger = ChildProcessLogger::log_child_process(
             &format!("[worker-{grpc_port}]"),

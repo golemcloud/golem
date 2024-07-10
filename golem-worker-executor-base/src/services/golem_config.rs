@@ -17,17 +17,22 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use figment::providers::{Env, Format, Toml};
+use figment::providers::{Format, Toml};
 use figment::Figment;
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-use golem_common::config::{RedisConfig, RetryConfig};
+use golem_common::config::{
+    ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig, RetryConfig,
+};
+use golem_common::tracing::TracingConfig;
 
 /// The shared global Golem configuration
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GolemConfig {
+    pub tracing: TracingConfig,
+    pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -43,15 +48,13 @@ pub struct GolemConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
     pub http_port: u16,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limits {
     pub max_active_workers: usize,
     pub invocation_result_broadcast_capacity: usize,
@@ -64,7 +67,7 @@ pub struct Limits {
     pub epoch_ticks: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
@@ -72,14 +75,14 @@ pub struct ComponentCacheConfig {
     pub time_to_idle: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ComponentServiceConfig {
     Grpc(ComponentServiceGrpcConfig),
     Local(ComponentServiceLocalConfig),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceGrpcConfig {
     pub host: String,
     pub port: u16,
@@ -88,39 +91,39 @@ pub struct ComponentServiceGrpcConfig {
     pub max_component_size: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceLocalConfig {
     pub root: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum CompiledComponentServiceConfig {
     Enabled(CompiledComponentServiceEnabledConfig),
     Disabled(CompiledComponentServiceDisabledConfig),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledComponentServiceEnabledConfig {}
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompiledComponentServiceDisabledConfig {}
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ShardManagerServiceConfig {
     Grpc(ShardManagerServiceGrpcConfig),
     SingleShard,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
     pub retries: RetryConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
@@ -128,14 +131,6 @@ pub struct WorkerServiceGrpcConfig {
 }
 
 impl GolemConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/worker-executor.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-
     pub fn from_file(path: &str) -> Self {
         Figment::new()
             .merge(Toml::file(path))
@@ -156,6 +151,21 @@ impl GolemConfig {
                 .context("http_address configuration")?,
             self.http_port,
         ))
+    }
+
+    pub fn add_port_to_tracing_file_name_if_enabled(&mut self) {
+        if self.tracing_file_name_with_port {
+            if let Some(file_name) = &self.tracing.file_name {
+                let elems: Vec<&str> = file_name.split('.').collect();
+                self.tracing.file_name = {
+                    if elems.len() == 2 {
+                        Some(format!("{}.{}.{}", elems[0], self.port, elems[1]))
+                    } else {
+                        Some(format!("{}.{}", file_name, self.port))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -207,26 +217,26 @@ impl WorkerServiceGrpcConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SuspendConfig {
     #[serde(with = "humantime_serde")]
     pub suspend_after: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActiveWorkersConfig {
     pub drop_when_full: f64,
     #[serde(with = "humantime_serde")]
     pub ttl: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SchedulerConfig {
     #[serde(with = "humantime_serde")]
     pub refresh_interval: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OplogConfig {
     pub max_operations_before_commit: u64,
     pub max_payload_size: usize,
@@ -237,14 +247,14 @@ pub struct OplogConfig {
     pub archive_interval: Duration,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     InMemory,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum IndexedStorageConfig {
     KVStoreRedis,
@@ -252,7 +262,7 @@ pub enum IndexedStorageConfig {
     InMemory,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum BlobStorageConfig {
     S3(S3BlobStorageConfig),
@@ -260,7 +270,7 @@ pub enum BlobStorageConfig {
     InMemory,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct S3BlobStorageConfig {
     pub retries: RetryConfig,
     pub region: String,
@@ -273,12 +283,12 @@ pub struct S3BlobStorageConfig {
     pub use_minio_credentials: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemBlobStorageConfig {
     pub root: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
@@ -300,19 +310,21 @@ impl MemoryConfig {
         })
     }
 
-    pub fn worker_memory(&self) -> u64 {
-        (self.system_memory() as f64 * self.worker_memory_ratio) as u64
+    pub fn worker_memory(&self) -> usize {
+        (self.total_system_memory() as f64 * self.worker_memory_ratio) as usize
     }
 }
 
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
+            tracing: TracingConfig::local_dev("worker-executor"),
+            tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
-            retry: RetryConfig::default(),
+            retry: RetryConfig::max_attempts_3(),
             component_cache: ComponentCacheConfig::default(),
             component_service: ComponentServiceConfig::default(),
             compiled_component_service: CompiledComponentServiceConfig::default(),
@@ -323,13 +335,37 @@ impl Default for GolemConfig {
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
-            enable_tracing_console: false,
-            enable_json_log: false,
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
             http_address: "0.0.0.0".to_string(),
-            http_port: 8080,
+            http_port: 8082,
         }
+    }
+}
+
+impl HasConfigExamples<GolemConfig> for GolemConfig {
+    fn examples() -> Vec<ConfigExample<GolemConfig>> {
+        vec![
+            (
+                "with redis indexed_storage, s3 blob storage, single shard manager service",
+                Self {
+                    key_value_storage: KeyValueStorageConfig::InMemory,
+                    indexed_storage: IndexedStorageConfig::Redis(RedisConfig::default()),
+                    blob_storage: BlobStorageConfig::default_s3(),
+                    shard_manager_service: ShardManagerServiceConfig::SingleShard,
+                    ..Self::default()
+                },
+            ),
+            (
+                "with in-memory key value storage, indexed storage and blob storage",
+                Self {
+                    key_value_storage: KeyValueStorageConfig::InMemory,
+                    indexed_storage: IndexedStorageConfig::InMemory,
+                    blob_storage: BlobStorageConfig::default_in_memory(),
+                    ..Self::default()
+                },
+            ),
+        ]
     }
 }
 
@@ -351,7 +387,7 @@ impl Default for Limits {
 impl Default for ComponentCacheConfig {
     fn default() -> Self {
         Self {
-            max_capacity: 128,
+            max_capacity: 32,
             max_metadata_capacity: 16384,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
@@ -369,8 +405,8 @@ impl Default for ComponentServiceGrpcConfig {
         Self {
             host: "localhost".to_string(),
             port: 9090,
-            access_token: "access_token".to_string(),
-            retries: RetryConfig::default(),
+            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
+            retries: RetryConfig::max_attempts_3(),
             max_component_size: 50 * 1024 * 1024,
         }
     }
@@ -378,14 +414,24 @@ impl Default for ComponentServiceGrpcConfig {
 
 impl Default for CompiledComponentServiceConfig {
     fn default() -> Self {
+        Self::enabled()
+    }
+}
+
+impl CompiledComponentServiceConfig {
+    pub fn enabled() -> Self {
         Self::Enabled(CompiledComponentServiceEnabledConfig {})
+    }
+
+    pub fn disabled() -> Self {
+        Self::Disabled(CompiledComponentServiceDisabledConfig {})
     }
 }
 
 impl Default for S3BlobStorageConfig {
     fn default() -> Self {
         Self {
-            retries: RetryConfig::default(),
+            retries: RetryConfig::max_attempts_3(),
             region: "us-east-1".to_string(),
             compilation_cache_bucket: "golem-compiled-components".to_string(),
             custom_data_bucket: "custom-data".to_string(),
@@ -394,6 +440,14 @@ impl Default for S3BlobStorageConfig {
             aws_endpoint_url: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             use_minio_credentials: false,
+        }
+    }
+}
+
+impl Default for LocalFileSystemBlobStorageConfig {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("../data/blob_storage"),
         }
     }
 }
@@ -408,7 +462,7 @@ impl Default for ShardManagerServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9020,
+            port: 9002,
             retries: RetryConfig::default(),
         }
     }
@@ -456,14 +510,20 @@ impl Default for WorkerServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9090,
-            access_token: "access_token".to_string(),
+            port: 9007,
+            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
         }
     }
 }
 
 impl Default for KeyValueStorageConfig {
     fn default() -> Self {
+        Self::default_redis()
+    }
+}
+
+impl KeyValueStorageConfig {
+    pub fn default_redis() -> Self {
         Self::Redis(RedisConfig::default())
     }
 }
@@ -476,7 +536,21 @@ impl Default for IndexedStorageConfig {
 
 impl Default for BlobStorageConfig {
     fn default() -> Self {
+        Self::default_local_file_system()
+    }
+}
+
+impl BlobStorageConfig {
+    pub fn default_s3() -> Self {
         Self::S3(S3BlobStorageConfig::default())
+    }
+
+    pub fn default_local_file_system() -> Self {
+        Self::LocalFileSystem(LocalFileSystemBlobStorageConfig::default())
+    }
+
+    pub fn default_in_memory() -> Self {
+        Self::InMemory
     }
 }
 
@@ -488,4 +562,8 @@ impl Default for MemoryConfig {
             worker_estimate_coefficient: 1.1,
         }
     }
+}
+
+pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
+    ConfigLoader::new_with_examples("config/worker-executor.toml".to_string())
 }

@@ -33,6 +33,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use model::{Pod, RoutingTable};
 use persistence::{PersistenceService, PersistenceServiceDefault};
 use prometheus::{default_registry, Registry};
@@ -41,11 +42,10 @@ use shard_manager_config::ShardManagerConfig;
 use tonic::transport::Server;
 use tonic::Response;
 use tracing::{debug, info, warn};
-use tracing_subscriber::EnvFilter;
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 use crate::http_server::HttpServerImpl;
-use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode};
+use crate::shard_manager_config::{make_config_loader, HealthCheckK8sConfig, HealthCheckMode};
 
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
@@ -173,33 +173,19 @@ impl ShardManagerService for ShardManagerServiceImpl {
 }
 
 pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ShardManagerConfig::new();
-    let registry = default_registry().clone();
+    match make_config_loader().load_or_dump_config() {
+        Some(config) => {
+            init_tracing_with_default_env_filter(&config.tracing);
+            let registry = default_registry().clone();
 
-    if config.enable_json_log {
-        tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            // .with_span_events(FmtSpan::FULL) // NOTE: enable to see span events
-            .with_env_filter(EnvFilter::from_default_env())
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .with_ansi(true)
-            .init();
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async_main(&config, registry))
+        }
+        None => Ok(()),
     }
-
-    // NOTE: to enable tokio-console, comment the lines above and uncomment the lines below,
-    // and compile with RUSTFLAGS="--cfg tokio_unstable" cargo build
-    // TODO: make tracing subscription configurable
-    // console_subscriber::init();
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async_main(&config, registry))
 }
 
 async fn async_main(

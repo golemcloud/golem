@@ -16,7 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use tracing::{error, warn};
+use tracing::{error, info, warn, Level};
 
 use crate::config::RetryConfig;
 use crate::metrics::external_calls::{
@@ -82,9 +82,9 @@ impl<'a> RetryState<'a> {
 }
 
 pub async fn with_retries<'a, In, F, G, R, E>(
-    description: &str,
     target_label: &'static str,
     op_label: &'static str,
+    op_id: Option<String>,
     config: &RetryConfig,
     i: &In,
     action: F,
@@ -98,41 +98,53 @@ where
     let mut attempts = 0;
     loop {
         attempts += 1;
+
         let start = Instant::now();
         let r = action(i).await;
         let end = Instant::now();
         let duration = end.duration_since(start);
-        match r {
+
+        let span = tracing::span!(
+            Level::INFO,
+            "retry",
+            target = target_label,
+            op = op_label,
+            op_id,
+            attempt = attempts
+        );
+        let enter = span.enter();
+
+        let delay = match r {
             Ok(result) => {
+                info!(duration_ms = duration.as_millis(), "op success");
                 record_external_call_success(target_label, op_label, duration);
                 return Ok(result);
             }
             Err(error) if is_retriable(&error) => {
                 if let Some(delay) = get_delay(config, attempts) {
                     warn!(
-                        "{} failed after {} attempts with {}, retrying in {:?}",
-                        description, attempts, error, delay
+                        delay_ms = delay.as_millis(),
+                        error = error.to_string(),
+                        "op failure - retrying"
                     );
                     record_external_call_retry(target_label, op_label);
-                    tokio::time::sleep(delay).await;
+                    delay
                 } else {
-                    error!(
-                        "{} failed after {} attempts with {}",
-                        description, attempts, error
-                    );
+                    error!(error = error.to_string(), "op failure - no more retries");
                     record_external_call_failure(target_label, op_label);
                     return Err(error);
                 }
             }
             Err(error) => {
-                error!(
-                    "{} failed with non-retriable error after {} attempts with {}",
-                    description, attempts, error
-                );
+                error!(error = error.to_string(), "op failure - non-retriable");
                 record_external_call_failure(target_label, op_label);
                 return Err(error);
             }
-        }
+        };
+
+        drop(enter);
+
+        tokio::time::sleep(delay).await;
     }
 }
 

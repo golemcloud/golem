@@ -305,6 +305,11 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
             port: context.grpc_port(),
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
         },
+        // memory: MemoryConfig {
+        //     system_memory_override: None,
+        //     worker_memory_ratio: 0.004,
+        //     worker_estimate_coefficient: 1.2,
+        // },
         ..Default::default()
     };
 
@@ -719,11 +724,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
-        Arc::new(ActiveWorkers::<TestWorkerCtx>::bounded(
-            golem_config.limits.max_active_workers,
-            golem_config.active_workers.drop_when_full,
-            golem_config.active_workers.ttl,
-        ))
+        Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
     async fn create_services(

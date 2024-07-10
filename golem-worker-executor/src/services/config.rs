@@ -15,12 +15,12 @@
 #[cfg(test)]
 mod tests {
     use golem_worker_executor_base::services::golem_config::{
-        GolemConfig, ShardManagerServiceConfig,
+        make_config_loader, ShardManagerServiceConfig,
     };
 
     #[test]
     pub fn config_is_loadable() {
-        let golem_config = GolemConfig::new();
+        let golem_config = make_config_loader().load().expect("Failed to load config");
 
         let shard_manager_grpc_port = match &golem_config.shard_manager_service {
             ShardManagerServiceConfig::Grpc(config) => config.port,

@@ -300,6 +300,11 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make check-openapi
+      - name: Check that configs are up-to-date
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make check-configs
       - name: Unit tests
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -421,7 +426,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make cli-tests
-        timeout-minutes: 20
+        timeout-minutes: 30
   sharding-tests:
     runs-on: ubuntu-latest-large
     steps:
