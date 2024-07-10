@@ -10,9 +10,10 @@ mod pattern_match_evaluator;
 mod internal;
 
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::get_analysed_type;
+use golem_wasm_rpc::{get_analysed_type, TypeExt};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedOption;
 
 use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
@@ -267,7 +268,7 @@ impl Evaluator for DefaultEvaluator {
                     eval_result
                         .get_value()
                         .map_or(Ok(ExprEvaluationResult::Unit), |value| {
-                            let result = internal::create_record(str, &value)?;
+                            let result = internal::create_singleton_record(str, &value)?;
 
                             input.merge_variables(&result);
 
@@ -311,16 +312,7 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    let sequence = match result.first() {
-                        Some(value) => TypeAnnotatedValue::List {
-                            values: result.clone(),
-                            typ: AnalysedType::from(value),
-                        },
-                        None => TypeAnnotatedValue::List {
-                            values: result.clone(),
-                            typ: AnalysedType::Tuple(vec![]),
-                        }, // Support optional type in List
-                    };
+                    let sequence = internal::create_list(result)?;
 
                     Ok(sequence.into())
                 }
@@ -342,16 +334,11 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    let types: Vec<(String, AnalysedType)> = values
-                        .iter()
-                        .map(|(key, value)| (key.clone(), AnalysedType::from(value)))
-                        .collect();
+                    let record =
+                        internal::create_record(values)?;
 
-                    Ok(TypeAnnotatedValue::Record {
-                        value: values,
-                        typ: types,
-                    }
-                    .into())
+                    Ok(record.into())
+
                 }
 
                 Expr::Concat(exprs) => {
@@ -401,20 +388,16 @@ impl Evaluator for DefaultEvaluator {
                             let expr_result = Box::pin(go(expr, input, executor)).await?;
 
                             if let Some(value) = expr_result.get_value() {
-                                let analysed_type = AnalysedType::from(&value);
-                                Ok(TypeAnnotatedValue::Option {
-                                    value: Some(Box::new(value)),
-                                    typ: analysed_type,
-                                }
-                                .into())
+                                let optional_value = internal::create_option(value)?;
+                                Ok(optional_value.into())
                             } else {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", rib::to_string(expr).unwrap())))
                             }
                         }
-                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
+                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option(Box::new(TypedOption {
                             value: None,
-                            typ: AnalysedType::Str,
-                        })),
+                            typ: Some(AnalysedType::Str.to_type()),
+                        })))),
                     }
                 }
 
