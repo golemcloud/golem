@@ -7,7 +7,7 @@ use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, Worke
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use golem_wasm_rpc::protobuf::NameTypePair;
+use golem_wasm_rpc::protobuf::{NameTypePair, TypedTuple};
 use golem_wasm_rpc::protobuf::NameValuePair;
 use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult};
 use golem_wasm_rpc::{get_type, TypeAnnotatedValue, TypeExt};
@@ -15,21 +15,60 @@ use rib::ParsedFunctionName;
 use std::str::FromStr;
 use std::sync::Arc;
 
-pub(crate) fn create_result(
+
+pub(crate) fn create_tuple(
+    value: Vec<TypeAnnotatedValue>
+) -> Result<TypeAnnotatedValue, EvaluationError> {
+
+    let mut types = vec![];
+
+    for value in value.iter() {
+        let typ = get_type(value).map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+        types.push(typ);
+    }
+
+    Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+        value: value
+            .into_iter()
+            .map(|result| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(result.clone()),
+            })
+            .collect(),
+        typ: types
+    }))
+}
+pub(crate) fn create_ok_result(
     value: TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
     let analysed_type = get_type(&value)
         .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
     let typed_value = TypeAnnotatedValue::Result(Box::new(TypedResult {
-        result_value: Some(ResultValue::OkValue(TypeAnnotatedValue {
+        result_value: Some(ResultValue::OkValue(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
             type_annotated_value: Some(value),
-        })),
+        }))),
         ok: Some(analysed_type),
         error: None,
     }));
 
     Ok(typed_value)
 }
+
+pub(crate) fn create_error_result(
+    value: TypeAnnotatedValue,
+) -> Result<TypeAnnotatedValue, EvaluationError> {
+    let analysed_type = get_type(&value)
+        .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
+    let typed_value = TypeAnnotatedValue::Result(Box::new(TypedResult {
+        result_value: Some(ResultValue::ErrorValue(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+            type_annotated_value: Some(value),
+        }))),
+        ok: None,
+        error: Some(analysed_type),
+    }));
+
+    Ok(typed_value)
+}
+
 pub(crate) fn create_option(
     value: TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
@@ -64,7 +103,7 @@ pub(crate) fn create_list(
         None => Ok(TypeAnnotatedValue::List(TypedList {
             values: vec![],
             typ: Some(AnalysedType::Tuple(vec![]).to_type()),
-        })), // Support optional type in List
+        })),
     }
 }
 pub(crate) fn create_singleton_record(

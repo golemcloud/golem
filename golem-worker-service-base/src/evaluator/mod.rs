@@ -407,14 +407,8 @@ impl Evaluator for DefaultEvaluator {
                             let expr_result = Box::pin(go(expr, input, executor)).await?;
 
                             if let Some(value) = expr_result.get_value() {
-                                let analysed_type = AnalysedType::from(&value);
-
-                                Ok(TypeAnnotatedValue::Result {
-                                    value: Ok(Some(Box::new(value))),
-                                    ok: Some(Box::new(analysed_type)),
-                                    error: None,
-                                }
-                                .into())
+                                let result = internal::create_ok_result(value);
+                                Ok(result.into())
                             } else {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
                             }
@@ -423,14 +417,9 @@ impl Evaluator for DefaultEvaluator {
                             let eval_result = Box::pin(go(expr, input, executor)).await?;
 
                             if let Some(value) = eval_result.get_value() {
-                                let analysed_type = AnalysedType::from(&value);
+                                let result = internal::create_error_result(value);
 
-                                Ok(TypeAnnotatedValue::Result {
-                                    value: Err(Some(Box::new(value))),
-                                    ok: None,
-                                    error: Some(Box::new(analysed_type)),
-                                }
-                                .into())
+                                Ok(result.into())
                             } else {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
                             }
@@ -454,13 +443,11 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
+                    let tuple = internal::create_tuple(result)?;
+
                     let typ: &Vec<AnalysedType> = &result.iter().map(AnalysedType::from).collect();
 
-                    Ok(TypeAnnotatedValue::Tuple {
-                        value: result,
-                        typ: typ.clone(),
-                    }
-                    .into())
+                    Ok(tuple.into())
                 }
 
                 Expr::Flags(flags) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Flags {
