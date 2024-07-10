@@ -445,15 +445,14 @@ impl Evaluator for DefaultEvaluator {
 
                     let tuple = internal::create_tuple(result)?;
 
-                    let typ: &Vec<AnalysedType> = &result.iter().map(AnalysedType::from).collect();
-
                     Ok(tuple.into())
                 }
 
-                Expr::Flags(flags) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Flags {
-                    values: flags.clone(),
-                    typ: flags.clone(),
-                })),
+                Expr::Flags(flags) => {
+                    let result = internal::create_flags(flags.clone());
+
+                    Ok(ExprEvaluationResult::Value(result))
+                },
             }
         }
 
@@ -479,7 +478,7 @@ mod tests {
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
-    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult};
+    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, internal};
     use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
@@ -898,11 +897,8 @@ mod tests {
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
         let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
-            TypeAnnotatedValue::Tuple {
-                typ: vec![AnalysedType::from(&result_as_typed_value)],
-                value: vec![result_as_typed_value],
-            },
-            vec![FunctionResult {
+              internal::create_tuple(vec![result_as_typed_value.clone()]).unwrap(),
+              vec![FunctionResult {
                 name: None,
                 typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),
             }],
@@ -1076,11 +1072,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response)
             .await;
 
-        let expected_result = TypeAnnotatedValue::Record {
-            value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
-            typ: vec![("id".to_string(), AnalysedType::Str)],
-        };
-
+        let expected_result = internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string())).unwrap();
         assert_eq!(result, Ok(expected_result));
     }
 
@@ -1150,10 +1142,10 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
-        let expected = TypeAnnotatedValue::Option {
-            value: Some(Box::new(TypeAnnotatedValue::Str("id1".to_string()))),
-            typ: AnalysedType::Str,
-        };
+
+        let expected =
+            internal::create_option(TypeAnnotatedValue::Str("id1".to_string())).unwrap();
+
         assert_eq!(result, Ok(expected));
     }
 
@@ -1176,10 +1168,9 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
-        let expected = TypeAnnotatedValue::Option {
-            value: None,
-            typ: AnalysedType::Str,
-        };
+
+        let expected = internal::create_none(&AnalysedType::Str);
+
         assert_eq!(result, Ok(expected));
     }
 
@@ -1201,13 +1192,9 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
-        let expected = TypeAnnotatedValue::Option {
-            value: Some(Box::new(TypeAnnotatedValue::Option {
-                typ: AnalysedType::Str,
-                value: None,
-            })),
-            typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
-        };
+
+        let internal_opt = internal::create_none(&AnalysedType::Str);
+        let expected = internal::create_option(internal_opt).unwrap();
         assert_eq!(result, Ok(expected));
     }
 

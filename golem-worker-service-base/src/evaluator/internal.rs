@@ -7,7 +7,7 @@ use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, Worke
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use golem_wasm_rpc::protobuf::{NameTypePair, TypedTuple};
+use golem_wasm_rpc::protobuf::{NameTypePair, TypedFlags, TypedTuple};
 use golem_wasm_rpc::protobuf::NameValuePair;
 use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult};
 use golem_wasm_rpc::{get_type, TypeAnnotatedValue, TypeExt};
@@ -37,6 +37,14 @@ pub(crate) fn create_tuple(
         typ: types
     }))
 }
+
+pub(crate) fn create_flags(value: Vec<String>) -> TypeAnnotatedValue {
+    TypeAnnotatedValue::Flags(TypedFlags {
+        values: value.clone(),
+        typ: value.clone(),
+    })
+}
+
 pub(crate) fn create_ok_result(
     value: TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
@@ -82,6 +90,14 @@ pub(crate) fn create_option(
         typ: Some(typ),
     })))
 }
+
+pub(crate) fn create_none(typ: &AnalysedType) -> TypeAnnotatedValue {
+    TypeAnnotatedValue::Option(Box::new(TypedOption {
+        value: None,
+        typ: Some(typ.clone().to_type()),
+    }))
+}
+
 pub(crate) fn create_list(
     values: Vec<TypeAnnotatedValue>,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
