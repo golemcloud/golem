@@ -438,6 +438,7 @@ where
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,
@@ -451,20 +452,21 @@ where
             )
             .await?;
 
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
+        let result = results_val.result.ok_or(WorkerServiceError::Internal(anyhow::Error::msg(
+            "Missing response from worker service exeutors"
+        )))?;
 
-        results_val
-            .result
-            .validate_function_result(function_results, *calling_convention)
-            .map(|result| TypedResult {
-                result,
-                function_result_types: function_type.results,
-            })
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
+        let type_annotatated_value =
+            result.type_annotated_value.ok_or(WorkerServiceError::Internal(anyhow::Error::msg(
+                "Missing type annotated value in worker service responses"
+            )))?;
+
+       let typed_result = TypedResult {
+           result:type_annotatated_value,
+           function_result_types: function_type.results.clone()
+       };
+
+       Ok(typed_result)
     }
 
     async fn invoke_and_await_function_proto(
