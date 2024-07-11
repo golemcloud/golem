@@ -494,8 +494,9 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-    use golem_wasm_rpc::TypeExt;
+    use crate::evaluator::EvaluationError;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedList, TypedRecord};
+    use golem_wasm_rpc::{get_type, TypeExt};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
     use serde_json::Value;
@@ -512,6 +513,44 @@ mod tests {
                     type_annotated_value: Some(TypeAnnotatedValue::Str("Hello".to_string())),
                 }),
             }],
+        })
+    }
+
+    fn create_list(vec: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
+        TypeAnnotatedValue::List(TypedList {
+            values: vec
+                .into_iter()
+                .map(|v| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(v),
+                })
+                .collect(),
+            typ: Some(AnalysedType::U8.to_type()),
+        })
+    }
+
+    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
+        let mut name_type_pairs = vec![];
+        let mut name_value_pairs = vec![];
+
+        for (key, value) in values.iter() {
+            let typ = get_type(value)
+                .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+            name_type_pairs.push(NameTypePair {
+                name: key.to_string(),
+                typ: Some(typ),
+            });
+
+            name_value_pairs.push(NameValuePair {
+                name: key.to_string(),
+                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(value.clone()),
+                }),
+            });
+        }
+
+        TypeAnnotatedValue::Record(TypedRecord {
+            typ: name_type_pairs,
+            value: name_value_pairs,
         })
     }
 
@@ -555,10 +594,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_u8_type() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U8(10)],
-                typ: AnalysedType::U8,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)]);
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let result = body.into_bytes().await.unwrap();
 
@@ -573,10 +609,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U16(10)],
-                typ: AnalysedType::U16,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)]);
 
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let data_as_str =
@@ -593,13 +626,10 @@ mod tests {
 
         #[tokio::test]
         async fn test_record_type() {
-            let type_annotated_value = TypeAnnotatedValue::Record {
-                typ: vec![("name".to_string(), AnalysedType::Str)],
-                value: vec![(
-                    "name".to_string(),
-                    TypeAnnotatedValue::Str("Hello".to_string()),
-                )],
-            };
+            let type_annotated_value = create_record(vec![(
+                "name".to_string(),
+                TypeAnnotatedValue::Str("Hello".to_string()),
+            )]);
 
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let data_as_str =
@@ -686,10 +716,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_u8_type() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U8(10)],
-                typ: AnalysedType::U8,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)]);
+
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
             let result = &body.into_bytes().await.unwrap();
@@ -708,10 +736,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U16(10)],
-                typ: AnalysedType::U16,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)]);
 
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
@@ -851,10 +876,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_u8_type_with_json() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U8(10)],
-                typ: AnalysedType::U8,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)]);
+
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
                 &AcceptHeaders::from_str("text/html;q=0.8, application/json;q=0.50"),
@@ -875,10 +898,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type_with_json() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U16(10)],
-                typ: AnalysedType::U16,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)]);
 
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
@@ -898,10 +918,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type_with_html_fail() {
-            let type_annotated_value = TypeAnnotatedValue::List {
-                values: vec![TypeAnnotatedValue::U16(10)],
-                typ: AnalysedType::U16,
-            };
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)]);
 
             let result = internal::get_response_body_based_on_content_type(
                 &type_annotated_value,
