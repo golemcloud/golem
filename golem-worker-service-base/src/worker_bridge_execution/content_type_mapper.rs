@@ -533,8 +533,8 @@ mod tests {
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = get_type(value)
-                .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+            let typ = get_type(value).unwrap();
+
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),

@@ -109,6 +109,8 @@ mod tests {
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
     use serde_json::Value;
     use std::sync::Arc;
+    use golem_wasm_rpc::get_type;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
 
     use golem_common::model::IdempotencyKey;
     use golem_service_base::model::{
@@ -144,10 +146,7 @@ mod tests {
 
             let response = convert_to_worker_response(&resolved_worker_request);
 
-            let response_dummy = TypeAnnotatedValue::Tuple {
-                typ: vec![AnalysedType::from(&response)],
-                value: vec![response],
-            };
+            let response_dummy = create_tuple(vec![response]);
 
             Ok(WorkerResponse::new(
                 response_dummy,
@@ -156,14 +155,51 @@ mod tests {
         }
     }
 
+    fn create_tuple(type_annotated_value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
+        let root = type_annotated_value.iter().map(|x| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+            type_annotated_value: Some(x.clone())
+        }).collect::<Vec<_>>();
+
+        let types = type_annotated_value.iter().map(|x| get_type(x).unwrap()).collect::<Vec<_>>();
+
+        TypeAnnotatedValue::Tuple(TypedTuple {
+            value: root,
+            typ: types
+        })
+    }
+
+    fn create_record(
+        values: Vec<(String, TypeAnnotatedValue)>,
+    ) -> Result<TypeAnnotatedValue, EvaluationError> {
+        let mut name_type_pairs = vec![];
+        let mut name_value_pairs = vec![];
+
+        for (key, value) in values.iter() {
+            let typ = get_type(value)
+                .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+            name_type_pairs.push(NameTypePair {
+                name: key.to_string(),
+                typ: Some(typ),
+            });
+
+            name_value_pairs.push(NameValuePair {
+                name: key.to_string(),
+                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(value.clone()),
+                }),
+            });
+        }
+
+        Ok(TypeAnnotatedValue::Record(TypedRecord {
+            typ: name_type_pairs,
+            value: name_value_pairs,
+        }))
+    }
+
     fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
-        let mut required = TypeAnnotatedValue::Record {
-            typ: vec![
-                ("component_id".to_string(), AnalysedType::Str),
-                ("name".to_string(), AnalysedType::Str),
-                ("function_name".to_string(), AnalysedType::Str),
-            ],
-            value: vec![
+
+        let mut required = create_record(
+            vec![
                 (
                     "component_id".to_string(),
                     TypeAnnotatedValue::Str(worker_request.component_id.0.to_string()),
@@ -178,31 +214,20 @@ mod tests {
                 ),
                 (
                     "function_params".to_string(),
-                    TypeAnnotatedValue::Tuple {
-                        typ: worker_request
-                            .function_params
-                            .iter()
-                            .map(AnalysedType::from)
-                            .collect(),
-                        value: worker_request.function_params.clone(),
-                    },
+                    create_tuple(worker_request.function_params.clone())
                 ),
             ],
-        };
+        ).unwrap();
 
         let optional_idempotency_key =
             worker_request
                 .clone()
                 .idempotency_key
-                .map(|x| TypeAnnotatedValue::Record {
-                    // Idempotency key can exist in header of the request in which case users can refer to it as
-                    // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
-                    // if it exists as part of the API definition
-                    typ: vec![("idempotency-key".to_string(), AnalysedType::Str)],
-                    value: vec![(
+                .map(|x| {
+                    create_record(vec![(
                         "idempotency-key".to_string(),
                         TypeAnnotatedValue::Str(x.to_string()),
-                    )],
+                    )]).unwrap()
                 });
 
         if let Some(idempotency_key) = optional_idempotency_key {
