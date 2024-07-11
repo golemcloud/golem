@@ -1,4 +1,3 @@
-use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::get_analysed_type;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedTuple;

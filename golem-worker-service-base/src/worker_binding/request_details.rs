@@ -105,7 +105,7 @@ impl TypedHttRequestDetails {
                     name: "body".to_string(),
                     value: Some({
                         RootTypeAnnotatedValue {
-                            type_annotated_value: Some({ self.typed_request_body.0.clone() }),
+                            type_annotated_value: Some(self.typed_request_body.0.clone()),
                         }
                     }),
                 },

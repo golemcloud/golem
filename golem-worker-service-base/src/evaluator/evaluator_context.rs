@@ -91,7 +91,7 @@ impl EvaluationContext {
 
 mod internal {
     use crate::evaluator::internal;
-    use golem_wasm_ast::analysis::AnalysedType;
+    
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     use crate::worker_binding::RequestDetails;
