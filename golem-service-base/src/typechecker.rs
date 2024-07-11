@@ -18,7 +18,7 @@ use golem_wasm_rpc::protobuf::{val, Val};
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
 use golem_wasm_rpc::{json, protobuf, TypeExt};
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
 use serde_json::Value;
 

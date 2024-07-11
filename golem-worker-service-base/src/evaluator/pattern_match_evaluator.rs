@@ -58,7 +58,8 @@ pub(crate) async fn evaluate_pattern_match(
         match match_arm_evaluated {
             ArmPatternOutput::Matched(match_result) => {
                 if let Some(binding_variable) = &match_result.binding_variable {
-                    let analysed_typ = AnalysedType::from(&match_result.result);
+                    let analysed_typ =
+                        get_analysed_type(&match_result.result).map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
 
                     let name_value_pair = ProtoNameValuePair {
                         name: binding_variable.0.clone(),
@@ -185,12 +186,12 @@ fn handle_ok(
             match result {
                 ProtoResultValue::ErrorValue(_) =>  Ok(ArmPatternOutput::NoneMatched),
                 ProtoResultValue::OkValue(ok_value) => {
-                    let type_annotated_value_in_ok = *ok_value.clone().ok_or(EvaluationError::Message(
+                    let type_annotated_value_in_ok = ok_value.type_annotated_value.ok_or(EvaluationError::Message(
                         "Ok constructor should have a value".to_string(),
                     ))?;
 
                     if let Some(bv) = binding_variable {
-                        let record =  internal::create_singleton_record(&bv.0, &result)?;
+                        let record =  internal::create_singleton_record(&bv.0, &type_annotated_value_in_ok)?;
                         input.merge_variables(&record);
                     }
 
@@ -201,7 +202,7 @@ fn handle_ok(
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Result::Ok".to_string(),
-            actual_type: format!("{:?}", AnalysedType::from(type_annotated_value)),
+            actual_type: get_analysed_type(type_annotated_value).map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
 }
@@ -221,23 +222,23 @@ fn handle_err(
             match result {
                 ProtoResultValue::OkValue(_) =>  Ok(ArmPatternOutput::NoneMatched),
                 ProtoResultValue::ErrorValue(err_value) => {
-                    let type_annotated_value_in_ok = *err_value.clone().ok_or(EvaluationError::Message(
-                        "Ok constructor should have a value".to_string(),
+                    let type_annotated_value_in_err = err_value.type_annotated_value.ok_or(EvaluationError::Message(
+                        "Err constructor should have a value".to_string(),
                     ))?;
 
                     if let Some(bv) = binding_variable {
-                        let record =  internal::create_singleton_record(&bv.0, &result)?;
+                        let record =  internal::create_singleton_record(&bv.0, &type_annotated_value_in_err)?;
                         input.merge_variables(&record);
                     }
 
-                    evaluate_arm_pattern(err_variable, &type_annotated_value_in_ok, input, None)
+                    evaluate_arm_pattern(err_variable, &type_annotated_value_in_err, input, None)
                 }
             }
         },
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Result::Err".to_string(),
-            actual_type: format!("{:?}", AnalysedType::from(type_annotated_value)),
+            actual_type: get_analysed_type(type_annotated_value).map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
 }
@@ -249,26 +250,28 @@ fn handle_some(
     input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
-        result @ TypeAnnotatedValue::Option(TypedOption { value: Some(some_value), .. })  => {
-            let type_annotated_value_in_some = *some_value.type_annotated_value.ok_or(EvaluationError::Message(
-                "Expecting non-empty type annotated value".to_string(),
-            ))?;
+        result @ TypeAnnotatedValue::Option(typed_option)  => {
+            match typed_option.value {
+                Some(value) =>  {
+                    let type_annotated_value_in_some = value.type_annotated_value.ok_or(EvaluationError::Message(
+                        "Expecting non-empty type annotated value".to_string(),
+                    ))?;
 
-            if let Some(bv) = binding_variable {
+                    if let Some(bv) = binding_variable {
+                        let record = internal::create_singleton_record(&bv.0, &result)?;
+                        input.merge_variables(&record);
+                    }
 
+                    evaluate_arm_pattern(some_variable, &type_annotated_value_in_some, input, None)
+                }
 
-                let record = internal::create_singleton_record(&bv.0, &result)?;
-                input.merge_variables(&record);
+                None =>  Ok(ArmPatternOutput::NoneMatched),
             }
-
-            evaluate_arm_pattern(some_variable, &type_annotated_value_in_some, input, None)
         }
-
-        TypeAnnotatedValue::Option (TypedOption { value: None, .. }) => Ok(ArmPatternOutput::NoneMatched),
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Option::Some".to_string(),
-            actual_type: format!("{:?}", get_analysed_type(type_annotated_value).ok()),
+            actual_type: get_analysed_type(type_annotated_value).map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
 }
@@ -277,21 +280,24 @@ fn handle_none(
     match_expr_result: &TypeAnnotatedValue,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
-        TypeAnnotatedValue::Option(TypedOption { value: None, .. })=> {
-            Ok(ArmPatternOutput::Matched(MatchResult {
-                binding_variable: None,
-                result: TypeAnnotatedValue::Option(Box::new(TypedOption {
-                    value: None,
-                    typ: Some(AnalysedType::Str.to_type()),
-                })),
-            }))
+        TypeAnnotatedValue::Option(typed_option)=> {
+            match typed_option.value {
+                Some(_) => Ok(ArmPatternOutput::NoneMatched),
+                None => {
+                    Ok(ArmPatternOutput::Matched(MatchResult {
+                        binding_variable: None,
+                        result: TypeAnnotatedValue::Option(Box::new(TypedOption {
+                            value: None,
+                            typ: Some(AnalysedType::Str.to_type()),
+                        })),
+                    }))
+                }
+            }
         }
-
-        TypeAnnotatedValue::Option(TypedOption { value: Some(_), .. }) => Ok(ArmPatternOutput::NoneMatched),
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Option::None".to_string(),
-            actual_type: format!("{:?}", AnalysedType::from(type_annotated_value)),
+            actual_type: get_analysed_type(type_annotated_value).map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
 }
@@ -351,7 +357,7 @@ fn handle_variant(
                 dbg!(type_annotated_value.clone());
                 Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
                     expected_type: format!("Variant::{}", variant_name),
-                    actual_type: format!("{:?}", AnalysedType::from(type_annotated_value)),
+                    actual_type: get_analysed_type(type_annotated_value).map_or("".to_string(), |typ| format!("{:?}", typ)),
                 }))
             }
         }

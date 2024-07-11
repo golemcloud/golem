@@ -75,12 +75,12 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
 fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
     match value {
         TypeAnnotatedValue::List (TypedList { values, .. }) => {
-            let vec = values.into_iter()    .filter_map(|v| v.type_annotated_value.as_ref()).collect::<Vec<_>>();
-            Some(vec.cloned())
+            let vec = values.into_iter().filter_map(|v| v.type_annotated_value).collect::<Vec<_>>();
+            Some(vec)
         },
         TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) =>{
-            let vec = value.into_iter().filter_map(|v| v.type_annotated_value.as_ref()).collect::<Vec<_>>();
-            Some(vec.cloned())
+            let vec = value.into_iter().filter_map(|v| v.type_annotated_value).collect::<Vec<_>>();
+            Some(vec)
         }
         _ => None,
     }

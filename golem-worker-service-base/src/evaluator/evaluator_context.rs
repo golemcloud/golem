@@ -7,7 +7,7 @@ use crate::evaluator::Getter;
 use crate::merge::Merge;
 use crate::worker_binding::{RequestDetails, WorkerDetail};
 use crate::worker_bridge_execution::RefinedWorkerResponse;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 #[derive(Debug, Clone)]
 pub struct EvaluationContext {
@@ -96,7 +96,8 @@ impl EvaluationContext {
 
 mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use crate::evaluator::internal;
 
     use crate::worker_binding::RequestDetails;
 
@@ -108,9 +109,7 @@ mod internal {
     }
 
     pub(crate) fn create_record(name: &str, value: TypeAnnotatedValue) -> TypeAnnotatedValue {
-        TypeAnnotatedValue::Record {
-            typ: vec![(name.to_string(), AnalysedType::from(&value))],
-            value: vec![(name.to_string(), value)].into_iter().collect(),
-        }
+        // This is a helper function to create a record with a single field
+        internal::create_record(vec![(name.to_string(), value)]).expect("Failed to create record")
     }
 }

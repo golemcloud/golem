@@ -1,4 +1,5 @@
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::get_analysed_type;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use crate::worker_bridge_execution::WorkerResponse;
@@ -36,10 +37,10 @@ impl RefinedWorkerResponse {
                     } else if value.is_empty() {
                         Ok(RefinedWorkerResponse::Unit)
                     } else {
-                        Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))
+                        Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", get_analysed_type(result).ok()))
                     }
                 }
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results are unnamed. Obtained {:?}", AnalysedType::from(ty))),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results are unnamed. Obtained {:?}", get_analysed_type(ty).ok())),
             }
         } else {
             match &worker_response.result.result {
@@ -48,7 +49,7 @@ impl RefinedWorkerResponse {
                 }
 
                 // See wasm-rpc implementations for more details
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
+                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}",get_analysed_type(ty).ok())),
             }
         }
     }

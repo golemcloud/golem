@@ -161,6 +161,8 @@ mod internal {
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
+    use golem_wasm_rpc::protobuf::{TypedEnum, TypedList};
+    use golem_wasm_rpc::TypeExt;
 
     pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt + Display>(
         type_annotated_value: &TypeAnnotatedValue,
@@ -170,8 +172,11 @@ mod internal {
             TypeAnnotatedValue::Record { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::List { values, typ } => {
-                handle_list(type_annotated_value, values, typ, content_header)
+            TypeAnnotatedValue::List(ref typed_list ) => {
+                let typ = typed_list.typ.clone().ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
+                let analysed_Type = AnalysedType::from_type(&typ).map_err(|_| ContentTypeMapError::internal("Failed to convert type to analysed type"))?;
+                let vec = typed_list.values.iter().filter_map(|v| v.type_annotated_value).collect::<Vec<_>>();
+                handle_list(type_annotated_value, &vec, &analysed_Type, content_header)
             }
             TypeAnnotatedValue::Bool(bool) => {
                 handle_primitive(bool, &AnalysedType::Bool, content_header)
@@ -202,7 +207,7 @@ mod internal {
             TypeAnnotatedValue::F64(f64) => {
                 handle_primitive(f64, &AnalysedType::F64, content_header)
             }
-            TypeAnnotatedValue::Chr(char) => {
+            TypeAnnotatedValue::Char(char) => {
                 handle_primitive(char, &AnalysedType::Chr, content_header)
             }
             TypeAnnotatedValue::Str(string) => handle_string(string, content_header),
@@ -216,10 +221,14 @@ mod internal {
             TypeAnnotatedValue::Variant { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::Enum { value, .. } => handle_string(value, content_header),
+            TypeAnnotatedValue::Enum (TypedEnum { value, .. }) => handle_string(value, content_header),
 
-            TypeAnnotatedValue::Option { value, .. } => match value {
-                Some(value) => get_response_body_based_on_content_type(value, content_header),
+            TypeAnnotatedValue::Option(typed_option) => match typed_option.value {
+                Some(value) => {
+                    let value =
+                        value.type_annotated_value.as_ref().ok_or(ContentTypeMapError::internal("Failed to fetch option value"))?;
+                    get_response_body_based_on_content_type(value, content_header)
+                },
                 None => {
                     if content_header.has_application_json() {
                         get_json_null()
@@ -246,15 +255,18 @@ mod internal {
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::List { values, typ } => match typ {
-                AnalysedType::U8 => get_byte_stream_body(values),
+            TypeAnnotatedValue::List(TypedList{ values, typ }) => match typ {
+                Some(golem_wasm_rpc::protobuf::Type::U8) => {
+                    let values = values.iter().filter_map(|v| v.type_annotated_value).collect::<Vec<_>>();
+                    get_byte_stream_body(&values)
+                },
                 _ => get_json(type_annotated_value),
             },
 
             TypeAnnotatedValue::Str(string) => Ok(Body::from_string(string.to_string())
                 .with_content_type(ContentType::json().to_string())),
 
-            TypeAnnotatedValue::Enum { value, .. } => Ok(Body::from_string(value.to_string())
+            TypeAnnotatedValue::Enum (TypedEnum{ value, .. }) => Ok(Body::from_string(value.to_string())
                 .with_content_type(ContentType::json().to_string())),
 
             TypeAnnotatedValue::Bool(bool) => get_json_of(bool),
@@ -268,12 +280,15 @@ mod internal {
             TypeAnnotatedValue::U64(u64) => get_json_of(u64),
             TypeAnnotatedValue::F32(f32) => get_json_of(f32),
             TypeAnnotatedValue::F64(f64) => get_json_of(f64),
-            TypeAnnotatedValue::Chr(char) => get_json_of(char),
+            TypeAnnotatedValue::Char(char) => get_json_of(char),
             TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Option { value, .. } => match value {
-                Some(value) => get_response_body(value),
+            TypeAnnotatedValue::Option(typed_option) => match typed_option.value {
+                Some(value) => {
+                    let value = value.type_annotated_value.as_ref().ok_or(ContentTypeMapError::internal("Failed to fetch option value"))?;
+                    get_response_body(value)
+                },
                 None => get_json_null(),
             },
             // Can be considered as a record
@@ -318,7 +333,7 @@ mod internal {
         let bytes = values
             .iter()
             .map(|v| match v {
-                TypeAnnotatedValue::U8(u8) => Ok(*u8),
+                TypeAnnotatedValue::U8(u8) => Ok(*u8 as u8),
                 _ => Err(ContentTypeMapError::internal(
                     "The analysed type is a binary stream however unable to fetch vec<u8>",
                 )),
@@ -453,19 +468,26 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+    use golem_wasm_rpc::TypeExt;
     use super::*;
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
     use serde_json::Value;
 
     fn sample_record() -> TypeAnnotatedValue {
-        TypeAnnotatedValue::Record {
-            typ: vec![("name".to_string(), AnalysedType::Str)],
-            value: vec![(
-                "name".to_string(),
-                TypeAnnotatedValue::Str("Hello".to_string()),
-            )],
-        }
+        TypeAnnotatedValue::Record(TypedRecord {
+            typ: vec![NameTypePair {
+                name: "name".to_string(),
+                typ: Some(AnalysedType::Str.to_type()),
+            }],
+            value: vec![NameValuePair {
+                name: "name".to_string(),
+                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(TypeAnnotatedValue::Str("Hello".to_string())),
+                }),
+            }],
+        })
     }
 
     #[cfg(test)]

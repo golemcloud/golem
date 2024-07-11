@@ -10,7 +10,7 @@ use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-use golem_wasm_rpc::get_type;
+use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -77,23 +77,29 @@ impl TypedHttRequestDetails {
 
         TypeAnnotatedValue::Record(TypedRecord {
             typ: vec![
-                (
-                    "path".to_string(),
-                    AnalysedType::from(&merged_type_annotated_value),
-                ),
-                ("body".to_string(), (&self.typed_request_body.0).into()),
-                (
-                    "headers".to_string(),
-                    self.typed_header_values.0.clone().into(),
-                ),
+                NameTypePair {
+                    name: "path".to_string(),
+                    typ: get_type( & merged_type_annotated_value).ok()
+                },
+                NameTypePair {
+                    name: "body".to_string(),
+                    typ: get_type(&self.typed_request_body.0).ok()
+                },
+                NameTypePair {
+                    name: "headers".to_string(),
+                    typ: {
+                        let typ: AnalysedType = self.typed_header_values.0.clone().into();
+                        Some(typ.to_type())
+                    },
+                },
             ],
             value: vec![
-                ("path".to_string(), merged_type_annotated_value),
-                ("body".to_string(), self.typed_request_body.clone().0),
-                (
-                    "headers".to_string(),
-                    self.typed_header_values.clone().0.into(),
-                ),
+                NameValuePair { name: "path".to_string(), value: merged_type_annotated_value } ,
+                NameValuePair { name: "body".to_string(), value: Some(self.typed_request_body.0.clone())},
+                NameValuePair {
+                    name: "headers".to_string(),
+                    value: Some(self.typed_header_values.clone().0.into()),
+                },
             ],
         })
     }

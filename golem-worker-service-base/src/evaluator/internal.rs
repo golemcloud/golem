@@ -10,8 +10,9 @@ use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use golem_wasm_rpc::protobuf::{NameTypePair, TypedFlags, TypedTuple};
 use golem_wasm_rpc::protobuf::NameValuePair;
 use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult};
-use golem_wasm_rpc::{get_type, TypeExt};
+use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
 use rib::ParsedFunctionName;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -85,7 +86,7 @@ pub(crate) fn create_option(
         .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
 
     Ok(TypeAnnotatedValue::Option(Box::new(TypedOption {
-        value: Some(Box::new(TypeAnnotatedValue {
+        value: Some(Box::new(RootTypeAnnotatedValue {
             type_annotated_value: Some(value),
         })),
         typ: Some(typ),
@@ -95,7 +96,7 @@ pub(crate) fn create_option(
 pub(crate) fn create_none(typ: &AnalysedType) -> TypeAnnotatedValue {
     TypeAnnotatedValue::Option(Box::new(TypedOption {
         value: None,
-        typ: Some(typ.clone().to_type()),
+        typ: Some(typ.to_type()),
     }))
 }
 
@@ -110,7 +111,7 @@ pub(crate) fn create_list(
             Ok(TypeAnnotatedValue::List(TypedList {
                 values: values
                     .into_iter()
-                    .map(|result| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    .map(|result| RootTypeAnnotatedValue {
                         type_annotated_value: Some(result.clone()),
                     })
                     .collect(),
@@ -222,4 +223,8 @@ pub(crate) async fn call_worker_function(
     })?;
 
     Ok(refined_worker_response)
+}
+
+pub(crate) fn print_type(value: &TypeAnnotatedValue) -> String {
+    get_analysed_type(value).map_or("<Unable to Resolve Type Info>".to_string(), |typ| format!("{:?}", typ))
 }
