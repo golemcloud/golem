@@ -1369,9 +1369,12 @@ mod tests {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                 type_annotated_value: Some(
-                    internal::create_singleton_record(
-                        "id",
-                        &TypeAnnotatedValue::Str("pId".to_string()),
+                    internal::create_option(
+                        internal::create_singleton_record(
+                            "id",
+                            &TypeAnnotatedValue::Str("pId".to_string()),
+                        )
+                        .unwrap(),
                     )
                     .unwrap(),
                 ),
@@ -1381,15 +1384,21 @@ mod tests {
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                                .to_type(),
+                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )])))
+                            .to_type(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                                .to_type(),
+                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )])))
+                            .to_type(),
                         ),
                     },
                 ],
@@ -1466,11 +1475,10 @@ mod tests {
         let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(
-                    internal::create_none(
-                        &AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                    )
-                ),
+                type_annotated_value: Some(internal::create_none(&AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
             })),
             typ: Some(TypeVariant {
                 cases: vec![
