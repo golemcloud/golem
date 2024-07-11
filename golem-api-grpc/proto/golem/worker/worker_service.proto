@@ -111,7 +111,7 @@ message InvokeAndAwaitRequest {
 
 message InvokeAndAwaitResponse {
   oneof result {
-    golem.worker.InvokeResult success = 1;
+    golem.worker.InvokeResultTyped success = 1;
     golem.worker.WorkerError error = 2;
   }
 }
