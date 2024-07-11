@@ -241,15 +241,13 @@ mod test {
     use super::*;
     use crate::worker_binding::TypedHttRequestDetails;
     use crate::worker_bridge_execution::to_response::internal::ResolvedResponseHeaders;
+    use golem_wasm_rpc::get_type;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use http::header::CONTENT_TYPE;
     use std::collections::HashMap;
-    use golem_wasm_rpc::get_type;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 
-    fn create_record(
-        values: Vec<(String, TypeAnnotatedValue)>,
-    ) -> TypeAnnotatedValue {
+    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
 
@@ -276,17 +274,14 @@ mod test {
 
     #[tokio::test]
     async fn test_evaluation_result_to_response_with_http_specifics() {
-
         let record = create_record(vec![
             ("status".to_string(), TypeAnnotatedValue::U16(400)),
             (
                 "headers".to_string(),
-                create_record(
-                    vec![(
-                        "Content-Type".to_string(),
-                        TypeAnnotatedValue::Str("application/json".to_string()),
-                    )],
-                ),
+                create_record(vec![(
+                    "Content-Type".to_string(),
+                    TypeAnnotatedValue::Str("application/json".to_string()),
+                )]),
             ),
             (
                 "body".to_string(),
@@ -294,8 +289,7 @@ mod test {
             ),
         ]);
 
-        let evaluation_result: ExprEvaluationResult =
-            ExprEvaluationResult::Value(record);
+        let evaluation_result: ExprEvaluationResult = ExprEvaluationResult::Value(record);
 
         let http_response: poem::Response =
             evaluation_result.to_response(&RequestDetails::Http(TypedHttRequestDetails::empty()));
@@ -348,7 +342,10 @@ mod test {
     #[test]
     fn test_get_response_headers_from_typed_value() {
         let header_map = create_record(vec![
-            ("header1".to_string(), TypeAnnotatedValue::Str("value1".to_string())),
+            (
+                "header1".to_string(),
+                TypeAnnotatedValue::Str("value1".to_string()),
+            ),
             ("header2".to_string(), TypeAnnotatedValue::F32(1.0)),
         ]);
 

@@ -62,16 +62,13 @@ mod tests {
     use crate::service::worker::TypedResult;
     use golem_service_base::model::{FunctionResult, Type, TypeU32};
     use golem_wasm_rpc::get_type;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
 
     use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerResponse;
 
-
-     fn create_record(
-        values: Vec<(String, TypeAnnotatedValue)>,
-    ) -> TypeAnnotatedValue {
+    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
 
@@ -96,9 +93,7 @@ mod tests {
         })
     }
 
-    fn create_tuple(
-        value: Vec<TypeAnnotatedValue>,
-    ) -> TypeAnnotatedValue {
+    fn create_tuple(value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
         let mut types = vec![];
 
         for value in value.iter() {
@@ -161,7 +156,10 @@ mod tests {
             RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
         assert_eq!(
             refined_worker_response,
-            RefinedWorkerResponse::MultipleResults(create_record(vec![("foo".to_string(), TypeAnnotatedValue::U32(1))]))
+            RefinedWorkerResponse::MultipleResults(create_record(vec![(
+                "foo".to_string(),
+                TypeAnnotatedValue::U32(1)
+            )]))
         );
     }
 }

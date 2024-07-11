@@ -104,13 +104,13 @@ pub mod router {
 mod tests {
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_rpc::get_type;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
     use serde_json::Value;
     use std::sync::Arc;
-    use golem_wasm_rpc::get_type;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
 
     use golem_common::model::IdempotencyKey;
     use golem_service_base::model::{
@@ -156,15 +156,21 @@ mod tests {
     }
 
     fn create_tuple(type_annotated_value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
-        let root = type_annotated_value.iter().map(|x| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-            type_annotated_value: Some(x.clone())
-        }).collect::<Vec<_>>();
+        let root = type_annotated_value
+            .iter()
+            .map(|x| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(x.clone()),
+            })
+            .collect::<Vec<_>>();
 
-        let types = type_annotated_value.iter().map(|x| get_type(x).unwrap()).collect::<Vec<_>>();
+        let types = type_annotated_value
+            .iter()
+            .map(|x| get_type(x).unwrap())
+            .collect::<Vec<_>>();
 
         TypeAnnotatedValue::Tuple(TypedTuple {
             value: root,
-            typ: types
+            typ: types,
         })
     }
 
@@ -197,38 +203,33 @@ mod tests {
     }
 
     fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
+        let mut required = create_record(vec![
+            (
+                "component_id".to_string(),
+                TypeAnnotatedValue::Str(worker_request.component_id.0.to_string()),
+            ),
+            (
+                "name".to_string(),
+                TypeAnnotatedValue::Str(worker_request.worker_name.clone()),
+            ),
+            (
+                "function_name".to_string(),
+                TypeAnnotatedValue::Str(worker_request.function_name.to_string()),
+            ),
+            (
+                "function_params".to_string(),
+                create_tuple(worker_request.function_params.clone()),
+            ),
+        ])
+        .unwrap();
 
-        let mut required = create_record(
-            vec![
-                (
-                    "component_id".to_string(),
-                    TypeAnnotatedValue::Str(worker_request.component_id.0.to_string()),
-                ),
-                (
-                    "name".to_string(),
-                    TypeAnnotatedValue::Str(worker_request.worker_name.clone()),
-                ),
-                (
-                    "function_name".to_string(),
-                    TypeAnnotatedValue::Str(worker_request.function_name.to_string()),
-                ),
-                (
-                    "function_params".to_string(),
-                    create_tuple(worker_request.function_params.clone())
-                ),
-            ],
-        ).unwrap();
-
-        let optional_idempotency_key =
-            worker_request
-                .clone()
-                .idempotency_key
-                .map(|x| {
-                    create_record(vec![(
-                        "idempotency-key".to_string(),
-                        TypeAnnotatedValue::Str(x.to_string()),
-                    )]).unwrap()
-                });
+        let optional_idempotency_key = worker_request.clone().idempotency_key.map(|x| {
+            create_record(vec![(
+                "idempotency-key".to_string(),
+                TypeAnnotatedValue::Str(x.to_string()),
+            )])
+            .unwrap()
+        });
 
         if let Some(idempotency_key) = optional_idempotency_key {
             required = required.merge(&idempotency_key).clone();
