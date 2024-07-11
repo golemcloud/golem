@@ -45,8 +45,10 @@ use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{worker_enumeration, HasAll};
-use golem_worker_executor_base::worker::{RetryDecision, Worker};
+use golem_worker_executor_base::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplogService,
+};
+use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
@@ -96,7 +98,7 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 
-    async fn compute_latest_worker_status<T: HasAll<Context> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,

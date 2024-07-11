@@ -45,7 +45,7 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{All, HasAll};
+use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
@@ -429,7 +429,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             .await
     }
 
-    async fn compute_latest_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
