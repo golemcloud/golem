@@ -266,6 +266,7 @@ args = [
     "integration",
     "--",
     "--nocapture",
+    "--test-threads=1"
 ]
 
 ## ** CHECK-OPENAPI **
