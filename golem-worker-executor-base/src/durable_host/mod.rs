@@ -269,6 +269,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 };
                 await_interruption.send(()).ok();
             }
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
         }
     }
 
@@ -286,6 +294,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
         }
     }
 

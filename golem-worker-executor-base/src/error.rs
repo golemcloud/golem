@@ -117,6 +117,10 @@ impl GolemError {
         GolemError::WorkerNotFound { worker_id }
     }
 
+    pub fn worker_already_exists(worker_id: WorkerId) -> Self {
+        GolemError::WorkerAlreadyExists { worker_id }
+    }
+
     pub fn component_download_failed(
         component_id: ComponentId,
         component_version: u64,

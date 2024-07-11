@@ -126,6 +126,10 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 
 #[derive(Clone, Debug)]
 pub enum ExecutionStatus {
+    Loading {
+        last_known_status: WorkerStatusRecord,
+        timestamp: Timestamp,
+    },
     Running {
         last_known_status: WorkerStatusRecord,
         timestamp: Timestamp,
@@ -149,6 +153,9 @@ impl ExecutionStatus {
 
     pub fn last_known_status(&self) -> &WorkerStatusRecord {
         match self {
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => last_known_status,
             ExecutionStatus::Running {
                 last_known_status, ..
             } => last_known_status,
@@ -163,6 +170,9 @@ impl ExecutionStatus {
 
     pub fn set_last_known_status(&mut self, status: WorkerStatusRecord) {
         match self {
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => *last_known_status = status,
             ExecutionStatus::Running {
                 last_known_status, ..
             } => *last_known_status = status,
@@ -177,6 +187,7 @@ impl ExecutionStatus {
 
     pub fn timestamp(&self) -> Timestamp {
         match self {
+            ExecutionStatus::Loading { timestamp, .. } => *timestamp,
             ExecutionStatus::Running { timestamp, .. } => *timestamp,
             ExecutionStatus::Suspended { timestamp, .. } => *timestamp,
             ExecutionStatus::Interrupting { timestamp, .. } => *timestamp,
@@ -187,7 +198,7 @@ impl ExecutionStatus {
 /// Describes the various reasons a worker can run into a trap
 #[derive(Clone, Debug)]
 pub enum TrapType {
-    /// Interrupted through Golem (including user interrupts, suspends, jumps, etc)
+    /// Interrupted through Golem (including user interrupts, suspends, jumps, etc.)
     Interrupt(InterruptKind),
     /// Called the WASI exit function
     Exit,
