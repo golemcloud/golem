@@ -6,26 +6,25 @@ use crate::primitive::GetPrimitive;
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor};
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use golem_wasm_rpc::protobuf::{NameTypePair, TypedFlags, TypedTuple};
 use golem_wasm_rpc::protobuf::NameValuePair;
+use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{NameTypePair, TypedFlags, TypedTuple};
 use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult};
 use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
 use rib::ParsedFunctionName;
 use std::str::FromStr;
 use std::sync::Arc;
 
-
 pub(crate) fn create_tuple(
-    value: Vec<TypeAnnotatedValue>
+    value: Vec<TypeAnnotatedValue>,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
-
     let mut types = vec![];
 
     for value in value.iter() {
-        let typ = get_type(value).map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+        let typ = get_type(value)
+            .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
         types.push(typ);
     }
 
@@ -36,7 +35,7 @@ pub(crate) fn create_tuple(
                 type_annotated_value: Some(result.clone()),
             })
             .collect(),
-        typ: types
+        typ: types,
     }))
 }
 
@@ -53,9 +52,11 @@ pub(crate) fn create_ok_result(
     let analysed_type = get_type(&value)
         .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
     let typed_value = TypeAnnotatedValue::Result(Box::new(TypedResult {
-        result_value: Some(ResultValue::OkValue(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-            type_annotated_value: Some(value),
-        }))),
+        result_value: Some(ResultValue::OkValue(Box::new(
+            golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(value),
+            },
+        ))),
         ok: Some(analysed_type),
         error: None,
     }));
@@ -69,9 +70,11 @@ pub(crate) fn create_error_result(
     let analysed_type = get_type(&value)
         .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
     let typed_value = TypeAnnotatedValue::Result(Box::new(TypedResult {
-        result_value: Some(ResultValue::ErrorValue(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-            type_annotated_value: Some(value),
-        }))),
+        result_value: Some(ResultValue::ErrorValue(Box::new(
+            golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(value),
+            },
+        ))),
         ok: None,
         error: Some(analysed_type),
     }));
@@ -226,5 +229,7 @@ pub(crate) async fn call_worker_function(
 }
 
 pub(crate) fn print_type(value: &TypeAnnotatedValue) -> String {
-    get_analysed_type(value).map_or("<Unable to Resolve Type Info>".to_string(), |typ| format!("{:?}", typ))
+    get_analysed_type(value).map_or("<Unable to Resolve Type Info>".to_string(), |typ| {
+        format!("{:?}", typ)
+    })
 }

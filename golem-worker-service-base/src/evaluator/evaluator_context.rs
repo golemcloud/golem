@@ -1,4 +1,4 @@
-use std::fmt::{Debug};
+use std::fmt::Debug;
 
 use crate::evaluator::evaluator_context::internal::create_record;
 use crate::evaluator::getter::GetError;
@@ -16,9 +16,7 @@ pub struct EvaluationContext {
 
 impl EvaluationContext {
     pub fn empty() -> Self {
-        EvaluationContext {
-            variables: None,
-        }
+        EvaluationContext { variables: None }
     }
 
     pub fn merge(&mut self, that: &EvaluationContext) -> EvaluationContext {
@@ -47,16 +45,13 @@ impl EvaluationContext {
         }
     }
 
-    pub fn from_all(
-        worker_detail: &WorkerDetail,
-        request: &RequestDetails,
-    ) -> Self {
+    pub fn from_all(worker_detail: &WorkerDetail, request: &RequestDetails) -> Self {
         let mut request_data = internal::request_type_annotated_value(request);
         let worker_data = create_record("worker", worker_detail.clone().to_type_annotated_value());
         let merged = request_data.merge(&worker_data);
 
         EvaluationContext {
-            variables: Some(merged.clone())
+            variables: Some(merged.clone()),
         }
     }
 
@@ -95,9 +90,9 @@ impl EvaluationContext {
 }
 
 mod internal {
+    use crate::evaluator::internal;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use crate::evaluator::internal;
 
     use crate::worker_binding::RequestDetails;
 

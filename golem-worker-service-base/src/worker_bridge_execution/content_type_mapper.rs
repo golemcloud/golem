@@ -157,12 +157,12 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
+    use golem_wasm_rpc::{get_analysed_type, TypeExt};
     use poem::web::headers::ContentType;
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
-    use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
-    use golem_wasm_rpc::{get_analysed_type, TypeExt};
 
     pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt + Display>(
         type_annotated_value: &TypeAnnotatedValue,
@@ -172,10 +172,19 @@ mod internal {
             TypeAnnotatedValue::Record { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::List(ref typed_list ) => {
-                let typ = typed_list.typ.clone().ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
-                let analysed_Type = AnalysedType::from_type(&typ).map_err(|_| ContentTypeMapError::internal("Failed to convert type to analysed type"))?;
-                let vec = typed_list.values.iter().filter_map(|v| v.type_annotated_value.clone()).collect::<Vec<_>>();
+            TypeAnnotatedValue::List(ref typed_list) => {
+                let typ = typed_list
+                    .typ
+                    .clone()
+                    .ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
+                let analysed_Type = AnalysedType::from_type(&typ).map_err(|_| {
+                    ContentTypeMapError::internal("Failed to convert type to analysed type")
+                })?;
+                let vec = typed_list
+                    .values
+                    .iter()
+                    .filter_map(|v| v.type_annotated_value.clone())
+                    .collect::<Vec<_>>();
                 handle_list(type_annotated_value, &vec, &analysed_Type, content_header)
             }
             TypeAnnotatedValue::Bool(bool) => {
@@ -221,14 +230,17 @@ mod internal {
             TypeAnnotatedValue::Variant { .. } => {
                 handle_record(type_annotated_value, content_header)
             }
-            TypeAnnotatedValue::Enum (TypedEnum { value, .. }) => handle_string(value, content_header),
+            TypeAnnotatedValue::Enum(TypedEnum { value, .. }) => {
+                handle_string(value, content_header)
+            }
 
             TypeAnnotatedValue::Option(typed_option) => match &typed_option.value {
                 Some(value) => {
-                    let value =
-                        value.type_annotated_value.as_ref().ok_or(ContentTypeMapError::internal("Failed to fetch option value"))?;
+                    let value = value.type_annotated_value.as_ref().ok_or(
+                        ContentTypeMapError::internal("Failed to fetch option value"),
+                    )?;
                     get_response_body_based_on_content_type(value, content_header)
-                },
+                }
                 None => {
                     if content_header.has_application_json() {
                         get_json_null()
@@ -236,10 +248,7 @@ mod internal {
                         let typ = get_analysed_type(type_annotated_value).map_err(|_| {
                             ContentTypeMapError::internal("Failed to resolve type of data")
                         })?;
-                        Err(ContentTypeMapError::illegal_mapping(
-                            &typ,
-                            content_header,
-                        ))
+                        Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
                     }
                 }
             },
@@ -258,24 +267,31 @@ mod internal {
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::List(TypedList{ values, typ }) => match typ.clone().map(|v| v.r#type).flatten() {
-                Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(primitive)) => {
-                    match PrimitiveType::try_from(primitive.primitive) {
-                        Ok(PrimitiveType::U8) =>  {
-                            let values = values.iter().filter_map(|v| v.type_annotated_value.clone()).collect::<Vec<_>>();
-                            get_byte_stream_body(&values)
+            TypeAnnotatedValue::List(TypedList { values, typ }) => {
+                match typ.clone().map(|v| v.r#type).flatten() {
+                    Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(primitive)) => {
+                        match PrimitiveType::try_from(primitive.primitive) {
+                            Ok(PrimitiveType::U8) => {
+                                let values = values
+                                    .iter()
+                                    .filter_map(|v| v.type_annotated_value.clone())
+                                    .collect::<Vec<_>>();
+                                get_byte_stream_body(&values)
+                            }
+                            _ => get_json(type_annotated_value),
                         }
-                        _ => get_json(type_annotated_value),
                     }
-                },
-                _ => get_json(type_annotated_value),
-            },
+                    _ => get_json(type_annotated_value),
+                }
+            }
 
             TypeAnnotatedValue::Str(string) => Ok(Body::from_string(string.to_string())
                 .with_content_type(ContentType::json().to_string())),
 
-            TypeAnnotatedValue::Enum (TypedEnum{ value, .. }) => Ok(Body::from_string(value.to_string())
-                .with_content_type(ContentType::json().to_string())),
+            TypeAnnotatedValue::Enum(TypedEnum { value, .. }) => {
+                Ok(Body::from_string(value.to_string())
+                    .with_content_type(ContentType::json().to_string()))
+            }
 
             TypeAnnotatedValue::Bool(bool) => get_json_of(bool),
             TypeAnnotatedValue::S8(s8) => get_json_of(s8),
@@ -294,9 +310,11 @@ mod internal {
             TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Option(typed_option) => match &typed_option.value {
                 Some(value) => {
-                    let value = value.type_annotated_value.as_ref().ok_or(ContentTypeMapError::internal("Failed to fetch option value"))?;
+                    let value = value.type_annotated_value.as_ref().ok_or(
+                        ContentTypeMapError::internal("Failed to fetch option value"),
+                    )?;
                     get_response_body(value)
-                },
+                }
                 None => get_json_null(),
             },
             // Can be considered as a record
@@ -393,14 +411,10 @@ mod internal {
         if content_header.has_application_json() {
             get_json(complex)
         } else {
-            let typ = get_analysed_type(complex).map_err(|_| {
-                ContentTypeMapError::internal("Failed to resolve type of data")
-            })?;
+            let typ = get_analysed_type(complex)
+                .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
 
-            Err(ContentTypeMapError::illegal_mapping(
-                &typ,
-                content_header,
-            ))
+            Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
         }
     }
 
@@ -460,14 +474,10 @@ mod internal {
         if content_header.has_application_json() {
             get_json(record)
         } else {
-            let typ =  get_analysed_type(record).map_err(|_| {
-                ContentTypeMapError::internal("Failed to resolve type of data")
-            })?;
+            let typ = get_analysed_type(record)
+                .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
-            Err(ContentTypeMapError::illegal_mapping(
-                &typ,
-                content_header,
-            ))
+            Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
         }
     }
 
@@ -483,9 +493,9 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use golem_wasm_rpc::TypeExt;
-    use super::*;
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
     use serde_json::Value;

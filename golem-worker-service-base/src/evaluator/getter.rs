@@ -34,9 +34,12 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                 match &paths[index] {
                     PathComponent::KeyName(key) => match type_annotated_value {
                         TypeAnnotatedValue::Record(TypedRecord { value, .. }) => {
-                            let new_value =
-                                value.into_iter().find(|name_value| name_value.name == key.0)
-                                    .map(|v| v.value.clone().map(|vv| vv.type_annotated_value)).flatten().flatten();
+                            let new_value = value
+                                .into_iter()
+                                .find(|name_value| name_value.name == key.0)
+                                .map(|v| v.value.clone().map(|vv| vv.type_annotated_value))
+                                .flatten()
+                                .flatten();
 
                             match new_value {
                                 Some(new_value) => go(&new_value, paths, index + 1, size),
@@ -74,12 +77,18 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
 
 fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
     match value {
-        TypeAnnotatedValue::List (TypedList { values, .. }) => {
-            let vec = values.into_iter().filter_map(|v| v.clone().type_annotated_value).collect::<Vec<_>>();
+        TypeAnnotatedValue::List(TypedList { values, .. }) => {
+            let vec = values
+                .into_iter()
+                .filter_map(|v| v.clone().type_annotated_value)
+                .collect::<Vec<_>>();
             Some(vec)
-        },
-        TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) =>{
-            let vec = value.into_iter().filter_map(|v| v.clone().type_annotated_value).collect::<Vec<_>>();
+        }
+        TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) => {
+            let vec = value
+                .into_iter()
+                .filter_map(|v| v.clone().type_annotated_value)
+                .collect::<Vec<_>>();
             Some(vec)
         }
         _ => None,

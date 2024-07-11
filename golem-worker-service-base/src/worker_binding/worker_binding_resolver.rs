@@ -1,8 +1,8 @@
 use crate::api_definition::http::{HttpApiDefinition, VarInfo};
+use crate::evaluator::Evaluator;
 use crate::evaluator::{
     DefaultEvaluator, EvaluationContext, EvaluationError, ExprEvaluationResult,
 };
-use crate::evaluator::{Evaluator};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
@@ -12,11 +12,11 @@ use async_trait::async_trait;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+use golem_wasm_rpc::TypeExt;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-use golem_wasm_rpc::TypeExt;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -78,34 +78,42 @@ impl WorkerDetail {
             value: vec![
                 NameValuePair {
                     name: "component_id".to_string(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value: Some(TypeAnnotatedValue::Str(self.component_id.0.to_string())) }),
+                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(TypeAnnotatedValue::Str(
+                            self.component_id.0.to_string(),
+                        )),
+                    }),
                 },
                 NameValuePair {
                     name: "name".to_string(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value: Some(TypeAnnotatedValue::Str(self.worker_name.clone().to_string()))}),
-                }
-
+                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(TypeAnnotatedValue::Str(
+                            self.worker_name.clone().to_string(),
+                        )),
+                    }),
+                },
             ],
         });
 
-        let optional_idempotency_key =
-            self.idempotency_key
-                .clone()
-                .map(|x| TypeAnnotatedValue::Record(TypedRecord {
-                    // Idempotency key can exist in header of the request in which case users can refer to it as
-                    // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
-                    // if it exists as part of the API definition
-                    typ: {
-                        vec![NameTypePair {
-                            name: "idempotency-key".to_string(),
-                            typ: Some(AnalysedType::Str.to_type()),
-                        }]
-                    },
-                    value: vec![NameValuePair {
+        let optional_idempotency_key = self.idempotency_key.clone().map(|x| {
+            TypeAnnotatedValue::Record(TypedRecord {
+                // Idempotency key can exist in header of the request in which case users can refer to it as
+                // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
+                // if it exists as part of the API definition
+                typ: {
+                    vec![NameTypePair {
                         name: "idempotency-key".to_string(),
-                        value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value: Some(TypeAnnotatedValue::Str(x.to_string())) }),
-                    }],
-                }));
+                        typ: Some(AnalysedType::Str.to_type()),
+                    }]
+                },
+                value: vec![NameValuePair {
+                    name: "idempotency-key".to_string(),
+                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(TypeAnnotatedValue::Str(x.to_string())),
+                    }),
+                }],
+            })
+        });
 
         if let Some(idempotency_key) = optional_idempotency_key {
             required = required.merge(&idempotency_key).clone();
@@ -116,27 +124,19 @@ impl WorkerDetail {
 }
 
 impl ResolvedWorkerBinding {
-    pub async fn execute_with<R>(
-        &self,
-        evaluator: &Arc<dyn Evaluator + Sync + Send>,
-    ) -> R
-        where
-            ExprEvaluationResult: ToResponse<R>,
-            EvaluationError: ToResponse<R>,
+    pub async fn execute_with<R>(&self, evaluator: &Arc<dyn Evaluator + Sync + Send>) -> R
+    where
+        ExprEvaluationResult: ToResponse<R>,
+        EvaluationError: ToResponse<R>,
     {
-        let runtime = EvaluationContext::from_all(
-            &self.worker_detail,
-            &self.request_details,
-        );
+        let runtime = EvaluationContext::from_all(&self.worker_detail, &self.request_details);
 
         let result = evaluator
             .evaluate(&self.response_mapping.clone().0, &runtime)
             .await;
 
         match result {
-            Ok(worker_response) => {
-                worker_response.to_response(&self.request_details)
-            }
+            Ok(worker_response) => worker_response.to_response(&self.request_details),
             Err(err) => err.to_response(&self.request_details),
         }
     }
@@ -184,7 +184,7 @@ impl WorkerBindingResolver<HttpApiDefinition> for InputHttpRequest {
             request_body,
             headers,
         )
-            .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
+        .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
         let request_evaluation_context = EvaluationContext::from_request_data(&request_details);
 

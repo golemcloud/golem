@@ -10,10 +10,10 @@ mod pattern_match_evaluator;
 mod internal;
 
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{TypeExt};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
+use golem_wasm_rpc::TypeExt;
 
 use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
@@ -21,7 +21,6 @@ use getter::Getter;
 use path::Path;
 use rib::Expr;
 use rib::Number;
-
 
 use crate::worker_bridge_execution::{
     NoopWorkerRequestExecutor, RefinedWorkerResponse, WorkerRequestExecutor,
@@ -334,11 +333,9 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    let record =
-                        internal::create_record(values)?;
+                    let record = internal::create_record(values)?;
 
                     Ok(record.into())
-
                 }
 
                 Expr::Concat(exprs) => {
@@ -394,10 +391,12 @@ impl Evaluator for DefaultEvaluator {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", rib::to_string(expr).unwrap())))
                             }
                         }
-                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option(Box::new(TypedOption {
-                            value: None,
-                            typ: Some(AnalysedType::Str.to_type()),
-                        })))),
+                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option(
+                            Box::new(TypedOption {
+                                value: None,
+                                typ: Some(AnalysedType::Str.to_type()),
+                            }),
+                        ))),
                     }
                 }
 
@@ -452,7 +451,7 @@ impl Evaluator for DefaultEvaluator {
                     let result = internal::create_flags(flags.clone());
 
                     Ok(ExprEvaluationResult::Value(result))
-                },
+                }
             }
         }
 
@@ -471,7 +470,7 @@ mod tests {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypedVariant, TypeVariant};
+    use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedVariant};
     use golem_wasm_rpc::TypeExt;
     use http::{HeaderMap, Uri};
     use rib::Expr;
@@ -480,7 +479,9 @@ mod tests {
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
-    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult, internal};
+    use crate::evaluator::{
+        internal, DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult,
+    };
     use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
@@ -899,8 +900,8 @@ mod tests {
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
         let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
-              internal::create_tuple(vec![result_as_typed_value.clone()]).unwrap(),
-              vec![FunctionResult {
+            internal::create_tuple(vec![result_as_typed_value.clone()]).unwrap(),
+            vec![FunctionResult {
                 name: None,
                 typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),
             }],
@@ -1074,7 +1075,9 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response)
             .await;
 
-        let expected_result = internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string())).unwrap();
+        let expected_result =
+            internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string()))
+                .unwrap();
         assert_eq!(result, Ok(expected_result));
     }
 
@@ -1145,8 +1148,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
 
-        let expected =
-            internal::create_option(TypeAnnotatedValue::Str("id1".to_string())).unwrap();
+        let expected = internal::create_option(TypeAnnotatedValue::Str("id1".to_string())).unwrap();
 
         assert_eq!(result, Ok(expected));
     }
@@ -1219,8 +1221,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
-        let expected =
-            internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap();
+        let expected = internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap();
         assert_eq!(result, Ok(expected));
     }
 
@@ -1328,8 +1329,11 @@ mod tests {
                 case_name: "Foo".to_string(),
                 case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                     type_annotated_value: Some(
-                        internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string()))
-                            .unwrap()
+                        internal::create_singleton_record(
+                            "id",
+                            &TypeAnnotatedValue::Str("pId".to_string()),
+                        )
+                        .unwrap(),
                     ),
                 })),
                 typ: Some(TypeVariant {
@@ -1337,7 +1341,7 @@ mod tests {
                         name: "Foo".to_string(),
                         typ: Some(
                             AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                                .to_type()
+                                .to_type(),
                         ),
                     }],
                 }),
@@ -1351,7 +1355,8 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
 
-        let expected = internal::create_ok_result(TypeAnnotatedValue::Str("pId".to_string())).unwrap();
+        let expected =
+            internal::create_ok_result(TypeAnnotatedValue::Str("pId".to_string())).unwrap();
 
         assert_eq!(result, Ok(expected));
     }
@@ -1360,29 +1365,34 @@ mod tests {
     async fn test_evaluation_with_pattern_match_variant_nested_with_some() {
         let noop_executor = DefaultEvaluator::noop();
 
-
         let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                 type_annotated_value: Some(
-                    internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string()))
-                        .unwrap()
+                    internal::create_singleton_record(
+                        "id",
+                        &TypeAnnotatedValue::Str("pId".to_string()),
+                    )
+                    .unwrap(),
                 ),
             })),
             typ: Some(TypeVariant {
-                cases: vec![NameOptionTypePair {
-                    name: "Foo".to_string(),
-                    typ: Some(
-                        AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                            .to_type()
-                    ),
-                }, NameOptionTypePair {
-                    name: "Bar".to_string(),
-                    typ: Some(
-                        AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                            .to_type()
-                    ),
-                }],
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
+                                .to_type(),
+                        ),
+                    },
+                    NameOptionTypePair {
+                        name: "Bar".to_string(),
+                        typ: Some(
+                            AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
+                                .to_type(),
+                        ),
+                    },
+                ],
             }),
         }));
 
@@ -1458,25 +1468,38 @@ mod tests {
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                 type_annotated_value: Some(
                     internal::create_option(
-                        internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string()))
-                            .unwrap()
-                    ).unwrap()
+                        internal::create_singleton_record(
+                            "id",
+                            &TypeAnnotatedValue::Str("pId".to_string()),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
                 ),
             })),
             typ: Some(TypeVariant {
-                cases: vec![NameOptionTypePair {
-                    name: "Foo".to_string(),
-                    typ:  Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
-                        ("id".to_string(), AnalysedType::Str),
-                    ]))).to_type()),
-                }, NameOptionTypePair {
-                    name: "Bar".to_string(),
-                    typ: Some(
-                        AnalysedType::Option(Box::new(AnalysedType::Record(vec![
-                            ("id".to_string(), AnalysedType::Str),
-                        ]))).to_type()
-                    ),
-                }],
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )])))
+                            .to_type(),
+                        ),
+                    },
+                    NameOptionTypePair {
+                        name: "Bar".to_string(),
+                        typ: Some(
+                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )])))
+                            .to_type(),
+                        ),
+                    },
+                ],
             }),
         }));
 
@@ -1505,7 +1528,8 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let inner_record = internal::create_singleton_record("a", &TypeAnnotatedValue::U64(1)).unwrap();
+        let inner_record =
+            internal::create_singleton_record("a", &TypeAnnotatedValue::U64(1)).unwrap();
         let inner_record_ok = internal::create_ok_result(inner_record).unwrap();
         let record = internal::create_record(vec![("a".to_string(), inner_record_ok)]).unwrap();
 
@@ -1525,7 +1549,9 @@ mod tests {
 
         let inner_result = internal::create_error_result(TypeAnnotatedValue::U64(1)).unwrap();
 
-        let expected = ExprEvaluationResult::Value(internal::create_record(vec![("a".to_string(), inner_result)]).unwrap());
+        let expected = ExprEvaluationResult::Value(
+            internal::create_record(vec![("a".to_string(), inner_result)]).unwrap(),
+        );
 
         assert_eq!(result, Ok(expected));
     }
@@ -1540,12 +1566,12 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-
         let list = internal::create_list(vec![
             TypeAnnotatedValue::U64(1),
             TypeAnnotatedValue::U64(2),
             TypeAnnotatedValue::U64(3),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let expected = Ok(ExprEvaluationResult::Value(list));
 
@@ -1562,15 +1588,14 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let optional_value = internal::create_option(
-            TypeAnnotatedValue::U64(1)
-        ).unwrap();
+        let optional_value = internal::create_option(TypeAnnotatedValue::U64(1)).unwrap();
 
         let expected = internal::create_tuple(vec![
             optional_value,
             TypeAnnotatedValue::U64(2),
             TypeAnnotatedValue::U64(3),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         assert_eq!(result, Ok(ExprEvaluationResult::Value(expected)));
     }
@@ -1585,9 +1610,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let flags = internal::create_flags(
-            vec!["A".to_string(), "B".to_string(), "C".to_string()]
-        );
+        let flags = internal::create_flags(vec!["A".to_string(), "B".to_string(), "C".to_string()]);
 
         let expected = Ok(ExprEvaluationResult::Value(flags));
 
@@ -1604,12 +1627,11 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let list = internal::create_list(
-            vec![
-                internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap(),
-                internal::create_ok_result(TypeAnnotatedValue::U64(2)).unwrap(),
-            ]
-        ).unwrap();
+        let list = internal::create_list(vec![
+            internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap(),
+            internal::create_ok_result(TypeAnnotatedValue::U64(2)).unwrap(),
+        ])
+        .unwrap();
 
         let expected = Ok(ExprEvaluationResult::Value(list));
 
@@ -1642,7 +1664,7 @@ mod tests {
     mod test_utils {
         use crate::api_definition::http::{AllPathPatterns, PathPattern, VarInfo};
         use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
-        use crate::evaluator::{DefaultEvaluator, internal};
+        use crate::evaluator::{internal, DefaultEvaluator};
         use crate::http::router::RouterPattern;
         use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
@@ -1650,45 +1672,55 @@ mod tests {
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedVariant};
+        use golem_wasm_rpc::TypeExt;
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
-        use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypedVariant, TypeVariant};
-        use golem_wasm_rpc::TypeExt;
-
 
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
-
-            let record =
-                internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string())).unwrap();
+            let record = internal::create_singleton_record(
+                "id",
+                &TypeAnnotatedValue::Str("pId".to_string()),
+            )
+            .unwrap();
 
             let result = internal::create_ok_result(record).unwrap();
 
             let optional = internal::create_option(result).unwrap();
 
             let variant_type = TypeVariant {
-                cases: vec![NameOptionTypePair {
-                    name: "Foo".to_string(),
-                    typ: Some(AnalysedType::Option(Box::new(AnalysedType::Result {
-                        ok: Some(Box::new(AnalysedType::Record(vec![(
-                            "id".to_string(),
-                            AnalysedType::Str,
-                        )]))),
-                        error: None,
-                    })).to_type()),
-                }, NameOptionTypePair {
-                    name: "Bar".to_string(),
-                    typ:  Some(AnalysedType::Option(Box::new(AnalysedType::Result {
-                        ok: Some(Box::new(AnalysedType::Record(vec![(
-                            "id".to_string(),
-                            AnalysedType::Str,
-                        )]))),
-                        error: None,
-                    })).to_type()),
-                }],
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            AnalysedType::Option(Box::new(AnalysedType::Result {
+                                ok: Some(Box::new(AnalysedType::Record(vec![(
+                                    "id".to_string(),
+                                    AnalysedType::Str,
+                                )]))),
+                                error: None,
+                            }))
+                            .to_type(),
+                        ),
+                    },
+                    NameOptionTypePair {
+                        name: "Bar".to_string(),
+                        typ: Some(
+                            AnalysedType::Option(Box::new(AnalysedType::Result {
+                                ok: Some(Box::new(AnalysedType::Record(vec![(
+                                    "id".to_string(),
+                                    AnalysedType::Str,
+                                )]))),
+                                error: None,
+                            }))
+                            .to_type(),
+                        ),
+                    },
+                ],
             };
 
-            TypeAnnotatedValue::Variant (Box::new(TypedVariant {
+            TypeAnnotatedValue::Variant(Box::new(TypedVariant {
                 case_name: "Foo".to_string(),
                 case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                     type_annotated_value: Some(optional),

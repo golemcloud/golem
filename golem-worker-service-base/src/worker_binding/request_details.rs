@@ -6,12 +6,12 @@ use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -80,11 +80,11 @@ impl TypedHttRequestDetails {
             typ: vec![
                 NameTypePair {
                     name: "path".to_string(),
-                    typ: get_type( & merged_type_annotated_value).ok()
+                    typ: get_type(&merged_type_annotated_value).ok(),
                 },
                 NameTypePair {
                     name: "body".to_string(),
-                    typ: get_type(&self.typed_request_body.0).ok()
+                    typ: get_type(&self.typed_request_body.0).ok(),
                 },
                 NameTypePair {
                     name: "headers".to_string(),
@@ -95,21 +95,25 @@ impl TypedHttRequestDetails {
                 },
             ],
             value: vec![
-                NameValuePair { name: "path".to_string(), value: Some(RootTypeAnnotatedValue {
-                    type_annotated_value: Some(merged_type_annotated_value),
-                })} ,
-                NameValuePair { name: "body".to_string(), value: Some({
-                    RootTypeAnnotatedValue {
-                        type_annotated_value: Some({
-                            self.typed_request_body.0.clone()
-                        })
-                    }
-                })},
+                NameValuePair {
+                    name: "path".to_string(),
+                    value: Some(RootTypeAnnotatedValue {
+                        type_annotated_value: Some(merged_type_annotated_value),
+                    }),
+                },
+                NameValuePair {
+                    name: "body".to_string(),
+                    value: Some({
+                        RootTypeAnnotatedValue {
+                            type_annotated_value: Some({ self.typed_request_body.0.clone() }),
+                        }
+                    }),
+                },
                 NameValuePair {
                     name: "headers".to_string(),
                     value: Some({
                         RootTypeAnnotatedValue {
-                            type_annotated_value: Some(self.typed_header_values.clone().0.into())
+                            type_annotated_value: Some(self.typed_header_values.clone().0.into()),
                         }
                     }),
                 },
@@ -232,7 +236,11 @@ impl From<TypedKeyValueCollection> for AnalysedType {
         let mut typ: Vec<(String, AnalysedType)> = vec![];
 
         for record in &typed_key_value_collection.fields {
-            typ.push((record.name.clone(), get_analysed_type(&record.value).expect("Internal error: Failed to retrieve type from Type Annotated Value")));
+            typ.push((
+                record.name.clone(),
+                get_analysed_type(&record.value)
+                    .expect("Internal error: Failed to retrieve type from Type Annotated Value"),
+            ));
         }
 
         AnalysedType::Record(typ)
@@ -247,7 +255,11 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
         for record in typed_key_value_collection.fields {
             typ.push(NameTypePair {
                 name: record.name.clone(),
-                typ: Some(get_type(&record.value).expect("Internal error: Failed to retrieve type from Type Annotated Value")),
+                typ: Some(
+                    get_type(&record.value).expect(
+                        "Internal error: Failed to retrieve type from Type Annotated Value",
+                    ),
+                ),
             });
 
             value.push(NameValuePair {
@@ -257,8 +269,8 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
                 }),
             });
         }
-        
-        TypeAnnotatedValue::Record (TypedRecord { typ, value })
+
+        TypeAnnotatedValue::Record(TypedRecord { typ, value })
     }
 }
 

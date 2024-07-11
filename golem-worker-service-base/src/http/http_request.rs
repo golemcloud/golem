@@ -118,9 +118,7 @@ mod tests {
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
     use crate::evaluator::path::Path;
-    use crate::evaluator::{
-        DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult
-    };
+    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult};
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::merge::Merge;
     use crate::primitive::GetPrimitive;
@@ -278,9 +276,7 @@ mod tests {
             .await
             .unwrap();
 
-        resolved_route
-            .execute_with(&evaluator)
-            .await
+        resolved_route.execute_with(&evaluator).await
     }
 
     #[tokio::test]

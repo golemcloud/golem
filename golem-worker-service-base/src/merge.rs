@@ -8,8 +8,8 @@ impl Merge for TypeAnnotatedValue {
     fn merge(&mut self, other: &Self) -> &mut Self {
         match (&mut *self, other) {
             (
-                TypeAnnotatedValue::Record (TypedRecord{ value, typ }),
-                TypeAnnotatedValue::Record (TypedRecord {
+                TypeAnnotatedValue::Record(TypedRecord { value, typ }),
+                TypeAnnotatedValue::Record(TypedRecord {
                     value: other_value,
                     typ: other_typ,
                 }),
