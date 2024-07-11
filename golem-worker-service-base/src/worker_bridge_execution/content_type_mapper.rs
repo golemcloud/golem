@@ -161,8 +161,8 @@ mod internal {
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
     use std::fmt::Display;
-    use golem_wasm_rpc::protobuf::{TypedEnum, TypedList};
-    use golem_wasm_rpc::TypeExt;
+    use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
+    use golem_wasm_rpc::{get_analysed_type, TypeExt};
 
     pub(crate) fn get_response_body_based_on_content_type<A: ContentTypeHeaderExt + Display>(
         type_annotated_value: &TypeAnnotatedValue,
@@ -175,7 +175,7 @@ mod internal {
             TypeAnnotatedValue::List(ref typed_list ) => {
                 let typ = typed_list.typ.clone().ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
                 let analysed_Type = AnalysedType::from_type(&typ).map_err(|_| ContentTypeMapError::internal("Failed to convert type to analysed type"))?;
-                let vec = typed_list.values.iter().filter_map(|v| v.type_annotated_value).collect::<Vec<_>>();
+                let vec = typed_list.values.iter().filter_map(|v| v.type_annotated_value.clone()).collect::<Vec<_>>();
                 handle_list(type_annotated_value, &vec, &analysed_Type, content_header)
             }
             TypeAnnotatedValue::Bool(bool) => {
@@ -223,7 +223,7 @@ mod internal {
             }
             TypeAnnotatedValue::Enum (TypedEnum { value, .. }) => handle_string(value, content_header),
 
-            TypeAnnotatedValue::Option(typed_option) => match typed_option.value {
+            TypeAnnotatedValue::Option(typed_option) => match &typed_option.value {
                 Some(value) => {
                     let value =
                         value.type_annotated_value.as_ref().ok_or(ContentTypeMapError::internal("Failed to fetch option value"))?;
@@ -233,8 +233,11 @@ mod internal {
                     if content_header.has_application_json() {
                         get_json_null()
                     } else {
+                        let typ = get_analysed_type(type_annotated_value).map_err(|_| {
+                            ContentTypeMapError::internal("Failed to resolve type of data")
+                        })?;
                         Err(ContentTypeMapError::illegal_mapping(
-                            &AnalysedType::from(type_annotated_value),
+                            &typ,
                             content_header,
                         ))
                     }
@@ -255,10 +258,15 @@ mod internal {
     ) -> Result<WithContentType<Body>, ContentTypeMapError> {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::List(TypedList{ values, typ }) => match typ {
-                Some(golem_wasm_rpc::protobuf::Type::U8) => {
-                    let values = values.iter().filter_map(|v| v.type_annotated_value).collect::<Vec<_>>();
-                    get_byte_stream_body(&values)
+            TypeAnnotatedValue::List(TypedList{ values, typ }) => match typ.clone().map(|v| v.r#type).flatten() {
+                Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(primitive)) => {
+                    match PrimitiveType::try_from(primitive.primitive) {
+                        Ok(PrimitiveType::U8) =>  {
+                            let values = values.iter().filter_map(|v| v.type_annotated_value.clone()).collect::<Vec<_>>();
+                            get_byte_stream_body(&values)
+                        }
+                        _ => get_json(type_annotated_value),
+                    }
                 },
                 _ => get_json(type_annotated_value),
             },
@@ -284,7 +292,7 @@ mod internal {
             TypeAnnotatedValue::Tuple { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Flags { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::Variant { .. } => get_json(type_annotated_value),
-            TypeAnnotatedValue::Option(typed_option) => match typed_option.value {
+            TypeAnnotatedValue::Option(typed_option) => match &typed_option.value {
                 Some(value) => {
                     let value = value.type_annotated_value.as_ref().ok_or(ContentTypeMapError::internal("Failed to fetch option value"))?;
                     get_response_body(value)
@@ -385,8 +393,12 @@ mod internal {
         if content_header.has_application_json() {
             get_json(complex)
         } else {
+            let typ = get_analysed_type(complex).map_err(|_| {
+                ContentTypeMapError::internal("Failed to resolve type of data")
+            })?;
+
             Err(ContentTypeMapError::illegal_mapping(
-                &AnalysedType::from(complex),
+                &typ,
                 content_header,
             ))
         }
@@ -448,9 +460,12 @@ mod internal {
         if content_header.has_application_json() {
             get_json(record)
         } else {
+            let typ =  get_analysed_type(record).map_err(|_| {
+                ContentTypeMapError::internal("Failed to resolve type of data")
+            })?;
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
             Err(ContentTypeMapError::illegal_mapping(
-                &AnalysedType::from(record),
+                &typ,
                 content_header,
             ))
         }

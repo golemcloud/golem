@@ -11,6 +11,7 @@ use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
 use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
+use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
@@ -94,11 +95,23 @@ impl TypedHttRequestDetails {
                 },
             ],
             value: vec![
-                NameValuePair { name: "path".to_string(), value: merged_type_annotated_value } ,
-                NameValuePair { name: "body".to_string(), value: Some(self.typed_request_body.0.clone())},
+                NameValuePair { name: "path".to_string(), value: Some(RootTypeAnnotatedValue {
+                    type_annotated_value: Some(merged_type_annotated_value),
+                })} ,
+                NameValuePair { name: "body".to_string(), value: Some({
+                    RootTypeAnnotatedValue {
+                        type_annotated_value: Some({
+                            self.typed_request_body.0.clone()
+                        })
+                    }
+                })},
                 NameValuePair {
                     name: "headers".to_string(),
-                    value: Some(self.typed_header_values.clone().0.into()),
+                    value: Some({
+                        RootTypeAnnotatedValue {
+                            type_annotated_value: Some(self.typed_header_values.clone().0.into())
+                        }
+                    }),
                 },
             ],
         })
@@ -219,7 +232,7 @@ impl From<TypedKeyValueCollection> for AnalysedType {
         let mut typ: Vec<(String, AnalysedType)> = vec![];
 
         for record in &typed_key_value_collection.fields {
-            typ.push((record.name.clone(), AnalysedType::from(&record.value)));
+            typ.push((record.name.clone(), get_analysed_type(&record.value).expect("Internal error: Failed to retrieve type from Type Annotated Value")));
         }
 
         AnalysedType::Record(typ)

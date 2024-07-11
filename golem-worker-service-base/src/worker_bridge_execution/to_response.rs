@@ -52,6 +52,7 @@ mod internal {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};
     use std::collections::HashMap;
+    use golem_wasm_rpc::protobuf::TypedRecord;
 
     use crate::evaluator::getter::GetterExt;
     use crate::evaluator::path::Path;
@@ -204,21 +205,19 @@ mod internal {
             header_map: &TypeAnnotatedValue,
         ) -> Result<ResolvedResponseHeaders, String> {
             match header_map {
-                TypeAnnotatedValue::Record { value, .. } => {
+                TypeAnnotatedValue::Record(TypedRecord { value, .. } )=> {
                     let mut resolved_headers: HashMap<String, String> = HashMap::new();
 
-                    for (header_name, header_value) in value {
-                        let value_str = header_value
-                            .get_primitive()
+                    for name_value_pair in value {
+                        let value_str = name_value_pair.value.as_ref().map(|v| v.type_annotated_value.clone()).flatten().ok_or(
+                                "Unable to resolve header value".to_string()
+                        )?.get_primitive()
                             .map(|primitive| primitive.to_string())
                             .unwrap_or_else(|| {
-                                format!(
-                                    "Unable to resolve header. Resulted in {}",
-                                    get_json_from_typed_value(header_value)
-                                )
+                                    "Unable to resolve header".to_string()
                             });
 
-                        resolved_headers.insert(header_name.clone(), value_str);
+                        resolved_headers.insert(name_value_pair.name.clone(), value_str);
                     }
 
                     Ok(ResolvedResponseHeaders {

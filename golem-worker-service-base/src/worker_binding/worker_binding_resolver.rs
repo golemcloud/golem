@@ -15,6 +15,8 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+use golem_wasm_rpc::TypeExt;
 
 use crate::worker_binding::{RequestDetails, ResponseMapping};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -62,36 +64,48 @@ pub struct WorkerDetail {
 
 impl WorkerDetail {
     pub fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
-        let mut required = TypeAnnotatedValue::Record {
+        let mut required = TypeAnnotatedValue::Record(TypedRecord {
             typ: vec![
-                ("component_id".to_string(), AnalysedType::Str),
-                ("name".to_string(), AnalysedType::Str),
+                NameTypePair {
+                    name: "component_id".to_string(),
+                    typ: Some(AnalysedType::Str.to_type()),
+                },
+                NameTypePair {
+                    name: "name".to_string(),
+                    typ: Some(AnalysedType::Str.to_type()),
+                },
             ],
             value: vec![
-                (
-                    "component_id".to_string(),
-                    TypeAnnotatedValue::Str(self.component_id.0.to_string()),
-                ),
-                (
-                    "name".to_string(),
-                    TypeAnnotatedValue::Str(self.worker_name.clone()),
-                ),
+                NameValuePair {
+                    name: "component_id".to_string(),
+                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value: Some(TypeAnnotatedValue::Str(self.component_id.0.to_string())) }),
+                },
+                NameValuePair {
+                    name: "name".to_string(),
+                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value: Some(TypeAnnotatedValue::Str(self.worker_name.clone().to_string()))}),
+                }
+
             ],
-        };
+        });
 
         let optional_idempotency_key =
             self.idempotency_key
                 .clone()
-                .map(|x| TypeAnnotatedValue::Record {
+                .map(|x| TypeAnnotatedValue::Record(TypedRecord {
                     // Idempotency key can exist in header of the request in which case users can refer to it as
                     // request.headers.idempotency-key. In order to keep some consistency, we are keeping the same key name here,
                     // if it exists as part of the API definition
-                    typ: vec![("idempotency-key".to_string(), AnalysedType::Str)],
-                    value: vec![(
-                        "idempotency-key".to_string(),
-                        TypeAnnotatedValue::Str(x.to_string()),
-                    )],
-                });
+                    typ: {
+                        vec![NameTypePair {
+                            name: "idempotency-key".to_string(),
+                            typ: Some(AnalysedType::Str.to_type()),
+                        }]
+                    },
+                    value: vec![NameValuePair {
+                        name: "idempotency-key".to_string(),
+                        value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue { type_annotated_value: Some(TypeAnnotatedValue::Str(x.to_string())) }),
+                    }],
+                }));
 
         if let Some(idempotency_key) = optional_idempotency_key {
             required = required.merge(&idempotency_key).clone();

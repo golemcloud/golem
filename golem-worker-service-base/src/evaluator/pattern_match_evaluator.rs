@@ -7,7 +7,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{ArmPattern, Expr, MatchArm};
 use std::ops::Deref;
 use std::sync::Arc;
-use golem_wasm_rpc::protobuf::{TypedOption, TypedRecord};
+use golem_wasm_rpc::protobuf::{TypedOption, TypedRecord, TypedVariant};
 use golem_wasm_rpc::protobuf::typed_result::{ResultValue as ProtoResultValue};
 use golem_wasm_rpc::protobuf::NameTypePair as ProtoNameTypePair;
 use golem_wasm_rpc::protobuf::NameValuePair as ProtoNameValuePair;
@@ -186,7 +186,7 @@ fn handle_ok(
             match result {
                 ProtoResultValue::ErrorValue(_) =>  Ok(ArmPatternOutput::NoneMatched),
                 ProtoResultValue::OkValue(ok_value) => {
-                    let type_annotated_value_in_ok = ok_value.type_annotated_value.ok_or(EvaluationError::Message(
+                    let type_annotated_value_in_ok = ok_value.type_annotated_value.clone().ok_or(EvaluationError::Message(
                         "Ok constructor should have a value".to_string(),
                     ))?;
 
@@ -222,7 +222,7 @@ fn handle_err(
             match result {
                 ProtoResultValue::OkValue(_) =>  Ok(ArmPatternOutput::NoneMatched),
                 ProtoResultValue::ErrorValue(err_value) => {
-                    let type_annotated_value_in_err = err_value.type_annotated_value.ok_or(EvaluationError::Message(
+                    let type_annotated_value_in_err = err_value.type_annotated_value.clone().ok_or(EvaluationError::Message(
                         "Err constructor should have a value".to_string(),
                     ))?;
 
@@ -251,18 +251,18 @@ fn handle_some(
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         result @ TypeAnnotatedValue::Option(typed_option)  => {
-            match typed_option.value {
+            match &typed_option.value {
                 Some(value) =>  {
-                    let type_annotated_value_in_some = value.type_annotated_value.ok_or(EvaluationError::Message(
+                    let type_annotated_value_in_some = value.type_annotated_value.as_ref().ok_or(EvaluationError::Message(
                         "Expecting non-empty type annotated value".to_string(),
                     ))?;
 
                     if let Some(bv) = binding_variable {
-                        let record = internal::create_singleton_record(&bv.0, &result)?;
+                        let record = internal::create_singleton_record(&bv.0, result)?;
                         input.merge_variables(&record);
                     }
 
-                    evaluate_arm_pattern(some_variable, &type_annotated_value_in_some, input, None)
+                    evaluate_arm_pattern(some_variable, type_annotated_value_in_some, input, None)
                 }
 
                 None =>  Ok(ArmPatternOutput::NoneMatched),
@@ -281,7 +281,7 @@ fn handle_none(
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
         TypeAnnotatedValue::Option(typed_option)=> {
-            match typed_option.value {
+            match &typed_option.value {
                 Some(_) => Ok(ArmPatternOutput::NoneMatched),
                 None => {
                     Ok(ArmPatternOutput::Matched(MatchResult {
@@ -321,13 +321,13 @@ fn handle_variant(
         handle_some(match_expr_result, &variables[0], binding_variable, input)
     } else {
         match match_expr_result {
-            result @ TypeAnnotatedValue::Variant(variant) => {
-                let (case_name, case_value) = (variant.case_name, variant.case_value);
+            result @ TypeAnnotatedValue::Variant(type_variant) => {
+                let TypedVariant { case_name, case_value, .. } = type_variant.deref();
                 if case_name == variant_name {
                     let type_annotated_value_in_case =
-                        *case_value.clone().ok_or(EvaluationError::Message(
+                        case_value.as_ref().ok_or(EvaluationError::Message(
                             "Variant constructor should have a value".to_string(),
-                        ))?.type_annotated_value.ok_or(EvaluationError::Message(
+                        ))?.type_annotated_value.clone().ok_or(EvaluationError::Message(
                             "Expecting non-empty type annotated value".to_string(),
                         ))?;
 

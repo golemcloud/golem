@@ -1,6 +1,7 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::get_analysed_type;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedTuple;
 
 use crate::worker_bridge_execution::WorkerResponse;
 
@@ -31,9 +32,10 @@ impl RefinedWorkerResponse {
 
         if function_result_types.iter().all(|r| r.name.is_none()) {
             match result {
-                TypeAnnotatedValue::Tuple { value, .. } => {
+                TypeAnnotatedValue::Tuple (TypedTuple { value, .. } )=> {
                     if value.len() == 1 {
-                        Ok(RefinedWorkerResponse::SingleResult(value[0].clone()))
+                        let inner = value[0].clone().type_annotated_value.ok_or("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained None")?;
+                        Ok(RefinedWorkerResponse::SingleResult(inner))
                     } else if value.is_empty() {
                         Ok(RefinedWorkerResponse::Unit)
                     } else {
