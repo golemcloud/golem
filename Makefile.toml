@@ -546,7 +546,7 @@ kill $redis_pid || true
 
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
-dependencies = ["build"]
+dependencies = ["build-bins"]
 
 script = '''
 export RUST_BACKTRACE=1
