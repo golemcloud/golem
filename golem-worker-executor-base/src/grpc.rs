@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::protobuf::{TypeAnnotatedValue, Val};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -49,7 +50,9 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_request};
+use golem_service_base::model::ExportFunction;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
+use rib::ParsedFunctionName;
 use crate::error::*;
 use crate::model::{InterruptKind, LastError};
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
@@ -520,12 +523,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let proto_function_input: Vec<Val> = request.input();
 
-        let function_input = proto_function_input
-            .iter()
-            .map(|val| val.clone().try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
-
         let calling_convention = request.calling_convention();
 
         let component_metadata = match optional_metadata {
@@ -552,9 +549,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
+
+        let params = serde_json::Value::Null;
+
+        let params_val = params
+            .validate_function_parameters(
+                Self::get_expected_function_parameters(&full_function_name, &function_type),
+                *calling_convention,
+            )
+            .map_err(|err| GolemError::ValueMismatch{ details: err.join(", ") }) ?;
+
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
+
+        let function_input = params_val
+            .iter()
+            .map(|val| val.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let values = worker
             .invoke_and_await(
@@ -565,9 +578,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
+        let results: Vec<Val> =
+            values.into_iter().map(|val| Val::from(val)).collect();
 
-        let results: Vec<Val> = values.into_iter().map(|val| val.into()).collect();
-
+        let function_results: Vec<AnalysedFunctionResult> = function_type
+            .results
+            .iter()
+            .map(|x| x.clone().into())
+            .collect();
 
         let output = results
             .validate_function_result(function_results, *calling_convention)
@@ -576,6 +594,30 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
             type_annotated_value: Some(output)
         })})
+    }
+
+    fn get_expected_function_parameters(
+        function_name: &str,
+        function_type: &ExportFunction,
+    ) -> Vec<AnalysedFunctionParameter> {
+        let is_indexed = ParsedFunctionName::parse(function_name)
+            .ok()
+            .map(|parsed| parsed.function().is_indexed_resource())
+            .unwrap_or(false);
+        if is_indexed {
+            function_type
+                .parameters
+                .iter()
+                .skip(1)
+                .map(|x| x.clone().into())
+                .collect()
+        } else {
+            function_type
+                .parameters
+                .iter()
+                .map(|x| x.clone().into())
+                .collect()
+        }
     }
 
     async fn get_or_create<Req: GrpcInvokeRequest>(
