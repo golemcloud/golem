@@ -17,6 +17,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 use bincode::{Decode, Encode};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
