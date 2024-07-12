@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ComponentStoreConfig {
     S3(ComponentStoreS3Config),
@@ -30,19 +30,19 @@ impl Default for ComponentStoreConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentStoreS3Config {
     pub bucket_name: String,
     pub object_prefix: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentStoreLocalConfig {
     pub root_path: String,
     pub object_prefix: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum DbConfig {
     Postgres(DbPostgresConfig),
@@ -58,13 +58,27 @@ impl Default for DbConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl DbConfig {
+    pub fn postgres_example() -> Self {
+        Self::Postgres(DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: "postgres".to_string(),
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: 5432,
+            max_connections: 10,
+            schema: None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbSqliteConfig {
     pub database: String,
     pub max_connections: u32,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DbPostgresConfig {
     pub host: String,
     pub database: String,

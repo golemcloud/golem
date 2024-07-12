@@ -1,33 +1,32 @@
+use std::fmt::Debug;
 use std::time::Duration;
 
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use golem_common::config::RetryConfig;
-use golem_service_base::config::DbConfig;
+use golem_common::config::{ConfigExample, HasConfigExamples, RetryConfig};
+use golem_common::tracing::TracingConfig;
+use golem_service_base::config::{DbConfig, DbSqliteConfig};
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
-// If there are extra cofigurations for custom services,
-// its preferred to reuse base config.
-#[derive(Clone, Debug, Deserialize)]
+// If there are extra configurations for custom services,
+// it's preferred to reuse base config.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceBaseConfig {
     pub environment: String,
+    pub tracing: TracingConfig,
     pub db: DbConfig,
     pub component_service: ComponentServiceConfig,
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
     pub port: u16,
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
@@ -47,33 +46,39 @@ impl WorkerServiceBaseConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
     }
-
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/worker-service.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
 }
 
 impl Default for WorkerServiceBaseConfig {
     fn default() -> Self {
         Self {
             environment: "local".to_string(),
-            db: DbConfig::default(),
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: "../data/golem_worker.sqlite".to_string(),
+                max_connections: 10,
+            }),
             component_service: ComponentServiceConfig::default(),
-            enable_tracing_console: false,
-            enable_json_log: false,
-            port: 9000,
-            custom_request_port: 9001,
-            worker_grpc_port: 9092,
+            tracing: TracingConfig::local_dev("worker-service"),
+            port: 9005,
+            custom_request_port: 9006,
+            worker_grpc_port: 9007,
             routing_table: RoutingTableConfig::default(),
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl HasConfigExamples<WorkerServiceBaseConfig> for WorkerServiceBaseConfig {
+    fn examples() -> Vec<ConfigExample<WorkerServiceBaseConfig>> {
+        vec![(
+            "with postgres",
+            Self {
+                db: DbConfig::postgres_example(),
+                ..Self::default()
+            },
+        )]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
     pub host: String,
     pub port: u16,
@@ -101,9 +106,10 @@ impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 8080,
-            access_token: Uuid::new_v4(),
-            retries: RetryConfig::default(),
+            port: 9090,
+            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
+                .expect("invalid UUID"),
+            retries: RetryConfig::max_attempts_3(),
         }
     }
 }

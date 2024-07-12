@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
-use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
-use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+use once_cell::sync::Lazy;
 use tokio::time::Instant;
 use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
+
+use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
+use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
 
 pub mod component_compilation_service;
 pub mod component_service;
@@ -136,3 +139,70 @@ async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: 
 // binding the container lifetime to the client.
 static DOCKER: Lazy<testcontainers::clients::Cli> =
     Lazy::new(testcontainers::clients::Cli::default);
+
+struct EnvVarBuilder {
+    env_vars: HashMap<String, String>,
+}
+
+impl EnvVarBuilder {
+    fn default() -> Self {
+        Self {
+            env_vars: HashMap::new(),
+        }
+    }
+
+    fn golem_service(verbosity: Level) -> Self {
+        Self::default()
+            .with_rust_log_with_dep_defaults(verbosity)
+            .with_rust_back_log()
+            .with_tracing_from_env()
+    }
+
+    fn with(mut self, name: &str, value: String) -> Self {
+        self.env_vars.insert(name.to_string(), value);
+        self
+    }
+
+    fn with_str(self, name: &str, value: &str) -> Self {
+        self.with(name, value.to_string())
+    }
+
+    fn with_all(mut self, env_vars: HashMap<String, String>) -> Self {
+        self.env_vars.extend(env_vars);
+        self
+    }
+
+    fn with_rust_log_with_dep_defaults(self, verbosity: Level) -> Self {
+        let rust_log_level_str = verbosity.as_str().to_lowercase();
+        self.with(
+            "RUST_LOG",
+            format!(
+                "{rust_log_level_str},\
+                cranelift_codegen=warn,\
+                wasmtime_cranelift=warn,\
+                wasmtime_jit=warn,\
+                h2=warn,\
+                hyper=warn,\
+                tower=warn,\
+                fred=warn"
+            ),
+        )
+    }
+
+    fn with_rust_back_log(self) -> Self {
+        self.with_str("RUST_BACKLOG", "1")
+    }
+
+    fn with_tracing_from_env(mut self) -> Self {
+        for (name, value) in
+            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
+        {
+            self.env_vars.insert(name, value);
+        }
+        self
+    }
+
+    fn build(self) -> HashMap<String, String> {
+        self.env_vars
+    }
+}

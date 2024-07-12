@@ -20,8 +20,10 @@ golem-rib = { path = "../golem-rib", version = "0.0.0" }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
+console-subscriber = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
+figment = { workspace = true }
 fred = { workspace = true }
 futures-core = { workspace = true }
 humantime-serde = { workspace = true }
@@ -37,9 +39,15 @@ rand = { workspace = true }
 range-set-blaze = "0.1.16"
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-serde = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+
+[dev-dependencies]
+tracing-test = { workspace = true }

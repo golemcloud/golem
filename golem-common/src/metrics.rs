@@ -232,3 +232,122 @@ pub mod caching {
             .inc();
     }
 }
+
+pub mod grpc {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::fmt::Debug;
+    use tracing::{error, info, Span};
+
+    lazy_static! {
+        static ref GRPC_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
+            "grpc_success_seconds",
+            "Time taken for successfully serving gRPC requests",
+            &["api"],
+            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref GRPC_FAILURE_SECONDS: HistogramVec = register_histogram_vec!(
+            "grpc_failure_seconds",
+            "Time taken for serving failed gRPC requests",
+            &["api", "error"],
+            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref GRPC_ACTIVE_STREAMS: Gauge =
+            register_gauge!("grpc_active_streams", "Number of active gRPC streams").unwrap();
+    }
+
+    pub fn record_grpc_success(api_name: &'static str, duration: std::time::Duration) {
+        GRPC_SUCCESS_SECONDS
+            .with_label_values(&[api_name])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_grpc_failure(
+        api_name: &'static str,
+        error_kind: &'static str,
+        duration: std::time::Duration,
+    ) {
+        GRPC_FAILURE_SECONDS
+            .with_label_values(&[api_name, error_kind])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_new_grpc_active_stream() {
+        GRPC_ACTIVE_STREAMS.inc();
+    }
+
+    pub fn record_closed_grpc_active_stream() {
+        GRPC_ACTIVE_STREAMS.dec();
+    }
+
+    pub struct RecordedGrpcRequest {
+        api_name: &'static str,
+        start_time: Option<std::time::Instant>,
+        pub span: Span,
+    }
+
+    pub trait TraceErrorKind {
+        fn trace_error_kind(&self) -> &'static str;
+    }
+
+    impl RecordedGrpcRequest {
+        pub fn new(api_name: &'static str, span: Span) -> Self {
+            Self {
+                api_name,
+                start_time: Some(std::time::Instant::now()),
+                span,
+            }
+        }
+
+        pub fn succeed<T>(mut self, result: T) -> T {
+            match self.start_time.take() {
+                Some(start) => self.span.in_scope(|| {
+                    let elapsed = start.elapsed();
+                    info!(elapsed_ms = elapsed.as_millis(), "gRPC request succeeded");
+
+                    record_grpc_success(self.api_name, elapsed);
+                    result
+                }),
+                None => result,
+            }
+        }
+
+        pub fn fail<T, E: Debug + TraceErrorKind>(mut self, result: T, error: &E) -> T {
+            match self.start_time.take() {
+                Some(start) => self.span.in_scope(|| {
+                    let elapsed = start.elapsed();
+                    error!(
+                        elapsed_ms = elapsed.as_millis(),
+                        error = format!("{:?}", error),
+                        "gRPC request failed",
+                    );
+
+                    record_grpc_failure(self.api_name, error.trace_error_kind(), elapsed);
+                    result
+                }),
+
+                None => result,
+            }
+        }
+    }
+
+    impl Drop for RecordedGrpcRequest {
+        fn drop(&mut self) {
+            if let Some(start) = self.start_time.take() {
+                record_grpc_failure(self.api_name, "Drop", start.elapsed());
+            }
+        }
+    }
+
+    #[macro_export]
+    macro_rules! recorded_grpc_request {
+        ($api_name:expr,  $($fields:tt)*) => {
+            {
+                let span = tracing::span!(tracing::Level::INFO, "grpc_request", api = $api_name, $($fields)*);
+                $crate::metrics::grpc::RecordedGrpcRequest::new($api_name, span)
+            }
+        };
+    }
+}

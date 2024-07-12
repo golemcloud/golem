@@ -12,9 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::worker::WorkerServiceError;
+use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+
 use anyhow::anyhow;
 use async_trait::async_trait;
+use tokio::task::JoinSet;
+use tokio::time::sleep;
+use tonic::transport::Channel;
+use tonic::Status;
+use tracing::{debug, error, info, Instrument};
+
 use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
@@ -23,15 +33,8 @@ use golem_service_base::model::{
     GolemError, GolemErrorInvalidShardId, GolemErrorUnknown, WorkerId,
 };
 use golem_service_base::routing_table::{HasRoutingTableService, RoutingTableError};
-use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
-use std::time::Duration;
-use tokio::task::JoinSet;
-use tokio::time::sleep;
-use tonic::transport::Channel;
-use tonic::Status;
-use tracing::{debug, info};
+
+use crate::service::worker::WorkerServiceError;
 
 #[async_trait]
 pub trait RoutingLogic {
@@ -53,7 +56,7 @@ pub trait RoutingLogic {
             + Sync
             + Clone
             + 'static,
-        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send;
+        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync;
 }
 
 #[async_trait]
@@ -74,6 +77,8 @@ pub trait CallOnExecutor<Out: Send + 'static> {
             + Sync
             + Clone
             + 'static;
+
+    fn tracing_kind() -> &'static str;
 }
 
 // TODO; Delete the WorkerId in service-base in favour of WorkerId in golem-common
@@ -101,6 +106,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
             worker_name: self.worker_name.to_string(),
         };
         worker_id.call_on_worker_executor(context, f).await
+    }
+
+    fn tracing_kind() -> &'static str {
+        "WorkerId"
     }
 }
 
@@ -139,6 +148,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for golem_common::model::WorkerId 
                     .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?,
             )),
         }
+    }
+
+    fn tracing_kind() -> &'static str {
+        "WorkerId"
     }
 }
 
@@ -179,6 +192,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
                     .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?,
             )),
         }
+    }
+
+    fn tracing_kind() -> &'static str {
+        "RandomExecutor"
     }
 }
 
@@ -234,6 +251,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
             Ok(Some(results))
         }
     }
+
+    fn tracing_kind() -> &'static str {
+        "AllExecutors"
+    }
 }
 
 pub trait HasWorkerExecutorClients {
@@ -277,9 +298,14 @@ impl From<WorkerExecutionError> for ResponseMapResult {
                 details: "Unknown worker execution error".to_string(),
             })
         });
-        let result = golem_error.clone().into();
-        debug!("Worker execution error {error:?} mapped to golem error {golem_error:?} and finally {result:?}");
-        result
+        let response_map_result = golem_error.clone().into();
+        debug!(
+            error = format!("{:?}", error),
+            golem_error = golem_error.to_string(),
+            response_map_result = format!("{:?}", response_map_result),
+            "ResponseMapResult from WorkerExecutionError"
+        );
+        response_map_result
     }
 }
 
@@ -303,64 +329,74 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             + Sync
             + Clone
             + 'static,
-        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send,
+        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
     {
+        let mut attempt = 0;
         loop {
-            match target
+            attempt += 1;
+            let span = RetrySpan::new(Target::tracing_kind(), attempt);
+
+            let worker_result = target
                 .call_on_worker_executor(self, remote_call.clone())
-                .await
-            {
-                Ok(None) => {
-                    info!("No active shards");
-                    info!("Invalidating routing table");
-                    self.routing_table_service()
-                        .invalidate_routing_table()
-                        .await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Ok(Some(out)) => match response_map(out) {
-                    Ok(result) => break Ok(result),
-                    Err(ResponseMapResult::InvalidShardId {
-                        shard_id,
-                        shard_ids,
-                    }) => {
-                        info!("InvalidShardId: {} not in {:?}", shard_id, shard_ids);
-                        info!("Invalidating routing table");
-                        self.routing_table_service()
-                            .invalidate_routing_table()
-                            .await;
-                        sleep(Duration::from_secs(1)).await;
+                .await;
+
+            let result = async {
+                match worker_result {
+                    Ok(None) => invalidate_routing_table_sleep(self, "NoActiveShards", None).await,
+                    Ok(Some(out)) => match response_map(out) {
+                        Ok(result) => Ok(Some(result)),
+                        Err(ResponseMapResult::InvalidShardId {
+                            shard_id,
+                            shard_ids,
+                        }) => {
+                            debug!(
+                                shard_id = shard_id.to_string(),
+                                available_shard_ids = format!("{:?}", shard_ids),
+                                "Invalid shard_id"
+                            );
+                            invalidate_routing_table_sleep(self, "InvalidShardID", None).await
+                        }
+                        Err(ResponseMapResult::Other(error)) => {
+                            logged_non_retryable_error("WorkerExecutor", error)
+                        }
+                    },
+                    Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
+                        RoutingTableError::Unexpected(details),
+                    )) if is_connection_failure(&details) => {
+                        invalidate_routing_table_sleep(
+                            self,
+                            "FailedToGetRoutingTable",
+                            Some(details.as_str()),
+                        )
+                        .await
                     }
-                    Err(ResponseMapResult::Other(error)) => {
-                        debug!("Got {:?}, not retrying", error);
-                        break Err(error);
+                    Err(GetWorkerExecutorClientError::FailedToConnectToPod(status))
+                        if is_connection_failure(&status.to_string()) =>
+                    {
+                        invalidate_routing_table_no_sleep(
+                            self,
+                            "FailedToConnectToPod",
+                            Some(status.message()),
+                        )
+                        .await
                     }
-                },
-                Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
-                    RoutingTableError::Unexpected(details),
-                )) if is_connection_failure(&details) => {
-                    info!("Shard manager unavailable");
-                    info!("Invalidating routing table and retrying in 1 seconds");
-                    self.routing_table_service()
-                        .invalidate_routing_table()
-                        .await;
-                    sleep(Duration::from_secs(1)).await;
-                }
-                Err(GetWorkerExecutorClientError::FailedToConnectToPod(status))
-                    if is_connection_failure(&status.to_string()) =>
-                {
-                    info!("Worker executor unavailable");
-                    info!("Invalidating routing table and retrying immediately");
-                    self.routing_table_service()
-                        .invalidate_routing_table()
-                        .await;
-                }
-                Err(other) => {
-                    debug!("Got {}, not retrying", other);
-                    // let err = anyhow::Error::new(other);
-                    break Err(WorkerServiceError::internal(other));
+                    Err(error) => {
+                        logged_non_retryable_error("Routing", WorkerServiceError::internal(error))
+                    }
                 }
             };
+
+            match result.instrument(span.span.clone()).await {
+                Ok(Some(result)) => {
+                    break Ok(result);
+                }
+                Ok(None) => {
+                    // NOP, retry
+                }
+                Err(error) => {
+                    break Err(error);
+                }
+            }
         }
     }
 }
@@ -379,4 +415,74 @@ fn is_connection_failure(message: &str) -> bool {
         || message.contains("CHANNEL CLOSED")
         || message.contains("transport error")
         || message.contains("Connection refused")
+}
+
+fn logged_non_retryable_error<T>(
+    error_kind: &'static str,
+    error: WorkerServiceError,
+) -> Result<Option<T>, WorkerServiceError> {
+    error!(
+        error = error.to_string(),
+        error_kind = error_kind,
+        "Non retryable error"
+    );
+    Err(error)
+}
+
+async fn invalidate_routing_table_no_sleep<T: HasRoutingTableService, U>(
+    context: &T,
+    reason: &str,
+    error: Option<&str>,
+) -> Result<Option<U>, WorkerServiceError> {
+    invalidate_routing_table(context, reason, error, false).await;
+    Ok(None)
+}
+
+async fn invalidate_routing_table_sleep<T: HasRoutingTableService, U>(
+    context: &T,
+    reason: &str,
+    error: Option<&str>,
+) -> Result<Option<U>, WorkerServiceError> {
+    invalidate_routing_table(context, reason, error, true).await;
+    Ok(None)
+}
+
+async fn invalidate_routing_table<T: HasRoutingTableService>(
+    context: &T,
+    reason: &str,
+    error: Option<&str>,
+    should_sleep: bool,
+) {
+    info!(
+        reason,
+        error,
+        sleep_after_invalidation = should_sleep,
+        "Invalidating routing table"
+    );
+
+    context
+        .routing_table_service()
+        .invalidate_routing_table()
+        .await;
+
+    if should_sleep {
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
+struct RetrySpan {
+    pub span: tracing::Span,
+}
+
+impl RetrySpan {
+    fn new(call_on_executor_kind: &'static str, attempt: usize) -> Self {
+        Self {
+            span: tracing::span!(
+                tracing::Level::INFO,
+                "call_on_executor_retry",
+                executor_kind = call_on_executor_kind,
+                attempt,
+            ),
+        }
+    }
 }
