@@ -55,7 +55,7 @@ use crate::model::{InterruptKind, LastError};
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{worker_event, All, HasActiveWorkers, HasAll, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps, HasComponentService};
-use crate::services::component::ComponentFunctionDetails;
+use crate::services::component::ProtoExports;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
@@ -519,6 +519,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (worker, optional_metadata) = self.get_or_create(request).await?;
 
         let proto_function_input: Vec<Val> = request.input();
+
         let function_input = proto_function_input
             .iter()
             .map(|val| val.clone().try_into())
@@ -526,7 +527,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let (_, _, component_metadata) = Worker::get_running_component(worker).await?;
+
+        let component_metadata = match optional_metadata {
+            Some(metadata) => metadata,
+            None => {
+                let (_, _, component_metadata) = Worker::get_running_component(worker).await?;
+                component_metadata.exports
+            }
+        };
+
+        let function_type = component_metadata
+            .to_exports()
+            .function_by_name(&full_function_name)
+            .map_err(|err| {
+                GolemError::invalid_request(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
+            .ok_or_else(|| {
+                GolemError::invalid_request(format!(
+                    "Failed to find the function {}",
+                    &full_function_name,
+                ))
+            })?;
+
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
@@ -556,7 +581,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_or_create<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<(Arc<Worker<Ctx>>, Option<ComponentFunctionDetails>), GolemError> {
+    ) -> Result<(Arc<Worker<Ctx>>, Option<ProtoExports>), GolemError> {
         let worker = self.get_or_create_pending(request).await?;
         let metadata = Worker::start_if_needed(worker.clone()).await?;
         Ok((worker, metadata))

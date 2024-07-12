@@ -1761,12 +1761,17 @@ impl From<LinearMemory> for golem_api_grpc::proto::golem::component::LinearMemor
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct ComponentMetadata {
-    pub exports: Vec<Export>,
+    pub exports: Exports,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
 }
 
-impl ComponentMetadata {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct Exports {
+    pub exports: Vec<Export>
+}
+
+impl Exports {
     pub fn instances(&self) -> Vec<ExportInstance> {
         let mut instances = vec![];
         for export in self.exports.clone() {
@@ -1824,6 +1829,22 @@ impl ComponentMetadata {
                 }
             }
         }
+    }
+
+}
+
+
+impl ComponentMetadata {
+    pub fn instances(&self) -> Vec<ExportInstance> {
+        self.exports.instances()
+    }
+
+    pub fn functions(&self) -> Vec<ExportFunction> {
+       self.exports.functions()
+    }
+
+    pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
+        self.exports.function_by_name(name)
     }
 
     /// Gets the sum of all the initial memory sizes of the component
@@ -3240,6 +3261,7 @@ pub struct Component {
 impl Component {
     pub fn function_names(&self) -> Vec<String> {
         self.metadata
+            .exports
             .exports
             .iter()
             .flat_map(|x| x.function_names())

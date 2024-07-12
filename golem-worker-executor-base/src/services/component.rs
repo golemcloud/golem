@@ -49,19 +49,29 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_api_grpc::proto::golem::component::export::Export;
+use golem_api_grpc::proto::golem::component::export::Export as ProtoExport;
+use golem_service_base::model::{Exports};
 
 #[derive(Debug, Clone)]
 pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
-    pub exports: ComponentFunctionDetails
+    pub exports: ProtoExports
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentFunctionDetails {
-    exports: Vec<Export>
+pub struct ProtoExports {
+    exports: Vec<ProtoExport>
+}
+
+impl ProtoExports {
+    pub fn to_exports(&self) -> Exports {
+        Exports {
+            exports: self.exports.iter().map(|export| export.into()).collect()
+        }
+
+    }
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -701,7 +711,7 @@ impl ComponentServiceLocalFileSystem {
             version: *version,
             size,
             memories,
-            exports: ComponentFunctionDetails {
+            exports: ComponentExports {
                 exports: vec![] // TODO resolve from wasm ast component when analyising memeories.
             }
         })

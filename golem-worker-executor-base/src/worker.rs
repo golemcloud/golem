@@ -53,7 +53,7 @@ use crate::services::{
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
     HasWorkerService, UsesAllDeps,
 };
-use crate::services::component::{ComponentFunctionDetails, ComponentMetadata};
+use crate::services::component::{ComponentExports, ComponentMetadata, ProtoExports};
 use crate::workerctx::WorkerCtx;
 
 /// Represents worker that may be running or suspended.
@@ -233,7 +233,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // If the worker isn't started , this will return None, however, it most probably
     // resides in the component-metadata cache, and if it returns None, it means the worker
     // is already started with a set component-version and we don't need to start it again
-    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<Option<ComponentFunctionDetails>, GolemError> {
+    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<Option<ProtoExports>, GolemError> {
         let mut running = this.running.lock().await;
         if running.is_none() {
             let permit = this
