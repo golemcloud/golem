@@ -17,6 +17,8 @@ interface api {
   idempotence-flag: func(enabled: bool) -> ();
   persist-nothing: func() -> ();
   get-workers: func(component-id: component-id, filter: option<worker-any-filter>, precise: bool) -> list<worker-metadata>;
+  get-self-metadata: func() -> worker-metadata;
+  get-worker-metadata: func(worker-id: worker-id) -> option<worker-metadata>;
   update-worker: func(worker-id: worker-id, component-version: component-version, update-mode: update-mode) -> ();
 }
 

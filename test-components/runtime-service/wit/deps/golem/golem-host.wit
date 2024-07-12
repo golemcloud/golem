@@ -227,6 +227,12 @@ constructor(component-id: component-id, filter: option<worker-any-filter>, preci
   /// Initiates an update attempt for the given worker. The function returns immediately once the request has been processed,
   /// not waiting for the worker to get updated.
   update-worker:  func(worker-id: worker-id, target-version: component-version, mode: update-mode) -> ();
+
+  /// Get current worker metadata
+  get-self-metadata: func() -> worker-metadata;
+
+  /// Get worker metadata
+  get-worker-metadata: func(worker-id: worker-id) -> option<worker-metadata>;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
