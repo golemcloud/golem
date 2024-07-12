@@ -49,16 +49,12 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_request};
-
 use crate::error::*;
 use crate::model::{InterruptKind, LastError};
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
-use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasPromiseService,
-    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
-};
+use crate::services::{worker_event, All, HasActiveWorkers, HasAll, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps, HasComponentService};
+use crate::services::component::ComponentFunctionDetails;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
@@ -527,7 +523,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let worker = self.get_or_create(request).await?;
+        let (worker, optional_metadata) = self.get_or_create(request).await?;
+        let (_, _, component_metadata) = Worker::get_running_component(worker).await?;
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
@@ -540,17 +537,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 function_input,
             )
             .await?;
-        let output = values.into_iter().map(|val| val.into()).collect();
+
+
+        let output: Vec<Val> = values.into_iter().map(|val| val.into()).collect();
+
+
+        output
+            .validate_function_(function_results, *calling_convention)
+            .map(|result| TypedResult {
+                result,
+                function_result_types: function_type.results,
+            })
+            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
+
         Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output })
     }
 
     async fn get_or_create<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<Arc<Worker<Ctx>>, GolemError> {
+    ) -> Result<(Arc<Worker<Ctx>>, Option<ComponentFunctionDetails>), GolemError> {
         let worker = self.get_or_create_pending(request).await?;
-        Worker::start_if_needed(worker.clone()).await?;
-        Ok(worker)
+        let metadata = Worker::start_if_needed(worker.clone()).await?;
+        Ok((worker, metadata))
     }
 
     async fn get_or_create_pending<Req: GrpcInvokeRequest>(
