@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
-use golem_wasm_rpc::protobuf::Val;
+use golem_wasm_rpc::protobuf::{TypeAnnotatedValue, Val};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -49,6 +49,7 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_request};
+use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use crate::error::*;
 use crate::model::{InterruptKind, LastError};
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
@@ -515,6 +516,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<golem::workerexecutor::InvokeAndAwaitWorkerSuccess, GolemError> {
         let full_function_name = request.name();
 
+        let (worker, optional_metadata) = self.get_or_create(request).await?;
+
         let proto_function_input: Vec<Val> = request.input();
         let function_input = proto_function_input
             .iter()
@@ -523,7 +526,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let calling_convention = request.calling_convention();
-        let (worker, optional_metadata) = self.get_or_create(request).await?;
         let (_, _, component_metadata) = Worker::get_running_component(worker).await?;
         let idempotency_key = request
             .idempotency_key()?
@@ -539,18 +541,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
 
-        let output: Vec<Val> = values.into_iter().map(|val| val.into()).collect();
+        let results: Vec<Val> = values.into_iter().map(|val| val.into()).collect();
 
 
-        output
-            .validate_function_(function_results, *calling_convention)
-            .map(|result| TypedResult {
-                result,
-                function_result_types: function_type.results,
-            })
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
+        let output = results
+            .validate_function_result(function_results, *calling_convention)
+            .map_err(|err| GolemError::ValueMismatch {details: err.join(", ") })?;
 
-        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output })
+        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+            type_annotated_value: Some(output)
+        })})
     }
 
     async fn get_or_create<Req: GrpcInvokeRequest>(
@@ -606,7 +606,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let worker = self.get_or_create(request).await?;
+        let (worker, _) = self.get_or_create(request).await?;
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
