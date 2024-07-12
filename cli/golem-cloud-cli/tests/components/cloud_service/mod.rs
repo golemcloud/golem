@@ -28,7 +28,7 @@ pub trait CloudService {
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
+    wait_for_startup_grpc(host, grpc_port, "cloud-service", timeout).await
 }
 
 fn env_vars(
@@ -65,7 +65,7 @@ fn env_vars(
         ("RUST_BACKTRACE", "1"),
         ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
         ("GOLEM__HTTP_PORT", &http_port.to_string()),
-        ("GOLEM__ENABLE_JSON_LOG", "true"),
+        ("GOLEM__TRACING__STDOUT__JSON", "true"),
         ("GOLEM__REDIS__HOST", &redis.private_host()),
         ("GOLEM__REDIS__PORT", &redis.private_port().to_string()),
         ("GOLEM__REDIS__KEY_PREFIX", redis.prefix()),

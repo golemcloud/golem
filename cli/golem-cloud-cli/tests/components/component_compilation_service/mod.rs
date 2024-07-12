@@ -50,7 +50,7 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(
         host,
         grpc_port,
-        "golem-component-compilation-service",
+        "cloud-component-compilation-service",
         timeout,
     )
     .await
@@ -73,7 +73,7 @@ fn env_vars(
         ("GOLEM__COMPONENT_SERVICE__PORT", &component_service.private_grpc_port().to_string()),
         ("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem"),
         ("GOLEM__BLOB_STORAGE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem-cloud"),
-        ("GOLEM__ENABLE_JSON_LOG", "true"),
+        ("GOLEM__TRACING__STDOUT__JSON", "true"),
         ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
         ("GOLEM__HTTP_PORT", &http_port.to_string()),
         ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , ROOT_TOKEN),

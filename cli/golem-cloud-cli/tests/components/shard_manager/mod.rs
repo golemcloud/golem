@@ -55,7 +55,7 @@ pub trait ShardManager {
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
+    wait_for_startup_grpc(host, grpc_port, "cloud-shard-manager", timeout).await
 }
 
 fn env_vars(

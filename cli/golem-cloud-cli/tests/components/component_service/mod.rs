@@ -49,7 +49,7 @@ pub trait ComponentService {
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
+    wait_for_startup_grpc(host, grpc_port, "cloud-component-service", timeout).await
 }
 
 fn env_vars(
@@ -75,7 +75,7 @@ fn env_vars(
         ("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "/tmp/ittest-local-object-store/golem-cloud"),
         ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
         ("GOLEM__HTTP_PORT", &http_port.to_string()),
-        ("GOLEM__ENABLE_JSON_LOG", "true"),
+        ("GOLEM__TRACING__STDOUT__JSON", "true"),
         ("GOLEM__CLOUD_SERVICE__ACCESS_TOKEN"     , ROOT_TOKEN),
     ];
 

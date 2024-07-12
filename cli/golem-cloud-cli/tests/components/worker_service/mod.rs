@@ -55,7 +55,7 @@ pub trait WorkerService {
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout).await
+    wait_for_startup_grpc(host, grpc_port, "cloud-worker-service", timeout).await
 }
 
 fn env_vars(
