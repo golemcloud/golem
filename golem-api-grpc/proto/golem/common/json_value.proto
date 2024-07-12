@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package golem.common;
 
-syntax = "proto3";
-
 message JsonValue {
   oneof kind {
     NullValue null_value = 1;
