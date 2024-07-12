@@ -5,8 +5,8 @@ use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition;

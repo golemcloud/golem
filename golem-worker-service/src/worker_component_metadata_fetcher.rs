@@ -1,7 +1,7 @@
 use crate::empty_worker_metadata;
 use async_trait::async_trait;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::{ComponentMetadata, WorkerId};
-use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::evaluator::{MetadataFetchError, WorkerMetadataFetcher};
 use golem_worker_service_base::service::worker::WorkerService;
 use std::sync::Arc;

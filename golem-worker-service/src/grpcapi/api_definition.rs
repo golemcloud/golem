@@ -25,10 +25,9 @@ use golem_common::grpc::{
 };
 use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::recorded_grpc_request;
-use golem_worker_service_base::auth::DefaultNamespace;
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::{
     api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion},
-    auth::EmptyAuthCtx,
     service::http::http_api_definition_validator::RouteValidationError,
 };
 

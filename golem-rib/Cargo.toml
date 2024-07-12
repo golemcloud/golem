@@ -8,6 +8,8 @@ repository = "https://github.com/golemcloud/golem"
 description = "Parser for Golem's Rib language"
 
 [dependencies]
+golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+
 async-trait = { workspace = true }
 bincode = { workspace = true }
 combine = "4.6.7"

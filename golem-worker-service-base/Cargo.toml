@@ -38,6 +38,7 @@ opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
+prost = { workspace = true }
 regex = { workspace = true }
 rustc-hash = "1.1.0"
 serde = { workspace = true }
@@ -45,7 +46,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-sqlx = { version = "0.7", features = [
+sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
