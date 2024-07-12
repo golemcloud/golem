@@ -71,8 +71,15 @@ max_active_workers = 1024
 max_concurrent_streams = 1024
 
 [memory]
+acquire_retry_delay = "500ms"
 worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
+
+[memory.oom_retry_config]
+max_attempts = 4294967295
+max_delay = "5s"
+min_delay = "100ms"
+multiplier = 2
 
 [oplog]
 archive_interval = "1day"
@@ -227,8 +234,15 @@ without_time = false
 # max_concurrent_streams = 1024
 # 
 # [memory]
+# acquire_retry_delay = "500ms"
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
+# 
+# [memory.oom_retry_config]
+# max_attempts = 4294967295
+# max_delay = "5s"
+# min_delay = "100ms"
+# multiplier = 2
 # 
 # [oplog]
 # archive_interval = "1day"
@@ -343,8 +357,15 @@ without_time = false
 # max_concurrent_streams = 1024
 # 
 # [memory]
+# acquire_retry_delay = "500ms"
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
+# 
+# [memory.oom_retry_config]
+# max_attempts = 4294967295
+# max_delay = "5s"
+# min_delay = "100ms"
+# multiplier = 2
 # 
 # [oplog]
 # archive_interval = "1day"

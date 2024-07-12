@@ -42,7 +42,7 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
-use crate::worker::{RecoveryDecision, Worker};
+use crate::worker::{RetryDecision, Worker};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -254,7 +254,7 @@ pub trait InvocationHooks {
     ) -> Result<(), GolemError>;
 
     /// Called when a worker invocation fails
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision;
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision;
 
     /// Called when a worker invocation succeeds
     /// Arguments:
@@ -344,7 +344,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RecoveryDecision, GolemError>;
+    ) -> Result<RetryDecision, GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(

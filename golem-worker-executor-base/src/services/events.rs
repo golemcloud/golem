@@ -79,4 +79,8 @@ pub enum Event {
         idempotency_key: IdempotencyKey,
         result: Result<Vec<Value>, GolemError>,
     },
+    WorkerLoaded {
+        worker_id: WorkerId,
+        result: Result<(), GolemError>,
+    },
 }

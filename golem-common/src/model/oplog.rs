@@ -216,6 +216,8 @@ pub enum OplogEntry {
         target_version: ComponentVersion,
         details: Option<String>,
     },
+    /// Increased total linear memory size
+    GrowMemory { timestamp: Timestamp, delta: u64 },
 }
 
 impl OplogEntry {
@@ -346,6 +348,13 @@ impl OplogEntry {
         }
     }
 
+    pub fn grow_memory(delta: u64) -> OplogEntry {
+        OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -366,6 +375,7 @@ impl OplogEntry {
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
                 | OplogEntry::FailedUpdate { .. }
+                | OplogEntry::GrowMemory { .. }
         )
     }
 
@@ -389,7 +399,8 @@ impl OplogEntry {
             | OplogEntry::PendingWorkerInvocation { timestamp, .. }
             | OplogEntry::PendingUpdate { timestamp, .. }
             | OplogEntry::SuccessfulUpdate { timestamp, .. }
-            | OplogEntry::FailedUpdate { timestamp, .. } => *timestamp,
+            | OplogEntry::FailedUpdate { timestamp, .. }
+            | OplogEntry::GrowMemory { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -448,6 +459,7 @@ pub enum WrappedFunctionType {
 pub enum WorkerError {
     Unknown(String),
     StackOverflow,
+    OutOfMemory,
 }
 
 impl Display for WorkerError {
@@ -455,6 +467,7 @@ impl Display for WorkerError {
         match self {
             WorkerError::Unknown(message) => write!(f, "{}", message),
             WorkerError::StackOverflow => write!(f, "Stack overflow"),
+            WorkerError::OutOfMemory => write!(f, "Out of memory"),
         }
     }
 }
