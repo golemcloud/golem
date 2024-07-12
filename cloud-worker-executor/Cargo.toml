@@ -15,6 +15,7 @@ golem-api-grpc = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-worker-executor-base = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
+cloud-common = { path = "../cloud-common" }
 
 anyhow = { workspace = true }
 async-mutex = "1.4.0"

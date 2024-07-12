@@ -642,15 +642,10 @@ impl CertificateManager for AwsCertificateManager {
                 multiplier: 2,
             };
 
-            let msg = format!(
-                "Delete certificate - account: {}, id: {}",
-                account_id, certificate_id
-            );
-
             let _ = with_retries(
-                &msg,
                 "certificate",
                 "delete",
+                Some(format!("{account_id} - {certificate_id}")),
                 &retry_config,
                 &(client.clone(), certificate_id),
                 |(client, certificate_id)| {

@@ -112,12 +112,16 @@ impl From<golem_worker_service_base::service::api_deployment::ApiDeploymentError
             }
             golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentNotFound(_, site) => {
                 ApiEndpointError::NotFound(Json(MessageBody {
-                    message: format!("ApiDeployment nott found for site: {}", site)
+                    message: format!("ApiDeployment not found for site: {}", site)
                 }))
             }
-
             golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentConflict(site) => {
                 ApiEndpointError::AlreadyExists(Json(format!("Deployment conflict for site: {}", site)))
+            }
+            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionsConflict(conflicting_definitions) => {
+                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(MessagesErrorsBody{
+                    errors: vec![format!("conflicting definitions: {conflicting_definitions}")],
+                })))
             }
         }
     }
@@ -151,6 +155,9 @@ impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
                 ApiEndpointError::already_exists(value)
             }
             BaseApiDefinitionError::ComponentNotFoundError(_) => {
+                ApiEndpointError::bad_request(value)
+            }
+            BaseApiDefinitionError::ApiDefinitionDeployed(_) => {
                 ApiEndpointError::bad_request(value)
             }
         }

@@ -174,15 +174,10 @@ impl LimitService for LimitServiceDefault {
         worker_id: &WorkerId,
         value: i32,
     ) -> Result<(), LimitError> {
-        let desc = format!(
-            "Update worker limit - account: {}, worker: {}",
-            account_id, worker_id
-        );
-        info!("{}", &desc);
         let result: Result<(), LimitClientError> = with_retries(
-            &desc,
             "limit",
             "update-worker-limit",
+            Some(format!("{account_id} - {worker_id}")),
             &self.retry_config,
             &(
                 self.uri.clone(),
@@ -227,15 +222,10 @@ impl LimitService for LimitServiceDefault {
         worker_id: &WorkerId,
         value: i32,
     ) -> Result<(), LimitError> {
-        let desc = format!(
-            "Update worker connection limit - account: {}, worker: {}",
-            account_id, worker_id
-        );
-        info!("{}", &desc);
         let result: Result<(), LimitClientError> = with_retries(
-            &desc,
             "limit",
             "update-worker-connection-limit",
+            Some(format!("{account_id} - {worker_id}")),
             &self.retry_config,
             &(
                 self.uri.clone(),
@@ -284,9 +274,9 @@ impl LimitService for LimitServiceDefault {
         let desc = format!("Getting resource limits - account: {}", account_id);
         info!("{}", &desc);
         let result: Result<ResourceLimits, LimitClientError> = with_retries(
-            &desc,
             "limit",
             "get-resource-limits",
+            Some(account_id.to_string()),
             &self.retry_config,
             &(self.uri.clone(), account_id.clone(), self.access_token),
             |(uri, id, token)| {

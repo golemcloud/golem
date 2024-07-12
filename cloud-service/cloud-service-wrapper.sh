@@ -5,7 +5,6 @@
 # configurations that are automatically uploaded (through terraform)
 # in SSM, to something that shard-manager is specifically looking for.
 # The right side values here are available through chamber that reads from SSM.
-echo "Running in environment ${ENVIRONMENT}"
 source <(chamber env golem-app/cloud-server/${ENVIRONMENT})
 source <(chamber env golem-app/infra-outputs/${ENVIRONMENT})
 # Custom names

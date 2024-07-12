@@ -13,7 +13,6 @@ use golem_common::config::RetryConfig;
 use golem_common::retries::with_retries;
 use http::Uri;
 use tonic::Status;
-use tracing::info;
 use uuid::Uuid;
 
 use crate::UriBackConversion;
@@ -162,15 +161,10 @@ impl LimitService for LimitServiceDefault {
         count: i32,
         size: i64,
     ) -> Result<(), LimitError> {
-        let desc = format!(
-            "Update component limit - account: {}, component: {}",
-            account_id, component_id
-        );
-        info!("{}", &desc);
         let result: Result<(), LimitClientError> = with_retries(
-            &desc,
             "limit",
             "update-component-limit",
+            Some(format!("{account_id} - {component_id}")),
             &self.retry_config,
             &(
                 self.uri.clone(),

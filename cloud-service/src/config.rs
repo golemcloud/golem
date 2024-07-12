@@ -3,20 +3,19 @@ use std::time::Duration;
 
 use cloud_common::model::PlanId;
 use cloud_common::model::Role;
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
+use golem_common::config::ConfigLoader;
+use golem_common::tracing::TracingConfig;
 use golem_service_base::config::DbConfig;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::model::{Plan, PlanData};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudServiceConfig {
+    pub tracing: TracingConfig,
     pub environment: String,
     pub workspace: String,
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
@@ -26,23 +25,12 @@ pub struct CloudServiceConfig {
     pub oauth2: OAuth2Config,
 }
 
-impl CloudServiceConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/cloud-service.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-}
-
 impl Default for CloudServiceConfig {
     fn default() -> Self {
         Self {
+            tracing: TracingConfig::local_dev("cloud-service"),
             environment: "dev".to_string(),
             workspace: "release".to_string(),
-            enable_tracing_console: false,
-            enable_json_log: false,
             http_port: 8080,
             grpc_port: 8081,
             db: DbConfig::default(),
@@ -54,7 +42,7 @@ impl Default for CloudServiceConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EdDsaConfig {
     pub private_key: String,
     pub public_key: String,
@@ -69,7 +57,7 @@ impl Default for EdDsaConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlansConfig {
     pub default: PlanConfig,
 }
@@ -90,7 +78,7 @@ impl Default for PlansConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlanConfig {
     pub plan_id: Uuid,
     pub project_limit: i32,
@@ -117,7 +105,7 @@ impl From<PlanConfig> for Plan {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OAuth2Config {
     pub github_client_id: String,
 }
@@ -130,14 +118,40 @@ impl Default for OAuth2Config {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
-#[derive(Default)]
 pub struct AccountsConfig {
     pub accounts: HashMap<String, AccountConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Default for AccountsConfig {
+    fn default() -> Self {
+        let mut accounts = HashMap::new();
+        accounts.insert(
+            "root".to_string(),
+            AccountConfig {
+                id: "root".to_string(),
+                name: "Initial User".to_string(),
+                email: "initial@user".to_string(),
+                token: Default::default(),
+                role: Role::Admin,
+            },
+        );
+        accounts.insert(
+            "marketing".to_string(),
+            AccountConfig {
+                id: "marketing".to_string(),
+                name: "Marketing User".to_string(),
+                email: "marketing@user".to_string(),
+                token: Default::default(),
+                role: Role::MarketingAdmin,
+            },
+        );
+        AccountsConfig { accounts }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AccountConfig {
     pub id: String,
     pub name: String,
@@ -147,7 +161,7 @@ pub struct AccountConfig {
 }
 
 // TODO: move to the base library
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
     pub max_capacity: usize,
     #[serde(with = "humantime_serde")]
@@ -163,28 +177,16 @@ impl Default for WorkerExecutorClientCacheConfig {
     }
 }
 
+pub fn make_config_loader() -> ConfigLoader<CloudServiceConfig> {
+    ConfigLoader::new("config/cloud-service.toml".to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::config::make_config_loader;
+
     #[test]
     pub fn config_is_loadable() {
-        std::env::set_var("GOLEM__DB__TYPE", "Postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__SCHEMA", "test");
-        std::env::set_var("GOLEM__ENVIRONMENT", "dev");
-        std::env::set_var("GOLEM__WORKSPACE", "test");
-        std::env::set_var(
-            "GOLEM__ACCOUNTS__ROOT__TOKEN",
-            "c88084af-3741-4946-8b58-fa445d770a26",
-        );
-        std::env::set_var(
-            "GOLEM__ACCOUNTS__MARKETING__TOKEN",
-            "bb249eb2-e54e-4bab-8e0e-836578e35912",
-        );
-        std::env::set_var("GOLEM__ED_DSA__PRIVATE_KEY", "x1234");
-        std::env::set_var("GOLEM__ED_DSA__PUBLIC_KEY", "x1234");
-
-        // The rest can be loaded from the toml
-        let _ = super::CloudServiceConfig::new();
+        make_config_loader().load().expect("Failed to load config");
     }
 }

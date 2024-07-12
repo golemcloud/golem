@@ -1,13 +1,13 @@
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
-use golem_common::config::RetryConfig;
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Deserialize)]
+use cloud_common::config::MergedConfigLoaderOrDumper;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudServiceConfig {
     pub host: String,
     pub port: u16,
@@ -36,9 +36,16 @@ impl Default for CloudServiceConfig {
         Self {
             host: "localhost".to_string(),
             port: 8080,
-            access_token: Uuid::new_v4(),
+            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
+                .expect("invalid UUID"),
             retries: RetryConfig::default(),
         }
+    }
+}
+
+impl HasConfigExamples<CloudServiceConfig> for CloudServiceConfig {
+    fn examples() -> Vec<ConfigExample<CloudServiceConfig>> {
+        vec![]
     }
 }
 
@@ -46,13 +53,13 @@ impl Default for CloudServiceConfig {
 pub struct WorkerServiceCloudConfig {
     pub base_config: WorkerServiceBaseConfig,
     pub cloud_specific_config: CloudSpecificWorkerServiceConfig,
-    pub cloud_service: CloudServiceConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudSpecificWorkerServiceConfig {
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
+    pub cloud_service: CloudServiceConfig,
 }
 
 impl Default for CloudSpecificWorkerServiceConfig {
@@ -60,7 +67,14 @@ impl Default for CloudSpecificWorkerServiceConfig {
         Self {
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
+            cloud_service: CloudServiceConfig::default(),
         }
+    }
+}
+
+impl HasConfigExamples<CloudSpecificWorkerServiceConfig> for CloudSpecificWorkerServiceConfig {
+    fn examples() -> Vec<ConfigExample<CloudSpecificWorkerServiceConfig>> {
+        vec![]
     }
 }
 
@@ -68,38 +82,9 @@ impl WorkerServiceCloudConfig {
     pub fn is_local_env(&self) -> bool {
         self.base_config.environment.to_lowercase() == "local"
     }
-
-    pub fn load() -> Self {
-        let common_file = "config/worker-service.toml";
-        let env_prefix = Env::prefixed("GOLEM__").split("__");
-
-        let base_config: WorkerServiceBaseConfig = Figment::new()
-            .merge(Toml::file(common_file))
-            .merge(env_prefix.clone())
-            .extract()
-            .expect("Failed to parse base worker service config");
-
-        let cloud_specific_config: CloudSpecificWorkerServiceConfig = Figment::new()
-            .merge(Toml::file(common_file))
-            .merge(env_prefix.clone())
-            .extract()
-            .expect("Failed to parse cloud specific worker service config");
-
-        let cloud_service: CloudServiceConfig = Figment::new()
-            .merge(Toml::file(common_file))
-            .merge(env_prefix.clone())
-            .extract_inner("cloud_service")
-            .expect("Failed to parse cloud service config");
-
-        WorkerServiceCloudConfig {
-            base_config,
-            cloud_specific_config,
-            cloud_service,
-        }
-    }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DomainRecordsConfig {
     pub subdomain_black_list: Vec<String>,
     pub domain_allow_list: Vec<String>,
@@ -176,47 +161,39 @@ fn domain_match(domain: &str, domain_cfg: &str) -> bool {
     }
 }
 
+const CONFIG_FILE_NAME: &str = "config/worker-service.toml";
+
+pub fn make_worker_service_base_config_loader() -> ConfigLoader<WorkerServiceBaseConfig> {
+    ConfigLoader::new_with_examples(CONFIG_FILE_NAME.to_string())
+}
+
+pub fn make_cloud_specific_config_loader() -> ConfigLoader<CloudSpecificWorkerServiceConfig> {
+    ConfigLoader::new_with_examples(CONFIG_FILE_NAME.to_string())
+}
+
+pub fn load_or_dump_config() -> Option<WorkerServiceCloudConfig> {
+    MergedConfigLoaderOrDumper::new(
+        "worker_service_base_config",
+        make_worker_service_base_config_loader(),
+    )
+    .add(
+        "cloud_specific_worker_service_config",
+        make_cloud_specific_config_loader(),
+        |base, specific| WorkerServiceCloudConfig {
+            base_config: base,
+            cloud_specific_config: specific,
+        },
+    )
+    .finish()
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::config::{domain_match, DomainRecordsConfig};
+    use crate::config::{domain_match, load_or_dump_config, DomainRecordsConfig};
 
     #[test]
     pub fn config_is_loadable() {
-        // The following settings are always coming through environment variables:
-        std::env::set_var("GOLEM__ENVIRONMENT", "dev");
-        std::env::set_var("GOLEM__WORKSPACE", "release");
-        std::env::set_var("GOLEM__DB__TYPE", "Postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__SCHEMA", "test");
-        std::env::set_var("GOLEM__CLOUD_SERVICE__HOST", "localhost");
-        std::env::set_var("GOLEM__CLOUD_SERVICE__PORT", "7899");
-        std::env::set_var("GOLEM__COMPONENT_SERVICE__HOST", "localhost");
-        std::env::set_var("GOLEM__COMPONENT_SERVICE__PORT", "1234");
-        std::env::set_var("GOLEM__ROUTING_TABLE__HOST", "localhost");
-        std::env::set_var("GOLEM__ROUTING_TABLE__PORT", "1234");
-        std::env::set_var(
-            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
-            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
-        );
-        std::env::set_var(
-            "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
-        );
-        std::env::set_var(
-            "GOLEM__DOMAIN_RECORDS__REGISTER_DOMAIN_BLACK_LIST",
-            "[api.golem.cloud,local-api.golem.cloud]",
-        );
-        std::env::set_var(
-            "GOLEM__DOMAIN_RECORDS__DOMAIN_ALLOW_LIST",
-            "[api.golem.cloud]",
-        );
-        std::env::set_var("GOLEM__DOMAIN_RECORDS__SUBDOMAIN_BLACK_LIST", "[api]");
-
-        // The rest can be loaded from the toml
-        let config = super::WorkerServiceCloudConfig::load();
-
-        println!("config: {:?}", config);
+        load_or_dump_config().expect("Failed to load config");
     }
 
     #[test]

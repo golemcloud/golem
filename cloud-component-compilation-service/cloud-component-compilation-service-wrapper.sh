@@ -5,7 +5,6 @@
 # configurations that are automatically uploaded (through terraform)
 # in SSM, to something that component-compilation-service is specifically looking for.
 # The right side values here are available through chamber that reads from SSM.
-echo "Running in environment ${ENVIRONMENT}"
 source <(chamber env golem-app/worker-executor/${ENVIRONMENT})
 source <(chamber env golem-app/infra-outputs/${ENVIRONMENT})
 export GOLEM__BLOB_STORAGE__CONFIG__COMPILATION_CACHE_BUCKET=$COMPILED_COMPONENT_STORE_BUCKET_NAME

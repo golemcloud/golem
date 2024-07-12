@@ -1,32 +1,14 @@
-use crate::aws_config::AwsConfig;
-use crate::config::WorkerServiceCloudConfig;
-use crate::service::api_certificate::{
-    AwsCertificateManager, CertificateManager, CertificateService, CertificateServiceDefault,
-    CertificateServiceNoop,
-};
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
-use crate::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
-use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceDefault};
-use crate::service::api_domain::{
-    ApiDomainService, ApiDomainServiceDefault, ApiDomainServiceNoop, AwsDomainRoute,
-    RegisterDomainRoute, RegisterDomainRouteNoop,
-};
-use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
-use crate::service::auth::{
-    AuthService, CloudAuthCtx, CloudAuthService, CloudAuthServiceNoop, CloudNamespace,
-};
-use crate::service::limit::{LimitService, LimitServiceDefault, LimitServiceNoop};
-use crate::service::project::{ProjectService, ProjectServiceDefault, ProjectServiceNoop};
-use crate::service::worker::{WorkerService, WorkerServiceDefault, WorkerServiceNoop};
-use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
-use crate::worker_request_to_http_response::CloudWorkerRequestToHttpResponse;
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
+use golem_common::config::RetryConfig;
+use golem_service_base::config::DbConfig;
+use golem_service_base::db;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 use golem_worker_service_base::http::InputHttpRequest;
-
-use golem_service_base::config::DbConfig;
-use golem_service_base::db;
 use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
 use golem_worker_service_base::repo::api_deployment::{ApiDeploymentRepo, DbApiDeploymentRepo};
 use golem_worker_service_base::service::api_definition::{
@@ -45,8 +27,30 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
-use std::sync::Arc;
 use tracing::{error, info};
+
+use crate::aws_config::AwsConfig;
+use crate::config::WorkerServiceCloudConfig;
+use crate::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
+use crate::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
+use crate::service::api_certificate::{
+    AwsCertificateManager, CertificateManager, CertificateService, CertificateServiceDefault,
+    CertificateServiceNoop,
+};
+use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceDefault};
+use crate::service::api_domain::{
+    ApiDomainService, ApiDomainServiceDefault, ApiDomainServiceNoop, AwsDomainRoute,
+    RegisterDomainRoute, RegisterDomainRouteNoop,
+};
+use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
+use crate::service::auth::{
+    AuthService, CloudAuthCtx, CloudAuthService, CloudAuthServiceNoop, CloudNamespace,
+};
+use crate::service::limit::{LimitService, LimitServiceDefault, LimitServiceNoop};
+use crate::service::project::{ProjectService, ProjectServiceDefault, ProjectServiceNoop};
+use crate::service::worker::{WorkerService, WorkerServiceDefault, WorkerServiceNoop};
+use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
+use crate::worker_request_to_http_response::CloudWorkerRequestToHttpResponse;
 
 pub mod api_certificate;
 pub mod api_definition;
@@ -78,8 +82,9 @@ pub struct ApiServices {
 pub async fn get_api_services(
     config: &WorkerServiceCloudConfig,
 ) -> Result<ApiServices, std::io::Error> {
-    let project_service: Arc<dyn ProjectService + Sync + Send> =
-        Arc::new(ProjectServiceDefault::new(&config.cloud_service));
+    let project_service: Arc<dyn ProjectService + Sync + Send> = Arc::new(
+        ProjectServiceDefault::new(&config.cloud_specific_config.cloud_service),
+    );
 
     let auth_service: Arc<dyn AuthService + Sync + Send> = Arc::new(CloudAuthService::new(
         project_service.clone(),
@@ -151,6 +156,7 @@ pub async fn get_api_services(
     > = Arc::new(BaseApiDefinitionServiceDefault::new(
         component_service.clone(),
         api_definition_repo.clone(),
+        api_deployment_repo.clone(),
         api_definition_validator,
     ));
 
@@ -240,8 +246,9 @@ pub async fn get_api_services(
             api_certificate_repo.clone(),
         ));
 
-    let limit_service: Arc<dyn LimitService + Sync + Send> =
-        Arc::new(LimitServiceDefault::new(&config.cloud_service));
+    let limit_service: Arc<dyn LimitService + Sync + Send> = Arc::new(LimitServiceDefault::new(
+        &config.cloud_specific_config.cloud_service,
+    ));
 
     let routing_table_service: Arc<
         dyn golem_service_base::routing_table::RoutingTableService + Send + Sync,
@@ -251,13 +258,18 @@ pub async fn get_api_services(
         ),
     );
 
-    let worker_executor_clients: Arc<
-        dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-    > = Arc::new(
-        golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
-            config.base_config.worker_executor_client_cache.max_capacity,
-            config.base_config.worker_executor_client_cache.time_to_idle,
-        ),
+    let worker_executor_clients = MultiTargetGrpcClient::new(
+        WorkerExecutorClient::new,
+        GrpcClientConfig {
+            // TODO
+            retries_on_unavailable: RetryConfig {
+                max_attempts: 0, // we want to invalidate the routing table asap
+                min_delay: Duration::from_millis(100),
+                max_delay: Duration::from_secs(2),
+                multiplier: 2,
+            },
+            connect_timeout: Duration::from_secs(10),
+        },
     );
 
     let worker_service: Arc<dyn WorkerService + Sync + Send> = Arc::new(WorkerServiceDefault::new(

@@ -79,11 +79,10 @@ impl ResourceLimitsGrpc {
         let body = BatchUpdateResourceLimits {
             updates: updates.into_iter().map(|(k, v)| (k.value, v)).collect(),
         };
-        let desc = "Sending batched resource limit updates".to_string();
         with_retries(
-            &desc,
             "resource_limits",
             "batch_update",
+            None,
             &self.retry_config,
             &(self.endpoint.clone(), self.access_token, body),
             |(endpoint, access_token, body)| {
@@ -122,11 +121,10 @@ impl ResourceLimitsGrpc {
         &self,
         account_id: &AccountId,
     ) -> Result<CurrentResourceLimits, GolemError> {
-        let desc = format!("Fetching resource limits for {account_id}");
         with_retries(
-            &desc,
             "resource_limits",
             "fetch",
+            Some(format!("{account_id}")),
             &self.retry_config,
             &(self.endpoint.clone(), self.access_token, account_id.clone()),
             |(url, access_token, account_id)| {

@@ -1,42 +1,26 @@
 use std::time::Duration;
 
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
-use golem_common::config::RetryConfig;
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
+use golem_worker_executor_base::services::golem_config::{make_config_loader, GolemConfig};
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Debug, Deserialize, Default)]
+use cloud_common::config::MergedConfigLoaderOrDumper;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AdditionalGolemConfig {
     pub resource_limits: ResourceLimitsConfig,
 }
 
-impl AdditionalGolemConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/worker-executor.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-
-    pub fn from_file(path: &str) -> Self {
-        Figment::new()
-            .merge(Toml::file(path))
-            .extract()
-            .expect("Failed to parse config")
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ResourceLimitsConfig {
     Grpc(ResourceLimitsGrpcConfig),
     Disabled,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceLimitsGrpcConfig {
     pub host: String,
     pub port: u16,
@@ -63,6 +47,17 @@ impl ResourceLimitsGrpcConfig {
     }
 }
 
+impl HasConfigExamples<AdditionalGolemConfig> for AdditionalGolemConfig {
+    fn examples() -> Vec<ConfigExample<AdditionalGolemConfig>> {
+        vec![(
+            "with disabled resource limits",
+            Self {
+                resource_limits: ResourceLimitsConfig::Disabled,
+            },
+        )]
+    }
+}
+
 impl Default for ResourceLimitsConfig {
     fn default() -> Self {
         Self::Grpc(ResourceLimitsGrpcConfig {
@@ -75,53 +70,42 @@ impl Default for ResourceLimitsConfig {
     }
 }
 
+pub fn make_additional_config_loader() -> ConfigLoader<AdditionalGolemConfig> {
+    ConfigLoader::new_with_examples("config/worker-executor.toml".to_string())
+}
+
+pub fn load_or_dump_config() -> Option<(GolemConfig, AdditionalGolemConfig)> {
+    MergedConfigLoaderOrDumper::new("golem-config", make_config_loader())
+        .add(
+            "additional-golem-config",
+            make_additional_config_loader(),
+            |base, additional| (base, additional),
+        )
+        .finish()
+}
+
 #[cfg(test)]
 mod tests {
-    use golem_worker_executor_base::services::golem_config::GolemConfig;
+    use golem_worker_executor_base::services::golem_config::make_config_loader;
 
-    use crate::services::config::AdditionalGolemConfig;
+    use crate::services::config::{load_or_dump_config, make_additional_config_loader};
 
     #[test]
-    pub fn config_is_loadable() {
-        // The following settings are always coming through environment variables:
-        std::env::set_var("GOLEM__REDIS__HOST", "localhost");
-        std::env::set_var("GOLEM__REDIS__PORT", "1234");
-        std::env::set_var("GOLEM__REDIS__DATABASE", "1");
-        std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__HOST", "localhost");
-        std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__PORT", "1234");
-        std::env::set_var("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "token");
-        std::env::set_var(
-            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__REGION",
-            "us-east-1",
-        );
-        std::env::set_var(
-            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__BUCKET",
-            "golem-compiled-components",
-        );
-        std::env::set_var(
-            "GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__OBJECT_PREFIX",
-            "",
-        );
-        std::env::set_var("GOLEM__BLOB_STORE_SERVICE__CONFIG__REGION", "us-east-1");
-        std::env::set_var(
-            "GOLEM__BLOB_STORE_SERVICE__CONFIG__BUCKET",
-            "golem-compiled-components",
-        );
-        std::env::set_var("GOLEM__BLOB_STORE_SERVICE__CONFIG__OBJECT_PREFIX", "");
-        std::env::set_var("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST", "localhost");
-        std::env::set_var("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT", "1234");
-        std::env::set_var("GOLEM__PORT", "1234");
-        std::env::set_var("GOLEM__RESOURCE_LIMITS__CONFIG__HOST", "localhost");
-        std::env::set_var("GOLEM__RESOURCE_LIMITS__CONFIG__PORT", "1234");
-        std::env::set_var("GOLEM__RESOURCE_LIMITS__CONFIG__ACCESS_TOKEN", "token");
-        std::env::set_var("GOLEM__HTTP_PORT", "1235");
-        std::env::set_var("GOLEM__ENABLE_JSON_LOG", "true");
-        std::env::set_var("GOLEM__PUBLIC_WORKER_API__HOST", "localhost");
-        std::env::set_var("GOLEM__PUBLIC_WORKER_API__PORT", "1234");
-        std::env::set_var("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN", "token");
+    pub fn base_config_is_loadable() {
+        make_config_loader()
+            .load()
+            .expect("Failed to load base config");
+    }
 
-        // The rest can be loaded from the toml
-        let _ = GolemConfig::new();
-        let _ = AdditionalGolemConfig::new();
+    #[test]
+    pub fn additional_config_is_loadable() {
+        make_additional_config_loader()
+            .load()
+            .expect("Failed to load additional config");
+    }
+
+    #[test]
+    pub fn merged_config_is_loadable() {
+        load_or_dump_config().expect("Failed to load additional config");
     }
 }

@@ -1,19 +1,17 @@
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
-use golem_common::config::RetryConfig;
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
+use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_service_base::config::{ComponentStoreConfig, DbConfig};
 use http::Uri;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
+    pub tracing: TracingConfig,
     pub environment: String,
     pub workspace: String,
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
@@ -22,23 +20,12 @@ pub struct ComponentServiceConfig {
     pub cloud_service: CloudServiceConfig,
 }
 
-impl ComponentServiceConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/component-service.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-}
-
 impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
+            tracing: TracingConfig::local_dev("component-service"),
             environment: "dev".to_string(),
             workspace: "release".to_string(),
-            enable_tracing_console: false,
-            enable_json_log: false,
             http_port: 8081,
             grpc_port: 9091,
             db: DbConfig::default(),
@@ -49,7 +36,7 @@ impl Default for ComponentServiceConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudServiceConfig {
     pub host: String,
     pub port: u16,
@@ -78,28 +65,29 @@ impl Default for CloudServiceConfig {
         Self {
             host: "localhost".to_string(),
             port: 8080,
-            access_token: Uuid::new_v4(),
+            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
+                .expect("invalid UUID"),
             retries: RetryConfig::default(),
         }
     }
 }
 
+impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
+    fn examples() -> Vec<ConfigExample<ComponentServiceConfig>> {
+        vec![]
+    }
+}
+
+pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
+    ConfigLoader::new_with_examples("config/component-service.toml".to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::config::make_config_loader;
+
     #[test]
     pub fn config_is_loadable() {
-        std::env::set_var("GOLEM__ENVIRONMENT", "dev");
-        std::env::set_var("GOLEM__WORKSPACE", "test");
-        std::env::set_var("GOLEM__DB__TYPE", "Postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__USERNAME", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__PASSWORD", "postgres");
-        std::env::set_var("GOLEM__DB__CONFIG__SCHEMA", "test");
-        std::env::set_var("GOLEM__CLOUD_SERVICE__HOST", "localhost");
-        std::env::set_var("GOLEM__CLOUD_SERVICE__PORT", "7899");
-        std::env::set_var(
-            "GOLEM__CLOUD_SERVICE__ACCESS_TOKEN",
-            "5C832D93-FF85-4A8F-9803-513950FDFDB1",
-        );
-        let _ = super::ComponentServiceConfig::new();
+        make_config_loader().load().expect("Failed to load config");
     }
 }

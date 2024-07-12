@@ -15,7 +15,6 @@ use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use tonic::Status;
-use tracing::info;
 
 use crate::model::ProjectView;
 use crate::service::auth::authorised_request;
@@ -60,12 +59,10 @@ impl ProjectService for ProjectServiceDefault {
         project_id: &ProjectId,
         token: &TokenSecret,
     ) -> Result<ProjectView, ProjectError> {
-        let desc = format!("Getting project: {}", project_id);
-        info!("{}", &desc);
         with_retries(
-            &desc,
             "project",
             "get",
+            Some(format!("{project_id}")),
             &self.retry_config,
             &(self.uri.clone(), project_id.clone(), token.clone()),
             |(uri, id, token)| {
@@ -94,12 +91,10 @@ impl ProjectService for ProjectServiceDefault {
     }
 
     async fn get_default(&self, token: &TokenSecret) -> Result<ProjectView, ProjectError> {
-        let desc = "Getting default project";
-        info!("{}", desc);
         with_retries(
-            desc,
             "project",
             "get-default",
+            None,
             &self.retry_config,
             &(self.uri.clone(), token.clone()),
             |(uri, token)| {
@@ -129,12 +124,10 @@ impl ProjectService for ProjectServiceDefault {
         project_id: &ProjectId,
         token: &TokenSecret,
     ) -> Result<ProjectAuthorisedActions, ProjectError> {
-        let desc = format!("Getting project: {} actions", project_id);
-        info!("{}", &desc);
         with_retries(
-            &desc,
             "project",
             "get-actions",
+            Some(format!("{project_id}")),
             &self.retry_config,
             &(self.uri.clone(), project_id.clone(), token.clone()),
             |(uri, id, token)| {

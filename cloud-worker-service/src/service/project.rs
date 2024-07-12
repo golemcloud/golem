@@ -14,7 +14,6 @@ use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
 use http::Uri;
 use tonic::Status;
-use tracing::info;
 
 use crate::model::ProjectView;
 use crate::service::auth::authorised_request;
@@ -57,12 +56,10 @@ impl ProjectService for ProjectServiceDefault {
         project_id: &ProjectId,
         token: &TokenSecret,
     ) -> Result<ProjectView, ProjectError> {
-        let desc = format!("Getting project: {}", project_id);
-        info!("{}", &desc);
         with_retries(
-            &desc,
             "project",
             "get",
+            Some(project_id.to_string()),
             &self.retry_config,
             &(self.uri.clone(), project_id.clone(), token.clone()),
             |(uri, id, token)| {
@@ -95,12 +92,10 @@ impl ProjectService for ProjectServiceDefault {
         project_id: &ProjectId,
         token: &TokenSecret,
     ) -> Result<ProjectAuthorisedActions, ProjectError> {
-        let desc = format!("Getting project: {} actions", project_id);
-        info!("{}", &desc);
         with_retries(
-            &desc,
             "project",
             "get-actions",
+            Some(project_id.to_string()),
             &self.retry_config,
             &(self.uri.clone(), project_id.clone(), token.clone()),
             |(uri, id, token)| {

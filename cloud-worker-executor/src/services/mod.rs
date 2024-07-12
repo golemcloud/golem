@@ -38,7 +38,7 @@ impl AdditionalDeps {
     pub async fn mocked() -> Self {
         let resource_limits = Arc::new(resource_limits::ResourceLimitsMock::new());
         Self {
-            additional_golem_config: Arc::new(AdditionalGolemConfig::new()),
+            additional_golem_config: Arc::new(AdditionalGolemConfig::default()),
             resource_limits,
         }
     }

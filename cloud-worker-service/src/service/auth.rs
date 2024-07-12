@@ -263,15 +263,12 @@ async fn get_project(
     metadata: &CloudAuthCtx,
     config: &ComponentServiceConfig,
 ) -> Result<ProjectId, AuthServiceError> {
-    let desc = format!("Getting project of component: {}", component_id);
-    debug!("{}", &desc);
-
     let uri: Uri = (*config).uri();
 
     let result = with_retries(
-        &desc,
         "component",
         "get_project",
+        Some(format!("{component_id}")),
         &config.retries,
         &(uri.clone(), component_id.clone(), metadata.clone()),
         |(uri, id, metadata)| {
