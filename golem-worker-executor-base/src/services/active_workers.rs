@@ -125,9 +125,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             self.worker_memory.clone().acquire_many_owned(mem32),
                         )
                         .await
-                        .expect("worker memory semaphore has been closed")
                         {
-                            Ok(permit) => break permit,
+                            Ok(Ok(permit)) => break permit,
+                            Ok(Err(_)) => {
+                                panic!("worker memory semaphore has been closed")
+                            }
                             Err(_) => {
                                 debug!("Could not acquire memory in time, retrying");
                                 continue;

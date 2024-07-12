@@ -744,10 +744,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 debug!("wait_for_invocation_result: accepting event {:?}", event);
                                 Some(LookupResult::Complete(result.clone()))
                             }
-                            _ => {
-                                debug!("wait_for_invocation_result: skipping event {:?}", event);
-                                None
-                            }
+                            _ => None,
                         })
                         .await;
                     match wait_result {
