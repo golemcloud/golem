@@ -971,7 +971,7 @@ async fn get_worker_metadata() {
             }
     );
     check!(metadata2.last_known_status.component_size == 60782);
-    check!(metadata2.last_known_status.total_linear_memory_size == 1114112);
+    check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
 }
 
 #[tokio::test]
