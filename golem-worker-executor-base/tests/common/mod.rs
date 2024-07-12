@@ -23,8 +23,8 @@ use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     BlobStorageConfig, CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, ShardManagerServiceConfig,
-    WorkerServiceGrpcConfig,
+    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -82,7 +82,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
+use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
@@ -274,6 +274,13 @@ impl TestContext {
 }
 
 pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
+    start_limited(context, None).await
+}
+
+pub async fn start_limited(
+    context: &TestContext,
+    system_memory_override: Option<u64>,
+) -> anyhow::Result<TestWorkerExecutor> {
     let redis = BASE_DEPS.redis();
     let redis_monitor = BASE_DEPS.redis_monitor();
     redis.assert_valid();
@@ -305,11 +312,10 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
             port: context.grpc_port(),
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
         },
-        // memory: MemoryConfig {
-        //     system_memory_override: None,
-        //     worker_memory_ratio: 0.004,
-        //     worker_estimate_coefficient: 1.2,
-        // },
+        memory: MemoryConfig {
+            system_memory_override,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -440,7 +446,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
-    ) -> Result<RecoveryDecision, GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -539,7 +545,7 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
@@ -702,6 +708,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
+            debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
             Ok(self.durable_ctx.increase_memory(delta).await?)
         } else {
             Ok(true)

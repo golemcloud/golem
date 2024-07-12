@@ -46,7 +46,7 @@ use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{worker_enumeration, HasAll};
-use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
+use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
@@ -108,7 +108,7 @@ impl ExternalOperations<Context> for Context {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Context> + Send),
-    ) -> Result<RecoveryDecision, GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -205,7 +205,7 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         self.durable_ctx.on_invocation_failure(trap_type).await
     }
 

@@ -62,6 +62,7 @@ metrohash = "1.0.6"
 nonempty-collections = "0.2.5"
 prometheus = { workspace = true }
 prost = { workspace = true }
+rand = { workspace = true }
 ringbuf = "0.3.3"
 rustls = { workspace = true }
 serde = { workspace = true }
