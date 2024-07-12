@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::common::{start, start_limited, TestContext, TestWorkerExecutor};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
@@ -22,6 +22,7 @@ use golem_wasm_rpc::Value;
 use std::future::Future;
 use std::time::Duration;
 use tokio::spawn;
+use tokio::task::JoinSet;
 use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -208,4 +209,78 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended() {
 
     check!(p951 < 25000);
     check!(p952 < 25000);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+#[allow(clippy::needless_range_loop)]
+async fn initial_large_memory_allocation() {
+    let context = TestContext::new();
+    let executor = start_limited(&context, Some(768 * 1024 * 1024))
+        .await
+        .unwrap();
+    let component_id = executor.store_component("large-initial-memory").await;
+
+    let mut handles = JoinSet::new();
+    let mut results: Vec<Vec<Value>> = Vec::new();
+
+    const N: usize = 10;
+    for i in 0..N {
+        let executor_clone = executor.clone();
+        let component_id_clone = component_id.clone();
+        handles.spawn(async move {
+            let worker = executor_clone
+                .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
+                .await;
+            executor_clone
+                .invoke_and_await(&worker, "run", vec![])
+                .await
+                .unwrap()
+        });
+    }
+
+    while let Some(result) = handles.join_next().await {
+        results.push(result.unwrap());
+    }
+
+    for i in 0..N {
+        check!(results[i][0] == Value::U64(536870912));
+    }
+}
+
+#[tokio::test]
+#[tracing::instrument]
+#[allow(clippy::needless_range_loop)]
+async fn dynamic_large_memory_allocation() {
+    let context = TestContext::new();
+    let executor = start_limited(&context, Some(768 * 1024 * 1024))
+        .await
+        .unwrap();
+    let component_id = executor.store_component("large-dynamic-memory").await;
+
+    let mut handles = JoinSet::new();
+    let mut results: Vec<Vec<Value>> = Vec::new();
+
+    const N: usize = 3;
+    for i in 0..N {
+        let executor_clone = executor.clone();
+        let component_id_clone = component_id.clone();
+        handles.spawn(async move {
+            let worker = executor_clone
+                .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
+                .await;
+            executor_clone
+                .invoke_and_await(&worker, "run", vec![])
+                .await
+                .unwrap()
+        });
+    }
+
+    while let Some(result) = handles.join_next().await {
+        results.push(result.unwrap());
+    }
+
+    for i in 0..N {
+        check!(results[i][0] == Value::U64(0));
+    }
 }

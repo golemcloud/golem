@@ -117,8 +117,9 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        let retries = RetryState::new(&self.config.retries_on_unavailable);
+        let mut retries = RetryState::new(&self.config.retries_on_unavailable);
         loop {
+            retries.start_attempt();
             let mut entry = self
                 .get(endpoint.clone())
                 .map_err(|err| Status::from_error(Box::new(err)))?;

@@ -293,21 +293,24 @@ pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
     pub worker_estimate_coefficient: f64,
+    #[serde(with = "humantime_serde")]
+    pub acquire_retry_delay: Duration,
+    pub oom_retry_config: RetryConfig,
 }
 
 impl MemoryConfig {
     pub fn total_system_memory(&self) -> u64 {
-        let mut sysinfo = sysinfo::System::new();
-        sysinfo.refresh_memory();
-        sysinfo.total_memory()
-    }
-
-    pub fn system_memory(&self) -> u64 {
         self.system_memory_override.unwrap_or_else(|| {
             let mut sysinfo = sysinfo::System::new();
             sysinfo.refresh_memory();
-            sysinfo.available_memory()
+            sysinfo.total_memory()
         })
+    }
+
+    pub fn system_memory(&self) -> u64 {
+        let mut sysinfo = sysinfo::System::new();
+        sysinfo.refresh_memory();
+        sysinfo.available_memory()
     }
 
     pub fn worker_memory(&self) -> usize {
@@ -560,6 +563,13 @@ impl Default for MemoryConfig {
             system_memory_override: None,
             worker_memory_ratio: 0.8,
             worker_estimate_coefficient: 1.1,
+            acquire_retry_delay: Duration::from_millis(500),
+            oom_retry_config: RetryConfig {
+                max_attempts: u32::MAX,
+                min_delay: Duration::from_millis(100),
+                max_delay: Duration::from_secs(5),
+                multiplier: 2,
+            },
         }
     }
 }

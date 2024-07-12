@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
-use golem_wasm_rpc::wasmtime::EncodingError;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use bincode::{Decode, Encode};
+use golem_wasm_rpc::wasmtime::EncodingError;
+use serde::{Deserialize, Serialize};
+use tonic::Status;
+
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
-use tonic::Status;
 
 use crate::model::InterruptKind;
 
@@ -114,6 +115,10 @@ impl GolemError {
 
     pub fn worker_not_found(worker_id: WorkerId) -> Self {
         GolemError::WorkerNotFound { worker_id }
+    }
+
+    pub fn worker_already_exists(worker_id: WorkerId) -> Self {
+        GolemError::WorkerAlreadyExists { worker_id }
     }
 
     pub fn component_download_failed(
@@ -745,3 +750,14 @@ impl From<EncodingError> for GolemError {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
+pub struct WorkerOutOfMemory;
+
+impl Display for WorkerOutOfMemory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Worker cannot acquire more memory")
+    }
+}
+
+impl Error for WorkerOutOfMemory {}

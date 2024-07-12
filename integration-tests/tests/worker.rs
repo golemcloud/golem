@@ -404,8 +404,8 @@ async fn get_running_workers() {
     let component_id = DEPS.store_component("http-client-2").await;
     let host_http_port = 8585;
 
-    let pooling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
-    let pooling_worker_ids_clone = pooling_worker_ids.clone();
+    let polling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
+    let polling_worker_ids_clone = polling_worker_ids.clone();
 
     let http_server = tokio::spawn(async move {
         let route = warp::path::path("poll")
@@ -420,7 +420,7 @@ async fn get_running_workers() {
                         component_id,
                         worker_name: worker_name.clone(),
                     };
-                    let mut ids = pooling_worker_ids_clone.lock().unwrap();
+                    let mut ids = polling_worker_ids_clone.lock().unwrap();
                     ids.insert(worker_id.clone());
                 }
                 Response::builder()
@@ -474,9 +474,9 @@ async fn get_running_workers() {
     loop {
         sleep(Duration::from_secs(2)).await;
         wait_counter += 1;
-        let ids = pooling_worker_ids.lock().unwrap().clone();
+        let ids = polling_worker_ids.lock().unwrap().clone();
 
-        if worker_ids.eq(&ids) || wait_counter >= 3 {
+        if worker_ids.eq(&ids) || wait_counter >= 10 {
             break;
         }
     }

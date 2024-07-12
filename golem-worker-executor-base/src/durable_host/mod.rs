@@ -45,7 +45,9 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription, WrappedFunctionType};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, UpdateDescription, WorkerError, WrappedFunctionType,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
@@ -92,7 +94,7 @@ pub mod wasm_rpc;
 mod durability;
 use crate::services::component::ComponentMetadata;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::worker::{RecoveryDecision, Worker};
+use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
 use golem_common::retries::get_delay;
 
@@ -190,6 +192,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         worker_config.deleted_regions.clone(),
                         last_oplog_index,
                         component_metadata,
+                        worker_config.total_linear_memory_size,
                     ),
                     temp_dir,
                     execution_status,
@@ -268,6 +271,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 };
                 await_interruption.send(()).ok();
             }
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
         }
     }
 
@@ -285,6 +296,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
         }
     }
 
@@ -325,6 +344,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         status
             .current_idempotency_key
             .clone_from(&self.state.current_idempotency_key);
+        status.total_linear_memory_size = self.state.total_linear_memory_size;
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
         self.public_state.worker().update_status(status).await;
@@ -377,25 +397,54 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.worker_proxy.clone()
     }
 
+    pub fn total_linear_memory_size(&self) -> u64 {
+        self.state.total_linear_memory_size
+    }
+
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+        if self.state.is_replay() {
+            // The increased amount was already recorded in live mode, so our worker
+            // was initialized with the correct amount of memory.
+            Ok(true)
+        } else {
+            // In live mode we need to try to get more memory permits and if we can't,
+            // we fail the worker, unload it from memory and schedule a retry.
+            // let current_size = self.update_worker_status();
+            self.state
+                .oplog
+                .add_and_commit(OplogEntry::grow_memory(delta))
+                .await;
+            self.update_worker_status(|_| {}).await;
+
+            self.public_state.worker().increase_memory(delta).await?;
+            self.state.total_linear_memory_size += delta;
+            Ok(true)
+        }
+    }
+
     fn get_recovery_decision_on_trap(
         retry_config: &RetryConfig,
         previous_tries: u64,
         trap_type: &TrapType,
-    ) -> RecoveryDecision {
+    ) -> RetryDecision {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => RecoveryDecision::None,
-            TrapType::Interrupt(InterruptKind::Suspend) => RecoveryDecision::None,
-            TrapType::Interrupt(InterruptKind::Restart) => RecoveryDecision::Immediate,
-            TrapType::Interrupt(InterruptKind::Jump) => RecoveryDecision::Immediate,
-            TrapType::Exit => RecoveryDecision::None,
+            TrapType::Interrupt(InterruptKind::Interrupt) => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Suspend) => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
+            TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
+            TrapType::Exit => RetryDecision::None,
             TrapType::Error(error) => {
                 if is_worker_error_retriable(retry_config, error, previous_tries) {
-                    match get_delay(retry_config, previous_tries) {
-                        Some(delay) => RecoveryDecision::Delayed(delay),
-                        None => RecoveryDecision::None,
+                    if error == &WorkerError::OutOfMemory {
+                        RetryDecision::ReacquirePermits
+                    } else {
+                        match get_delay(retry_config, previous_tries) {
+                            Some(delay) => RetryDecision::Delayed(delay),
+                            None => RetryDecision::None,
+                        }
                     }
                 } else {
-                    RecoveryDecision::None
+                    RetryDecision::None
                 }
             }
         }
@@ -404,7 +453,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     fn get_recovery_decision_on_startup(
         retry_config: &RetryConfig,
         last_error: &Option<LastError>,
-    ) -> RecoveryDecision {
+    ) -> RetryDecision {
         match last_error {
             Some(last_error) => {
                 if is_worker_error_retriable(
@@ -412,12 +461,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     &last_error.error,
                     last_error.retry_count,
                 ) {
-                    RecoveryDecision::Immediate
+                    RetryDecision::Immediate
                 } else {
-                    RecoveryDecision::None
+                    RetryDecision::None
                 }
             }
-            None => RecoveryDecision::Immediate,
+            None => RetryDecision::Immediate,
         }
     }
 
@@ -447,10 +496,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     /// Records the result of an automatic update, if any was active, and returns whether the worker
     /// should be restarted to retry recovering without the pending update.
     pub async fn finalize_pending_update(
-        result: &Result<RecoveryDecision, GolemError>,
+        result: &Result<RetryDecision, GolemError>,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> RecoveryDecision {
+    ) -> RetryDecision {
         let worker_id = store.as_context().data().worker_id().clone();
         let pending_update = store
             .as_context()
@@ -461,7 +510,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .pop_pending_update();
         match pending_update {
             Some(pending_update) => match result {
-                Ok(RecoveryDecision::None) => {
+                Ok(RetryDecision::None) => {
                     if let UpdateDescription::SnapshotBased { .. } = &pending_update.description {
                         let target_version = *pending_update.description.target_version();
 
@@ -533,7 +582,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         .data_mut()
                                         .on_worker_update_failed(target_version, Some(error))
                                         .await;
-                                    RecoveryDecision::Immediate
+                                    RetryDecision::Immediate
                                 } else {
                                     let component_metadata =
                                         store.as_context().data().component_metadata().clone();
@@ -545,7 +594,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                             component_metadata.size,
                                         )
                                         .await;
-                                    RecoveryDecision::None
+                                    RetryDecision::None
                                 }
                             }
                             Ok(None) => {
@@ -557,7 +606,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         Some("Failed to find snapshot data for update".to_string()),
                                     )
                                     .await;
-                                RecoveryDecision::Immediate
+                                RetryDecision::Immediate
                             }
                             Err(error) => {
                                 store
@@ -565,7 +614,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .data_mut()
                                     .on_worker_update_failed(target_version, Some(error))
                                     .await;
-                                RecoveryDecision::Immediate
+                                RetryDecision::Immediate
                             }
                         }
                     } else {
@@ -578,7 +627,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .on_worker_update_succeeded(target_version, component_metadata.size)
                             .await;
-                        RecoveryDecision::None
+                        RetryDecision::None
                     }
                 }
                 Ok(_) => {
@@ -594,7 +643,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             Some("Automatic update failed".to_string()),
                         )
                         .await;
-                    RecoveryDecision::Immediate
+                    RetryDecision::Immediate
                 }
                 Err(error) => {
                     let target_version = *pending_update.description.target_version();
@@ -607,12 +656,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             Some(format!("Automatic update failed: {error}")),
                         )
                         .await;
-                    RecoveryDecision::Immediate
+                    RetryDecision::Immediate
                 }
             },
             None => {
                 debug!("No pending updates to finalize for {}", worker_id);
-                RecoveryDecision::None
+                RetryDecision::None
             }
         }
     }
@@ -713,7 +762,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         let needs_commit = match trap_type {
             TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
             TrapType::Interrupt(InterruptKind::Interrupt) => {
@@ -975,7 +1024,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RecoveryDecision, GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         let mut count = 0;
@@ -1004,7 +1053,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .await;
                 match oplog_entry {
                     Err(error) => break Err(error),
-                    Ok(None) => break Ok(RecoveryDecision::None),
+                    Ok(None) => break Ok(RetryDecision::None),
                     Ok(Some((
                         function_name,
                         function_input,
@@ -1067,7 +1116,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             .on_invocation_failure(&trap_type)
                                             .await;
 
-                                        if decision == RecoveryDecision::None {
+                                        if decision == RetryDecision::None {
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(interrupt_kind) => {
@@ -1094,7 +1143,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                                         decision
                                     }
-                                    None => RecoveryDecision::None,
+                                    None => RetryDecision::None,
                                 };
 
                                 break Ok(decision);
@@ -1103,7 +1152,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     }
                 }
             } else {
-                break Ok(RecoveryDecision::None);
+                break Ok(RetryDecision::None);
             }
         };
         record_resume_worker(start.elapsed());
@@ -1112,7 +1161,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let final_decision = Self::finalize_pending_update(&result, instance, store).await;
 
         // The update finalization has the right to override the Err result with an explicit retry request
-        if final_decision != RecoveryDecision::None {
+        if final_decision != RetryDecision::None {
             debug!("Retrying prepare_instance after failed update attempt");
             Ok(final_decision)
         } else {
@@ -1164,7 +1213,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             }
 
             match decision {
-                RecoveryDecision::Immediate => {
+                RetryDecision::Immediate | RetryDecision::ReacquirePermits => {
                     let _ = Worker::get_or_create_running(
                         this,
                         &owned_worker_id,
@@ -1175,10 +1224,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     )
                     .await?;
                 }
-                RecoveryDecision::Delayed(_) => {
+                RetryDecision::Delayed(_) => {
                     panic!("Delayed recovery on startup is not supported currently")
                 }
-                RecoveryDecision::None => {}
+                RetryDecision::None => {}
             }
         }
 
@@ -1260,6 +1309,8 @@ pub struct PrivateDurableWorkerState {
 
     indexed_resources: HashMap<IndexedResourceKey, u64>,
     component_metadata: ComponentMetadata,
+
+    total_linear_memory_size: u64,
 }
 
 impl PrivateDurableWorkerState {
@@ -1281,6 +1332,7 @@ impl PrivateDurableWorkerState {
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
         component_metadata: ComponentMetadata,
+        total_linear_memory_size: u64,
     ) -> Self {
         let mut result = Self {
             oplog_service,
@@ -1309,6 +1361,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: None,
             indexed_resources: HashMap::new(),
             component_metadata,
+            total_linear_memory_size,
         };
         result.move_replay_idx(OplogIndex::INITIAL); // By this we handle initial deleted regions applied by manual updates correctly
         result
