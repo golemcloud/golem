@@ -591,7 +591,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .validate_function_result(function_results, *calling_convention)
             .map_err(|err| GolemError::ValueMismatch {details: err.join(", ") })?;
 
-        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: Some(TypeAnnotatedValue {
             type_annotated_value: Some(output)
         })})
     }

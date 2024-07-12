@@ -3353,3 +3353,6 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         }
     }
 }
+
+pub struct FunctionParameters(pub serde_json::value::Value);
+

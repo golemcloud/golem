@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package golem.common;
+
+syntax = "proto3";
+
+message JsonValue {
+  oneof kind {
+    NullValue null_value = 1;
+    double number_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    JsonArray array_value = 5;
+    JsonObject object_value = 6;
+  }
+}
+
+message JsonArray {
+  repeated JsonValue values = 1;
+}
+
+message JsonObject {
+  map<string, JsonValue> fields = 1;
+}
+
+enum NullValue {
+  NULL_VALUE = 0;
+}

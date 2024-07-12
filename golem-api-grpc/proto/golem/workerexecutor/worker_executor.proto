@@ -101,7 +101,7 @@ message CreateWorkerResponse {
 message InvokeAndAwaitWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   string name = 2;
-  repeated wasm.rpc.Val input = 3;
+  repeated golem.common.JsonValue input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
   golem.worker.CallingConvention calling_convention = 5;
   golem.common.AccountId account_id = 6;
