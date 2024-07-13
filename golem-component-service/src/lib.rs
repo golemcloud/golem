@@ -16,5 +16,4 @@ pub mod api;
 pub mod config;
 pub mod grpcapi;
 pub mod metrics;
-pub mod repo;
 pub mod service;

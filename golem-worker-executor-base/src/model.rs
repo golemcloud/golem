@@ -25,7 +25,7 @@ use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord};
 
-use crate::error::GolemError;
+use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
 
 pub trait ShardAssignmentCheck {
@@ -74,6 +74,7 @@ pub struct WorkerConfig {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub deleted_regions: DeletedRegions,
+    pub total_linear_memory_size: u64,
 }
 
 impl WorkerConfig {
@@ -83,6 +84,7 @@ impl WorkerConfig {
         worker_args: Vec<String>,
         mut worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
+        total_linear_memory_size: u64,
     ) -> WorkerConfig {
         let worker_name = worker_id.worker_name.clone();
         let component_id = worker_id.component_id;
@@ -99,6 +101,7 @@ impl WorkerConfig {
             args: worker_args,
             env: worker_env,
             deleted_regions,
+            total_linear_memory_size,
         }
     }
 }
@@ -123,6 +126,10 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 
 #[derive(Clone, Debug)]
 pub enum ExecutionStatus {
+    Loading {
+        last_known_status: WorkerStatusRecord,
+        timestamp: Timestamp,
+    },
     Running {
         last_known_status: WorkerStatusRecord,
         timestamp: Timestamp,
@@ -146,6 +153,9 @@ impl ExecutionStatus {
 
     pub fn last_known_status(&self) -> &WorkerStatusRecord {
         match self {
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => last_known_status,
             ExecutionStatus::Running {
                 last_known_status, ..
             } => last_known_status,
@@ -160,6 +170,9 @@ impl ExecutionStatus {
 
     pub fn set_last_known_status(&mut self, status: WorkerStatusRecord) {
         match self {
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => *last_known_status = status,
             ExecutionStatus::Running {
                 last_known_status, ..
             } => *last_known_status = status,
@@ -174,6 +187,7 @@ impl ExecutionStatus {
 
     pub fn timestamp(&self) -> Timestamp {
         match self {
+            ExecutionStatus::Loading { timestamp, .. } => *timestamp,
             ExecutionStatus::Running { timestamp, .. } => *timestamp,
             ExecutionStatus::Suspended { timestamp, .. } => *timestamp,
             ExecutionStatus::Interrupting { timestamp, .. } => *timestamp,
@@ -184,7 +198,7 @@ impl ExecutionStatus {
 /// Describes the various reasons a worker can run into a trap
 #[derive(Clone, Debug)]
 pub enum TrapType {
-    /// Interrupted through Golem (including user interrupts, suspends, jumps, etc)
+    /// Interrupted through Golem (including user interrupts, suspends, jumps, etc.)
     Interrupt(InterruptKind),
     /// Called the WASI exit function
     Exit,
@@ -200,7 +214,10 @@ impl TrapType {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
                     Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
-                    _ => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                    _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
+                        Some(_) => TrapType::Error(WorkerError::OutOfMemory),
+                        None => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                    },
                 },
             },
         }

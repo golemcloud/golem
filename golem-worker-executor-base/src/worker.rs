@@ -13,33 +13,13 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::mem;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use anyhow::anyhow;
-use golem_wasm_rpc::Value;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
-use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level};
-use wasmtime::{Store, UpdateDeadline};
-
-use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-};
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{
-    CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-};
-
-use crate::error::GolemError;
+use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
 use crate::services::events::Event;
@@ -52,6 +32,27 @@ use crate::services::{
     HasWorkerService, UsesAllDeps,
 };
 use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
+use golem_common::config::RetryConfig;
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
+};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::{
+    CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
+    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
+use golem_common::retries::get_delay;
+use golem_wasm_rpc::Value;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
+use tokio::task::JoinHandle;
+use tracing::{debug, info, span, warn, Instrument, Level};
+use wasmtime::component::Instance;
+use wasmtime::{Store, UpdateDeadline};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -81,7 +82,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     stopping: AtomicBool,
     worker_estimate_coefficient: f64,
 
-    running: Arc<Mutex<Option<RunningWorker>>>,
+    instance: Arc<Mutex<WorkerInstance>>,
+    oom_retry_config: RetryConfig,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -155,7 +157,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
-        worker_estimate_coefficient: f64,
     ) -> Result<Self, GolemError> {
         let worker_metadata = Self::get_or_create_worker_metadata(
             deps,
@@ -197,7 +198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
             }),
         )));
-        let running = Arc::new(Mutex::new(None));
+        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
 
         let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
             last_known_status: worker_metadata.last_known_status.clone(),
@@ -217,145 +218,92 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             queue,
             pending_updates,
             invocation_results,
-            running,
+            instance,
             execution_status,
             stopping,
             initial_worker_metadata: worker_metadata,
-            worker_estimate_coefficient,
+            worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
+            oom_retry_config: deps.config().memory.oom_retry_config.clone(),
         })
     }
 
-    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
-        let mut running = this.running.lock().await;
-        if running.is_none() {
-            let permit = this
-                .active_workers()
-                .acquire(this.memory_requirement().await?)
-                .await;
+    pub fn oom_retry_config(&self) -> &RetryConfig {
+        &self.oom_retry_config
+    }
 
-            let component_id = this.owned_worker_id.component_id();
-            let worker_metadata = this.get_metadata().await?;
+    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, GolemError> {
+        Self::start_if_needed_internal(this, 0).await
+    }
 
-            let component_version = worker_metadata
-                .last_known_status
-                .pending_updates
-                .front()
-                .map_or(
-                    worker_metadata.last_known_status.component_version,
-                    |update| {
-                        let target_version = *update.description.target_version();
-                        info!(
-                            "Attempting {} update from {} to version {target_version}",
-                            match update.description {
-                                UpdateDescription::Automatic { .. } => "automatic",
-                                UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                            },
-                            worker_metadata.last_known_status.component_version
-                        );
-                        target_version
-                    },
-                );
-            let (component, component_metadata) = this
-                .component_service()
-                .get(&this.engine(), &component_id, component_version)
-                .await?;
-
-            let context = Ctx::create(
-                OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
-                component_metadata,
-                this.promise_service(),
-                this.worker_service(),
-                this.worker_enumeration_service(),
-                this.key_value_service(),
-                this.blob_store_service(),
-                this.event_service.clone(),
-                this.active_workers(),
-                this.oplog_service(),
-                this.oplog.clone(),
-                Arc::downgrade(&this),
-                this.scheduler_service(),
-                this.rpc(),
-                this.worker_proxy(),
-                this.extra_deps(),
-                this.config(),
-                WorkerConfig::new(
-                    worker_metadata.worker_id.clone(),
-                    worker_metadata.last_known_status.component_version,
-                    worker_metadata.args.clone(),
-                    worker_metadata.env.clone(),
-                    worker_metadata.last_known_status.deleted_regions.clone(),
-                ),
-                this.execution_status.clone(),
-            )
-            .await?;
-
-            let mut store = Store::new(&this.engine(), context);
-            store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            let worker_id_clone = worker_metadata.worker_id.clone();
-            store.epoch_deadline_callback(move |mut store| {
-                let current_level = store.get_fuel().unwrap_or(0);
-                if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                    store.data_mut().borrow_fuel_sync();
-                }
-
-                match store.data_mut().check_interrupt() {
-                    Some(kind) => Err(kind.into()),
-                    None => Ok(UpdateDeadline::Yield(1)),
-                }
-            });
-
-            store.set_fuel(i64::MAX as u64)?;
-            store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
-
-            store.limiter_async(|ctx| ctx.resource_limiter());
-
-            let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
-                GolemError::worker_creation_failed(
-                    this.owned_worker_id.worker_id(),
-                    format!(
-                        "Failed to pre-instantiate worker {}: {e}",
-                        this.owned_worker_id
-                    ),
-                )
-            })?;
-
-            let instance = instance_pre
-                .instantiate_async(&mut store)
-                .await
-                .map_err(|e| {
-                    GolemError::worker_creation_failed(
-                        this.owned_worker_id.worker_id(),
-                        format!("Failed to instantiate worker {}: {e}", this.owned_worker_id),
-                    )
-                })?;
-            let store = async_mutex::Mutex::new(store);
-
-            *running = Some(RunningWorker::new(
-                this.owned_worker_id.clone(),
-                this.queue.clone(),
+    async fn start_if_needed_internal(
+        this: Arc<Worker<Ctx>>,
+        oom_retry_count: u64,
+    ) -> Result<bool, GolemError> {
+        let mut instance = this.instance.lock().await;
+        if instance.is_unloaded() {
+            this.mark_as_loading();
+            *instance = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                 this.clone(),
-                this.oplog(),
-                this.execution_status.clone(),
-                instance,
-                store,
-                permit,
+                this.memory_requirement().await?,
+                oom_retry_count,
             ));
+            Ok(true)
         } else {
-            debug!("Worker is already running");
+            debug!("Worker is already running or waiting for permit");
+            Ok(false)
         }
+    }
 
-        Ok(())
+    pub(crate) async fn start_with_permit(
+        this: Arc<Worker<Ctx>>,
+        permit: OwnedSemaphorePermit,
+        oom_retry_count: u64,
+    ) {
+        let mut instance = this.instance.lock().await;
+        *instance = WorkerInstance::Running(RunningWorker::new(
+            this.owned_worker_id.clone(),
+            this.queue.clone(),
+            this.clone(),
+            this.oplog(),
+            this.execution_status.clone(),
+            permit,
+            oom_retry_count,
+        ));
     }
 
     pub async fn stop(&self) {
-        self.stop_internal(false).await;
+        self.stop_internal(false, None).await;
     }
 
+    /// This method is supposed to be called on a worker for what `is_currently_idle_but_running`
+    /// previously returned true.
+    ///
+    /// It is not guaranteed that the worker is still "running (loaded in memory) but idle" when
+    /// this method is called, so it rechecks this condition and only stops the worker if it
+    /// is still true. If it was not true, it returns false.
+    ///
+    /// There are two conditions to this:
+    /// - the ExecutionStatus must be suspended; this means the worker is currently not running any invocations
+    /// - there must be no more pending invocations in the invocation queue
+    ///
+    /// Here we first acquire the `instance` lock. This means the worker cannot be started/stopped while we
+    /// are processing this method.
+    /// If it was not running, then we don't have to stop it.
+    /// If it was running then we recheck the conditions and then stop the worker.
+    ///
+    /// We know that the conditions remain true because:
+    /// - the invocation queue is empty, so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
+    /// - nothing can be added to the invocation queue because we are holding the `instance` lock
+    ///
+    /// By passing the running lock to `stop_internal_running` it is never released and the stop eventually
+    /// drops the `RunningWorker` instance.
+    ///
+    /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
+    /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
-        let running_guard = self.running.lock().await;
-        match running_guard.as_ref() {
-            Some(running) => {
+        let instance_guard = self.instance.lock().await;
+        match &*instance_guard {
+            WorkerInstance::Running(running) => {
                 if is_running_worker_idle(running) {
                     if self.stopping.compare_exchange(
                         false,
@@ -364,7 +312,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         Ordering::Relaxed,
                     ) == Ok(false)
                     {
-                        self.stop_internal_running(running_guard, false).await;
+                        self.stop_internal_running(instance_guard, false, None)
+                            .await;
                         true
                     } else {
                         false
@@ -373,16 +322,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     false
                 }
             }
-            None => false,
+            WorkerInstance::WaitingForPermit(_) => false,
+            WorkerInstance::Unloaded => false,
         }
-    }
-
-    pub async fn restart(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
-        Self::restart_internal(this, false).await
     }
 
     pub fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
         self.event_service.clone()
+    }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(
+            &*self.execution_status.read().unwrap(),
+            ExecutionStatus::Loading { .. }
+        )
+    }
+
+    fn mark_as_loading(&self) {
+        let mut execution_status = self.execution_status.write().unwrap();
+        *execution_status = ExecutionStatus::Loading {
+            last_known_status: execution_status.last_known_status().clone(),
+            timestamp: Timestamp::now_utc(),
+        };
     }
 
     /// Updates the cached metadata in execution_status
@@ -425,7 +386,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///    automatically resumed when the worker is needed again. This only works if the worker context
     ///    supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        if let Some(running) = self.running.lock().await.as_ref() {
+        if let WorkerInstance::Running(running) = &*self.instance.lock().await {
             running.interrupt(interrupt_kind.clone());
         }
 
@@ -451,6 +412,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let receiver = await_interruption.subscribe();
                 Some(receiver)
             }
+            ExecutionStatus::Loading { .. } => None,
         }
     }
 
@@ -549,11 +511,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// This enqueues a special function invocation that saves the component's state and
     /// triggers a restart immediately.
     pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
-        match self.running.lock().await.as_ref() {
-            Some(running) => {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
                 running.enqueue_manual_update(target_version).await;
             }
-            None => {
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
                 debug!("Worker is initializing, persisting manual update request");
                 let invocation = WorkerInvocation::ManualUpdate { target_version };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
@@ -693,22 +655,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((x * (ml + c * sw)) as u64)
     }
 
-    /// Returns true if the worker is running but it is not performing any invocations at the moment
+    /// Returns true if the worker is running, but it is not performing any invocations at the moment
     /// (ExecutionStatus::Suspended) and has no pending invocation in its invocation queue.
     ///
     /// These workers can be stopped to free up available worker memory.
     pub fn is_currently_idle_but_running(&self) -> bool {
-        match self.running.try_lock() {
-            Ok(guard) => match guard.as_ref() {
-                Some(running) => {
-                    let status = running.execution_status.read().unwrap();
-                    if matches!(&*status, ExecutionStatus::Suspended { .. }) {
-                        self.pending_invocations().is_empty()
-                    } else {
-                        false
-                    }
+        match self.instance.try_lock() {
+            Ok(guard) => match &*guard {
+                WorkerInstance::Running(running) => {
+                    let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
+                    let has_invocations = !self.pending_invocations().is_empty();
+                    debug!("Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}", self.owned_worker_id);
+                    waiting_for_command && !has_invocations
                 }
-                None => false,
+                WorkerInstance::WaitingForPermit(_) => {
+                    debug!(
+                        "Worker {} is waiting for permit, cannot be used to free up memory",
+                        self.owned_worker_id
+                    );
+                    false
+                }
+                WorkerInstance::Unloaded => {
+                    debug!(
+                        "Worker {} is unloaded, cannot be used to free up memory",
+                        self.owned_worker_id
+                    );
+                    false
+                }
             },
             Err(_) => false,
         }
@@ -719,6 +692,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().timestamp()
     }
 
+    pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(ref mut running) => {
+                if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
+                    running.merge_extra_permits(new_permits);
+                    Ok(())
+                } else {
+                    Err(anyhow!(WorkerOutOfMemory))
+                }
+            }
+            WorkerInstance::WaitingForPermit(_) => Ok(()),
+            WorkerInstance::Unloaded => Ok(()),
+        }
+    }
+
     /// Enqueue invocation of an exported function
     async fn enqueue(
         &self,
@@ -727,8 +715,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         function_input: Vec<Value>,
         calling_convention: CallingConvention,
     ) {
-        match self.running.lock().await.as_ref() {
-            Some(running) => {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
                 running
                     .enqueue(
                         idempotency_key,
@@ -738,7 +726,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await;
             }
-            None => {
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
                 debug!("Worker is initializing, persisting pending invocation");
                 let invocation = WorkerInvocation::ExportedFunction {
                     idempotency_key,
@@ -784,10 +772,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 debug!("wait_for_invocation_result: accepting event {:?}", event);
                                 Some(LookupResult::Complete(result.clone()))
                             }
-                            _ => {
-                                debug!("wait_for_invocation_result: skipping event {:?}", event);
-                                None
-                            }
+                            _ => None,
                         })
                         .await;
                     match wait_result {
@@ -846,25 +831,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn stop_internal(&self, called_from_invocation_loop: bool) {
+    async fn stop_internal(
+        &self,
+        called_from_invocation_loop: bool,
+        fail_pending_invocations: Option<GolemError>,
+    ) {
         // we don't want to re-enter stop from within the invocation loop
         if self
             .stopping
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             == Ok(false)
         {
-            let running = self.running.lock().await;
-            self.stop_internal_running(running, called_from_invocation_loop)
-                .await;
+            let instance = self.instance.lock().await;
+            self.stop_internal_running(
+                instance,
+                called_from_invocation_loop,
+                fail_pending_invocations,
+            )
+            .await;
         }
     }
 
     async fn stop_internal_running<'a>(
         &self,
-        mut running: MutexGuard<'a, Option<RunningWorker>>,
+        mut instance: MutexGuard<'a, WorkerInstance>,
         called_from_invocation_loop: bool,
+        fail_pending_invocations: Option<GolemError>,
     ) {
-        if let Some(running) = running.take() {
+        if let WorkerInstance::Running(running) = instance.unload() {
             debug!("Stopping running worker ({called_from_invocation_loop})");
             let queued_items = running
                 .queue
@@ -873,7 +867,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .drain(..)
                 .collect::<VecDeque<_>>();
 
-            *self.queue.write().unwrap() = queued_items;
+            if let Some(fail_pending_invocations) = fail_pending_invocations {
+                // Publishing the provided initialization error to all pending invocations.
+                // We cannot persist these failures so they remain pending in the oplog, and
+                // on next recovery they will be retried, but we still want waiting callers
+                // to get the error.
+                for item in queued_items {
+                    if let Some(idempotency_key) = item.invocation.idempotency_key() {
+                        self.events().publish(Event::InvocationCompleted {
+                            worker_id: self.owned_worker_id.worker_id(),
+                            idempotency_key: idempotency_key.clone(),
+                            result: Err(fail_pending_invocations.clone()),
+                        })
+                    }
+                }
+            } else {
+                *self.queue.write().unwrap() = queued_items;
+            }
 
             if !called_from_invocation_loop {
                 // If stop was called from outside, we wait until the invocation queue stops
@@ -887,12 +897,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.stopping.store(false, Ordering::Release);
     }
 
-    async fn restart_internal(
+    async fn restart_on_oom(
         this: Arc<Worker<Ctx>>,
         called_from_invocation_loop: bool,
-    ) -> Result<(), GolemError> {
-        this.stop_internal(called_from_invocation_loop).await;
-        Self::start_if_needed(this).await
+        delay: Option<Duration>,
+        oom_retry_count: u64,
+    ) -> Result<bool, GolemError> {
+        this.stop_internal(called_from_invocation_loop, None).await;
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        Self::start_if_needed_internal(this, oom_retry_count).await
     }
 
     async fn get_or_create_worker_metadata<
@@ -949,6 +964,69 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
+enum WorkerInstance {
+    Unloaded,
+    #[allow(dead_code)]
+    WaitingForPermit(WaitingWorker),
+    Running(RunningWorker),
+}
+
+impl WorkerInstance {
+    pub fn is_unloaded(&self) -> bool {
+        matches!(self, WorkerInstance::Unloaded)
+    }
+
+    #[allow(unused)]
+    pub fn is_running(&self) -> bool {
+        matches!(self, WorkerInstance::Running(_))
+    }
+
+    #[allow(unused)]
+    pub fn is_waiting_for_permit(&self) -> bool {
+        matches!(self, WorkerInstance::WaitingForPermit(_))
+    }
+
+    pub fn unload(&mut self) -> WorkerInstance {
+        mem::replace(self, WorkerInstance::Unloaded)
+    }
+}
+
+struct WaitingWorker {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl WaitingWorker {
+    pub fn new<Ctx: WorkerCtx>(
+        parent: Arc<Worker<Ctx>>,
+        memory_requirement: u64,
+        oom_retry_count: u64,
+    ) -> Self {
+        let span = span!(
+            Level::INFO,
+            "waiting-for-permits",
+            worker_id = parent.owned_worker_id.worker_id.to_string(),
+        );
+        let handle = tokio::task::spawn(
+            async move {
+                let permit = parent.active_workers().acquire(memory_requirement).await;
+                Worker::start_with_permit(parent, permit, oom_retry_count).await;
+            }
+            .instrument(span),
+        );
+        WaitingWorker {
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for WaitingWorker {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
@@ -957,7 +1035,17 @@ struct RunningWorker {
 
     oplog: Arc<dyn Oplog + Send + Sync>,
 
-    _permit: OwnedSemaphorePermit,
+    permit: OwnedSemaphorePermit,
+    waiting_for_command: Arc<AtomicBool>,
+}
+
+impl Drop for RunningWorker {
+    fn drop(&mut self) {
+        debug!(
+            "DROPPING RUNNING WORKER WITH PERMITS {}",
+            self.permit.num_permits()
+        );
+    }
 }
 
 impl RunningWorker {
@@ -967,9 +1055,8 @@ impl RunningWorker {
         parent: Arc<Worker<Ctx>>,
         oplog: Arc<dyn Oplog + Send + Sync>,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        instance: wasmtime::component::Instance,
-        store: async_mutex::Mutex<Store<Ctx>>,
         permit: OwnedSemaphorePermit,
+        oom_retry_count: u64,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -980,16 +1067,24 @@ impl RunningWorker {
 
         let active_clone = queue.clone();
         let owned_worker_id_clone = owned_worker_id.clone();
+        let waiting_for_command = Arc::new(AtomicBool::new(false));
+        let waiting_for_command_clone = waiting_for_command.clone();
+
+        let span = span!(
+            Level::INFO,
+            "invocation-loop",
+            worker_id = parent.owned_worker_id.worker_id.to_string(),
+        );
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
                 receiver,
                 active_clone,
                 owned_worker_id_clone,
                 parent,
-                instance,
-                store,
+                waiting_for_command_clone,
+                oom_retry_count,
             )
-            .in_current_span()
+            .instrument(span)
             .await;
         });
 
@@ -999,8 +1094,13 @@ impl RunningWorker {
             queue,
             oplog,
             execution_status,
-            _permit: permit,
+            permit,
+            waiting_for_command,
         }
+    }
+
+    pub fn merge_extra_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+        self.permit.merge(extra_permit);
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
@@ -1050,155 +1150,293 @@ impl RunningWorker {
         self.sender.send(WorkerCommand::Interrupt(kind)).unwrap();
     }
 
+    async fn create_instance<Ctx: WorkerCtx>(
+        parent: Arc<Worker<Ctx>>,
+    ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
+        let component_id = parent.owned_worker_id.component_id();
+        let worker_metadata = parent.get_metadata().await?;
+
+        let component_version = worker_metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .map_or(
+                worker_metadata.last_known_status.component_version,
+                |update| {
+                    let target_version = *update.description.target_version();
+                    info!(
+                        "Attempting {} update from {} to version {target_version}",
+                        match update.description {
+                            UpdateDescription::Automatic { .. } => "automatic",
+                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        },
+                        worker_metadata.last_known_status.component_version
+                    );
+                    target_version
+                },
+            );
+        let (component, component_metadata) = parent
+            .component_service()
+            .get(&parent.engine(), &component_id, component_version)
+            .await?;
+
+        let context = Ctx::create(
+            OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+            component_metadata,
+            parent.promise_service(),
+            parent.worker_service(),
+            parent.worker_enumeration_service(),
+            parent.key_value_service(),
+            parent.blob_store_service(),
+            parent.event_service.clone(),
+            parent.active_workers(),
+            parent.oplog_service(),
+            parent.oplog.clone(),
+            Arc::downgrade(&parent),
+            parent.scheduler_service(),
+            parent.rpc(),
+            parent.worker_proxy(),
+            parent.extra_deps(),
+            parent.config(),
+            WorkerConfig::new(
+                worker_metadata.worker_id.clone(),
+                worker_metadata.last_known_status.component_version,
+                worker_metadata.args.clone(),
+                worker_metadata.env.clone(),
+                worker_metadata.last_known_status.deleted_regions.clone(),
+                worker_metadata.last_known_status.total_linear_memory_size,
+            ),
+            parent.execution_status.clone(),
+        )
+        .await?;
+
+        let mut store = Store::new(&parent.engine(), context);
+        store.set_epoch_deadline(parent.config().limits.epoch_ticks);
+        let worker_id_clone = worker_metadata.worker_id.clone();
+        store.epoch_deadline_callback(move |mut store| {
+            let current_level = store.get_fuel().unwrap_or(0);
+            if store.data().is_out_of_fuel(current_level as i64) {
+                debug!("{worker_id_clone} ran out of fuel, borrowing more");
+                store.data_mut().borrow_fuel_sync();
+            }
+
+            match store.data_mut().check_interrupt() {
+                Some(kind) => Err(kind.into()),
+                None => Ok(UpdateDeadline::Yield(1)),
+            }
+        });
+
+        store.set_fuel(i64::MAX as u64)?;
+        store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
+
+        store.limiter_async(|ctx| ctx.resource_limiter());
+
+        let instance_pre = parent.linker().instantiate_pre(&component).map_err(|e| {
+            GolemError::worker_creation_failed(
+                parent.owned_worker_id.worker_id(),
+                format!(
+                    "Failed to pre-instantiate worker {}: {e}",
+                    parent.owned_worker_id
+                ),
+            )
+        })?;
+
+        let instance = instance_pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| {
+                GolemError::worker_creation_failed(
+                    parent.owned_worker_id.worker_id(),
+                    format!(
+                        "Failed to instantiate worker {}: {e}",
+                        parent.owned_worker_id
+                    ),
+                )
+            })?;
+        let store = async_mutex::Mutex::new(store);
+        Ok((instance, store))
+    }
+
     async fn invocation_loop<Ctx: WorkerCtx>(
         mut receiver: UnboundedReceiver<WorkerCommand>,
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
         owned_worker_id: OwnedWorkerId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
-        instance: wasmtime::component::Instance,
-        store: async_mutex::Mutex<Store<Ctx>>,
+        waiting_for_command: Arc<AtomicBool>,
+        oom_retry_count: u64,
     ) {
-        debug!("Invocation queue loop preparing the instance");
+        loop {
+            debug!("Invocation queue loop creating the instance");
 
-        let mut final_decision = {
-            let mut store = store.lock().await;
-            let span = span!(
-                Level::INFO,
-                "invocation",
-                worker_id = owned_worker_id.worker_id.to_string(),
-            );
-            let prepare_result =
-                Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store)
-                    .instrument(span)
-                    .await;
-
-            match prepare_result {
-                Ok(decision) => decision,
+            let (instance, store) = match Self::create_instance(parent.clone()).await {
+                Ok((instance, store)) => {
+                    parent.events().publish(Event::WorkerLoaded {
+                        worker_id: owned_worker_id.worker_id(),
+                        result: Ok(()),
+                    });
+                    (instance, store)
+                }
                 Err(err) => {
                     warn!("Failed to start the worker: {err}");
-                    parent.stop_internal(true).await;
-                    store.data_mut().set_suspended();
-                    return; // early return, we can't retry this
+                    parent.events().publish(Event::WorkerLoaded {
+                        worker_id: owned_worker_id.worker_id(),
+                        result: Err(err.clone()),
+                    });
+                    parent.stop_internal(true, Some(err)).await;
+                    break; // early return, we can't retry this
                 }
-            }
-        };
+            };
 
-        if final_decision == RecoveryDecision::None {
-            debug!("Invocation queue loop started");
+            debug!("Invocation queue loop preparing the instance");
 
-            // Exits when RunningWorker is dropped
-            while let Some(cmd) = receiver.recv().await {
-                match cmd {
-                    WorkerCommand::Invocation => {
-                        let message = active
-                            .write()
-                            .unwrap()
-                            .pop_front()
-                            .expect("Message should be present");
+            let mut final_decision = {
+                let mut store = store.lock().await;
 
-                        let mut store_mutex = store.lock().await;
-                        let store = store_mutex.deref_mut();
+                store.data_mut().set_suspended();
+                let span = span!(
+                    Level::INFO,
+                    "invocation",
+                    worker_id = owned_worker_id.worker_id.to_string(),
+                );
+                let prepare_result =
+                    Ctx::prepare_instance(&owned_worker_id.worker_id, &instance, &mut *store)
+                        .instrument(span)
+                        .await;
 
-                        match message.invocation {
-                            WorkerInvocation::ExportedFunction {
-                                idempotency_key: invocation_key,
-                                full_function_name,
-                                function_input,
-                                calling_convention,
-                            } => {
-                                let span = span!(
-                                    Level::INFO,
-                                    "invocation",
-                                    worker_id = owned_worker_id.worker_id.to_string(),
-                                    idempotency_key = invocation_key.to_string(),
-                                    function = full_function_name
-                                );
-                                let do_break = async {
-                                    store
-                                        .data_mut()
-                                        .set_current_idempotency_key(invocation_key)
-                                        .await;
+                match prepare_result {
+                    Ok(decision) => {
+                        debug!("Recovery decision from prepare_instance: {decision:?}");
+                        decision
+                    }
+                    Err(err) => {
+                        warn!("Failed to start the worker: {err}");
+                        parent.stop_internal(true, Some(err)).await;
+                        store.data_mut().set_suspended();
+                        break; // early return, we can't retry this
+                    }
+                }
+            };
 
-                                    if let Some(idempotency_key) =
-                                        &store.data().get_current_idempotency_key().await
-                                    {
+            if final_decision == RetryDecision::None {
+                debug!("Invocation queue loop started");
+
+                // Exits when RunningWorker is dropped
+                waiting_for_command.store(true, Ordering::Release);
+                while let Some(cmd) = receiver.recv().await {
+                    waiting_for_command.store(false, Ordering::Release);
+                    match cmd {
+                        WorkerCommand::Invocation => {
+                            let message = active
+                                .write()
+                                .unwrap()
+                                .pop_front()
+                                .expect("Message should be present");
+
+                            let mut store_mutex = store.lock().await;
+                            let store = store_mutex.deref_mut();
+
+                            match message.invocation {
+                                WorkerInvocation::ExportedFunction {
+                                    idempotency_key: invocation_key,
+                                    full_function_name,
+                                    function_input,
+                                    calling_convention,
+                                } => {
+                                    let span = span!(
+                                        Level::INFO,
+                                        "invocation",
+                                        worker_id = owned_worker_id.worker_id.to_string(),
+                                        idempotency_key = invocation_key.to_string(),
+                                        function = full_function_name
+                                    );
+                                    let do_break = async {
                                         store
                                             .data_mut()
-                                            .get_public_state()
-                                            .worker()
-                                            .store_invocation_resuming(idempotency_key)
+                                            .set_current_idempotency_key(invocation_key)
                                             .await;
-                                    }
 
-                                    // Make sure to update the pending invocation queue in the status record before
-                                    // the invocation writes the invocation start oplog entry
-                                    store.data_mut().update_pending_invocations().await;
-
-                                    let result = invoke_worker(
-                                        full_function_name.clone(),
-                                        function_input.clone(),
-                                        store,
-                                        &instance,
-                                        calling_convention,
-                                        true, // We are always in live mode at this point
-                                    )
-                                    .await;
-
-                                    match result {
-                                        Ok(InvokeResult::Succeeded {
-                                            output,
-                                            consumed_fuel,
-                                        }) => {
+                                        if let Some(idempotency_key) =
+                                            &store.data().get_current_idempotency_key().await
+                                        {
                                             store
                                                 .data_mut()
-                                                .on_invocation_success(
-                                                    &full_function_name,
-                                                    &function_input,
-                                                    consumed_fuel,
-                                                    output,
-                                                )
-                                                .await
-                                                .unwrap(); // TODO: handle this error
-                                            false // do not break
+                                                .get_public_state()
+                                                .worker()
+                                                .store_invocation_resuming(idempotency_key)
+                                                .await;
                                         }
-                                        _ => {
-                                            let trap_type = match result {
-                                                Ok(invoke_result) => {
-                                                    invoke_result.as_trap_type::<Ctx>()
-                                                }
-                                                Err(error) => Some(TrapType::from_error::<Ctx>(
-                                                    &anyhow!(error),
-                                                )),
-                                            };
-                                            let decision = match trap_type {
-                                                Some(trap_type) => {
-                                                    store
-                                                        .data_mut()
-                                                        .on_invocation_failure(&trap_type)
-                                                        .await
-                                                }
-                                                None => RecoveryDecision::None,
-                                            };
 
-                                            final_decision = decision;
-                                            true // break
+                                        // Make sure to update the pending invocation queue in the status record before
+                                        // the invocation writes the invocation start oplog entry
+                                        store.data_mut().update_pending_invocations().await;
+
+                                        let result = invoke_worker(
+                                            full_function_name.clone(),
+                                            function_input.clone(),
+                                            store,
+                                            &instance,
+                                            calling_convention,
+                                            true, // We are always in live mode at this point
+                                        )
+                                        .await;
+
+                                        match result {
+                                            Ok(InvokeResult::Succeeded {
+                                                output,
+                                                consumed_fuel,
+                                            }) => {
+                                                store
+                                                    .data_mut()
+                                                    .on_invocation_success(
+                                                        &full_function_name,
+                                                        &function_input,
+                                                        consumed_fuel,
+                                                        output,
+                                                    )
+                                                    .await
+                                                    .unwrap(); // TODO: handle this error
+                                                false // do not break
+                                            }
+                                            _ => {
+                                                let trap_type = match result {
+                                                    Ok(invoke_result) => {
+                                                        invoke_result.as_trap_type::<Ctx>()
+                                                    }
+                                                    Err(error) => {
+                                                        Some(TrapType::from_error::<Ctx>(&anyhow!(
+                                                            error
+                                                        )))
+                                                    }
+                                                };
+                                                let decision = match trap_type {
+                                                    Some(trap_type) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(&trap_type)
+                                                            .await
+                                                    }
+                                                    None => RetryDecision::None,
+                                                };
+
+                                                final_decision = decision;
+                                                true // break
+                                            }
                                         }
                                     }
+                                    .instrument(span)
+                                    .await;
+                                    if do_break {
+                                        break;
+                                    }
                                 }
-                                .instrument(span)
-                                .await;
-                                if do_break {
-                                    break;
-                                }
-                            }
-                            WorkerInvocation::ManualUpdate { target_version } => {
-                                let span = span!(
-                                    Level::INFO,
-                                    "manual_update",
-                                    worker_id = owned_worker_id.worker_id.to_string(),
-                                    target_version = target_version.to_string()
-                                );
-                                let do_break = async {
+                                WorkerInvocation::ManualUpdate { target_version } => {
+                                    let span = span!(
+                                        Level::INFO,
+                                        "manual_update",
+                                        worker_id = owned_worker_id.worker_id.to_string(),
+                                        target_version = target_version.to_string()
+                                    );
+                                    let do_break = async {
                                     let _idempotency_key = {
                                         let ctx = store.data_mut();
                                         let idempotency_key = IdempotencyKey::fresh();
@@ -1239,7 +1477,7 @@ impl RunningWorker {
                                                         store.data_mut().update_pending_updates().await;
 
                                                         // Reactivate the worker
-                                                        final_decision = RecoveryDecision::Immediate;
+                                                        final_decision = RetryDecision::Immediate;
 
                                                         // Stop processing the queue to avoid race conditions
                                                         true
@@ -1287,46 +1525,57 @@ impl RunningWorker {
                                         }
                                     }
                                 }.instrument(span).await;
-                                if do_break {
-                                    break;
+                                    if do_break {
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
-                    WorkerCommand::Interrupt(kind) => {
-                        match kind {
-                            InterruptKind::Restart | InterruptKind::Jump => {
-                                final_decision = RecoveryDecision::Immediate;
+                        WorkerCommand::Interrupt(kind) => {
+                            match kind {
+                                InterruptKind::Restart | InterruptKind::Jump => {
+                                    final_decision = RetryDecision::Immediate;
+                                }
+                                _ => {
+                                    final_decision = RetryDecision::None;
+                                }
                             }
-                            _ => {
-                                final_decision = RecoveryDecision::None;
-                            }
+                            break;
                         }
-                        break;
                     }
+                    waiting_for_command.store(true, Ordering::Release);
                 }
-            }
-            debug!("Invocation queue loop for finished");
-        }
+                waiting_for_command.store(false, Ordering::Release);
 
-        {
-            store.lock().await.data_mut().set_suspended();
-        }
+                debug!("Invocation queue loop finished");
+            }
 
-        match final_decision {
-            RecoveryDecision::Immediate => {
-                debug!("Invocation queue loop triggering restart immediately");
-                let _ = Worker::restart_internal(parent, true).await; // TODO: what to do with error here?
+            {
+                store.lock().await.data_mut().set_suspended();
             }
-            RecoveryDecision::Delayed(delay) => {
-                debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
-                tokio::time::sleep(delay).await;
-                debug!("Invocation queue loop triggering restart after delay");
-                let _ = Worker::restart_internal(parent, true).await; // TODO: what to do with error here?
-            }
-            RecoveryDecision::None => {
-                debug!("Invocation queue loop notifying parent about being stopped");
-                parent.stop_internal(true).await;
+
+            match final_decision {
+                RetryDecision::Immediate => {
+                    debug!("Invocation queue loop triggering restart immediately");
+                    continue;
+                }
+                RetryDecision::Delayed(delay) => {
+                    debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
+                    tokio::time::sleep(delay).await;
+                    debug!("Invocation queue loop restarting after delay");
+                    continue;
+                }
+                RetryDecision::None => {
+                    debug!("Invocation queue loop notifying parent about being stopped");
+                    parent.stop_internal(true, None).await;
+                    break;
+                }
+                RetryDecision::ReacquirePermits => {
+                    let delay = get_delay(parent.oom_retry_config(), oom_retry_count);
+                    debug!("Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}");
+                    let _ = Worker::restart_on_oom(parent, true, delay, oom_retry_count + 1).await;
+                    break;
+                }
             }
         }
     }
@@ -1411,10 +1660,15 @@ impl InvocationResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum RecoveryDecision {
+pub enum RetryDecision {
+    /// Immediately retry by recreating the instance using the existing permits
     Immediate,
+    /// Retry after a given delay by recreating the instance using the existing permits
     Delayed(Duration),
+    /// No retry possible
     None,
+    /// Retry immediately but drop and reacquire permits
+    ReacquirePermits,
 }
 
 #[derive(Clone, Debug)]
@@ -1501,7 +1755,8 @@ where
             &new_entries,
         );
 
-        let total_linear_memory_size = last_known.total_linear_memory_size; // TODO: recalculate this once we record memory grow events in oplog
+        let total_linear_memory_size =
+            calculate_total_linear_memory_size(last_known.total_linear_memory_size, &new_entries);
 
         let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
@@ -1603,6 +1858,7 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
+            OplogEntry::GrowMemory { .. } => {}
         }
     }
     result
@@ -1798,6 +2054,19 @@ fn calculate_invocation_results(
     (invocation_results, current_idempotency_key)
 }
 
+fn calculate_total_linear_memory_size(
+    total: u64,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> u64 {
+    let mut result = total;
+    for entry in entries.values() {
+        if let OplogEntry::GrowMemory { delta, .. } = entry {
+            result += *delta;
+        }
+    }
+    result
+}
+
 pub fn is_worker_error_retriable(
     retry_config: &RetryConfig,
     error: &WorkerError,
@@ -1806,11 +2075,10 @@ pub fn is_worker_error_retriable(
     match error {
         WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
         WorkerError::StackOverflow => false,
+        WorkerError::OutOfMemory => true,
     }
 }
 
 fn is_running_worker_idle(running: &RunningWorker) -> bool {
-    let status = running.execution_status.read().unwrap();
-    matches!(&*status, ExecutionStatus::Suspended { .. })
-        && running.queue.read().unwrap().is_empty()
+    running.waiting_for_command.load(Ordering::Acquire) && running.queue.read().unwrap().is_empty()
 }

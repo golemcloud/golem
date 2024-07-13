@@ -44,7 +44,7 @@ use golem_common::grpc::{
 use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_request;
-use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 
 use crate::empty_worker_metadata;
