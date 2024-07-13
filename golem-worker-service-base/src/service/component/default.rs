@@ -10,7 +10,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
-use golem_service_base::model::Component;
+use golem_service_base::model::{Component, Exports};
 
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
@@ -219,7 +219,9 @@ impl ComponentServiceNoop {
             component_name: ComponentName("test".to_string()),
             component_size: 0,
             metadata: ComponentMetadata {
-                exports: vec![],
+                exports: Exports {
+                    exports: vec![]
+                },
                 producers: vec![],
                 memories: vec![],
             },

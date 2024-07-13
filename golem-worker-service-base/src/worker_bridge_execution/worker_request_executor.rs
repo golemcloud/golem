@@ -18,16 +18,13 @@ pub trait WorkerRequestExecutor {
 // The result of a worker execution from worker-bridge,
 // which is a combination of function metadata and the type-annotated-value representing the actual result
 pub struct WorkerResponse {
-    pub result: TypedResult,
+    pub result: TypeAnnotatedValue,
 }
 
 impl WorkerResponse {
-    pub fn new(result: TypeAnnotatedValue, function_result_types: Vec<FunctionResult>) -> Self {
+    pub fn new(result: TypeAnnotatedValue) -> Self {
         WorkerResponse {
-            result: TypedResult {
-                result,
-                function_result_types,
-            },
+            result
         }
     }
 }

@@ -41,6 +41,7 @@ mod internal {
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
     };
     use tracing::{debug, info};
+    use golem_api_grpc::proto::golem::worker::IdempotencyKey;
 
     pub(crate) async fn execute(
         default_executor: &UnauthorisedWorkerRequestExecutor,
@@ -88,11 +89,13 @@ mod internal {
 
         let invoke_result = default_executor
             .worker_service
-            .invoke_and_await_function_typed_value(
+            .invoke_and_await_function_proto(
                 &worker_id,
-                worker_request_params.idempotency_key,
+                worker_request_params.idempotency_key.map(|v| IdempotencyKey {
+                    value: v.value
+                }),
                 worker_request_params.function_name.to_string(),
-                Value::Array(invoke_parameters_values),
+                invoke_parameters_values,
                 &CallingConvention::Component,
                 None,
                 empty_worker_metadata(),
@@ -101,8 +104,14 @@ mod internal {
             .await
             .map_err(|e| e.to_string())?;
 
+        // based on wasm-rpc code, empty result is TypeAnnotatedValue::Tuple([])
+        // and therefore we always expect a result.
+        let type_annotated_value =
+            invoke_result.result.map(|v| v.type_annotated_value).flatten()
+                .ok_or("Internal Error: Empty result in worker response")?;
+
         Ok(WorkerResponse {
-            result: invoke_result,
+            result: type_annotated_value
         })
     }
 }

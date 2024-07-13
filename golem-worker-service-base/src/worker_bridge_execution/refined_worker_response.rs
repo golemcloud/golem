@@ -26,33 +26,17 @@ impl RefinedWorkerResponse {
     pub(crate) fn from_worker_response(
         worker_response: &WorkerResponse,
     ) -> Result<RefinedWorkerResponse, String> {
-        let result = &worker_response.result.result;
-        let function_result_types = &worker_response.result.function_result_types;
-
-        if function_result_types.iter().all(|r| r.name.is_none()) {
+        let result = &worker_response.result;
             match result {
-                TypeAnnotatedValue::Tuple (TypedTuple { value, .. } )=> {
-                    if value.len() == 1 {
-                        let inner = value[0].clone().type_annotated_value.ok_or("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained None")?;
-                        Ok(RefinedWorkerResponse::SingleResult(inner))
-                    } else if value.is_empty() {
-                        Ok(RefinedWorkerResponse::Unit)
-                    } else {
-                        Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", get_analysed_type(result).ok()))
-                    }
+                TypeAnnotatedValue::Tuple (TypedTuple { value, .. }) if value.is_empty() => {
+                    Ok(RefinedWorkerResponse::Unit)
                 }
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results are unnamed. Obtained {:?}", get_analysed_type(ty).ok())),
-            }
-        } else {
-            match &worker_response.result.result {
-                TypeAnnotatedValue::Record { .. } => {
-                    Ok(RefinedWorkerResponse::MultipleResults(worker_response.result.result.clone()))
+                TypeAnnotatedValue::Tuple (TypedTuple { value, .. }) if value.len() == 1 => {
+                    let inner = value[0].clone().type_annotated_value.ok_or("Internal Error. Unexpected empty result")?;
+                    Ok(RefinedWorkerResponse::SingleResult(inner))
                 }
-
-                // See wasm-rpc implementations for more details
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}",get_analysed_type(ty).ok())),
+                ty => Ok(RefinedWorkerResponse::MultipleResults(ty.clone()))
             }
-        }
     }
 }
 
@@ -114,13 +98,7 @@ mod tests {
     #[test]
     fn test_refined_worker_response_from_worker_response() {
         let worker_response = WorkerResponse {
-            result: TypedResult {
-                result: create_tuple(vec![TypeAnnotatedValue::U32(1)]),
-                function_result_types: vec![FunctionResult {
-                    name: None,
-                    typ: Type::U32(TypeU32),
-                }],
-            },
+            result: create_tuple(vec![TypeAnnotatedValue::U32(1)]),
         };
 
         let refined_worker_response =
@@ -131,10 +109,7 @@ mod tests {
         );
 
         let worker_response = WorkerResponse {
-            result: TypedResult {
-                result: create_tuple(vec![]),
-                function_result_types: vec![],
-            },
+            result: create_tuple(vec![]),
         };
 
         let refined_worker_response =
@@ -142,13 +117,7 @@ mod tests {
         assert_eq!(refined_worker_response, RefinedWorkerResponse::Unit);
 
         let worker_response = WorkerResponse {
-            result: TypedResult {
-                result: create_record(vec![("foo".to_string(), TypeAnnotatedValue::U32(1))]),
-                function_result_types: vec![FunctionResult {
-                    name: Some("name".to_string()),
-                    typ: Type::U32(TypeU32),
-                }],
-            },
+            result: create_record(vec![("foo".to_string(), TypeAnnotatedValue::U32(1))]),
         };
 
         let refined_worker_response =

@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use serde_json::{Number, Value};
-use golem_api_grpc::proto::golem::common::JsonValue as ProtoJson;
+use golem_api_grpc::proto::golem::common::{JsonArray, JsonObject, JsonValue as ProtoJson};
 use golem_api_grpc::proto::golem::common::json_value::Kind;
 
 pub trait FromToJson {
@@ -39,8 +40,16 @@ impl FromToJson for ProtoJson {
             }
             Value::String(s) => Kind::StringValue(s.clone()),
             Value::Bool(b) => Kind::BoolValue(*b),
-            Value::Array(a) => Kind::ArrayValue(ProtoJson::JsonArray { values: a.iter().map(|x| ProtoJson::from_json(x)).collect() }),
-            Value::Object(o) => Kind::ObjectValue(ProtoJson::JsonObject { fields: o.iter().map(|(k, v)| (k.clone(), ProtoJson::from_json(v)).collect()) }),
+            Value::Array(a) => Kind::ArrayValue(JsonArray { values: a.iter().map(|x| ProtoJson::from_json(x)).collect() }),
+            Value::Object(o) => Kind::ObjectValue(JsonObject { fields: {
+                let mut map = HashMap::new();
+
+                for (k, v) in o.iter() {
+                    map.insert(k.clone(), ProtoJson::from_json(v));
+                }
+
+                map
+            } }),
         };
         ProtoJson { kind: Some(kind) }
     }

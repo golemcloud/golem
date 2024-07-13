@@ -1865,11 +1865,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for Com
         value: golem_api_grpc::proto::golem::component::ComponentMetadata,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            exports: value
-                .exports
-                .into_iter()
-                .map(|export| export.try_into())
-                .collect::<Result<_, _>>()?,
+            exports: Exports {
+                exports: value
+                    .exports
+                    .into_iter()
+                    .map(|export| export.try_into())
+                    .collect::<Result<_, _>>()?
+            },
             producers: value
                 .producers
                 .into_iter()
@@ -1888,6 +1890,7 @@ impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::Compon
     fn from(value: ComponentMetadata) -> Self {
         Self {
             exports: value
+                .exports
                 .exports
                 .into_iter()
                 .map(|export| export.into())

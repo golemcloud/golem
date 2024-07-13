@@ -567,7 +567,7 @@ mod tests {
 
     impl WorkerBridgeExt for WorkerResponse {
         fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse {
-            RefinedWorkerResponse::SingleResult(self.result.result.clone())
+            RefinedWorkerResponse::SingleResult(self.result.clone())
         }
     }
 
@@ -901,10 +901,6 @@ mod tests {
                 .unwrap();
         let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
             internal::create_tuple(vec![result_as_typed_value.clone()]).unwrap(),
-            vec![FunctionResult {
-                name: None,
-                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),
-            }],
         ))
         .unwrap();
 
@@ -1346,7 +1342,6 @@ mod tests {
                     }],
                 }),
             })),
-            vec![],
         );
 
         let expr =
