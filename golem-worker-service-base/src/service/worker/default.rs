@@ -376,9 +376,9 @@ where
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
         let typed_value = self
-            .invoke_and_await_function_typed_value(
+            .invoke_and_await_function_proto(
                 worker_id,
-                idempotency_key,
+                idempotency_key.map(|v| v.into()),
                 function_name,
                 params,
                 calling_convention,
@@ -388,7 +388,11 @@ where
             )
             .await?;
 
-        Ok(get_json_from_typed_value(&typed_value.result))
+        let type_annotated_value = &typed_value.result.map(|v|v.type_annotated_value).flatten().ok_or(
+            WorkerServiceError::TypeChecker("Empty response from worker".to_string()),
+        )?;
+
+        Ok(get_json_from_typed_value(&type_annotated_value))
     }
 
     async fn invoke_and_await_function_proto(
@@ -419,7 +423,7 @@ where
                         InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
                             name: function_name.clone(),
-                            input: proto_json,
+                            input: proto_json.clone(),
                             idempotency_key: idempotency_key.clone(),
                             calling_convention: calling_convention.into(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -1014,7 +1018,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Value,
+        _params: Vec<Value>,
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
@@ -1023,32 +1027,12 @@ where
         Ok(Value::default())
     }
 
-    async fn invoke_and_await_function_typed_value(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Value,
-        _calling_convention: &CallingConvention,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypedResult> {
-        Ok(TypedResult {
-            result: TypeAnnotatedValue::Tuple(TypedTuple {
-                value: vec![],
-                typ: vec![],
-            }),
-            function_result_types: vec![],
-        })
-    }
-
     async fn invoke_and_await_function_proto(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
-        _params: Vec<ProtoVal>,
+        _params: Vec<Value>,
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
