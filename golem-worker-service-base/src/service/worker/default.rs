@@ -96,7 +96,6 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value>;
 
     // Returns TypeAnnotatedValue proto
@@ -109,7 +108,6 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult>;
 
     async fn invoke_function(
@@ -372,7 +370,6 @@ where
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
         let typed_value = self
             .invoke_and_await_function_proto(
@@ -383,7 +380,6 @@ where
                 calling_convention,
                 invocation_context,
                 metadata,
-                auth_ctx,
             )
             .await?;
 
@@ -403,7 +399,6 @@ where
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
 
         let worker_id = worker_id.clone();
@@ -1021,7 +1016,6 @@ where
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
         Ok(Value::default())
     }
@@ -1035,7 +1029,6 @@ where
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
         Ok(ProtoInvokeResult::default())
     }
