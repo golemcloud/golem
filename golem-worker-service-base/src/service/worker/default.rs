@@ -15,10 +15,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::TypedTuple;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
@@ -46,7 +45,7 @@ use golem_service_base::model::{
     WorkerMetadata,
 };
 use golem_service_base::routing_table::HasRoutingTableService;
-use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
+use golem_service_base::typechecker::{TypeCheckIn};
 use golem_service_base::{
     model::{Component, GolemError},
     routing_table::RoutingTableService,
