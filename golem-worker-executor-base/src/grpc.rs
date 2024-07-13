@@ -522,8 +522,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let (worker, optional_metadata) = self.get_or_create(request).await?;
 
-        let proto_function_input: Vec<Val> = request.input();
-
         let calling_convention = request.calling_convention();
 
         let component_metadata = match optional_metadata {
@@ -551,9 +549,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
 
 
-        let params = serde_json::Value::Null;
-
-        let params_val = params
+        let params_val = request.input()
             .validate_function_parameters(
                 Self::get_expected_function_parameters(&full_function_name, &function_type),
                 *calling_convention,
@@ -1839,8 +1835,8 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         }
     }
 
-    fn input(&self) -> Vec<serde_json::Value> {
-       self.input.iter().map(|proto_json| proto_json.to_json()).collect()
+    fn input(&self) -> serde_json::Value {
+       serde_json::Value::Array(self.input.iter().map(|proto_json| proto_json.to_json()).collect())
     }
 
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
