@@ -18,6 +18,7 @@ import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_execution_error.proto";
+
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
 

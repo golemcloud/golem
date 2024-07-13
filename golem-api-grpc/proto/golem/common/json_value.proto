@@ -5,11 +5,13 @@ package golem.common;
 message JsonValue {
   oneof kind {
     NullValue null_value = 1;
-    double number_value = 2;
-    string string_value = 3;
-    bool bool_value = 4;
-    JsonArray array_value = 5;
-    JsonObject object_value = 6;
+    PosIntValue pos_int_value = 2;
+    NegIntValue neg_int_value = 3;
+    double number_value = 4;
+    string string_value = 5;
+    bool bool_value = 6;
+    JsonArray array_value = 7;
+    JsonObject object_value = 8;
   }
 }
 
@@ -19,6 +21,14 @@ message JsonArray {
 
 message JsonObject {
   map<string, JsonValue> fields = 1;
+}
+
+message PosIntValue {
+  uint64 value = 1;
+}
+
+message NegIntValue {
+  int64 value = 1;
 }
 
 enum NullValue {

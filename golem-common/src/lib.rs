@@ -23,3 +23,4 @@ pub mod redis;
 pub mod retries;
 pub mod serialization;
 pub mod tracing;
+pub mod to_json;

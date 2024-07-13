@@ -28,7 +28,7 @@ use uuid::Uuid;
 use wasmtime::Error;
 
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
+use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
@@ -50,6 +50,7 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_request};
+use golem_common::to_json::FromToJson;
 use golem_service_base::model::ExportFunction;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use rib::ParsedFunctionName;
@@ -1838,8 +1839,8 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         }
     }
 
-    fn input(&self) -> Vec<Val> {
-        self.input.clone()
+    fn input(&self) -> Vec<serde_json::Value> {
+       self.input.iter().map(|proto_json| proto_json.to_json()).collect()
     }
 
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
