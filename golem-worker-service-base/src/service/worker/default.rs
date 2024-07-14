@@ -115,10 +115,9 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<Value>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn invoke_function_proto(
@@ -126,10 +125,9 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
-        params: Vec<ProtoVal>,
+        params: Vec<Value>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn complete_promise(
@@ -463,44 +461,17 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<Value>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
-        let function_type = component_details
-            .metadata
-            .function_by_name(&function_name)
-            .map_err(|err| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to parse the function name: {}",
-                    err
-                ))
-            })?
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
-                    &function_name,
-                    component_details.function_names().join(", ")
-                ))
-            })?;
-        let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                CallingConvention::Component,
-            )
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
         self.invoke_function_proto(
             worker_id,
             idempotency_key.map(|k| k.into()),
             function_name.clone(),
-            params_val,
+            params,
             invocation_context,
             metadata,
-            auth_ctx,
         )
         .await?;
 
@@ -512,36 +483,15 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
-        params: Vec<ProtoVal>,
+        params: Vec<Value>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
-        let function_type = component_details
-            .metadata
-            .function_by_name(&function_name)
-            .map_err(|err| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to parse the function name: {}",
-                    err
-                ))
-            })?
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
-                    &function_name,
-                    component_details.function_names().join(", ")
-                ))
-            })?;
+
         let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                CallingConvention::Component,
-            )
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+            .iter()
+            .map(JsonValue::from_json)
+            .collect::<Vec<JsonValue>>();
 
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1054,7 +1004,6 @@ where
         _params: Vec<ProtoVal>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
     }

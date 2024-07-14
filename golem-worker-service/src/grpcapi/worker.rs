@@ -544,7 +544,6 @@ impl WorkerGrpcApi {
                 params.params,
                 request.context,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
