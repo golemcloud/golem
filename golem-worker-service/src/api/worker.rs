@@ -111,17 +111,22 @@ impl WorkerApi {
 
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
+        let values = params.0.params.as_array().ok_or_else(|| {
+            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid parameters".to_string()],
+            }))
+        })?;
+
         let result = self
             .worker_service
-            .invoke_and_await_function(
+            .invoke_and_await_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                values.clone(),
                 &calling_convention,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -143,15 +148,20 @@ impl WorkerApi {
     ) -> Result<Json<InvokeResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
+        let param_values = params.0.params.as_array().ok_or_else(|| {
+            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid parameters".to_string()],
+            }))
+        })?;
+
         self.worker_service
-            .invoke_function(
+            .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                param_values.clone(),
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 

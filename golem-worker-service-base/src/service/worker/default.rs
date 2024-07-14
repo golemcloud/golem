@@ -15,20 +15,24 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter};
-use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_api_grpc::proto::golem::common::JsonValue;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
-use golem_api_grpc::proto::golem::common::JsonValue;
 
-use golem_api_grpc::proto::golem::worker::{IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResultTyped};
-use golem_api_grpc::proto::golem::worker::{InvokeResultTyped as ProtoInvokeResultTyped, InvokeResult as ProtoInvokeResult, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{
+    IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
+};
+use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::{self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerRequestJson, ResumeWorkerRequest, UpdateWorkerRequest};
+use golem_api_grpc::proto::golem::workerexecutor::{
+    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
+    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerRequestJson,
+    ResumeWorkerRequest, UpdateWorkerRequest,
+};
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
@@ -36,16 +40,13 @@ use golem_common::model::{
 };
 use golem_common::to_json::FromToJson;
 use golem_service_base::model::{
-    ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
-    WorkerMetadata,
+    FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::routing_table::HasRoutingTableService;
-use golem_service_base::typechecker::{TypeCheckIn};
 use golem_service_base::{
     model::{Component, GolemError},
     routing_table::RoutingTableService,
 };
-use rib::ParsedFunctionName;
 
 use crate::service::component::ComponentService;
 
@@ -94,18 +95,17 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value>;
 
-
     // Accepts Json Params and Returns TypeAnnotatedValue (a Json with more type Info)
     async fn invoke_and_await_function_json_typed(
         &self,
         worker_id: &WorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<Value>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<ProtoInvokeResultTyped>;
+    ) -> WorkerResult<TypeAnnotatedValue>;
 
     // Accepts a Vec<Val> and returns a Vec<Val> (with no type information)
     async fn invoke_and_await_function_proto(
@@ -118,7 +118,6 @@ pub trait WorkerService<AuthCtx> {
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<ProtoInvokeResult>;
-
 
     async fn invoke_function_json(
         &self,
@@ -227,30 +226,6 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
             worker_executor_clients,
             component_service,
             routing_table_service,
-        }
-    }
-
-    fn get_expected_function_parameters(
-        function_name: &str,
-        function_type: &ExportFunction,
-    ) -> Vec<AnalysedFunctionParameter> {
-        let is_indexed = ParsedFunctionName::parse(function_name)
-            .ok()
-            .map(|parsed| parsed.function().is_indexed_resource())
-            .unwrap_or(false);
-        if is_indexed {
-            function_type
-                .parameters
-                .iter()
-                .skip(1)
-                .map(|x| x.clone().into())
-                .collect()
-        } else {
-            function_type
-                .parameters
-                .iter()
-                .map(|x| x.clone().into())
-                .collect()
         }
     }
 }
@@ -380,12 +355,14 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value> {
-
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
-        let params_: Vec<JsonValue> = params.iter().map(JsonValue::from).collect::<Vec<_>>();
+        let params_: Vec<JsonValue> = params
+            .iter()
+            .map(|v| JsonValue::from_serde_json_value(v))
+            .collect::<Vec<_>>();
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
@@ -396,7 +373,7 @@ where
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params_.clone(),
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
                         calling_convention: calling_convention.into(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
@@ -416,8 +393,8 @@ where
                              )),
                     } => {
                         info!("Invoked function on {}: {}", worker_id, function_name_clone);
-                        let output = output[0].to_json();
-                        Ok(output)
+                        let output = output.map(|v| v.to_serde_json_value());
+                        output.ok_or("Empty response".into())
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponseJson {
                         result:
@@ -447,12 +424,14 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
-
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
-        let params_: Vec<JsonValue> = params.iter().map(JsonValue::from).collect::<Vec<_>>();
+        let params_: Vec<JsonValue> = params
+            .iter()
+            .map(JsonValue::from_serde_json_value)
+            .collect::<Vec<_>>();
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
@@ -463,7 +442,7 @@ where
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params_.clone(),
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
                         calling_convention: calling_convention.into(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
@@ -503,7 +482,6 @@ where
         Ok(invoke_response)
     }
 
-
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -514,7 +492,6 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<ProtoInvokeResult> {
-
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
@@ -584,17 +561,22 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                Box::pin(worker_executor_client.invoke_worker(
-                    workerexecutor::InvokeWorkerRequestJson {
-                        worker_id: Some(worker_id.into()),
-                        name: function_name.clone(),
-                        input: params.iter().map(JsonValue::from).collect::<Vec<_>>(),
-                        idempotency_key: idempotency_key.clone(),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                        account_limits: metadata.limits.clone().map(|id| id.into()),
-                        context: invocation_context.clone(),
-                    },
-                ))
+                Box::pin(
+                    worker_executor_client.invoke_worker_json(
+                        workerexecutor::InvokeWorkerRequestJson {
+                            worker_id: Some(worker_id.into()),
+                            name: function_name.clone(),
+                            input: params
+                                .iter()
+                                .map(JsonValue::from_serde_json_value)
+                                .collect::<Vec<_>>(),
+                            idempotency_key: idempotency_key.clone().map(|v| v.into()),
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
+                            account_limits: metadata.limits.clone().map(|id| id.into()),
+                            context: invocation_context.clone(),
+                        },
+                    ),
+                )
             },
             |response| match response.into_inner() {
                 workerexecutor::InvokeWorkerResponse {
@@ -606,7 +588,7 @@ where
                 workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -619,7 +601,6 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
-
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
@@ -887,7 +868,6 @@ where
         self.try_get_component_for_worker(worker_id, metadata, auth_ctx)
             .await
     }
-
 }
 
 impl<AuthCtx> WorkerServiceDefault<AuthCtx>
@@ -1110,7 +1090,7 @@ where
     ) -> WorkerResult<TypeAnnotatedValue> {
         Ok(TypeAnnotatedValue::Tuple(TypedTuple {
             value: vec![],
-            typ: vec![]
+            typ: vec![],
         }))
     }
 
@@ -1239,5 +1219,4 @@ where
         };
         Err(WorkerServiceError::WorkerNotFound(worker_id))
     }
-
 }

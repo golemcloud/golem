@@ -177,7 +177,7 @@ mod internal {
                     .typ
                     .clone()
                     .ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
-                let analysed_Type = AnalysedType::from_type(&typ).map_err(|_| {
+                let analysed_type = AnalysedType::from_type(&typ).map_err(|_| {
                     ContentTypeMapError::internal("Failed to convert type to analysed type")
                 })?;
                 let vec = typed_list
@@ -185,7 +185,7 @@ mod internal {
                     .iter()
                     .filter_map(|v| v.type_annotated_value.clone())
                     .collect::<Vec<_>>();
-                handle_list(type_annotated_value, &vec, &analysed_Type, content_header)
+                handle_list(type_annotated_value, &vec, &analysed_type, content_header)
             }
             TypeAnnotatedValue::Bool(bool) => {
                 handle_primitive(bool, &AnalysedType::Bool, content_header)

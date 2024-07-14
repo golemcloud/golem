@@ -34,14 +34,10 @@ mod internal {
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
     use golem_wasm_rpc::json::get_json_from_typed_value;
-    use golem_worker_service_base::auth::EmptyAuthCtx;
-    use serde_json::Value;
-
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
     };
     use tracing::{debug, info};
-    use golem_api_grpc::proto::golem::worker::IdempotencyKey;
 
     pub(crate) async fn execute(
         default_executor: &UnauthorisedWorkerRequestExecutor,
@@ -87,13 +83,11 @@ mod internal {
             invoke_parameters_values.push(value);
         }
 
-        let invoke_result = default_executor
+        let type_annotated_value = default_executor
             .worker_service
             .invoke_and_await_function_json_typed(
                 &worker_id,
-                worker_request_params.idempotency_key.map(|v| IdempotencyKey {
-                    value: v.value
-                }),
+                worker_request_params.idempotency_key,
                 worker_request_params.function_name.to_string(),
                 invoke_parameters_values,
                 &CallingConvention::Component,
@@ -103,14 +97,8 @@ mod internal {
             .await
             .map_err(|e| e.to_string())?;
 
-        // based on wasm-rpc code, empty result is TypeAnnotatedValue::Tuple([])
-        // and therefore we always expect a result.
-        let type_annotated_value =
-            invoke_result.result.map(|v| v.type_annotated_value).flatten()
-                .ok_or("Internal Error: Empty result in worker response")?;
-
         Ok(WorkerResponse {
-            result: type_annotated_value
+            result: type_annotated_value,
         })
     }
 }

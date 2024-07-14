@@ -26,16 +26,19 @@ impl RefinedWorkerResponse {
         worker_response: &WorkerResponse,
     ) -> Result<RefinedWorkerResponse, String> {
         let result = &worker_response.result;
-            match result {
-                TypeAnnotatedValue::Tuple (TypedTuple { value, .. }) if value.is_empty() => {
-                    Ok(RefinedWorkerResponse::Unit)
-                }
-                TypeAnnotatedValue::Tuple (TypedTuple { value, .. }) if value.len() == 1 => {
-                    let inner = value[0].clone().type_annotated_value.ok_or("Internal Error. Unexpected empty result")?;
-                    Ok(RefinedWorkerResponse::SingleResult(inner))
-                }
-                ty => Ok(RefinedWorkerResponse::MultipleResults(ty.clone()))
+        match result {
+            TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.is_empty() => {
+                Ok(RefinedWorkerResponse::Unit)
             }
+            TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.len() == 1 => {
+                let inner = value[0]
+                    .clone()
+                    .type_annotated_value
+                    .ok_or("Internal Error. Unexpected empty result")?;
+                Ok(RefinedWorkerResponse::SingleResult(inner))
+            }
+            ty => Ok(RefinedWorkerResponse::MultipleResults(ty.clone())),
+        }
     }
 }
 

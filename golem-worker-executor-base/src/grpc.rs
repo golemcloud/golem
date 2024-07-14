@@ -545,7 +545,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        let json_param = serde_json::Value::Array(request.input.iter().map(|v| v.to_json()).collect::<Vec<_>>());
+        let json_param = serde_json::Value::Array(request.input.iter().map(|v| v.to_serde_json_value()).collect::<Vec<_>>());
 
         let params_val = json_param
             .validate_function_parameters(
@@ -1380,7 +1380,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
             Ok(result) => {
 
-                let json = JsonValue::from_json(&get_json_from_typed_value(&result));
+                let json = JsonValue::from_serde_json_value(&get_json_from_typed_value(&result));
                 let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessJson { output: vec![json] };
 
                 record.succeed(Ok(Response::new(

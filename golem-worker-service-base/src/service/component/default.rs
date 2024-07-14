@@ -219,9 +219,7 @@ impl ComponentServiceNoop {
             component_name: ComponentName("test".to_string()),
             component_size: 0,
             metadata: ComponentMetadata {
-                exports: Exports {
-                    exports: vec![]
-                },
+                exports: Exports { exports: vec![] },
                 producers: vec![],
                 memories: vec![],
             },

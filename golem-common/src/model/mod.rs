@@ -36,8 +36,6 @@ use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
-use golem_api_grpc::proto::golem::common::JsonValue;
-
 use crate::config::RetryConfig;
 use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
 use crate::model::regions::DeletedRegions;

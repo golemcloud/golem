@@ -1169,7 +1169,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
 
-        let expected = internal::create_none(&AnalysedType::Str);
+        let expected = test_utils::create_none(&AnalysedType::Str);
 
         assert_eq!(result, Ok(expected));
     }
@@ -1193,7 +1193,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
             .await;
 
-        let internal_opt = internal::create_none(&AnalysedType::Str);
+        let internal_opt = test_utils::create_none(&AnalysedType::Str);
         let expected = internal::create_option(internal_opt).unwrap();
         assert_eq!(result, Ok(expected));
     }
@@ -1320,8 +1320,8 @@ mod tests {
     async fn test_evaluation_with_pattern_match_variant_positive() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let worker_response = WorkerResponse::new(
-            TypeAnnotatedValue::Variant(Box::new(TypedVariant {
+        let worker_response =
+            WorkerResponse::new(TypeAnnotatedValue::Variant(Box::new(TypedVariant {
                 case_name: "Foo".to_string(),
                 case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                     type_annotated_value: Some(
@@ -1341,8 +1341,7 @@ mod tests {
                         ),
                     }],
                 }),
-            })),
-        );
+            })));
 
         let expr =
             rib::from_string("${match worker.response { Foo(value) => ok(value.id) }}").unwrap();
@@ -1400,8 +1399,7 @@ mod tests {
             }),
         }));
 
-        let worker_bridge_response =
-            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(some(value)) => value.id, err(msg) => "not found" }}"#,
@@ -1423,8 +1421,7 @@ mod tests {
 
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response =
-            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
@@ -1445,8 +1442,7 @@ mod tests {
 
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response =
-            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => "not found" }}"#,
@@ -1470,7 +1466,7 @@ mod tests {
         let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(internal::create_none(&AnalysedType::Record(vec![(
+                type_annotated_value: Some(test_utils::create_none(&AnalysedType::Record(vec![(
                     "id".to_string(),
                     AnalysedType::Str,
                 )]))),
@@ -1501,7 +1497,7 @@ mod tests {
             }),
         }));
 
-        let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_response = WorkerResponse::new(output).to_test_worker_bridge_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
@@ -1670,11 +1666,20 @@ mod tests {
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedVariant};
+        use golem_wasm_rpc::protobuf::{
+            NameOptionTypePair, TypeVariant, TypedOption, TypedVariant,
+        };
         use golem_wasm_rpc::TypeExt;
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
+
+        pub(crate) fn create_none(typ: &AnalysedType) -> TypeAnnotatedValue {
+            TypeAnnotatedValue::Option(Box::new(TypedOption {
+                value: None,
+                typ: Some(typ.to_type()),
+            }))
+        }
 
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             let record = internal::create_singleton_record(
@@ -1740,7 +1745,7 @@ mod tests {
             )
             .unwrap();
 
-            WorkerResponse::new(worker_response_value, vec![])
+            WorkerResponse::new(worker_response_value)
         }
 
         pub(crate) fn get_worker_response(input: &str) -> WorkerResponse {
@@ -1748,7 +1753,7 @@ mod tests {
 
             let expected_type = infer_analysed_type(&value);
             let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
-            WorkerResponse::new(result_as_typed_value, vec![])
+            WorkerResponse::new(result_as_typed_value)
         }
 
         pub(crate) fn resolved_variables_from_request_body(

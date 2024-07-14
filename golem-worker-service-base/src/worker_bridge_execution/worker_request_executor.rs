@@ -1,7 +1,6 @@
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use async_trait::async_trait;
 
-
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 
@@ -21,9 +20,7 @@ pub struct WorkerResponse {
 
 impl WorkerResponse {
     pub fn new(result: TypeAnnotatedValue) -> Self {
-        WorkerResponse {
-            result
-        }
+        WorkerResponse { result }
     }
 }
 

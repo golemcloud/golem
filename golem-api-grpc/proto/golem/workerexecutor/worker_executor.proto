@@ -27,7 +27,7 @@ package golem.workerexecutor;
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
   rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
-  rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerRequestJson) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerRequestJson) returns (InvokeAndAwaitWorkerResponseJson);
   rpc InvokeAndAwaitWorkerJsonTyped(InvokeAndAwaitWorkerRequestJson) returns (InvokeAndAwaitWorkerResponseTyped);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
   rpc InvokeWorkerJson(InvokeWorkerRequestJson) returns (InvokeWorkerResponse);
@@ -157,7 +157,7 @@ message InvokeAndAwaitWorkerSuccessTyped {
 }
 
 message InvokeAndAwaitWorkerSuccessJson {
-  repeated golem.common.JsonValue output = 1;
+  golem.common.JsonValue output = 1;
 }
 
 message InvokeWorkerRequest {
