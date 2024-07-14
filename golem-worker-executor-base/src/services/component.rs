@@ -66,10 +66,19 @@ pub struct ProtoExports {
 }
 
 impl ProtoExports {
-    pub fn to_exports(&self) -> Exports {
-        Exports {
-            exports: self.exports.iter().map(|export| export.into()).collect(),
-        }
+    pub fn to_exports(&self) -> Result<Exports, String> {
+        let exports: Result<Vec<_>, _> = self
+            .exports
+            .iter()
+            .map(|export| {
+                golem_api_grpc::proto::golem::component::Export {
+                    export: Some(export.clone()),
+                }
+                .try_into()
+            })
+            .collect();
+
+        exports.map(|exports| Exports { exports })
     }
 }
 
@@ -457,11 +466,21 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
-                    exports: component
-                        .metadata
-                        .as_ref()
-                        .map(|metadata| metadata.exports.clone())
-                        .unwrap_or_default(),
+                    exports: ProtoExports {
+                        exports: component
+                            .metadata
+                            .map(|metadata| {
+                                metadata
+                                    .exports
+                                    .into_iter()
+                                    .flat_map(|export| match export.export {
+                                        Some(export) => vec![export],
+                                        None => vec![],
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    },
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);

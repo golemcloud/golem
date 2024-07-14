@@ -19,7 +19,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;

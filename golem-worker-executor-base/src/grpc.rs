@@ -34,7 +34,7 @@ use crate::services::component::ProtoExports;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasComponentService, HasPromiseService,
+    worker_event, All, HasActiveWorkers, HasAll, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -47,9 +47,9 @@ use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::Worker
 use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerRequestJson, InvokeAndAwaitWorkerResponse,
-    InvokeAndAwaitWorkerResponseJson, InvokeAndAwaitWorkerResponseTyped, InvokeWorkerRequestJson,
-    InvokeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitWorkerRequestJson, InvokeAndAwaitWorkerResponseJson,
+    InvokeAndAwaitWorkerResponseTyped, InvokeWorkerRequestJson, InvokeWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -565,6 +565,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let function_type = component_metadata
             .to_exports()
+            .map_err(|err| {
+                GolemError::invalid_request(format!("Failed to get the exports: {}", err))
+            })?
             .function_by_name(&full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
@@ -694,6 +697,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let function_type = component_metadata
             .to_exports()
+            .map_err(|err| {
+                GolemError::invalid_request(format!("Failed to get the exports: {}", err))
+            })?
             .function_by_name(&full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
