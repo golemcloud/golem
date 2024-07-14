@@ -711,7 +711,7 @@ impl ComponentServiceLocalFileSystem {
             version: *version,
             size,
             memories,
-            exports: ComponentExports {
+            exports: ProtoExports {
                 exports: vec![] // TODO resolve from wasm ast component when analyising memeories.
             }
         })

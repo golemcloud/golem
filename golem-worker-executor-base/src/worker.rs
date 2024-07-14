@@ -53,7 +53,7 @@ use crate::services::{
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
     HasWorkerService, UsesAllDeps,
 };
-use crate::services::component::{ComponentExports, ComponentMetadata, ProtoExports};
+use crate::services::component::{ComponentMetadata, ProtoExports};
 use crate::workerctx::WorkerCtx;
 
 /// Represents worker that may be running or suspended.
@@ -236,10 +236,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<Option<ProtoExports>, GolemError> {
         let mut running = this.running.lock().await;
         if running.is_none() {
-            let permit = this
-                .active_workers()
-                .acquire(this.memory_requirement().await?)
-                .await;
 
             let (worker_metadata, component, ComponentMetadata {
                 version,
@@ -247,7 +243,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 memories,
                 exports
             }) =
-                Self::get_running_component(this)?;
+                Self::get_running_component(&this).await?;
+
+            let permit = this
+                .active_workers()
+                .acquire(this.memory_requirement().await?)
+                .await;
+
 
             let function_details = exports.clone();
 
@@ -345,7 +347,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn get_running_component(this: Arc<Worker<Ctx>>) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
+    pub async fn get_running_component(this: &Arc<Worker<Ctx>>) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
         let component_id = this.owned_worker_id.component_id();
         let worker_metadata = this.get_metadata().await?;
 
