@@ -602,13 +602,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let values = worker
             .invoke_and_await(
                 idempotency_key,
-                calling_convention.into(),
+                calling_convention,
                 full_function_name,
                 function_input,
             )
             .await?;
 
-        let results: Vec<Val> = values.into_iter().map(|val| Val::from(val)).collect();
+        let results: Vec<Val> = values.into_iter().map(Val::from).collect();
 
         Ok((function_type, results))
 
