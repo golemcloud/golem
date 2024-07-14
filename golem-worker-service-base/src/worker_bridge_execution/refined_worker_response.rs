@@ -44,9 +44,6 @@ impl RefinedWorkerResponse {
 
 #[cfg(test)]
 mod tests {
-    use crate::service::worker::TypedResult;
-    use golem_service_base::model::{FunctionResult, Type, TypeU32};
-    use golem_wasm_rpc::get_type;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
 
@@ -58,7 +55,7 @@ mod tests {
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = get_type(value).unwrap();
+            let typ = value.clone().try_into().unwrap();
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),
@@ -82,7 +79,7 @@ mod tests {
         let mut types = vec![];
 
         for value in value.iter() {
-            let typ = get_type(value).unwrap();
+            let typ = value.clone().try_into().unwrap();
             types.push(typ);
         }
 

@@ -6,9 +6,9 @@ use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{Type, TypeAnnotatedValue as RootTypeAnnotatedValue};
 use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-use golem_wasm_rpc::{get_analysed_type, get_type, TypeExt};
+use golem_wasm_rpc::{TypeExt};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -80,11 +80,11 @@ impl TypedHttRequestDetails {
             typ: vec![
                 NameTypePair {
                     name: "path".to_string(),
-                    typ: get_type(&merged_type_annotated_value).ok(),
+                    typ: Type::try_from(merged_type_annotated_value).ok(),
                 },
                 NameTypePair {
                     name: "body".to_string(),
-                    typ: get_type(&self.typed_request_body.0).ok(),
+                    typ: Type::try_from(self.typed_request_body.0.clone()).ok(),
                 },
                 NameTypePair {
                     name: "headers".to_string(),
@@ -238,7 +238,7 @@ impl From<TypedKeyValueCollection> for AnalysedType {
         for record in &typed_key_value_collection.fields {
             typ.push((
                 record.name.clone(),
-                get_analysed_type(&record.value)
+                AnalysedType::try_from(record.value.clone())
                     .expect("Internal error: Failed to retrieve type from Type Annotated Value"),
             ));
         }
@@ -256,7 +256,7 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
             typ.push(NameTypePair {
                 name: record.name.clone(),
                 typ: Some(
-                    get_type(&record.value).expect(
+                    Type::try_from(record.value.clone()).expect(
                         "Internal error: Failed to retrieve type from Type Annotated Value",
                     ),
                 ),

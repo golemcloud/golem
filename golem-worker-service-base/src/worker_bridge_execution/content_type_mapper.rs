@@ -158,7 +158,7 @@ mod internal {
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
-    use golem_wasm_rpc::{get_analysed_type, TypeExt};
+    use golem_wasm_rpc::{TypeExt};
     use poem::web::headers::ContentType;
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
@@ -245,7 +245,7 @@ mod internal {
                     if content_header.has_application_json() {
                         get_json_null()
                     } else {
-                        let typ = get_analysed_type(type_annotated_value).map_err(|_| {
+                        let typ = AnalysedType::try_from(type_annotated_value.clone()).map_err(|_| {
                             ContentTypeMapError::internal("Failed to resolve type of data")
                         })?;
                         Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
@@ -411,7 +411,7 @@ mod internal {
         if content_header.has_application_json() {
             get_json(complex)
         } else {
-            let typ = get_analysed_type(complex)
+            let typ = AnalysedType::try_from(complex.clone())
                 .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
 
             Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
@@ -474,7 +474,7 @@ mod internal {
         if content_header.has_application_json() {
             get_json(record)
         } else {
-            let typ = get_analysed_type(record)
+            let typ = AnalysedType::try_from(record.clone())
                 .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
             Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
@@ -496,10 +496,11 @@ mod tests {
     use super::*;
     use crate::evaluator::EvaluationError;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedList, TypedRecord};
-    use golem_wasm_rpc::{get_type, TypeExt};
+    use golem_wasm_rpc::{TypeExt};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
     use serde_json::Value;
+    use golem_service_base::model::Type;
 
     fn sample_record() -> TypeAnnotatedValue {
         TypeAnnotatedValue::Record(TypedRecord {
@@ -533,7 +534,7 @@ mod tests {
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = get_type(value).unwrap();
+            let typ = Type::try_from(value.clone()).unwrap();
 
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),

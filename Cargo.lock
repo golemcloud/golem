@@ -3738,7 +3738,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc.git?branch=type_annotated_value#b3fbc7ee2fe8eb92339c3d781e24b264e01b1ecb"
+source = "git+https://github.com/golemcloud/wasm-rpc.git?branch=type_annotated_value#dbac148eb6493d852405ef61c9bc99db9e74fe91"
 dependencies = [
  "arbitrary",
  "async-trait",
