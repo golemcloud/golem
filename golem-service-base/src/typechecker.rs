@@ -30,15 +30,16 @@ pub trait TypeCheckIn {
     ) -> Result<Vec<Val>, Vec<String>>;
 }
 
-impl TypeCheckIn for Value {
+impl TypeCheckIn for Vec<Value> {
     fn validate_function_parameters(
         self,
         expected_parameters: Vec<AnalysedFunctionParameter>,
         calling_convention: CallingConvention,
     ) -> Result<Vec<Val>, Vec<String>> {
+
         match calling_convention {
             CallingConvention::Component => {
-                let parameter_values = json::function_parameters(&self, &expected_parameters)?;
+                let parameter_values = json::function_parameters(&Value::Array(self), &expected_parameters)?;
                 Ok(parameter_values
                     .into_iter()
                     .map(|value| value.into())
@@ -47,7 +48,7 @@ impl TypeCheckIn for Value {
             CallingConvention::Stdio => {
                 if expected_parameters.is_empty() {
                     let vval: Val = Val {
-                        val: Some(val::Val::String(self.to_string())),
+                        val: Some(val::Val::String(Value::Array(self).to_string())),
                     };
 
                     Ok(vec![vval])

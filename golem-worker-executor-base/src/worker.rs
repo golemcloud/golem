@@ -27,8 +27,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, span, warn, Instrument, Level};
-use wasmtime::{Store, UpdateDeadline};
 use wasmtime::component::Component;
+use wasmtime::{Store, UpdateDeadline};
 
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
@@ -44,6 +44,7 @@ use golem_common::model::{
 use crate::error::GolemError;
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
+use crate::services::component::{ComponentMetadata, ProtoExports};
 use crate::services::events::Event;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -53,7 +54,6 @@ use crate::services::{
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
     HasWorkerService, UsesAllDeps,
 };
-use crate::services::component::{ComponentMetadata, ProtoExports};
 use crate::workerctx::WorkerCtx;
 
 /// Represents worker that may be running or suspended.
@@ -233,23 +233,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // If the worker isn't started , this will return None, however, it most probably
     // resides in the component-metadata cache, and if it returns None, it means the worker
     // is already started with a set component-version and we don't need to start it again
-    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<Option<ProtoExports>, GolemError> {
+    pub async fn start_if_needed(
+        this: Arc<Worker<Ctx>>,
+    ) -> Result<Option<ProtoExports>, GolemError> {
         let mut running = this.running.lock().await;
         if running.is_none() {
-
-            let (worker_metadata, component, ComponentMetadata {
-                version,
-                size,
-                memories,
-                exports
-            }) =
-                Self::get_running_component(&this).await?;
+            let (
+                worker_metadata,
+                component,
+                ComponentMetadata {
+                    version,
+                    size,
+                    memories,
+                    exports,
+                },
+            ) = Self::get_running_component(&this).await?;
 
             let permit = this
                 .active_workers()
                 .acquire(this.memory_requirement().await?)
                 .await;
-
 
             let function_details = exports.clone();
 
@@ -259,7 +262,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     version,
                     size,
                     memories,
-                    exports
+                    exports,
                 },
                 this.promise_service(),
                 this.worker_service(),
@@ -347,7 +350,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn get_running_component(this: &Arc<Worker<Ctx>>) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
+    pub async fn get_running_component(
+        this: &Arc<Worker<Ctx>>,
+    ) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
         let component_id = this.owned_worker_id.component_id();
         let worker_metadata = this.get_metadata().await?;
 
@@ -360,13 +365,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 |update| {
                     let target_version = *update.description.target_version();
                     info!(
-                            "Attempting {} update from {} to version {target_version}",
-                            match update.description {
-                                UpdateDescription::Automatic { .. } => "automatic",
-                                UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                            },
-                            worker_metadata.last_known_status.component_version
-                        );
+                        "Attempting {} update from {} to version {target_version}",
+                        match update.description {
+                            UpdateDescription::Automatic { .. } => "automatic",
+                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        },
+                        worker_metadata.last_known_status.component_version
+                    );
                     target_version
                 },
             );

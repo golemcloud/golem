@@ -28,6 +28,7 @@ use crate::storage::blob::BlobStorage;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::export::Export as ProtoExport;
 use golem_api_grpc::proto::golem::component::{
     download_component_response, get_component_metadata_response, DownloadComponentRequest,
     GetLatestComponentRequest, GetVersionedComponentRequest,
@@ -39,6 +40,7 @@ use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
+use golem_service_base::model::Exports;
 use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
 use golem_wasm_ast::IgnoreAll;
 use http::Uri;
@@ -49,28 +51,25 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_api_grpc::proto::golem::component::export::Export as ProtoExport;
-use golem_service_base::model::{Exports};
 
 #[derive(Debug, Clone)]
 pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
-    pub exports: ProtoExports
+    pub exports: ProtoExports,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProtoExports {
-    exports: Vec<ProtoExport>
+    exports: Vec<ProtoExport>,
 }
 
 impl ProtoExports {
     pub fn to_exports(&self) -> Exports {
         Exports {
-            exports: self.exports.iter().map(|export| export.into()).collect()
+            exports: self.exports.iter().map(|export| export.into()).collect(),
         }
-
     }
 }
 
@@ -458,7 +457,11 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
-                    exports: component.metadata.as_ref().map(|metadata| metadata.exports.clone()).unwrap_or_default()
+                    exports: component
+                        .metadata
+                        .as_ref()
+                        .map(|metadata| metadata.exports.clone())
+                        .unwrap_or_default(),
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
@@ -712,8 +715,8 @@ impl ComponentServiceLocalFileSystem {
             size,
             memories,
             exports: ProtoExports {
-                exports: vec![] // TODO resolve from wasm ast component when analyising memeories.
-            }
+                exports: vec![], // TODO resolve from wasm ast component when analyising memeories.
+            },
         })
     }
 }
