@@ -1802,7 +1802,7 @@ pub struct ComponentMetadata {
     pub memories: Vec<LinearMemory>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct Exports {
     pub exports: Vec<Export>
 }

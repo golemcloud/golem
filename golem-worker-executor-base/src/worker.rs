@@ -19,31 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::error::{GolemError, WorkerOutOfMemory};
-
-use anyhow::anyhow;
-use golem_wasm_rpc::Value;
-use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
-use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Component;
-use wasmtime::{Store, UpdateDeadline};
 
-use golem_common::config::RetryConfig;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-};
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{
-    CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-};
-
-use crate::error::GolemError;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
@@ -110,6 +87,42 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     instance: Arc<Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
+}
+
+impl<Ctx: WorkerCtx> Worker <Ctx> {
+    pub async fn get_component_metadata(
+        worker: &Arc<Worker<Ctx>>,
+    ) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
+        let component_id = worker.owned_worker_id.component_id();
+        let worker_metadata = worker.get_metadata().await?;
+
+        let component_version = worker_metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .map_or(
+                worker_metadata.last_known_status.component_version,
+                |update| {
+                    let target_version = *update.description.target_version();
+                    info!(
+                        "Attempting {} update from {} to version {target_version}",
+                        match update.description {
+                            UpdateDescription::Automatic { .. } => "automatic",
+                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        },
+                        worker_metadata.last_known_status.component_version
+                    );
+                    target_version
+                },
+            );
+        let (component, component_metadata) = worker
+            .component_service()
+            .get(&worker.engine(), &component_id, component_version)
+            .await?;
+
+        Ok((worker_metadata, component, component_metadata))
+    }
+
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -262,10 +275,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Self::start_if_needed_internal(this, 0).await
     }
 
-    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, GolemError> {
-        Self::start_if_needed_internal(this, 0).await
-    }
-
     async fn start_if_needed_internal(
         this: Arc<Worker<Ctx>>,
         oom_retry_count: u64,
@@ -285,129 +294,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn start_if_needed0(this: Arc<Worker<Ctx>>) -> Result<(), GolemError> {
-        let mut running = this.running.lock().await;
-        if running.is_none() {
-            let permit = this
-                .active_workers()
-                .acquire(this.memory_requirement().await?)
-                .await;
-
-            let component_id = this.owned_worker_id.component_id();
-            let worker_metadata = this.get_metadata().await?;
-
-            let component_version = worker_metadata
-                .last_known_status
-                .pending_updates
-                .front()
-                .map_or(
-                    worker_metadata.last_known_status.component_version,
-                    |update| {
-                        let target_version = *update.description.target_version();
-                        info!(
-                            "Attempting {} update from {} to version {target_version}",
-                            match update.description {
-                                UpdateDescription::Automatic { .. } => "automatic",
-                                UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                            },
-                            worker_metadata.last_known_status.component_version
-                        );
-                        target_version
-                    },
-                );
-            let (component, component_metadata) = this
-                .component_service()
-                .get(&this.engine(), &component_id, component_version)
-                .await?;
-
-            let context = Ctx::create(
-                OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
-                component_metadata,
-                this.promise_service(),
-                this.worker_service(),
-                this.worker_enumeration_service(),
-                this.key_value_service(),
-                this.blob_store_service(),
-                this.event_service.clone(),
-                this.active_workers(),
-                this.oplog_service(),
-                this.oplog.clone(),
-                Arc::downgrade(&this),
-                this.scheduler_service(),
-                this.rpc(),
-                this.worker_proxy(),
-                this.extra_deps(),
-                this.config(),
-                WorkerConfig::new(
-                    worker_metadata.worker_id.clone(),
-                    worker_metadata.last_known_status.component_version,
-                    worker_metadata.args.clone(),
-                    worker_metadata.env.clone(),
-                    worker_metadata.last_known_status.deleted_regions.clone(),
-                ),
-                this.execution_status.clone(),
-            )
-            .await?;
-
-            let mut store = Store::new(&this.engine(), context);
-            store.set_epoch_deadline(this.config().limits.epoch_ticks);
-            let worker_id_clone = worker_metadata.worker_id.clone();
-            store.epoch_deadline_callback(move |mut store| {
-                let current_level = store.get_fuel().unwrap_or(0);
-                if store.data().is_out_of_fuel(current_level as i64) {
-                    debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                    store.data_mut().borrow_fuel_sync();
-                }
-
-                match store.data_mut().check_interrupt() {
-                    Some(kind) => Err(kind.into()),
-                    None => Ok(UpdateDeadline::Yield(1)),
-                }
-            });
-
-            store.set_fuel(i64::MAX as u64)?;
-            store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
-
-            store.limiter_async(|ctx| ctx.resource_limiter());
-
-            let instance_pre = this.linker().instantiate_pre(&component).map_err(|e| {
-                GolemError::worker_creation_failed(
-                    this.owned_worker_id.worker_id(),
-                    format!(
-                        "Failed to pre-instantiate worker {}: {e}",
-                        this.owned_worker_id
-                    ),
-                )
-            })?;
-
-            let instance = instance_pre
-                .instantiate_async(&mut store)
-                .await
-                .map_err(|e| {
-                    GolemError::worker_creation_failed(
-                        this.owned_worker_id.worker_id(),
-                        format!("Failed to instantiate worker {}: {e}", this.owned_worker_id),
-                    )
-                })?;
-            let store = async_mutex::Mutex::new(store);
-
-            *running = Some(RunningWorker::new(
-                this.owned_worker_id.clone(),
-                this.queue.clone(),
-                this.clone(),
-                this.oplog(),
-                this.execution_status.clone(),
-                instance,
-                store,
-                permit,
-            ));
-        } else {
-            debug!("Worker is already running");
-        }
-
-        Ok(())
-    }
-
     pub(crate) async fn start_with_permit(
         this: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
@@ -423,39 +309,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             permit,
             oom_retry_count,
         ));
-    }
-
-    pub async fn get_running_component(
-        this: &Arc<Worker<Ctx>>,
-    ) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
-        let component_id = this.owned_worker_id.component_id();
-        let worker_metadata = this.get_metadata().await?;
-
-        let component_version = worker_metadata
-            .last_known_status
-            .pending_updates
-            .front()
-            .map_or(
-                worker_metadata.last_known_status.component_version,
-                |update| {
-                    let target_version = *update.description.target_version();
-                    info!(
-                        "Attempting {} update from {} to version {target_version}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                        },
-                        worker_metadata.last_known_status.component_version
-                    );
-                    target_version
-                },
-            );
-        let (component, component_metadata) = this
-            .component_service()
-            .get(&this.engine(), &component_id, component_version)
-            .await?;
-
-        Ok((worker_metadata, component, component_metadata))
     }
 
 
@@ -1341,32 +1194,9 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
-        let component_id = parent.owned_worker_id.component_id();
-        let worker_metadata = parent.get_metadata().await?;
 
-        let component_version = worker_metadata
-            .last_known_status
-            .pending_updates
-            .front()
-            .map_or(
-                worker_metadata.last_known_status.component_version,
-                |update| {
-                    let target_version = *update.description.target_version();
-                    info!(
-                        "Attempting {} update from {} to version {target_version}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                        },
-                        worker_metadata.last_known_status.component_version
-                    );
-                    target_version
-                },
-            );
-        let (component, component_metadata) = parent
-            .component_service()
-            .get(&parent.engine(), &component_id, component_version)
-            .await?;
+        let (worker_metadata, component, component_metadata) =
+            Worker::get_component_metadata(&parent).await?;
 
         let context = Ctx::create(
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),

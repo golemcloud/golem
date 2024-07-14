@@ -30,17 +30,8 @@ use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::error::*;
-use crate::model::{InterruptKind, LastError};
 use crate::services::component::ProtoExports;
-use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
-use crate::services::worker_event::LogLevel;
-use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasPromiseService,
-    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
-};
-use crate::worker::Worker;
-use crate::workerctx::WorkerCtx;
+use crate::services::{HasComponentService};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
@@ -592,19 +583,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(ExportFunction, Vec<Val>), GolemError> {
         let full_function_name = request.name();
 
-        let (worker, optional_metadata) = self.get_or_create(request).await?;
+        let worker = self.get_or_create(request).await?;
 
         let calling_convention = request.calling_convention();
 
-        let component_metadata = match optional_metadata {
-            Some(metadata) => metadata,
-            None => {
-                let (_, _, component_metadata) = Worker::get_running_component(&worker).await?;
-                component_metadata.exports
-            }
-        };
+        let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
+        let exports_proto = component_metadata.exports;
 
-        let function_type = component_metadata
+        let function_type = exports_proto
             .to_exports()
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to get the exports: {}", err))
@@ -652,8 +638,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let results: Vec<Val> = values.into_iter().map(Val::from).collect();
 
         Ok((function_type, results))
-
-        // Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: results })
     }
 
     fn get_expected_function_parameters(
@@ -683,10 +667,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_or_create<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<(Arc<Worker<Ctx>>, Option<ProtoExports>), GolemError> {
+    ) -> Result<Arc<Worker<Ctx>>, GolemError> {
         let worker = self.get_or_create_pending(request).await?;
-        let metadata = Worker::start_if_needed(worker.clone()).await?;
-        Ok((worker, metadata))
+        Worker::start_if_needed(worker.clone()).await?;
+        Ok(worker)
     }
 
     async fn get_or_create_pending<Req: GrpcInvokeRequest>(
@@ -726,15 +710,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let (worker, optional_metadata) = self.get_or_create(request).await?;
+        let worker = self.get_or_create(request).await?;
 
-        let component_metadata = match optional_metadata {
-            Some(metadata) => metadata,
-            None => {
-                let (_, _, component_metadata) = Worker::get_running_component(&worker).await?;
-                component_metadata.exports
-            }
-        };
+        let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
+        let component_metadata = component_metadata.exports;
 
         let function_type = component_metadata
             .to_exports()
