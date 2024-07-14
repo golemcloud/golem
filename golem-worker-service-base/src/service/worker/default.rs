@@ -18,22 +18,17 @@ use async_trait::async_trait;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
 use golem_api_grpc::proto::golem::common::JsonValue;
 
-use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
-};
+use golem_api_grpc::proto::golem::worker::{IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResultTyped};
 use golem_api_grpc::proto::golem::worker::{InvokeResultTyped as ProtoInvokeResultTyped, InvokeResult as ProtoInvokeResult, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
-};
+use golem_api_grpc::proto::golem::workerexecutor::{self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerRequestJson, ResumeWorkerRequest, UpdateWorkerRequest};
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
@@ -125,7 +120,7 @@ pub trait WorkerService<AuthCtx> {
     ) -> WorkerResult<ProtoInvokeResult>;
 
 
-    async fn invoke_function(
+    async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -140,7 +135,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
@@ -390,16 +385,17 @@ where
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
+        let params_: Vec<JsonValue> = params.iter().map(JsonValue::from).collect::<Vec<_>>();
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
                 info!("Invoking function on {}: {}", worker_id_clone, function_name);
-                Box::pin(worker_executor_client.invoke_and_await_worker(
-                    InvokeAndAwaitWorkerRequest {
+                Box::pin(worker_executor_client.invoke_and_await_worker_json(
+                    InvokeAndAwaitWorkerRequestJson {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
-                        input: params.clone(),
+                        input: params_.clone(),
                         idempotency_key: idempotency_key.clone(),
                         calling_convention: calling_convention.into(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -411,25 +407,26 @@ where
             },
             move |response| {
                 match response.into_inner() {
-                    workerexecutor::InvokeAndAwaitWorkerResponse {
+                    workerexecutor::InvokeAndAwaitWorkerResponseJson {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response::Result::Success(
-                                 workerexecutor::InvokeAndAwaitWorkerSuccess {
+                        Some(workerexecutor::invoke_and_await_worker_response_json::Result::Success(
+                                 workerexecutor::InvokeAndAwaitWorkerSuccessJson {
                                      output,
                                  },
                              )),
                     } => {
                         info!("Invoked function on {}: {}", worker_id, function_name_clone);
-                        Ok(ProtoInvokeResult { result: output })
+                        let output = output[0].to_json();
+                        Ok(output)
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponse {
+                    workerexecutor::InvokeAndAwaitWorkerResponseJson {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
+                        Some(workerexecutor::invoke_and_await_worker_response_json::Result::Failure(err)),
                     } => {
                         error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
+                    workerexecutor::InvokeAndAwaitWorkerResponseJson { .. } => {
                         error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
@@ -439,6 +436,73 @@ where
 
         Ok(invoke_response)
     }
+
+    async fn invoke_and_await_function_json_typed(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<Value>,
+        calling_convention: &CallingConvention,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<TypeAnnotatedValue> {
+
+        let worker_id = worker_id.clone();
+        let worker_id_clone = worker_id.clone();
+        let function_name_clone = function_name.clone();
+        let calling_convention = *calling_convention;
+        let params_: Vec<JsonValue> = params.iter().map(JsonValue::from).collect::<Vec<_>>();
+
+        let invoke_response = self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Invoking function on {}: {}", worker_id_clone, function_name);
+                Box::pin(worker_executor_client.invoke_and_await_worker_json_typed(
+                    InvokeAndAwaitWorkerRequestJson {
+                        worker_id: Some(worker_id_clone.clone().into()),
+                        name: function_name.clone(),
+                        input: params_.clone(),
+                        idempotency_key: idempotency_key.clone(),
+                        calling_convention: calling_convention.into(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone()
+                    }
+                )
+                )
+            },
+            move |response| {
+                match response.into_inner() {
+                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result:
+                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Success(
+                                 workerexecutor::InvokeAndAwaitWorkerSuccessTyped {
+                                     output: Some(output),
+                                 },
+                             )),
+                    } => {
+                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
+                        output.type_annotated_value.ok_or("Empty response".into())
+                    },
+                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result:
+                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Failure(err)),
+                    } => {
+                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
+                        Err(err.into())
+                    },
+                    workerexecutor::InvokeAndAwaitWorkerResponseTyped { .. } => {
+                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
+                        Err("Empty response".into())
+                    }
+                }
+            }
+        ).await?;
+
+        Ok(invoke_response)
+    }
+
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -505,7 +569,7 @@ where
         Ok(invoke_response)
     }
 
-    async fn invoke_function(
+    async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -514,16 +578,35 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
-        self.invoke_function_proto(
-            worker_id,
-            idempotency_key.map(|k| k.into()),
-            function_name.clone(),
-            params,
-            invocation_context,
-            metadata,
-        )
-        .await?;
+        let worker_id = worker_id.clone();
 
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                let worker_id = worker_id.clone();
+                Box::pin(worker_executor_client.invoke_worker(
+                    workerexecutor::InvokeWorkerRequestJson {
+                        worker_id: Some(worker_id.into()),
+                        name: function_name.clone(),
+                        input: params.iter().map(JsonValue::from).collect::<Vec<_>>(),
+                        idempotency_key: idempotency_key.clone(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::InvokeWorkerResponse {
+                    result: Some(workerexecutor::invoke_worker_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::InvokeWorkerResponse {
+                    result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
+            },
+        )
+            .await?;
         Ok(())
     }
 
@@ -532,15 +615,10 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
-
-        let params_val = params
-            .iter()
-            .map(JsonValue::from_json)
-            .collect::<Vec<JsonValue>>();
 
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -552,7 +630,7 @@ where
                         worker_id: Some(worker_id.into()),
                         idempotency_key: idempotency_key.clone(),
                         name: function_name.clone(),
-                        input: params_val.clone(),
+                        input: params.clone(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
@@ -1007,7 +1085,7 @@ where
         Ok(())
     }
 
-    async fn invoke_and_await_function(
+    async fn invoke_and_await_function_json(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
@@ -1018,6 +1096,22 @@ where
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value> {
         Ok(Value::default())
+    }
+
+    async fn invoke_and_await_function_json_typed(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: Option<IdempotencyKey>,
+        _function_name: String,
+        _params: Vec<Value>,
+        _calling_convention: &CallingConvention,
+        _invocation_context: Option<InvocationContext>,
+        _metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+            value: vec![],
+            typ: vec![]
+        }))
     }
 
     async fn invoke_and_await_function_proto(
@@ -1033,12 +1127,12 @@ where
         Ok(ProtoInvokeResult::default())
     }
 
-    async fn invoke_function(
+    async fn invoke_function_json(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Value,
+        _params: Vec<Value>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
@@ -1146,11 +1240,4 @@ where
         Err(WorkerServiceError::WorkerNotFound(worker_id))
     }
 
-    async fn invoke_and_await_function_json(&self, worker_id: &WorkerId, idempotency_key: Option<IdempotencyKey>, function_name: String, params: Vec<Value>, calling_convention: &CallingConvention, invocation_context: Option<InvocationContext>, metadata: WorkerRequestMetadata) -> WorkerResult<Value> {
-        todo!()
-    }
-
-    async fn invoke_and_await_function_typed(&self, worker_id: &WorkerId, idempotency_key: Option<ProtoIdempotencyKey>, function_name: String, params: Vec<Value>, calling_convention: &CallingConvention, invocation_context: Option<InvocationContext>, metadata: WorkerRequestMetadata) -> WorkerResult<ProtoInvokeResultTyped> {
-        todo!()
-    }
 }

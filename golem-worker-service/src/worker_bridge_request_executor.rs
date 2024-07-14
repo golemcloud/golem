@@ -89,7 +89,7 @@ mod internal {
 
         let invoke_result = default_executor
             .worker_service
-            .invoke_and_await_function_proto(
+            .invoke_and_await_function_json_typed(
                 &worker_id,
                 worker_request_params.idempotency_key.map(|v| IdempotencyKey {
                     value: v.value
@@ -99,7 +99,6 @@ mod internal {
                 &CallingConvention::Component,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await
             .map_err(|e| e.to_string())?;
