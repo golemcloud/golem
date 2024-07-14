@@ -16,7 +16,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{get_value, type_annotated_value_from_str};
+use golem_wasm_rpc::{type_annotated_value_from_str};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value};
 use semver::{BuildMetadata, Prerelease};
@@ -418,7 +418,7 @@ impl ParsedFunctionReference {
                     let type_annotated_value: TypeAnnotatedValue =
                         type_annotated_value_from_str(param_type, raw_param)
                             .map_err(|err| err.to_string())?;
-                    let value = get_value(type_annotated_value)?;
+                    let value = type_annotated_value.try_into()?;
                     result.push(value);
                 }
                 Ok(Some(result))

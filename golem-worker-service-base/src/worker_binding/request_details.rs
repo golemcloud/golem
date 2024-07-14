@@ -80,7 +80,7 @@ impl TypedHttRequestDetails {
             typ: vec![
                 NameTypePair {
                     name: "path".to_string(),
-                    typ: Type::try_from(merged_type_annotated_value).ok(),
+                    typ: Type::try_from(merged_type_annotated_value.clone()).ok(),
                 },
                 NameTypePair {
                     name: "body".to_string(),

@@ -57,7 +57,7 @@ pub(crate) async fn evaluate_pattern_match(
         match match_arm_evaluated {
             ArmPatternOutput::Matched(match_result) => {
                 if let Some(binding_variable) = &match_result.binding_variable {
-                    let analysed_typ = AnalysedType::try_from(match_result.result).map_err(|_| {
+                    let analysed_typ = AnalysedType::try_from(match_result.result.clone()).map_err(|_| {
                         EvaluationError::Message("Failed to get analysed type".to_string())
                     })?;
 
