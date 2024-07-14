@@ -187,6 +187,10 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             invocation,
         },
+        OplogEntry::GrowMemory { timestamp, delta } => OplogEntry::GrowMemory {
+            timestamp: rounded_ts(timestamp),
+            delta,
+        },
     }
 }
 

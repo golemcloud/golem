@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
-use tokio::time::timeout;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
+
 use tracing::{debug, Instrument};
 
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -31,7 +31,8 @@ use crate::workerctx::WorkerCtx;
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<WorkerId, (), Arc<Worker<Ctx>>, GolemError>,
     worker_memory: Arc<Semaphore>,
-    worker_estimate_coefficient: f64,
+    priority_allocation_lock: Arc<Mutex<()>>,
+    acquire_retry_delay: Duration,
 }
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
@@ -45,7 +46,8 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 "active_workers",
             ),
             worker_memory: Arc::new(Semaphore::new(worker_memory_size)),
-            worker_estimate_coefficient: memory_config.worker_estimate_coefficient,
+            acquire_retry_delay: memory_config.acquire_retry_delay,
+            priority_allocation_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -65,7 +67,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         let owned_worker_id = owned_worker_id.clone();
         let deps = deps.clone();
-        let worker_estimate_coefficient = self.worker_estimate_coefficient;
         self.workers
             .get_or_insert_simple(&worker_id, || {
                 Box::pin(async move {
@@ -77,7 +78,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             worker_env,
                             component_version,
                             parent,
-                            worker_estimate_coefficient,
                         )
                         .in_current_span()
                         .await?,
@@ -101,6 +101,50 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .expect("requested memory size is too large");
 
         loop {
+            let available = self.worker_memory.available_permits();
+            let lock = self.priority_allocation_lock.lock().await; // Block trying until a priority request is retrying once
+            let result = self.worker_memory.clone().try_acquire_many_owned(mem32);
+            drop(lock);
+            match result {
+                Ok(permit) => {
+                    debug!(
+                        "Acquired {} memory of {}, new available: {}, permit size: {}",
+                        mem32,
+                        available,
+                        self.worker_memory.available_permits(),
+                        permit.num_permits()
+                    );
+                    break permit;
+                }
+                Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
+                Err(TryAcquireError::NoPermits) => {
+                    debug!("Not enough memory to allocate {mem32} (available: {}), trying to free some up", self.worker_memory.available_permits());
+                    if self.try_free_up_memory(memory).await {
+                        debug!("Freed up some memory, retrying");
+                        // We have enough memory unless another worker has taken it in the meantime,
+                        // so retry the loop
+                        continue;
+                    } else {
+                        debug!(
+                            "Could not free up memory, retrying asking for permits after some time"
+                        );
+                        // Could not free up enough memory, so waiting for permits to be available.
+                        // We cannot use acquire_many() to wait for the permits because it eagerly preallocates
+                        // the available permits, and by that causing deadlocks. So we sleep and retry.
+
+                        tokio::time::sleep(self.acquire_retry_delay).await; // TODO: config
+                    }
+                }
+            }
+        }
+    }
+
+    pub async fn try_acquire(&self, memory: u64) -> Option<OwnedSemaphorePermit> {
+        let mem32: u32 = memory
+            .try_into()
+            .expect("requested memory size is too large");
+        let mut lock = None;
+        loop {
             match self.worker_memory.clone().try_acquire_many_owned(mem32) {
                 Ok(permit) => {
                     debug!(
@@ -108,34 +152,23 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         mem32,
                         self.worker_memory.available_permits()
                     );
-                    break permit;
+                    break Some(permit);
                 }
                 Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
-                    debug!("Not enough memory, trying to free some up");
-                    if self.try_free_up_memory(memory).await {
-                        debug!("Freed up some memory, retrying");
-                        // We have enough memory unless another worker has taken it in the meantime,
-                        // so retry the loop
+                    if lock.is_none() {
+                        debug!(
+                            "Not enough available memory to acquire {mem32} (available: {}), cancelling waiting acquires and retry",
+                            self.worker_memory.available_permits()
+                        );
+                        lock = Some(self.priority_allocation_lock.lock().await);
                         continue;
                     } else {
-                        debug!("Could not free up memory, waiting for permits to be available");
-                        // Could not free up enough memory, so waiting for permits to be available.
-                        // We cannot wait forever, because we need to force idle workers out of memory
-                        // if there is a need - but don't want to early drop them if there's no need.
-                        match timeout(
-                            Duration::from_millis(500),
-                            self.worker_memory.clone().acquire_many_owned(mem32),
-                        )
-                        .await
-                        .expect("worker memory semaphore has been closed")
-                        {
-                            Ok(permit) => break permit,
-                            Err(_) => {
-                                debug!("Could not acquire memory in time, retrying");
-                                continue;
-                            }
-                        }
+                        debug!(
+                            "Not enough available memory to acquire {mem32} (available: {})",
+                            self.worker_memory.available_permits()
+                        );
+                        break None;
                     }
                 }
             }
@@ -178,7 +211,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 }
             }
 
-            debug!("Freed up {freed}");
+            if freed > 0 {
+                debug!("Freed up {freed}");
+            }
             freed >= needed
         } else {
             debug!("Memory was freed up in the meantime");

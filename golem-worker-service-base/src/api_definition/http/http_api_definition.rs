@@ -262,9 +262,9 @@ pub struct Route {
 
 #[cfg(test)]
 mod tests {
-    use golem_common::serialization;
-
     use super::*;
+    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+    use golem_common::serialization;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -463,10 +463,9 @@ mod tests {
             binding:
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              functionName: golem:it/api/get-cart-contents
+              functionName: golem:it/api.{{get-cart-contents}}
               functionParams: {}
               response: '{}'
-
 
         "#,
             path_pattern, worker_id, function_params, response_mapping
@@ -543,6 +542,58 @@ mod tests {
             let encoded = serialization::serialize(&original).unwrap();
             let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
 
+            assert_eq!(original, decoded);
+        }
+
+        test_encode_decode(
+            "foo/{user-id}",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body}\"]",
+            "{status : 200}",
+        );
+
+        test_encode_decode(
+            "foo/{user-id}",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.body.foo}\"]",
+            "{status : 200}",
+        );
+
+        test_encode_decode(
+            "foo/{user-id}",
+            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
+            "[\"${request.path.user-id}\"]",
+            "{status : 200}",
+        );
+
+        test_encode_decode(
+            "foo",
+            "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
+            "[ \"data\"]",
+            "{status : 200}",
+        );
+
+        test_encode_decode(
+            "foo",
+            "match worker.response { ok(value) => 1, error => 0 }",
+            "[ \"data\"]",
+            "{status : 200}",
+        );
+    }
+
+    #[test]
+    fn test_api_spec_proto_conversion() {
+        fn test_encode_decode(
+            path_pattern: &str,
+            worker_id: &str,
+            function_params: &str,
+            response_mapping: &str,
+        ) {
+            let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
+            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+
+            let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
+            let decoded: HttpApiDefinition = proto.try_into().unwrap();
             assert_eq!(original, decoded);
         }
 

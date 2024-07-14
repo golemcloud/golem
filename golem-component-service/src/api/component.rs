@@ -15,9 +15,12 @@
 use futures_util::TryStreamExt;
 use std::sync::Arc;
 
-use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
 use golem_common::model::ComponentId;
+use golem_component_service_base::service::component::{
+    ComponentError as ComponentServiceError, ComponentService,
+};
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::model::*;
 use poem::error::ReadBodyError;
 use poem::Body;
@@ -95,7 +98,7 @@ impl From<std::io::Error> for ComponentError {
 }
 
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Component)]
@@ -104,8 +107,16 @@ impl ComponentApi {
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
         let data = payload.component.into_vec().await?;
         let component_name = payload.name;
-        let response = self.component_service.create(&component_name, data).await?;
-        Ok(Json(response))
+        let response = self
+            .component_service
+            .create(
+                &ComponentId::new_v4(),
+                &component_name,
+                data,
+                &DefaultNamespace::default(),
+            )
+            .await?;
+        Ok(Json(response.into()))
     }
 
     #[oai(
@@ -119,8 +130,11 @@ impl ComponentApi {
         wasm: Binary<Body>,
     ) -> Result<Json<Component>> {
         let data = wasm.0.into_vec().await?;
-        let response = self.component_service.update(&component_id.0, data).await?;
-        Ok(Json(response))
+        let response = self
+            .component_service
+            .update(&component_id.0, data, &DefaultNamespace::default())
+            .await?;
+        Ok(Json(response.into()))
     }
 
     #[oai(
@@ -135,7 +149,7 @@ impl ComponentApi {
     ) -> Result<Binary<Body>> {
         let bytes = self
             .component_service
-            .download_stream(&component_id.0, version.0)
+            .download_stream(&component_id.0, version.0, &DefaultNamespace::default())
             .await?;
         Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
@@ -151,8 +165,11 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
     ) -> Result<Json<Vec<Component>>> {
-        let response = self.component_service.get(&component_id.0).await?;
-        Ok(Json(response))
+        let response = self
+            .component_service
+            .get(&component_id.0, &DefaultNamespace::default())
+            .await?;
+        Ok(Json(response.into_iter().map(|c| c.into()).collect()))
     }
 
     #[oai(
@@ -181,11 +198,11 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .get_by_version(&versioned_component_id)
+            .get_by_version(&versioned_component_id, &DefaultNamespace::default())
             .await?;
 
         match response {
-            Some(component) => Ok(Json(component)),
+            Some(component) => Ok(Json(component.into())),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
@@ -203,11 +220,11 @@ impl ComponentApi {
     ) -> Result<Json<Component>> {
         let response = self
             .component_service
-            .get_latest_version(&component_id.0)
+            .get_latest_version(&component_id.0, &DefaultNamespace::default())
             .await?;
 
         match response {
-            Some(component) => Ok(Json(component)),
+            Some(component) => Ok(Json(component.into())),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
@@ -221,9 +238,9 @@ impl ComponentApi {
     ) -> Result<Json<Vec<Component>>> {
         let response = self
             .component_service
-            .find_by_name(component_name.0)
+            .find_by_name(component_name.0, &DefaultNamespace::default())
             .await?;
 
-        Ok(Json(response))
+        Ok(Json(response.into_iter().map(|c| c.into()).collect()))
     }
 }

@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
+use tokio::sync::broadcast::error::RecvError;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::{TypeAnnotatedValue, Val};
@@ -66,6 +67,19 @@ use golem_common::model::{
 };
 use golem_common::to_json::FromToJson;
 use golem_common::{model as common_model, recorded_grpc_request};
+
+use crate::error::*;
+use crate::model::{InterruptKind, LastError};
+use crate::services::events::Event;
+use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
+use crate::services::worker_event::LogLevel;
+use crate::services::{
+    worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
+    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::Worker;
+use crate::workerctx::WorkerCtx;
 use golem_service_base::model::ExportFunction;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use rib::ParsedFunctionName;
@@ -256,6 +270,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
+        let existing_worker = self.worker_service().get(&owned_worker_id).await;
+        if existing_worker.is_some() {
+            return Err(GolemError::worker_already_exists(worker_id.clone()));
+        }
+
         let args = request.args;
         let env = request
             .env
@@ -272,9 +291,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
         )
         .await?;
-        Worker::start_if_needed(worker.clone()).await?;
 
-        Ok(())
+        let mut subscription = self.events().subscribe();
+        Worker::start_if_needed(worker.clone()).await?;
+        if worker.is_loading() {
+            match subscription
+                .wait_for(|event| match event {
+                    Event::WorkerLoaded { worker_id, result }
+                        if worker_id == &owned_worker_id.worker_id =>
+                    {
+                        Some(result.clone())
+                    }
+                    _ => None,
+                })
+                .await
+            {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(RecvError::Closed) => Err(GolemError::unknown("Events subscription closed")),
+                Err(RecvError::Lagged(_)) => Err(GolemError::unknown(
+                    "Worker executor is overloaded and could not wait for worker to load",
+                )),
+            }
+        } else {
+            Ok(())
+        }
     }
 
     async fn complete_promise_internal(

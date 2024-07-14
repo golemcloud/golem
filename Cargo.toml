@@ -136,6 +136,14 @@ rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = { version = "0.9.33 " }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 strum = "0.26.1"
 strum_macros = "0.26.1"
 tap = "1.0.1"

@@ -37,6 +37,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .include_file("mod.rs")
         .compile(
             &[
+                "proto/golem/rib/function_name.proto",
+                "proto/golem/rib/expr.proto",
                 "proto/golem/common/account_id.proto",
                 "proto/golem/common/project_id.proto",
                 "proto/golem/common/empty.proto",

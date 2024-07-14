@@ -2,7 +2,6 @@ use ::http::Uri;
 pub mod api;
 pub mod api_definition;
 pub mod app_config;
-pub mod auth;
 pub mod evaluator;
 pub mod http;
 mod merge;
