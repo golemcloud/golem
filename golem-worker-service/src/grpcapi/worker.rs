@@ -575,7 +575,6 @@ impl WorkerGrpcApi {
                 &calling_convention,
                 request.context,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 

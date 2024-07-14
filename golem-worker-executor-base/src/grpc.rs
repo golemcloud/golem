@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use gethostname::gethostname;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
+use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::{TypeAnnotatedValue, Val};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -31,11 +32,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse,
-};
+use golem_api_grpc::proto::golem::workerexecutor::{ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequestJson, InvokeAndAwaitWorkerResponse, InvokeAndAwaitWorkerResponseJson, InvokeAndAwaitWorkerResponseTyped, UpdateWorkerRequest, UpdateWorkerResponse};
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_worker_id_string,
@@ -514,7 +511,85 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_and_await_worker_internal(
+    async fn invoke_and_await_worker_internal_typed(
+        &self,
+        request: &golem::workerexecutor::InvokeAndAwaitWorkerRequestJson
+    ) -> Result<golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue, GolemError> {
+        let full_function_name = request.name();
+
+        let (worker, optional_metadata) = self.get_or_create(request).await?;
+
+        let calling_convention = request.calling_convention();
+
+        let component_metadata = match optional_metadata {
+            Some(metadata) => metadata,
+            None => {
+                let (_, _, component_metadata) = Worker::get_running_component(worker).await?;
+                component_metadata.exports
+            }
+        };
+
+        let function_type = component_metadata
+            .to_exports()
+            .function_by_name(&full_function_name)
+            .map_err(|err| {
+                GolemError::invalid_request(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
+            .ok_or_else(|| {
+                GolemError::invalid_request(format!(
+                    "Failed to find the function {}",
+                    &full_function_name,
+                ))
+            })?;
+
+        let json_param = serde_json::Value::Array(request.input.iter().map(|v| v.to_json()).collect::<Vec<_>>());
+
+        let params_val = json_param
+            .validate_function_parameters(
+                Self::get_expected_function_parameters(&full_function_name, &function_type),
+                *calling_convention,
+            )
+            .map_err(|err| GolemError::ValueMismatch{ details: err.join(", ") }) ?;
+
+        let idempotency_key = request
+            .idempotency_key()?
+            .unwrap_or(IdempotencyKey::fresh());
+
+        let function_input = params_val
+            .iter()
+            .map(|val| val.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
+
+        let values = worker
+            .invoke_and_await(
+                idempotency_key,
+                calling_convention.into(),
+                full_function_name,
+                function_input,
+            )
+            .await?;
+
+        let results: Vec<Val> =
+            values.into_iter().map(|val| Val::from(val)).collect();
+
+        let function_results: Vec<AnalysedFunctionResult> = function_type
+            .results
+            .iter()
+            .map(|x| x.clone().into())
+            .collect();
+
+        let output = results
+            .validate_function_result(function_results, *calling_convention)
+            .map_err(|err| GolemError::ValueMismatch {details: err.join(", ") })?;
+
+        Ok(output)
+    }
+
+    async fn invoke_and_await_worker_internal_proto(
         &self,
         request: &golem::workerexecutor::InvokeAndAwaitWorkerRequest,
     ) -> Result<golem::workerexecutor::InvokeAndAwaitWorkerSuccess, GolemError> {
@@ -578,19 +653,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let results: Vec<Val> =
             values.into_iter().map(|val| Val::from(val)).collect();
 
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
-
-        let output = results
-            .validate_function_result(function_results, *calling_convention)
-            .map_err(|err| GolemError::ValueMismatch {details: err.join(", ") })?;
-
-        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: Some(TypeAnnotatedValue {
-            type_annotated_value: Some(output)
-        })})
+        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output: results })
     }
 
     fn get_expected_function_parameters(
@@ -1281,7 +1344,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             account_id = proto_account_id_string(&request.account_id),
         );
 
-        match self.invoke_and_await_worker_internal(&request).instrument(record.span.clone()).await {
+        match self.invoke_and_await_worker_internal_proto(&request).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                     result: Some(
@@ -1294,6 +1357,85 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                         result: Some(
                             golem::workerexecutor::invoke_and_await_worker_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn invoke_and_await_worker_json(&self, request: Request<InvokeAndAwaitWorkerRequestJson>) -> Result<Response<InvokeAndAwaitWorkerResponseJson>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "invoke_and_await_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            calling_convention = request.calling_convention,
+            account_id = proto_account_id_string(&request.account_id),
+        );
+
+        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
+            Ok(result) => {
+
+                let json = JsonValue::from_json(&get_json_from_typed_value(&result));
+                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessJson { output: vec![json] };
+
+                record.succeed(Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponseJson {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response_json::Result::Success(result),
+                        ),
+                    },
+                )))
+            },
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponseJson {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response_json::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn invoke_and_await_worker_json_typed(&self, request: Request<InvokeAndAwaitWorkerRequestJson>) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "invoke_and_await_worker",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            calling_convention = request.calling_convention,
+            account_id = proto_account_id_string(&request.account_id),
+        );
+
+        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
+            Ok(type_annotated_value) => {
+
+                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessTyped { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(type_annotated_value),
+                }) };
+
+                record.succeed(Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response_typed::Result::Success(result),
+                        ),
+                    },
+                )))
+            },
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response_typed::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),
@@ -1835,8 +1977,8 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         }
     }
 
-    fn input(&self) -> serde_json::Value {
-       serde_json::Value::Array(self.input.iter().map(|proto_json| proto_json.to_json()).collect())
+    fn input(&self) -> Vec<Val> {
+        self.input.clone()
     }
 
     fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {

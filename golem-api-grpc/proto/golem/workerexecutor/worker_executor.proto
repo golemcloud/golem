@@ -27,6 +27,8 @@ package golem.workerexecutor;
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
   rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerRequestJson) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeAndAwaitWorkerJsonTyped(InvokeAndAwaitWorkerRequestJson) returns (InvokeAndAwaitWorkerResponseTyped);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
@@ -100,7 +102,7 @@ message CreateWorkerResponse {
   }
 }
 
-message InvokeAndAwaitWorkerRequest {
+message InvokeAndAwaitWorkerRequestJson {
   golem.worker.WorkerId worker_id = 1;
   string name = 2;
   repeated golem.common.JsonValue input = 3;
@@ -111,6 +113,19 @@ message InvokeAndAwaitWorkerRequest {
   optional golem.worker.InvocationContext context = 8;
 }
 
+
+message InvokeAndAwaitWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated wasm.rpc.Val input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.worker.CallingConvention calling_convention = 5;
+  golem.common.AccountId account_id = 6;
+  golem.common.ResourceLimits account_limits = 7;
+  optional golem.worker.InvocationContext context = 8;
+}
+
+
 message InvokeAndAwaitWorkerResponse {
   oneof result {
     InvokeAndAwaitWorkerSuccess success = 1;
@@ -118,8 +133,30 @@ message InvokeAndAwaitWorkerResponse {
   }
 }
 
+message InvokeAndAwaitWorkerResponseJson {
+  oneof result {
+    InvokeAndAwaitWorkerSuccessJson success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAndAwaitWorkerResponseTyped {
+  oneof result {
+    InvokeAndAwaitWorkerSuccessTyped success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
 message InvokeAndAwaitWorkerSuccess {
+  repeated wasm.rpc.Val output = 1;
+}
+
+message InvokeAndAwaitWorkerSuccessTyped {
   wasm.rpc.TypeAnnotatedValue output = 1;
+}
+
+message InvokeAndAwaitWorkerSuccessJson {
+  repeated golem.common.JsonValue output = 1;
 }
 
 message InvokeWorkerRequest {
