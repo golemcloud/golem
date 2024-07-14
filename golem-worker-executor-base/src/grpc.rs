@@ -30,8 +30,6 @@ use uuid::Uuid;
 use wasmtime::Error;
 
 use crate::error::*;
-use crate::services::component::ProtoExports;
-use crate::services::{HasComponentService};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
@@ -59,7 +57,6 @@ use golem_common::model::{
 use golem_common::to_json::FromToJson;
 use golem_common::{model as common_model, recorded_grpc_request};
 
-use crate::error::*;
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};

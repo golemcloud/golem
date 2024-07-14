@@ -24,7 +24,7 @@ use wasmtime::component::Component;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
-use crate::services::component::{ComponentMetadata, ProtoExports};
+use crate::services::component::{ComponentMetadata};
 use crate::services::events::Event;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
