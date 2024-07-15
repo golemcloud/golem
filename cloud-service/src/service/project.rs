@@ -200,8 +200,17 @@ impl ProjectService for ProjectServiceDefault {
         } else {
             info!("Creating default project for account {}", account_id);
             let project = create_default_project(&auth.token.account_id);
-            self.project_repo.create(&project.clone().into()).await?;
-            Ok(project)
+            let create_res = self.project_repo.create(&project.clone().into()).await;
+            if let Err(err) = create_res {
+                info!("Project creation failed: {err:?}");
+            }
+            let result = self
+                .project_repo
+                .get_own_default(account_id.value.as_str())
+                .await?;
+            Ok(result
+                .ok_or(ProjectError::internal("Failed to create default project"))?
+                .into())
         }
     }
 
