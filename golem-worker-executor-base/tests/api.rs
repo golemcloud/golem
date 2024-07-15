@@ -440,6 +440,92 @@ async fn get_workers_from_worker() {
 
 #[tokio::test]
 #[tracing::instrument]
+async fn get_metadata_from_worker() {
+    let context = TestContext::new();
+    let mut executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("runtime-service").await;
+
+    let worker_id1 = executor
+        .start_worker(&component_id, "runtime-service-1")
+        .await;
+
+    let worker_id2 = executor
+        .start_worker(&component_id, "runtime-service-2")
+        .await;
+
+    fn get_worker_id_val(worker_id: &WorkerId) -> Value {
+        let component_id_val = {
+            let (high, low) = worker_id.component_id.0.as_u64_pair();
+            Value::Record(vec![Value::Record(vec![Value::U64(high), Value::U64(low)])])
+        };
+
+        Value::Record(vec![
+            component_id_val,
+            Value::String(worker_id.worker_name.clone()),
+        ])
+    }
+
+    async fn get_check(
+        worker_id1: &WorkerId,
+        worker_id2: &WorkerId,
+        executor: &mut TestWorkerExecutor,
+    ) {
+        let worker_id_val1 = get_worker_id_val(worker_id1);
+
+        let result = executor
+            .invoke_and_await(worker_id1, "golem:it/api.{get-self-metadata}", vec![])
+            .await
+            .unwrap();
+
+        match result.first() {
+            Some(Value::Record(values)) if !values.is_empty() => {
+                let id_val = values.first().unwrap();
+                check!(worker_id_val1 == *id_val);
+            }
+            _ => {
+                check!(false);
+            }
+        }
+
+        let worker_id_val2 = get_worker_id_val(worker_id2);
+
+        let result = executor
+            .invoke_and_await(
+                worker_id1,
+                "golem:it/api.{get-worker-metadata}",
+                vec![worker_id_val2.clone()],
+            )
+            .await
+            .unwrap();
+
+        match result.first() {
+            Some(Value::Option(value)) if value.is_some() => {
+                let result = *value.clone().unwrap();
+                match result {
+                    Value::Record(values) if !values.is_empty() => {
+                        let id_val = values.first().unwrap();
+                        check!(worker_id_val2 == *id_val);
+                    }
+                    _ => {
+                        check!(false);
+                    }
+                }
+            }
+            _ => {
+                check!(false);
+            }
+        }
+    }
+
+    get_check(&worker_id1, &worker_id2, &mut executor).await;
+    get_check(&worker_id2, &worker_id1, &mut executor).await;
+
+    drop(executor);
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn invoking_with_same_idempotency_key_is_idempotent() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
