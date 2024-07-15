@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
 use crate::config::CloudServiceConfig;
+use crate::model::ProjectView;
+use crate::service::auth::authorised_request;
+use crate::UriBackConversion;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_api_grpc::proto::golem::cloud::project::project_error::Error;
@@ -9,16 +12,13 @@ use cloud_api_grpc::proto::golem::cloud::project::{
     GetDefaultProjectRequest, GetProjectActionsRequest, GetProjectRequest,
 };
 use cloud_common::model::{ProjectActions, ProjectAuthorisedActions, TokenSecret};
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
-use http::Uri;
+use tonic::transport::Channel;
 use tonic::Status;
-
-use crate::model::ProjectView;
-use crate::service::auth::authorised_request;
-use crate::UriBackConversion;
 
 #[async_trait]
 pub trait ProjectService {
@@ -39,14 +39,24 @@ pub trait ProjectService {
 
 #[derive(Clone)]
 pub struct ProjectServiceDefault {
-    uri: Uri,
+    project_service_client: GrpcClient<CloudProjectServiceClient<Channel>>,
     retry_config: RetryConfig,
 }
 
 impl ProjectServiceDefault {
     pub fn new(config: &CloudServiceConfig) -> Self {
+        let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
+            GrpcClient::new(
+                CloudProjectServiceClient::new,
+                config.uri().as_http_02(),
+                GrpcClientConfig {
+                    retries_on_unavailable: config.retries.clone(),
+                    ..Default::default() // TODO
+                },
+            );
+
         Self {
-            uri: config.uri(),
+            project_service_client,
             retry_config: config.retries.clone(),
         }
     }
@@ -64,17 +74,26 @@ impl ProjectService for ProjectServiceDefault {
             "get",
             Some(format!("{project_id}")),
             &self.retry_config,
-            &(self.uri.clone(), project_id.clone(), token.clone()),
-            |(uri, id, token)| {
+            &(
+                self.project_service_client.clone(),
+                project_id.clone(),
+                token.clone(),
+            ),
+            |(client, id, token)| {
                 Box::pin(async move {
-                    let mut client = CloudProjectServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        GetProjectRequest {
-                            project_id: Some(id.clone().into()),
-                        },
-                        &token.value,
-                    );
-                    let response = client.get_project(request).await?.into_inner();
+                    let response = client
+                        .call(move |client| {
+                            let request = authorised_request(
+                                GetProjectRequest {
+                                    project_id: Some(id.clone().into()),
+                                },
+                                &token.value,
+                            );
+
+                            Box::pin(client.get_project(request))
+                        })
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
@@ -96,13 +115,17 @@ impl ProjectService for ProjectServiceDefault {
             "get-default",
             None,
             &self.retry_config,
-            &(self.uri.clone(), token.clone()),
-            |(uri, token)| {
+            &(self.project_service_client.clone(), token.clone()),
+            |(client, token)| {
                 Box::pin(async move {
-                    let mut client = CloudProjectServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(GetDefaultProjectRequest {}, &token.value);
-                    let response = client.get_default_project(request).await?.into_inner();
-
+                    let response = client
+                        .call(move |client| {
+                            let request =
+                                authorised_request(GetDefaultProjectRequest {}, &token.value);
+                            Box::pin(client.get_default_project(request))
+                        })
+                        .await?
+                        .into_inner();
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(get_default_project_response::Result::Success(project)) => {
@@ -129,19 +152,26 @@ impl ProjectService for ProjectServiceDefault {
             "get-actions",
             Some(format!("{project_id}")),
             &self.retry_config,
-            &(self.uri.clone(), project_id.clone(), token.clone()),
-            |(uri, id, token)| {
+            &(
+                self.project_service_client.clone(),
+                project_id.clone(),
+                token.clone(),
+            ),
+            |(client, id, token)| {
                 Box::pin(async move {
-                    let mut client = CloudProjectServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        GetProjectActionsRequest {
-                            project_id: Some(id.clone().into()),
-                        },
-                        &token.value,
-                    );
+                    let response = client
+                        .call(move |client| {
+                            let request = authorised_request(
+                                GetProjectActionsRequest {
+                                    project_id: Some(id.clone().into()),
+                                },
+                                &token.value,
+                            );
 
-                    let response = client.get_project_actions(request).await?.into_inner();
-
+                            Box::pin(client.get_project_actions(request))
+                        })
+                        .await?
+                        .into_inner();
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(get_project_actions_response::Result::Success(response)) => {
@@ -233,11 +263,11 @@ impl std::error::Error for ProjectError {
     // }
 }
 
-pub struct NoOpProjectService {
+pub struct ProjectServiceNoop {
     account_id: AccountId,
 }
 
-impl Default for NoOpProjectService {
+impl Default for ProjectServiceNoop {
     fn default() -> Self {
         Self {
             account_id: AccountId::from("a1"),
@@ -246,7 +276,7 @@ impl Default for NoOpProjectService {
 }
 
 #[async_trait]
-impl ProjectService for NoOpProjectService {
+impl ProjectService for ProjectServiceNoop {
     async fn get(
         &self,
         project_id: &ProjectId,

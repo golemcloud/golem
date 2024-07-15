@@ -4,6 +4,11 @@ pub mod limit;
 pub mod project;
 
 use golem_component_service_base::config::ComponentCompilationConfig;
+use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+use golem_component_service_base::service::component::{
+    ComponentService as BaseComponentService,
+    ComponentServiceDefault as BaseComponentServiceDefault,
+};
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
@@ -14,8 +19,7 @@ use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
 use crate::config::ComponentServiceConfig;
-use crate::repo::component::{ComponentRepo, DbComponentRepo};
-use crate::service::auth::{AuthService, CloudAuthService};
+use crate::service::auth::{AuthService, CloudAuthService, CloudNamespace};
 use crate::service::limit::{LimitService, LimitServiceDefault};
 use crate::service::project::{ProjectService, ProjectServiceDefault};
 
@@ -71,14 +75,19 @@ impl Services {
         let limit_service: Arc<dyn LimitService + Sync + Send> =
             Arc::new(LimitServiceDefault::new(&config.cloud_service));
 
-        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceDefault::new(
+        let base_component_service: Arc<dyn BaseComponentService<CloudNamespace> + Sync + Send> =
+            Arc::new(BaseComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
+                compilation_service.clone(),
+            ));
+
+        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
+            Arc::new(component::ComponentServiceDefault::new(
+                base_component_service,
                 auth_service.clone(),
                 limit_service.clone(),
                 project_service.clone(),
-                compilation_service.clone(),
             ));
 
         Ok(Services {
@@ -89,7 +98,7 @@ impl Services {
 
     pub fn noop() -> Self {
         let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceNoOp::default());
+            Arc::new(component::ComponentServiceNoop::default());
 
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
             Arc::new(ComponentCompilationServiceDisabled);

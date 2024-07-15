@@ -1,8 +1,3 @@
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use cloud_common::model::ProjectAction;
@@ -11,14 +6,21 @@ use golem_api_grpc::proto::golem::component::component_service_client::Component
 use golem_api_grpc::proto::golem::component::{
     get_component_metadata_response, GetLatestComponentRequest,
 };
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
 use golem_worker_service_base::app_config::ComponentServiceConfig;
 use golem_worker_service_base::service::component::ComponentServiceError;
 use golem_worker_service_base::service::with_metadata;
-use http::Uri;
 use serde::Deserialize;
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 use tonic::metadata::MetadataMap;
+use tonic::transport::Channel;
 use tonic::Request;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -41,24 +43,6 @@ pub trait AuthService {
         permission: ProjectAction,
         ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError>;
-}
-
-#[derive(Clone)]
-pub struct CloudAuthService {
-    project_service: Arc<dyn ProjectService + Sync + Send>,
-    component_service_config: ComponentServiceConfig,
-}
-
-impl CloudAuthService {
-    pub fn new(
-        project_service: Arc<dyn ProjectService + Sync + Send>,
-        component_service_config: ComponentServiceConfig,
-    ) -> Self {
-        Self {
-            project_service,
-            component_service_config,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -101,6 +85,15 @@ pub struct CloudNamespace {
     pub account_id: AccountId,
 }
 
+impl CloudNamespace {
+    pub fn new(project_id: ProjectId, account_id: AccountId) -> Self {
+        Self {
+            project_id,
+            account_id,
+        }
+    }
+}
+
 impl Display for CloudNamespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.account_id, self.project_id)
@@ -133,6 +126,111 @@ pub enum AuthServiceError {
     Internal(#[from] anyhow::Error),
 }
 
+pub struct CloudAuthService {
+    project_service: Arc<dyn ProjectService + Sync + Send>,
+    component_service_config: ComponentServiceConfig,
+    component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
+    component_project_cache: Cache<ComponentId, (), ProjectId, String>,
+}
+
+impl CloudAuthService {
+    pub fn new(
+        project_service: Arc<dyn ProjectService + Sync + Send>,
+        component_service_config: ComponentServiceConfig,
+    ) -> Self {
+        let component_service_client = GrpcClient::new(
+            ComponentServiceClient::new,
+            component_service_config.uri().as_http_02(),
+            GrpcClientConfig {
+                retries_on_unavailable: component_service_config.retries.clone(),
+                ..Default::default() // TODO
+            },
+        );
+
+        // TODO configuration
+        let component_project_cache = Cache::new(
+            Some(10000),
+            FullCacheEvictionMode::LeastRecentlyUsed(1),
+            BackgroundEvictionMode::OlderThan {
+                ttl: Duration::from_secs(60 * 60),
+                period: Duration::from_secs(60),
+            },
+            "component_project",
+        );
+
+        Self {
+            project_service,
+            component_service_config,
+            component_service_client,
+            component_project_cache,
+        }
+    }
+
+    async fn get_project(
+        &self,
+        component_id: &ComponentId,
+        metadata: &CloudAuthCtx,
+    ) -> Result<ProjectId, AuthServiceError> {
+        let id = component_id.clone();
+        let metadata = metadata.clone();
+        let retries = self.component_service_config.retries.clone();
+        let client = self.component_service_client.clone();
+
+        self.component_project_cache
+            .get_or_insert_simple(component_id, || {
+                Box::pin(async move {
+                    let result = with_retries(
+                        "component",
+                        "get_project",
+                        Some(format!("{id}")),
+                        &retries.clone(),
+                        &(client.clone(), id.clone(), metadata.clone()),
+                        |(client, id, metadata)| {
+                            Box::pin(async move {
+                                let response = client
+                                    .call(move |client| {
+                                        let request = GetLatestComponentRequest {
+                                            component_id: Some(id.clone().into()),
+                                        };
+                                        let request = with_metadata(request, metadata.clone());
+
+                                        Box::pin(client.get_latest_component_metadata(request))
+                                    })
+                                    .await?
+                                    .into_inner();
+
+                                match response.result {
+                                    None => Err(ComponentServiceError::internal("Empty response")),
+                                    Some(get_component_metadata_response::Result::Success(
+                                        response,
+                                    )) => response
+                                        .component
+                                        .and_then(|c| c.project_id)
+                                        .and_then(|id| id.try_into().ok())
+                                        .ok_or_else(|| {
+                                            ComponentServiceError::internal("Empty project id")
+                                        }),
+                                    Some(get_component_metadata_response::Result::Error(error)) => {
+                                        Err(error.into())
+                                    }
+                                }
+                            })
+                        },
+                        is_retriable,
+                    )
+                    .await;
+
+                    result.map_err(|e| {
+                        error!("Getting project of component: {} - error: {}", id, e);
+                        "Get project error".to_string()
+                    })
+                })
+            })
+            .await
+            .map_err(AuthServiceError::Unauthorized)
+    }
+}
+
 #[async_trait]
 impl AuthService for CloudAuthService {
     async fn is_authorized(
@@ -153,10 +251,7 @@ impl AuthService for CloudAuthService {
         debug!("is_authorized - project_id: {project_id}, action: {permission:?}, actions: {actions:?}, has_permission: {has_permission}");
 
         if has_permission {
-            Ok(CloudNamespace {
-                project_id,
-                account_id,
-            })
+            Ok(CloudNamespace::new(project_id, account_id))
         } else {
             Err(AuthServiceError::Forbidden(format!(
                 "No permission {permission:?}"
@@ -170,7 +265,7 @@ impl AuthService for CloudAuthService {
         permission: ProjectAction,
         ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
-        let project_id = get_project(component_id, ctx, &self.component_service_config).await?;
+        let project_id = self.get_project(component_id, ctx).await?;
 
         self.is_authorized(&project_id, permission, ctx).await
     }
@@ -239,10 +334,10 @@ impl AuthService for CloudAuthServiceNoop {
         _permission: ProjectAction,
         ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace {
-            project_id: project_id.clone(),
-            account_id: AccountId::from(ctx.token_secret.value.to_string().as_str()),
-        })
+        Ok(CloudNamespace::new(
+            project_id.clone(),
+            AccountId::from(ctx.token_secret.value.to_string().as_str()),
+        ))
     }
 
     async fn is_authorized_by_component(
@@ -251,63 +346,11 @@ impl AuthService for CloudAuthServiceNoop {
         _permission: ProjectAction,
         ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace {
-            project_id: ProjectId(component_id.0),
-            account_id: AccountId::from(ctx.token_secret.value.to_string().as_str()),
-        })
+        Ok(CloudNamespace::new(
+            ProjectId(component_id.0),
+            AccountId::from(ctx.token_secret.value.to_string().as_str()),
+        ))
     }
-}
-
-async fn get_project(
-    component_id: &ComponentId,
-    metadata: &CloudAuthCtx,
-    config: &ComponentServiceConfig,
-) -> Result<ProjectId, AuthServiceError> {
-    let uri: Uri = (*config).uri();
-
-    let result = with_retries(
-        "component",
-        "get_project",
-        Some(format!("{component_id}")),
-        &config.retries,
-        &(uri.clone(), component_id.clone(), metadata.clone()),
-        |(uri, id, metadata)| {
-            Box::pin(async move {
-                let mut client = ComponentServiceClient::connect(uri.as_http_02()).await?;
-                let request = GetLatestComponentRequest {
-                    component_id: Some(id.clone().into()),
-                };
-                let request = with_metadata(request, metadata.clone());
-
-                let response = client
-                    .get_latest_component_metadata(request)
-                    .await?
-                    .into_inner();
-
-                match response.result {
-                    None => Err(ComponentServiceError::internal("Empty response")),
-                    Some(get_component_metadata_response::Result::Success(response)) => response
-                        .component
-                        .and_then(|c| c.project_id)
-                        .and_then(|id| id.try_into().ok())
-                        .ok_or_else(|| ComponentServiceError::internal("Empty project id")),
-                    Some(get_component_metadata_response::Result::Error(error)) => {
-                        Err(error.into())
-                    }
-                }
-            })
-        },
-        is_retriable,
-    )
-    .await;
-
-    result.map_err(|e| {
-        error!(
-            "Getting project of component: {} - error: {}",
-            component_id, e
-        );
-        AuthServiceError::Unauthorized("Get project error".to_string())
-    })
 }
 
 fn is_retriable(error: &ComponentServiceError) -> bool {

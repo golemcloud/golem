@@ -102,26 +102,18 @@ impl From<golem_worker_service_base::service::api_deployment::ApiDeploymentError
         >,
     ) -> Self {
         match value {
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::InternalError(error) => {
-                ApiEndpointError::InternalError(Json(ErrorBody { error }))
+             golem_worker_service_base::service::api_deployment::ApiDeploymentError::InternalError(error) => ApiEndpointError::internal(error),
+            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
+                ApiEndpointError::not_found(e)
             }
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionNotFound(_, api_definition_id) => {
-                ApiEndpointError::NotFound(Json(MessageBody {
-                    message: format!("ApiDefinition not found id: {}", api_definition_id)
-                }))
+            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                ApiEndpointError::not_found(e)
             }
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentNotFound(_, site) => {
-                ApiEndpointError::NotFound(Json(MessageBody {
-                    message: format!("ApiDeployment not found for site: {}", site)
-                }))
+            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentConflict(_) => {
+                ApiEndpointError::already_exists(e)
             }
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentConflict(site) => {
-                ApiEndpointError::AlreadyExists(Json(format!("Deployment conflict for site: {}", site)))
-            }
-            golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionsConflict(conflicting_definitions) => {
-                ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Messages(MessagesErrorsBody{
-                    errors: vec![format!("conflicting definitions: {conflicting_definitions}")],
-                })))
+            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionsConflict(_) => {
+                ApiEndpointError::bad_request(e)
             }
         }
     }

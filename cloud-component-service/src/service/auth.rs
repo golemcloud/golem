@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::model::ProjectView;
+use crate::service::project::{ProjectError, ProjectService};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use cloud_common::model::ProjectAction;
@@ -13,8 +15,6 @@ use tonic::metadata::MetadataMap;
 use tonic::Request;
 use tracing::debug;
 use uuid::Uuid;
-
-use crate::service::project::{ProjectError, ProjectService};
 
 #[async_trait]
 pub trait AuthService {
@@ -77,9 +77,38 @@ pub struct CloudNamespace {
     pub account_id: AccountId,
 }
 
+impl CloudNamespace {
+    pub fn new(project_id: ProjectId, account_id: AccountId) -> Self {
+        Self {
+            project_id,
+            account_id,
+        }
+    }
+
+    pub fn from(project: ProjectView) -> Self {
+        CloudNamespace::new(project.id, project.owner_account_id)
+    }
+}
+
 impl Display for CloudNamespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.account_id, self.project_id)
+    }
+}
+
+impl TryFrom<String> for CloudNamespace {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid namespace: {s}"));
+        }
+
+        Ok(Self {
+            project_id: ProjectId::try_from(parts[1])?,
+            account_id: AccountId::from(parts[0]),
+        })
     }
 }
 
@@ -113,10 +142,7 @@ impl AuthService for CloudAuthService {
         debug!("is_authorized - project_id: {project_id}, action: {permission:?}, actions: {actions:?}, has_permission: {has_permission}");
 
         if has_permission {
-            Ok(CloudNamespace {
-                project_id,
-                account_id,
-            })
+            Ok(CloudNamespace::new(project_id, account_id))
         } else {
             Err(AuthServiceError::Forbidden(format!(
                 "No permission {permission:?}"
@@ -185,11 +211,11 @@ impl AuthService for CloudAuthServiceNoop {
         &self,
         project_id: &ProjectId,
         _permission: ProjectAction,
-        _ctx: &CloudAuthCtx,
+        ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
-        Ok(CloudNamespace {
-            project_id: project_id.clone(),
-            account_id: AccountId::generate(),
-        })
+        Ok(CloudNamespace::new(
+            project_id.clone(),
+            AccountId::from(ctx.token_secret.value.to_string().as_str()),
+        ))
     }
 }

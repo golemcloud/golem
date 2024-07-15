@@ -1,24 +1,23 @@
-use crate::service::auth::authorised_request;
-use async_trait::async_trait;
-use golem_common::model::AccountId;
-use golem_service_base::model::{ResourceLimits, WorkerId};
-use std::fmt::Display;
-
 use crate::config::CloudServiceConfig;
+use crate::service::auth::authorised_request;
+use crate::UriBackConversion;
+use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::limits_error::Error;
 use cloud_api_grpc::proto::golem::cloud::limit::{
     get_resource_limits_response, update_worker_limit_response, GetResourceLimitsRequest,
     UpdateWorkerLimitRequest,
 };
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
+use golem_common::model::AccountId;
 use golem_common::retries::with_retries;
-use http::Uri;
+use golem_service_base::model::{ResourceLimits, WorkerId};
+use std::fmt::Display;
+use tonic::transport::Channel;
 use tonic::Status;
 use tracing::info;
 use uuid::Uuid;
-
-use crate::UriBackConversion;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LimitError {
@@ -151,15 +150,23 @@ pub trait LimitService {
 }
 
 pub struct LimitServiceDefault {
-    uri: Uri,
+    limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>>,
     access_token: Uuid,
     retry_config: RetryConfig,
 }
 
 impl LimitServiceDefault {
     pub fn new(config: &CloudServiceConfig) -> Self {
+        let limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>> = GrpcClient::new(
+            CloudLimitsServiceClient::new,
+            config.uri().as_http_02(),
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default() // TODO
+            },
+        );
         Self {
-            uri: config.uri(),
+            limit_service_client,
             access_token: config.access_token,
             retry_config: config.retries.clone(),
         }
@@ -180,25 +187,29 @@ impl LimitService for LimitServiceDefault {
             Some(format!("{account_id} - {worker_id}")),
             &self.retry_config,
             &(
-                self.uri.clone(),
+                self.limit_service_client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
                 value,
                 self.access_token,
             ),
-            |(uri, account_id, worker_id, value, token)| {
+            |(client, account_id, worker_id, value, token)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        UpdateWorkerLimitRequest {
-                            account_id: Some(account_id.clone().into()),
-                            worker_id: Some(worker_id.clone().into()),
-                            value: *value,
-                        },
-                        token,
-                    );
+                    let response = client
+                        .call(move |client| {
+                            let request = authorised_request(
+                                UpdateWorkerLimitRequest {
+                                    account_id: Some(account_id.clone().into()),
+                                    worker_id: Some(worker_id.clone().into()),
+                                    value: *value,
+                                },
+                                token,
+                            );
 
-                    let response = client.update_worker_limit(request).await?.into_inner();
+                            Box::pin(client.update_worker_limit(request))
+                        })
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
@@ -228,26 +239,27 @@ impl LimitService for LimitServiceDefault {
             Some(format!("{account_id} - {worker_id}")),
             &self.retry_config,
             &(
-                self.uri.clone(),
+                self.limit_service_client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
                 value,
                 self.access_token,
             ),
-            |(uri, account_id, worker_id, value, token)| {
+            |(client, account_id, worker_id, value, token)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        UpdateWorkerLimitRequest {
-                            account_id: Some(account_id.clone().into()),
-                            worker_id: Some(worker_id.clone().into()),
-                            value: *value,
-                        },
-                        token,
-                    );
-
                     let response = client
-                        .update_worker_connection_limit(request)
+                        .call(move |client| {
+                            let request = authorised_request(
+                                UpdateWorkerLimitRequest {
+                                    account_id: Some(account_id.clone().into()),
+                                    worker_id: Some(worker_id.clone().into()),
+                                    value: *value,
+                                },
+                                token,
+                            );
+
+                            Box::pin(client.update_worker_connection_limit(request))
+                        })
                         .await?
                         .into_inner();
 
@@ -278,18 +290,26 @@ impl LimitService for LimitServiceDefault {
             "get-resource-limits",
             Some(account_id.to_string()),
             &self.retry_config,
-            &(self.uri.clone(), account_id.clone(), self.access_token),
-            |(uri, id, token)| {
+            &(
+                self.limit_service_client.clone(),
+                account_id.clone(),
+                self.access_token,
+            ),
+            |(client, id, token)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        GetResourceLimitsRequest {
-                            account_id: Some(id.clone().into()),
-                        },
-                        token,
-                    );
+                    let response = client
+                        .call(move |client| {
+                            let request = authorised_request(
+                                GetResourceLimitsRequest {
+                                    account_id: Some(id.clone().into()),
+                                },
+                                token,
+                            );
 
-                    let response = client.get_resource_limits(request).await?.into_inner();
+                            Box::pin(client.get_resource_limits(request))
+                        })
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),

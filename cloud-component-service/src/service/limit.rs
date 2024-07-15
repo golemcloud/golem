@@ -1,17 +1,17 @@
+use crate::config::CloudServiceConfig;
 use crate::service::auth::authorised_request;
 use async_trait::async_trait;
-use golem_common::model::{AccountId, ComponentId};
-use std::fmt::Display;
-
-use crate::config::CloudServiceConfig;
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::limits_error::Error;
 use cloud_api_grpc::proto::golem::cloud::limit::{
     update_component_limit_response, UpdateComponentLimitRequest,
 };
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
+use golem_common::model::{AccountId, ComponentId};
 use golem_common::retries::with_retries;
-use http::Uri;
+use std::fmt::Display;
+use tonic::transport::Channel;
 use tonic::Status;
 use uuid::Uuid;
 
@@ -137,15 +137,23 @@ pub trait LimitService {
 }
 
 pub struct LimitServiceDefault {
-    uri: Uri,
+    limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>>,
     access_token: Uuid,
     retry_config: RetryConfig,
 }
 
 impl LimitServiceDefault {
     pub fn new(config: &CloudServiceConfig) -> Self {
+        let limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>> = GrpcClient::new(
+            CloudLimitsServiceClient::new,
+            config.uri().as_http_02(),
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default() // TODO
+            },
+        );
         Self {
-            uri: config.uri(),
+            limit_service_client,
             access_token: config.access_token,
             retry_config: config.retries.clone(),
         }
@@ -167,28 +175,31 @@ impl LimitService for LimitServiceDefault {
             Some(format!("{account_id} - {component_id}")),
             &self.retry_config,
             &(
-                self.uri.clone(),
+                self.limit_service_client.clone(),
                 account_id.clone(),
                 component_id.clone(),
                 count,
                 size,
                 self.access_token,
             ),
-            |(uri, account_id, component_id, count, size, token)| {
+            |(client, account_id, component_id, count, size, token)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(uri.as_http_02()).await?;
-                    let request = authorised_request(
-                        UpdateComponentLimitRequest {
-                            account_id: Some(account_id.clone().into()),
-                            component_id: Some(component_id.clone().into()),
-                            count: *count,
-                            size: *size,
-                        },
-                        token,
-                    );
+                    let response = client
+                        .call(move |client| {
+                            let request = authorised_request(
+                                UpdateComponentLimitRequest {
+                                    account_id: Some(account_id.clone().into()),
+                                    component_id: Some(component_id.clone().into()),
+                                    count: *count,
+                                    size: *size,
+                                },
+                                token,
+                            );
 
-                    let response = client.update_component_limit(request).await?.into_inner();
-
+                            Box::pin(client.update_component_limit(request))
+                        })
+                        .await?
+                        .into_inner();
                     match response.result {
                         None => Err("Empty response".to_string().into()),
                         Some(update_component_limit_response::Result::Success(_)) => Ok(()),
@@ -207,10 +218,10 @@ impl LimitService for LimitServiceDefault {
 }
 
 #[derive(Default)]
-pub struct NoOpLimitService {}
+pub struct LimitServiceNoop {}
 
 #[async_trait]
-impl LimitService for NoOpLimitService {
+impl LimitService for LimitServiceNoop {
     async fn update_component_limit(
         &self,
         _account_id: &AccountId,

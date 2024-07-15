@@ -1,3 +1,4 @@
+use crate::service::auth::CloudNamespace;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::model::{
@@ -26,6 +27,20 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub project_id: ProjectId,
+}
+
+impl Component {
+    pub fn new(component: golem_service_base::model::Component, project_id: ProjectId) -> Self {
+        Self {
+            versioned_component_id: component.versioned_component_id,
+            user_component_id: component.user_component_id,
+            protected_component_id: component.protected_component_id,
+            component_name: component.component_name,
+            component_size: component.component_size,
+            metadata: component.metadata,
+            project_id,
+        }
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -69,21 +84,16 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
     }
 }
 
-impl Component {
-    pub fn next_version(self) -> Self {
-        let new_version = VersionedComponentId {
-            component_id: self.versioned_component_id.component_id,
-            version: self.versioned_component_id.version + 1,
-        };
+impl From<golem_component_service_base::model::Component<CloudNamespace>> for Component {
+    fn from(value: golem_component_service_base::model::Component<CloudNamespace>) -> Self {
         Self {
-            versioned_component_id: new_version.clone(),
-            user_component_id: UserComponentId {
-                versioned_component_id: new_version.clone(),
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: new_version,
-            },
-            ..self
+            versioned_component_id: value.versioned_component_id,
+            user_component_id: value.user_component_id,
+            protected_component_id: value.protected_component_id,
+            component_name: value.component_name,
+            component_size: value.component_size,
+            metadata: value.metadata,
+            project_id: value.namespace.project_id,
         }
     }
 }
