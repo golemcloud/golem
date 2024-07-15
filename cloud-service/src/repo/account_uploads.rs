@@ -48,26 +48,33 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<sqlx::Postgres> {
     }
 
     async fn update(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        sqlx::query(
+            "
+            insert into account_uploads (account_id, counter, month, year)
+            values ($1, 0, 1, 2000)
+            on conflict do nothing
+        ",
+        )
+        .bind(id.value.clone())
+        .execute(&mut *transaction)
+        .await?;
+
         sqlx::query("
-            with upsert as (
-                update account_uploads
-                set counter = case
+            update account_uploads
+            set counter = case
                 when month = extract(month from get_current_date()) and year = extract(year from get_current_date())
                     then counter + $2
                 else $2
                 end,
-                month = extract(month from get_current_date()),
-                year = extract(year from get_current_date())
-                where account_id = $1
-                returning *
-            )
-            insert into account_uploads (account_id, counter, month, year)
-            select $1, $2, extract(month from get_current_date()), extract(year from get_current_date())
-            where not exists (select * from upsert)
+            month = extract(month from get_current_date()),
+            year = extract(year from get_current_date())
+            where account_id = $1
         ")
         .bind(id.value.clone())
         .bind(value)
-        .execute(self.db_pool.deref())
+        .execute(&mut *transaction)
         .await?;
 
         // Why don't we use get function?
@@ -79,8 +86,10 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<sqlx::Postgres> {
             ",
         )
         .bind(id.value.clone())
-        .fetch_optional(self.db_pool.deref())
+        .fetch_optional(&mut *transaction)
         .await?;
+
+        transaction.commit().await?;
 
         Ok(new_counter.map(|r| r.counter).unwrap_or(0))
     }
