@@ -25,9 +25,7 @@ use tracing::{error, info};
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
-use golem_service_base::model::{
-    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
-};
+use golem_service_base::model::{ComponentMetadata, ComponentName, Exports, ProtectedComponentId, UserComponentId, VersionedComponentId};
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 
@@ -686,7 +684,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
             component_name: component_name.clone(),
             component_size: 0,
             metadata: ComponentMetadata {
-                exports: vec![],
+                exports: Exports::empty(),
                 producers: vec![],
                 memories: vec![],
             },
@@ -722,7 +720,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
             component_name: ComponentName("fake".to_string()),
             component_size: 0,
             metadata: ComponentMetadata {
-                exports: vec![],
+                exports: Exports::empty(),
                 producers: vec![],
                 memories: vec![],
             },

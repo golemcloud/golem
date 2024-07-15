@@ -1808,6 +1808,12 @@ pub struct Exports {
 }
 
 impl Exports {
+    pub fn empty() -> Exports {
+        Exports {
+            exports: vec![]
+        }
+    }
+
     pub fn instances(&self) -> Vec<ExportInstance> {
         let mut instances = vec![];
         for export in self.exports.clone() {

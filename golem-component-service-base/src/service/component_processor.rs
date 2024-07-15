@@ -20,7 +20,7 @@ use golem_wasm_ast::{
     IgnoreAllButMetadata,
 };
 
-use golem_service_base::model::ComponentMetadata;
+use golem_service_base::model::{ComponentMetadata, Exports};
 
 pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
     let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
@@ -40,10 +40,12 @@ pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProc
 
     add_resource_drops(&mut exports);
 
-    let exports = exports
-        .into_iter()
-        .map(|export| export.into())
-        .collect::<Vec<_>>();
+    let exports = Exports {
+        exports:  exports
+            .into_iter()
+            .map(|export| export.into())
+            .collect::<Vec<_>>()
+    };
 
     let memories = state
         .get_all_memories()
