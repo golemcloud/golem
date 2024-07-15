@@ -119,6 +119,7 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<ProtoInvokeResult>;
 
+    // Accepts Json parameters as input
     async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
@@ -129,6 +130,7 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
+    // Accepts Vec<Val> as input
     async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,
