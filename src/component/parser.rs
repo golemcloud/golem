@@ -546,19 +546,21 @@ impl<'a> TryFrom<wasmparser::ComponentType<'a>> for ComponentType {
                 Ok(ComponentType::Func(component_func_type.try_into()?))
             }
             wasmparser::ComponentType::Component(component_type_decls) => {
-                Ok(ComponentType::Component(
+                Ok(ComponentType::Component(ComponentTypeDeclarations(
                     component_type_decls
                         .iter()
                         .map(|component_type_decl| component_type_decl.clone().try_into())
                         .collect::<Result<Vec<_>, String>>()?,
-                ))
+                )))
             }
-            wasmparser::ComponentType::Instance(instancetype_decls) => Ok(ComponentType::Instance(
-                instancetype_decls
-                    .iter()
-                    .map(|instancetype_decl| instancetype_decl.clone().try_into())
-                    .collect::<Result<Vec<_>, String>>()?,
-            )),
+            wasmparser::ComponentType::Instance(instancetype_decls) => {
+                Ok(ComponentType::Instance(InstanceTypeDeclarations(
+                    instancetype_decls
+                        .iter()
+                        .map(|instancetype_decl| instancetype_decl.clone().try_into())
+                        .collect::<Result<Vec<_>, String>>()?,
+                )))
+            }
             wasmparser::ComponentType::Resource { rep, dtor } => Ok(ComponentType::Resource {
                 representation: rep.try_into()?,
                 destructor: dtor,

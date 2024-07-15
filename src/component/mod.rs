@@ -724,6 +724,11 @@ pub enum ComponentTypeDeclaration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentTypeDeclarations(Vec<ComponentTypeDeclaration>);
+
+impl ComponentTypeDeclarations {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstanceTypeDeclaration {
     Core(CoreType),
     Type(ComponentType),
@@ -735,11 +740,60 @@ pub enum InstanceTypeDeclaration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceTypeDeclarations(Vec<InstanceTypeDeclaration>);
+
+impl InstanceTypeDeclarations {
+    pub fn find_export(&self, name: &str) -> Option<&ComponentTypeRef> {
+        self.0.iter().find_map(|decl| match decl {
+            InstanceTypeDeclaration::Export {
+                name: ComponentExternName::Name(n),
+                desc,
+            } if n == name => Some(desc),
+            _ => None,
+        })
+    }
+
+    pub fn get_component_type(
+        &self,
+        component_type_idx: ComponentTypeIdx,
+    ) -> Option<&InstanceTypeDeclaration> {
+        let mut idx = 0;
+        let mut result = None;
+        for decl in &self.0 {
+            match decl {
+                InstanceTypeDeclaration::Type(_)
+                | InstanceTypeDeclaration::Alias(Alias::Outer {
+                    kind: OuterAliasKind::Type,
+                    ..
+                })
+                | InstanceTypeDeclaration::Alias(Alias::InstanceExport {
+                    kind: ComponentExternalKind::Type,
+                    ..
+                })
+                | InstanceTypeDeclaration::Export {
+                    desc: ComponentTypeRef::Type(_),
+                    ..
+                } => {
+                    if component_type_idx == idx {
+                        result = Some(decl);
+                        break;
+                    } else {
+                        idx += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        result
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComponentType {
     Defined(ComponentDefinedType),
     Func(ComponentFuncType),
-    Component(Vec<ComponentTypeDeclaration>),
-    Instance(Vec<InstanceTypeDeclaration>),
+    Component(ComponentTypeDeclarations),
+    Instance(InstanceTypeDeclarations),
     Resource {
         representation: ValType,
         destructor: Option<ComponentFuncIdx>,

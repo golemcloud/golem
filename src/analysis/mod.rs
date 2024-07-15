@@ -545,7 +545,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
     fn get_components_from_stack(&self, count: u32) -> Vec<ComponentStackItem<Ast>> {
         self.component_stack
             .iter()
-            .take(self.component_stack.len() - count as usize)
+            .skip(self.component_stack.len() - count as usize - 1)
             .cloned()
             .collect()
     }
@@ -629,20 +629,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     .get_final_referenced(format!("instance {instance_idx}"), |component| {
                         component.get_instance_wrapped(*instance_idx)
                     })?;
-                match &*instance_section {
-                    ComponentSection::Instance(_) => {
-                        let instance = Mrc::map(instance_section, |s| s.as_instance());
-                        let (maybe_export, next_ctx) =
-                            next_ctx.find_export_by_name(&instance, name)?;
-                        let export = AnalysisFailure::fail_on_missing(maybe_export, format!("missing aliased instance export {name} from instance {instance_idx}"))?;
-                        let wrapped = Mrc::new(ComponentSection::Export((*export).clone()));
-                        next_ctx.follow_redirects(wrapped)
-                    }
-                    _ => Err(AnalysisFailure::failed(format!(
-                        "Expected instance, but got {} instead",
-                        instance_section.type_name()
-                    ))),
-                }
+                next_ctx.find_instance_export(instance_section, name)
             }
             ComponentSection::Import(ComponentImport {
                 desc: ComponentTypeRef::Type(TypeBounds::Eq(idx)),
@@ -650,7 +637,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             }) => {
                 let maybe_tpe = component.get_component_type(*idx);
                 let tpe = AnalysisFailure::fail_on_missing(maybe_tpe, format!("type {idx}"))?;
-                Ok((tpe, self.clone()))
+                self.follow_redirects(tpe)
             }
             ComponentSection::Alias(Alias::Outer {
                 kind,
@@ -692,6 +679,113 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             }
             // TODO: support other redirections if needed
             _ => Ok((section, self.clone())),
+        }
+    }
+
+    fn find_instance_export(
+        &self,
+        instance_section: Mrc<ComponentSection<Ast>>,
+        name: &String,
+    ) -> AnalysisResult<(Mrc<ComponentSection<Ast>>, AnalysisContext<Ast>)> {
+        match &*instance_section {
+            ComponentSection::Instance(_) => {
+                let instance = Mrc::map(instance_section, |s| s.as_instance());
+                let (maybe_export, next_ctx) = self.find_export_by_name(&instance, name)?;
+                let export = AnalysisFailure::fail_on_missing(
+                    maybe_export,
+                    format!("missing aliased instance export {name} from instance"),
+                )?;
+                let wrapped = Mrc::new(ComponentSection::Export((*export).clone()));
+                next_ctx.follow_redirects(wrapped)
+            }
+            ComponentSection::Import(ComponentImport {
+                desc: ComponentTypeRef::Instance(type_idx),
+                ..
+            }) => {
+                let maybe_tpe = self.get_component().get_component_type(*type_idx);
+                let tpe = AnalysisFailure::fail_on_missing(maybe_tpe, format!("type {type_idx}"))?;
+                let (tpe, next_ctx) = self.follow_redirects(tpe)?;
+                next_ctx.find_instance_export(tpe, name)
+            }
+            ComponentSection::Type(ComponentType::Instance(decls)) => {
+                match decls.find_export(name) {
+                    Some(decl) => {
+                        match decl {
+                            ComponentTypeRef::Module(type_idx) => {
+                                let maybe_tpe = self.get_component().get_component_type(*type_idx);
+                                let tpe = AnalysisFailure::fail_on_missing(
+                                    maybe_tpe,
+                                    format!("type {type_idx}"),
+                                )?;
+                                self.follow_redirects(tpe)
+                            }
+                            ComponentTypeRef::Func(type_idx) => {
+                                let maybe_tpe = self.get_component().get_component_type(*type_idx);
+                                let tpe = AnalysisFailure::fail_on_missing(
+                                    maybe_tpe,
+                                    format!("type {type_idx}"),
+                                )?;
+                                self.follow_redirects(tpe)
+                            }
+                            ComponentTypeRef::Val(_val_type) => {
+                                todo!()
+                            }
+                            ComponentTypeRef::Type(type_bounds) => {
+                                match type_bounds {
+                                    TypeBounds::Eq(component_type_idx) => {
+                                        let decl = decls.get_component_type(*component_type_idx);
+                                        let decl = AnalysisFailure::fail_on_missing(decl, format!("type {component_type_idx}"))?;
+
+                                        match decl {
+                                            InstanceTypeDeclaration::Core(_) => {
+                                                Err(AnalysisFailure::failed("Core type aliases are not supported"))
+                                            }
+                                            InstanceTypeDeclaration::Type(component_type) => {
+                                                Ok((Mrc::new(ComponentSection::Type(component_type.clone())), self.clone()))
+                                            }
+                                            InstanceTypeDeclaration::Alias(alias) => {
+                                                let component_idx = self.component_stack.last().unwrap().component_idx.unwrap();
+                                                let new_ctx = self.push_component(self.get_component(), component_idx);
+                                                // Emulating an inner scope by duplicating the current component on the stack (TODO: refactor this)
+                                                new_ctx.follow_redirects(Mrc::new(ComponentSection::Alias(alias.clone())))
+                                            }
+                                            InstanceTypeDeclaration::Export { .. } => {
+                                                todo!()
+                                            }
+                                        }
+                                    }
+                                    TypeBounds::SubResource => {
+                                        Err(AnalysisFailure::failed("Reached a sub-resource type bound without a surrounding borrowed/owned resource type in find_instance_export"))
+                                    }
+                                }
+                            }
+                            ComponentTypeRef::Instance(type_idx) => {
+                                let maybe_tpe = self.get_component().get_component_type(*type_idx);
+                                let tpe = AnalysisFailure::fail_on_missing(
+                                    maybe_tpe,
+                                    format!("type {type_idx}"),
+                                )?;
+                                self.follow_redirects(tpe)
+                            }
+                            ComponentTypeRef::Component(type_idx) => {
+                                let maybe_tpe = self.get_component().get_component_type(*type_idx);
+                                let tpe = AnalysisFailure::fail_on_missing(
+                                    maybe_tpe,
+                                    format!("type {type_idx}"),
+                                )?;
+                                self.follow_redirects(tpe)
+                            }
+                        }
+                    }
+                    None => Err(AnalysisFailure::failed(format!(
+                        "Could not find exported element {name} in instance type declaration"
+                    ))),
+                }
+            }
+            _ => Err(AnalysisFailure::failed(format!(
+                "Expected instance or imported instance, but got {} instead",
+                instance_section.type_name()
+            ))),
         }
     }
 
