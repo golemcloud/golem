@@ -180,7 +180,7 @@ fn handle_ok(
     input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
-        TypeAnnotatedValue::Result(typed_result) => {
+       outer @ TypeAnnotatedValue::Result(typed_result) => {
             let result = typed_result
                 .result_value
                 .as_ref()
@@ -201,7 +201,7 @@ fn handle_ok(
 
                     if let Some(bv) = binding_variable {
                         let record =
-                            internal::create_singleton_record(&bv.0, &type_annotated_value_in_ok)?;
+                            internal::create_singleton_record(&bv.0, &outer)?;
                         input.merge_variables(&record);
                     }
 
@@ -225,7 +225,7 @@ fn handle_err(
     input: &mut EvaluationContext,
 ) -> Result<ArmPatternOutput, EvaluationError> {
     match match_expr_result {
-        TypeAnnotatedValue::Result(typed_result) => {
+        outer @ TypeAnnotatedValue::Result(typed_result) => {
             let result = typed_result
                 .result_value
                 .as_ref()
@@ -245,7 +245,7 @@ fn handle_err(
 
                     if let Some(bv) = binding_variable {
                         let record =
-                            internal::create_singleton_record(&bv.0, &type_annotated_value_in_err)?;
+                            internal::create_singleton_record(&bv.0, &outer)?;
                         input.merge_variables(&record);
                     }
 

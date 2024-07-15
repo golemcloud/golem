@@ -560,11 +560,11 @@ mod tests {
     }
 
     trait WorkerBridgeExt {
-        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse;
+        fn to_refined_worker_response(&self) -> RefinedWorkerResponse;
     }
 
     impl WorkerBridgeExt for WorkerResponse {
-        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse {
+        fn to_refined_worker_response(&self) -> RefinedWorkerResponse {
             RefinedWorkerResponse::SingleResult(self.result.clone())
         }
     }
@@ -920,7 +920,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let worker_response =
-            get_worker_response(Value::Null.to_string().as_str()).to_test_worker_bridge_response();
+            get_worker_response(Value::Null.to_string().as_str()).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
@@ -955,7 +955,7 @@ mod tests {
                         }
                     }"#,
         )
-        .to_test_worker_bridge_response();
+        .to_refined_worker_response();
 
         let expr1 = rib::from_string(
             r#"${if request.path.id == "foo" then "bar" else match worker.response { ok(value) => value.id, err(msg) => "empty" }}"#,
@@ -988,7 +988,7 @@ mod tests {
             request_details_from_request_path_variables(uri, path_pattern);
 
         let error_response_with_request_variables = new_resolved_variables_from_request_path;
-        let error_worker_response = error_worker_response.to_test_worker_bridge_response();
+        let error_worker_response = error_worker_response.to_refined_worker_response();
 
         let expr3 = rib::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
@@ -1031,7 +1031,7 @@ mod tests {
                         }
                     }"#,
         )
-        .to_test_worker_bridge_response();
+        .to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { ok(value) => "personal-id", err(msg) => "not found" }}"#,
@@ -1059,7 +1059,7 @@ mod tests {
                         }
                     }"#,
         )
-        .to_test_worker_bridge_response();
+        .to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { ok(value) => value, err(msg) => "not found" }}"#,
@@ -1093,7 +1093,7 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
@@ -1116,7 +1116,7 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }
@@ -1139,7 +1139,7 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
         let expected = internal::create_option(TypeAnnotatedValue::Str("id1".to_string())).unwrap();
@@ -1164,7 +1164,7 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
         let expected = test_utils::create_none(&AnalysedType::Str);
@@ -1188,7 +1188,7 @@ mod tests {
             rib::from_string("${match worker.response { ok(value) => some(none), none => none }}")
                 .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
         let internal_opt = test_utils::create_none(&AnalysedType::Str);
@@ -1213,7 +1213,7 @@ mod tests {
             rib::from_string("${match worker.response { ok(value) => ok(1), none => err(2) }}")
                 .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
         let expected = internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap();
         assert_eq!(result, Ok(expected));
@@ -1236,7 +1236,7 @@ mod tests {
             rib::from_string("${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}")
                 .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
         let expected = internal::create_error_result(TypeAnnotatedValue::U64(2)).unwrap();
@@ -1263,7 +1263,7 @@ mod tests {
 
         dbg!(expr.clone());
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
         let expected = internal::create_error_result(TypeAnnotatedValue::U64(2)).unwrap();
@@ -1290,9 +1290,11 @@ mod tests {
         )
             .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await
             .unwrap();
+
+        dbg!(result.clone());
 
         let output_json = golem_wasm_rpc::json::get_json_from_typed_value(&result);
 
@@ -1344,7 +1346,7 @@ mod tests {
         let expr =
             rib::from_string("${match worker.response { Foo(value) => ok(value.id) }}").unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
         let expected =
@@ -1397,7 +1399,7 @@ mod tests {
             }),
         }));
 
-        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(some(value)) => value.id, err(msg) => "not found" }}"#,
@@ -1419,7 +1421,7 @@ mod tests {
 
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
@@ -1440,7 +1442,7 @@ mod tests {
 
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response = WorkerResponse::new(output).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => "not found" }}"#,
@@ -1495,7 +1497,7 @@ mod tests {
             }),
         }));
 
-        let worker_response = WorkerResponse::new(output).to_test_worker_bridge_response();
+        let worker_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
@@ -1807,7 +1809,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
@@ -1817,7 +1819,7 @@ mod tests {
             let value2 = noop_executor
                 .evaluate_with_worker_response(
                     &expr2,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
@@ -1830,7 +1832,7 @@ mod tests {
         async fn expr_to_string_round_trip_match_expr_append() {
             let noop_executor = DefaultEvaluator::noop();
 
-            let worker_response = get_err_worker_response().to_test_worker_bridge_response();
+            let worker_response = get_err_worker_response().to_refined_worker_response();
 
             let expr1_string =
                 r#"append-${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
@@ -1864,7 +1866,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
@@ -1874,7 +1876,7 @@ mod tests {
             let value2 = noop_executor
                 .evaluate_with_worker_response(
                     &expr2,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
