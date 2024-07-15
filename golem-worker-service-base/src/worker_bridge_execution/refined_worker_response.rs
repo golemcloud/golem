@@ -49,13 +49,15 @@ mod tests {
 
     use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerResponse;
+    use golem_wasm_rpc::protobuf::Type;
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = value.clone().try_into().unwrap();
+            let typ = Type::try_from(value).unwrap();
+
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),
@@ -79,7 +81,7 @@ mod tests {
         let mut types = vec![];
 
         for value in value.iter() {
-            let typ = value.clone().try_into().unwrap();
+            let typ = value.try_into().unwrap();
             types.push(typ);
         }
 

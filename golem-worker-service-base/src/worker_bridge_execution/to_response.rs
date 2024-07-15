@@ -241,8 +241,8 @@ mod test {
     use super::*;
     use crate::worker_binding::TypedHttRequestDetails;
     use crate::worker_bridge_execution::to_response::internal::ResolvedResponseHeaders;
-    use golem_wasm_rpc::get_type;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
     use http::header::CONTENT_TYPE;
     use std::collections::HashMap;
@@ -252,7 +252,7 @@ mod test {
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = get_type(value).unwrap();
+            let typ = Type::try_from(value).unwrap();
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),

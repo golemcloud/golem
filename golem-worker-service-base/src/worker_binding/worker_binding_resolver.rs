@@ -13,7 +13,6 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-use golem_wasm_rpc::TypeExt;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -68,11 +67,11 @@ impl WorkerDetail {
             typ: vec![
                 NameTypePair {
                     name: "component_id".to_string(),
-                    typ: Some(AnalysedType::Str.to_type()),
+                    typ: Some((&AnalysedType::Str).into()),
                 },
                 NameTypePair {
                     name: "name".to_string(),
-                    typ: Some(AnalysedType::Str.to_type()),
+                    typ: Some((&AnalysedType::Str).into()),
                 },
             ],
             value: vec![
@@ -103,7 +102,7 @@ impl WorkerDetail {
                 typ: {
                     vec![NameTypePair {
                         name: "idempotency-key".to_string(),
-                        typ: Some(AnalysedType::Str.to_type()),
+                        typ: Some((&AnalysedType::Str).into()),
                     }]
                 },
                 value: vec![NameValuePair {

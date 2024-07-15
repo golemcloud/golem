@@ -13,7 +13,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
-use golem_wasm_rpc::TypeExt;
 
 use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
@@ -394,7 +393,7 @@ impl Evaluator for DefaultEvaluator {
                         None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option(
                             Box::new(TypedOption {
                                 value: None,
-                                typ: Some(AnalysedType::Str.to_type()),
+                                typ: Some((&AnalysedType::Str).into()),
                             }),
                         ))),
                     }
@@ -471,7 +470,6 @@ mod tests {
     use golem_wasm_rpc::json::get_typed_value_from_json;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedVariant};
-    use golem_wasm_rpc::TypeExt;
     use http::{HeaderMap, Uri};
     use rib::Expr;
     use serde_json::{json, Value};
@@ -1336,8 +1334,8 @@ mod tests {
                     cases: vec![NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)])
-                                .to_type(),
+                            (&AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]))
+                                .into(),
                         ),
                     }],
                 }),
@@ -1378,21 +1376,21 @@ mod tests {
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
                                 "id".to_string(),
                                 AnalysedType::Str,
-                            )])))
-                            .to_type(),
+                            )]))))
+                                .into(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
                                 "id".to_string(),
                                 AnalysedType::Str,
-                            )])))
-                            .to_type(),
+                            )]))))
+                                .into(),
                         ),
                     },
                 ],
@@ -1476,21 +1474,21 @@ mod tests {
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
                                 "id".to_string(),
                                 AnalysedType::Str,
-                            )])))
-                            .to_type(),
+                            )]))))
+                                .into(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
                                 "id".to_string(),
                                 AnalysedType::Str,
-                            )])))
-                            .to_type(),
+                            )]))))
+                                .into(),
                         ),
                     },
                 ],
@@ -1669,7 +1667,6 @@ mod tests {
         use golem_wasm_rpc::protobuf::{
             NameOptionTypePair, TypeVariant, TypedOption, TypedVariant,
         };
-        use golem_wasm_rpc::TypeExt;
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
@@ -1697,27 +1694,27 @@ mod tests {
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            AnalysedType::Option(Box::new(AnalysedType::Result {
+                            (&AnalysedType::Option(Box::new(AnalysedType::Result {
                                 ok: Some(Box::new(AnalysedType::Record(vec![(
                                     "id".to_string(),
                                     AnalysedType::Str,
                                 )]))),
                                 error: None,
-                            }))
-                            .to_type(),
+                            })))
+                                .into(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            AnalysedType::Option(Box::new(AnalysedType::Result {
+                            (&AnalysedType::Option(Box::new(AnalysedType::Result {
                                 ok: Some(Box::new(AnalysedType::Record(vec![(
                                     "id".to_string(),
                                     AnalysedType::Str,
                                 )]))),
                                 error: None,
-                            }))
-                            .to_type(),
+                            })))
+                                .into(),
                         ),
                     },
                 ],

@@ -104,7 +104,6 @@ pub mod router {
 mod tests {
     use async_trait::async_trait;
     use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::get_type;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
@@ -148,10 +147,7 @@ mod tests {
 
             let response_dummy = create_tuple(vec![response]);
 
-            Ok(WorkerResponse::new(
-                response_dummy,
-                vec![function_result_type],
-            ))
+            Ok(WorkerResponse::new(response_dummy))
         }
     }
 
@@ -165,7 +161,7 @@ mod tests {
 
         let types = type_annotated_value
             .iter()
-            .map(|x| get_type(x).unwrap())
+            .map(|x| golem_wasm_rpc::protobuf::Type::try_from(x).unwrap())
             .collect::<Vec<_>>();
 
         TypeAnnotatedValue::Tuple(TypedTuple {

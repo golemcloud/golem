@@ -9,10 +9,10 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use golem_wasm_rpc::protobuf::NameValuePair;
+use golem_wasm_rpc::protobuf::Type;
 use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{NameTypePair, TypedFlags, TypedTuple};
 use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult};
-use golem_wasm_rpc::{TypeExt};
 use rib::ParsedFunctionName;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub(crate) fn create_tuple(
     let mut types = vec![];
 
     for value in value.iter() {
-        let typ = value.clone().try_into()
+        let typ = Type::try_from(value)
             .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
         types.push(typ);
     }
@@ -49,15 +49,16 @@ pub(crate) fn create_flags(value: Vec<String>) -> TypeAnnotatedValue {
 pub(crate) fn create_ok_result(
     value: TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
-    let analysed_type = value.clone().try_into()
-        .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
+    let typ = golem_wasm_rpc::protobuf::Type::try_from(&value)
+        .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+
     let typed_value = TypeAnnotatedValue::Result(Box::new(TypedResult {
         result_value: Some(ResultValue::OkValue(Box::new(
             golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                 type_annotated_value: Some(value),
             },
         ))),
-        ok: Some(analysed_type),
+        ok: Some(typ),
         error: None,
     }));
 
@@ -67,8 +68,9 @@ pub(crate) fn create_ok_result(
 pub(crate) fn create_error_result(
     value: TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
-    let analysed_type = value.clone().try_into()
-        .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
+    let typ = golem_wasm_rpc::protobuf::Type::try_from(&value)
+        .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+
     let typed_value = TypeAnnotatedValue::Result(Box::new(TypedResult {
         result_value: Some(ResultValue::ErrorValue(Box::new(
             golem_wasm_rpc::protobuf::TypeAnnotatedValue {
@@ -76,7 +78,7 @@ pub(crate) fn create_error_result(
             },
         ))),
         ok: None,
-        error: Some(analysed_type),
+        error: Some(typ),
     }));
 
     Ok(typed_value)
@@ -85,7 +87,7 @@ pub(crate) fn create_error_result(
 pub(crate) fn create_option(
     value: TypeAnnotatedValue,
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
-    let typ = value.clone().try_into()
+    let typ = Type::try_from(&value)
         .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
 
     Ok(TypeAnnotatedValue::Option(Box::new(TypedOption {
@@ -101,7 +103,7 @@ pub(crate) fn create_list(
 ) -> Result<TypeAnnotatedValue, EvaluationError> {
     match values.first() {
         Some(value) => {
-            let typ = value.clone().try_into()
+            let typ = Type::try_from(value)
                 .map_err(|_| EvaluationError::Message("Failed to get analysed type".to_string()))?;
 
             Ok(TypeAnnotatedValue::List(TypedList {
@@ -116,7 +118,7 @@ pub(crate) fn create_list(
         }
         None => Ok(TypeAnnotatedValue::List(TypedList {
             values: vec![],
-            typ: Some(AnalysedType::Tuple(vec![]).to_type()),
+            typ: Some((&AnalysedType::Tuple(vec![])).into()),
         })),
     }
 }
@@ -134,7 +136,8 @@ pub(crate) fn create_record(
     let mut name_value_pairs = vec![];
 
     for (key, value) in values.iter() {
-        let typ = value.clone().try_into()
+        let typ = value
+            .try_into()
             .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
         name_type_pairs.push(NameTypePair {
             name: key.to_string(),

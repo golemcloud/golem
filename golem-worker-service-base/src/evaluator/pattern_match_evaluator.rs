@@ -5,10 +5,9 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue as ProtoResultValue;
-use golem_wasm_rpc::protobuf::NameTypePair as ProtoNameTypePair;
 use golem_wasm_rpc::protobuf::NameValuePair as ProtoNameValuePair;
+use golem_wasm_rpc::protobuf::{NameTypePair as ProtoNameTypePair, Type};
 use golem_wasm_rpc::protobuf::{TypedOption, TypedRecord, TypedVariant};
-use golem_wasm_rpc::{TypeExt};
 use rib::{ArmPattern, Expr, MatchArm};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -57,9 +56,10 @@ pub(crate) async fn evaluate_pattern_match(
         match match_arm_evaluated {
             ArmPatternOutput::Matched(match_result) => {
                 if let Some(binding_variable) = &match_result.binding_variable {
-                    let analysed_typ = AnalysedType::try_from(match_result.result.clone()).map_err(|_| {
-                        EvaluationError::Message("Failed to get analysed type".to_string())
-                    })?;
+                    let analysed_typ =
+                        AnalysedType::try_from(&match_result.result).map_err(|_| {
+                            EvaluationError::Message("Failed to get analysed type".to_string())
+                        })?;
 
                     let name_value_pair = ProtoNameValuePair {
                         name: binding_variable.0.clone(),
@@ -70,7 +70,7 @@ pub(crate) async fn evaluate_pattern_match(
 
                     let name_type_pair = ProtoNameTypePair {
                         name: binding_variable.0.clone(),
-                        typ: Some(analysed_typ.to_type()),
+                        typ: Some(Type::from(&analysed_typ)),
                     };
                     input.merge_variables(&TypeAnnotatedValue::Record(TypedRecord {
                         value: vec![name_value_pair],
@@ -212,7 +212,7 @@ fn handle_ok(
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Result::Ok".to_string(),
-            actual_type: AnalysedType::try_from(type_annotated_value.clone())
+            actual_type: AnalysedType::try_from(type_annotated_value)
                 .map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
@@ -256,7 +256,7 @@ fn handle_err(
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Result::Err".to_string(),
-            actual_type: AnalysedType::try_from(type_annotated_value.clone())
+            actual_type: AnalysedType::try_from(type_annotated_value)
                 .map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
@@ -292,7 +292,7 @@ fn handle_some(
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Option::Some".to_string(),
-            actual_type: AnalysedType::try_from(type_annotated_value.clone())
+            actual_type: AnalysedType::try_from(type_annotated_value)
                 .map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
@@ -308,14 +308,14 @@ fn handle_none(
                 binding_variable: None,
                 result: TypeAnnotatedValue::Option(Box::new(TypedOption {
                     value: None,
-                    typ: Some(AnalysedType::Str.to_type()),
+                    typ: Some((&AnalysedType::Str).into()),
                 })),
             })),
         },
 
         type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
             expected_type: "Option::None".to_string(),
-            actual_type: AnalysedType::try_from(type_annotated_value.clone())
+            actual_type: AnalysedType::try_from(type_annotated_value)
                 .map_or("".to_string(), |typ| format!("{:?}", typ)),
         })),
     }
@@ -384,7 +384,7 @@ fn handle_variant(
                 dbg!(type_annotated_value.clone());
                 Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
                     expected_type: format!("Variant::{}", variant_name),
-                    actual_type: AnalysedType::try_from(type_annotated_value.clone())
+                    actual_type: AnalysedType::try_from(type_annotated_value)
                         .map_or("".to_string(), |typ| format!("{:?}", typ)),
                 }))
             }

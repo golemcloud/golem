@@ -158,7 +158,6 @@ mod internal {
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
-    use golem_wasm_rpc::{TypeExt};
     use poem::web::headers::ContentType;
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
@@ -245,9 +244,10 @@ mod internal {
                     if content_header.has_application_json() {
                         get_json_null()
                     } else {
-                        let typ = AnalysedType::try_from(type_annotated_value.clone()).map_err(|_| {
-                            ContentTypeMapError::internal("Failed to resolve type of data")
-                        })?;
+                        let typ =
+                            AnalysedType::try_from(type_annotated_value.clone()).map_err(|_| {
+                                ContentTypeMapError::internal("Failed to resolve type of data")
+                            })?;
                         Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
                     }
                 }
@@ -411,7 +411,7 @@ mod internal {
         if content_header.has_application_json() {
             get_json(complex)
         } else {
-            let typ = AnalysedType::try_from(complex.clone())
+            let typ = AnalysedType::try_from(complex)
                 .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
 
             Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
@@ -474,7 +474,7 @@ mod internal {
         if content_header.has_application_json() {
             get_json(record)
         } else {
-            let typ = AnalysedType::try_from(record.clone())
+            let typ = AnalysedType::try_from(record)
                 .map_err(|_| ContentTypeMapError::internal("Failed to resolve type of data"))?;
             // There is no way a Record can be properly serialised into any other formats to satisfy any other headers, therefore fail
             Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
@@ -495,18 +495,17 @@ mod internal {
 mod tests {
     use super::*;
     use crate::evaluator::EvaluationError;
+    use golem_service_base::model::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedList, TypedRecord};
-    use golem_wasm_rpc::{TypeExt};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
     use serde_json::Value;
-    use golem_service_base::model::Type;
 
     fn sample_record() -> TypeAnnotatedValue {
         TypeAnnotatedValue::Record(TypedRecord {
             typ: vec![NameTypePair {
                 name: "name".to_string(),
-                typ: Some(AnalysedType::Str.to_type()),
+                typ: Some((&AnalysedType::Str).into()),
             }],
             value: vec![NameValuePair {
                 name: "name".to_string(),
@@ -525,7 +524,7 @@ mod tests {
                     type_annotated_value: Some(v),
                 })
                 .collect(),
-            typ: Some(AnalysedType::U8.to_type()),
+            typ: Some((&AnalysedType::U8).into()),
         })
     }
 
@@ -534,7 +533,7 @@ mod tests {
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = Type::try_from(value.clone()).unwrap();
+            let typ = golem_wasm_rpc::protobuf::Type::try_from(value).unwrap();
 
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),

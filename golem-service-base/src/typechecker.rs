@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use golem_common::model::CallingConvention;
-use golem_wasm_rpc::protobuf::{val, Val};
+use golem_wasm_rpc::protobuf::{Type, val, Val};
 
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
-use golem_wasm_rpc::{json, protobuf, TypeExt};
+use golem_wasm_rpc::{json, protobuf};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
 use serde_json::Value;
@@ -136,7 +136,7 @@ impl TypeCheckOut for Vec<Val> {
                                 Ok(TypeAnnotatedValue::Option(
                                     Box::new(TypedOption {
                                         value: None,
-                                        typ: Some(analysed_typ.to_type()),
+                                        typ: Some(Type::from(&analysed_typ)),
                                     })
                                 ))
                             } else {

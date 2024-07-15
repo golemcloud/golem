@@ -6,9 +6,8 @@ use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{Type, TypeAnnotatedValue as RootTypeAnnotatedValue};
 use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-use golem_wasm_rpc::{TypeExt};
+use golem_wasm_rpc::protobuf::{Type, TypeAnnotatedValue as RootTypeAnnotatedValue};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -80,17 +79,17 @@ impl TypedHttRequestDetails {
             typ: vec![
                 NameTypePair {
                     name: "path".to_string(),
-                    typ: Type::try_from(merged_type_annotated_value.clone()).ok(),
+                    typ: Type::try_from(&merged_type_annotated_value).ok(),
                 },
                 NameTypePair {
                     name: "body".to_string(),
-                    typ: Type::try_from(self.typed_request_body.0.clone()).ok(),
+                    typ: Type::try_from(&self.typed_request_body.0).ok(),
                 },
                 NameTypePair {
                     name: "headers".to_string(),
                     typ: {
                         let typ: AnalysedType = self.typed_header_values.0.clone().into();
-                        Some(typ.to_type())
+                        Some((&typ).into())
                     },
                 },
             ],
@@ -238,7 +237,7 @@ impl From<TypedKeyValueCollection> for AnalysedType {
         for record in &typed_key_value_collection.fields {
             typ.push((
                 record.name.clone(),
-                AnalysedType::try_from(record.value.clone())
+                AnalysedType::try_from(&record.value)
                     .expect("Internal error: Failed to retrieve type from Type Annotated Value"),
             ));
         }
@@ -256,7 +255,7 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
             typ.push(NameTypePair {
                 name: record.name.clone(),
                 typ: Some(
-                    Type::try_from(record.value.clone()).expect(
+                    Type::try_from(&record.value).expect(
                         "Internal error: Failed to retrieve type from Type Annotated Value",
                     ),
                 ),
@@ -265,7 +264,7 @@ impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
             value.push(NameValuePair {
                 name: record.name.clone(),
                 value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(record.value.clone()),
+                    type_annotated_value: Some(record.value),
                 }),
             });
         }
