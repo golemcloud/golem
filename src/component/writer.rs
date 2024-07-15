@@ -386,14 +386,14 @@ fn add_to_component_type(
         }
         ComponentType::Component(component_type_declarations) => {
             let mut component_type = wasm_encoder::ComponentType::new();
-            for component_type_declaration in component_type_declarations {
+            for component_type_declaration in &component_type_declarations.0 {
                 add_declaration_to_component_type(&mut component_type, component_type_declaration)?;
             }
             encoder.component(&component_type);
         }
         ComponentType::Instance(instance_type_declarations) => {
             let mut instance_type = wasm_encoder::InstanceType::new();
-            for instance_type_declaration in instance_type_declarations {
+            for instance_type_declaration in &instance_type_declarations.0 {
                 add_declaration_to_instance_type(&mut instance_type, instance_type_declaration)?;
             }
             encoder.instance(&instance_type);
