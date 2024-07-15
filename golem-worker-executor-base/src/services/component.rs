@@ -28,7 +28,6 @@ use crate::storage::blob::BlobStorage;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::export::Export as ProtoExport;
 use golem_api_grpc::proto::golem::component::{
     download_component_response, get_component_metadata_response, DownloadComponentRequest,
     GetLatestComponentRequest, GetVersionedComponentRequest,
@@ -452,7 +451,7 @@ async fn get_metadata_via_grpc(
                                 export.into_iter().map(|proto_export| golem_service_base::model::Export::try_from(proto_export)).collect();
                             vec.into_iter().collect()
                         })
-                        .unwrap_or_else(|| Ok(Vec::new())).map_err(|err| GrpcError::Unexpected("Failed to get the exports".to_string()))?
+                        .unwrap_or_else(|| Ok(Vec::new())).map_err(|_| GrpcError::Unexpected("Failed to get the exports".to_string()))?
                     },
                 };
 
@@ -641,7 +640,7 @@ impl ComponentServiceLocalFileSystem {
                 })?,
         );
 
-        let mut exports = analysis
+        let analysed_exports = analysis
             .get_top_level_exports()
             .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
@@ -651,7 +650,7 @@ impl ComponentServiceLocalFileSystem {
             })?;
 
         let exports = Exports {
-            exports:  exports
+            exports:  analysed_exports
                 .into_iter()
                 .map(|export| export.into())
                 .collect::<Vec<_>>()
