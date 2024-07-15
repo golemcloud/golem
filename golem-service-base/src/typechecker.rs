@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use golem_common::model::CallingConvention;
-use golem_wasm_rpc::protobuf::{Type, val, Val};
+use golem_wasm_rpc::protobuf::{val, Type, Val};
 
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
-use golem_wasm_rpc::{json, protobuf};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
+use golem_wasm_rpc::{json, protobuf};
 use serde_json::Value;
 
 pub trait TypeCheckIn {
@@ -36,10 +36,10 @@ impl TypeCheckIn for Vec<Value> {
         expected_parameters: Vec<AnalysedFunctionParameter>,
         calling_convention: CallingConvention,
     ) -> Result<Vec<Val>, Vec<String>> {
-
         match calling_convention {
             CallingConvention::Component => {
-                let parameter_values = json::function_parameters(&Value::Array(self), &expected_parameters)?;
+                let parameter_values =
+                    json::function_parameters(&Value::Array(self), &expected_parameters)?;
                 Ok(parameter_values
                     .into_iter()
                     .map(|value| value.into())

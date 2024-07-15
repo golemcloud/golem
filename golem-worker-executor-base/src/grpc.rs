@@ -18,10 +18,10 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
-use tokio::sync::broadcast::error::RecvError;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::{TypeAnnotatedValue, Val};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};

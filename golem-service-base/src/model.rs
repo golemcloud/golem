@@ -1804,14 +1804,12 @@ pub struct ComponentMetadata {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct Exports {
-    pub exports: Vec<Export>
+    pub exports: Vec<Export>,
 }
 
 impl Exports {
     pub fn empty() -> Exports {
-        Exports {
-            exports: vec![]
-        }
+        Exports { exports: vec![] }
     }
 
     pub fn instances(&self) -> Vec<ExportInstance> {
@@ -1872,9 +1870,7 @@ impl Exports {
             }
         }
     }
-
 }
-
 
 impl ComponentMetadata {
     pub fn instances(&self) -> Vec<ExportInstance> {
@@ -1882,7 +1878,7 @@ impl ComponentMetadata {
     }
 
     pub fn functions(&self) -> Vec<ExportFunction> {
-       self.exports.functions()
+        self.exports.functions()
     }
 
     pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
@@ -1912,7 +1908,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for Com
                     .exports
                     .into_iter()
                     .map(|export| export.try_into())
-                    .collect::<Result<_, _>>()?
+                    .collect::<Result<_, _>>()?,
             },
             producers: value
                 .producers
@@ -3400,4 +3396,3 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
 }
 
 pub struct FunctionParameters(pub serde_json::value::Value);
-

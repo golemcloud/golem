@@ -24,7 +24,7 @@ use wasmtime::component::Component;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
-use crate::services::component::{ComponentMetadata};
+use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -89,7 +89,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     oom_retry_config: RetryConfig,
 }
 
-impl<Ctx: WorkerCtx> Worker <Ctx> {
+impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_component_metadata(
         worker: &Arc<Worker<Ctx>>,
     ) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
@@ -122,7 +122,6 @@ impl<Ctx: WorkerCtx> Worker <Ctx> {
 
         Ok((worker_metadata, component, component_metadata))
     }
-
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -270,7 +269,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self.oom_retry_config
     }
 
-
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, GolemError> {
         Self::start_if_needed_internal(this, 0).await
     }
@@ -310,7 +308,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oom_retry_count,
         ));
     }
-
 
     pub async fn stop(&self) {
         self.stop_internal(false, None).await;
@@ -1194,7 +1191,6 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
-
         let (worker_metadata, component, component_metadata) =
             Worker::get_component_metadata(&parent).await?;
 

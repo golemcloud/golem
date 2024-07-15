@@ -41,10 +41,10 @@ pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProc
     add_resource_drops(&mut exports);
 
     let exports = Exports {
-        exports:  exports
+        exports: exports
             .into_iter()
             .map(|export| export.into())
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
     };
 
     let memories = state

@@ -20,6 +20,10 @@ use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config::RetryConfig;
+use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
+use crate::model::regions::DeletedRegions;
+use crate::newtype_uuid;
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -36,10 +40,6 @@ use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
-use crate::config::RetryConfig;
-use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
-use crate::model::regions::DeletedRegions;
-use crate::newtype_uuid;
 
 pub mod oplog;
 pub mod regions;

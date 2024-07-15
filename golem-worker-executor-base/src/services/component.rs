@@ -444,14 +444,23 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
-                    exports: Exports { exports : component.metadata
-                        .map(|metadata| {
-                            let export = metadata.exports;
-                            let vec: Vec<Result<Export, String>> =
-                                export.into_iter().map(|proto_export| golem_service_base::model::Export::try_from(proto_export)).collect();
-                            vec.into_iter().collect()
-                        })
-                        .unwrap_or_else(|| Ok(Vec::new())).map_err(|_| GrpcError::Unexpected("Failed to get the exports".to_string()))?
+                    exports: Exports {
+                        exports: component
+                            .metadata
+                            .map(|metadata| {
+                                let export = metadata.exports;
+                                let vec: Vec<Result<Export, String>> = export
+                                    .into_iter()
+                                    .map(|proto_export| {
+                                        golem_service_base::model::Export::try_from(proto_export)
+                                    })
+                                    .collect();
+                                vec.into_iter().collect()
+                            })
+                            .unwrap_or_else(|| Ok(Vec::new()))
+                            .map_err(|_| {
+                                GrpcError::Unexpected("Failed to get the exports".to_string())
+                            })?,
                     },
                 };
 
@@ -640,20 +649,20 @@ impl ComponentServiceLocalFileSystem {
                 })?,
         );
 
-        let analysed_exports = analysis
-            .get_top_level_exports()
-            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
+        let analysed_exports = analysis.get_top_level_exports().map_err(|reason| {
+            GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
-                reason:  match reason {
+                reason: match reason {
                     AnalysisFailure::Failed(reason) => reason,
                 },
-            })?;
+            }
+        })?;
 
         let exports = Exports {
-            exports:  analysed_exports
+            exports: analysed_exports
                 .into_iter()
                 .map(|export| export.into())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
         };
 
         let linear_memories = analysis
@@ -718,13 +727,14 @@ impl ComponentServiceLocalFileSystem {
 
         let size = tokio::fs::metadata(&path).await?.len();
         let (memories, exports) = Self::analyze_memories_and_exports(component_id, &path)
-            .await.unwrap_or((vec![], Exports::empty())); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
+            .await
+            .unwrap_or((vec![], Exports::empty())); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
 
         Ok(ComponentMetadata {
             version: *version,
             size,
             memories,
-            exports
+            exports,
         })
     }
 }

@@ -16,9 +16,9 @@ use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{type_annotated_value_from_str};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{Value};
+use golem_wasm_rpc::type_annotated_value_from_str;
+use golem_wasm_rpc::Value;
 use semver::{BuildMetadata, Prerelease};
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -603,7 +603,7 @@ impl Display for ParsedFunctionName {
             .site
             .interface_name()
             .map_or(self.function.function_name(), |interface| {
-                format!("{}.{{{}}}", interface, self.function.to_string())
+                format!("{}.{{{}}}", interface, self.function)
             });
         write!(f, "{}", function_name)
     }
