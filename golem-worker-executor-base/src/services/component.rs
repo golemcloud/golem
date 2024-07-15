@@ -431,16 +431,6 @@ async fn get_metadata_via_grpc(
                     }
                 }?;
 
-                let exports: Vec<Export> = component.metadata
-                    .map(|metadata| {
-                        let export = metadata.exports;
-                        let vec: Vec<Result<Export, String>> =
-                            export.into_iter().map(|proto_export| golem_service_base::model::Export::try_from(proto_export)).collect();
-                        vec.into_iter().collect()
-                    })
-                    .unwrap_or_else(|| Ok(Vec::new())).map_err(|err| GrpcError::Unexpected("Failed to get the exports"))?;
-
-
                 let result = ComponentMetadata {
                     version: component
                         .versioned_component_id
@@ -455,7 +445,15 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
-                    exports: Exports { exports },
+                    exports: Exports { exports : component.metadata
+                        .map(|metadata| {
+                            let export = metadata.exports;
+                            let vec: Vec<Result<Export, String>> =
+                                export.into_iter().map(|proto_export| golem_service_base::model::Export::try_from(proto_export)).collect();
+                            vec.into_iter().collect()
+                        })
+                        .unwrap_or_else(|| Ok(Vec::new())).map_err(|err| GrpcError::Unexpected("Failed to get the exports".to_string()))?
+                    },
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
