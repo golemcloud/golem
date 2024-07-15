@@ -585,13 +585,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let calling_convention = request.calling_convention();
 
         let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
-        let exports_proto = component_metadata.exports;
+        let exports = component_metadata.exports;
 
-        let function_type = exports_proto
-            .to_exports()
-            .map_err(|err| {
-                GolemError::invalid_request(format!("Failed to get the exports: {}", err))
-            })?
+        let function_type = exports
             .function_by_name(&full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
@@ -710,13 +706,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = self.get_or_create(request).await?;
 
         let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
-        let component_metadata = component_metadata.exports;
+        let exports = component_metadata.exports;
 
-        let function_type = component_metadata
-            .to_exports()
-            .map_err(|err| {
-                GolemError::invalid_request(format!("Failed to get the exports: {}", err))
-            })?
+        let function_type = exports
             .function_by_name(&full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))

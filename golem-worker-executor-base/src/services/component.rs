@@ -40,7 +40,7 @@ use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
-use golem_service_base::model::Exports;
+use golem_service_base::model::{Export, Exports};
 use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
 use golem_wasm_ast::IgnoreAll;
 use http::Uri;
@@ -57,29 +57,7 @@ pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
-    pub exports: ProtoExports,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProtoExports {
-    exports: Vec<ProtoExport>,
-}
-
-impl ProtoExports {
-    pub fn to_exports(&self) -> Result<Exports, String> {
-        let exports: Result<Vec<_>, _> = self
-            .exports
-            .iter()
-            .map(|export| {
-                golem_api_grpc::proto::golem::component::Export {
-                    export: Some(export.clone()),
-                }
-                .try_into()
-            })
-            .collect();
-
-        exports.map(|exports| Exports { exports })
-    }
+    pub exports: Exports,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -452,6 +430,17 @@ async fn get_metadata_via_grpc(
                         Err(GrpcError::Domain(error))
                     }
                 }?;
+
+                let exports: Vec<Export> = component.metadata
+                    .map(|metadata| {
+                        let export = metadata.exports;
+                        let vec: Vec<Result<Export, String>> =
+                            export.into_iter().map(|proto_export| golem_service_base::model::Export::try_from(proto_export)).collect();
+                        vec.into_iter().collect()
+                    })
+                    .unwrap_or_else(|| Ok(Vec::new())).map_err(|err| GrpcError::Unexpected("Failed to get the exports"))?;
+
+
                 let result = ComponentMetadata {
                     version: component
                         .versioned_component_id
@@ -466,21 +455,7 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
-                    exports: ProtoExports {
-                        exports: component
-                            .metadata
-                            .map(|metadata| {
-                                metadata
-                                    .exports
-                                    .into_iter()
-                                    .flat_map(|export| match export.export {
-                                        Some(export) => vec![export],
-                                        None => vec![],
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                    },
+                    exports: Exports { exports },
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
@@ -656,10 +631,10 @@ impl ComponentServiceLocalFileSystem {
             .await
     }
 
-    async fn analyize_memories(
+    async fn analyze_memories_and_exports(
         component_id: &ComponentId,
         path: &&PathBuf,
-    ) -> Result<Vec<LinearMemory>, GolemError> {
+    ) -> Result<(Vec<LinearMemory>, Exports), GolemError> {
         let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
             golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
                 .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
@@ -667,7 +642,24 @@ impl ComponentServiceLocalFileSystem {
                     reason,
                 })?,
         );
-        Ok(analysis
+
+        let mut exports = analysis
+            .get_top_level_exports()
+            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
+                component_id: component_id.clone(),
+                reason:  match reason {
+                    AnalysisFailure::Failed(reason) => reason,
+                },
+            })?;
+
+        let exports = Exports {
+            exports:  exports
+                .into_iter()
+                .map(|export| export.into())
+                .collect::<Vec<_>>()
+        };
+
+        let linear_memories = analysis
             .get_all_memories()
             .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
@@ -680,7 +672,9 @@ impl ComponentServiceLocalFileSystem {
                 initial: mem.mem_type.limits.min * 65536,
                 maximum: mem.mem_type.limits.max.map(|m| m * 65536),
             })
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+
+        Ok((linear_memories, exports))
     }
 
     async fn get_metadata_impl(
@@ -726,16 +720,14 @@ impl ComponentServiceLocalFileSystem {
         };
 
         let size = tokio::fs::metadata(&path).await?.len();
-        let memories = Self::analyize_memories(component_id, &path)
-            .await
-            .unwrap_or_default(); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
+        let (memories, exports) = Self::analyze_memories_and_exports(component_id, &path)
+            .await.unwrap_or((vec![], Exports::empty())); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
+
         Ok(ComponentMetadata {
             version: *version,
             size,
             memories,
-            exports: ProtoExports {
-                exports: vec![], // TODO resolve from wasm ast component when analyising memeories.
-            },
+            exports
         })
     }
 }
