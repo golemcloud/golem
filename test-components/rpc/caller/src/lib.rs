@@ -85,6 +85,17 @@ impl Guest for Component {
         let results = create_use_and_drop_counters_non_blocking(&component_id);
         results.to_vec()
     }
+
+    fn bug_wasm_rpc_i32(in_: TimelineNode) -> TimelineNode {
+        println!("Reproducer for wasm-rpc issue #32");
+        let component_id =
+            env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
+        let counters_uri = Uri {
+            value: format!("worker://{component_id}/bug32"),
+        };
+        let api = Api::new(&counters_uri);
+        api.blocking_bug_wasm_rpc_i32(in_)
+    }
 }
 
 fn create_use_and_drop_counters(counters_uri: &Uri) {
@@ -167,12 +178,24 @@ fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
         remaining = remaining
             .into_iter()
             .enumerate()
-            .filter_map(|(idx, item)| if poll_result.contains(&(idx as u32)) { None } else { Some(item) })
+            .filter_map(|(idx, item)| {
+                if poll_result.contains(&(idx as u32)) {
+                    None
+                } else {
+                    Some(item)
+                }
+            })
             .collect();
         mapping = mapping
             .into_iter()
             .enumerate()
-            .filter_map(|(idx, item)| if poll_result.contains(&(idx as u32)) { None } else { Some(item) })
+            .filter_map(|(idx, item)| {
+                if poll_result.contains(&(idx as u32)) {
+                    None
+                } else {
+                    Some(item)
+                }
+            })
             .collect();
 
         println!("mapping at the end of the loop: {:?}", mapping);

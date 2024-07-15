@@ -3,6 +3,7 @@ package rpc:counters-stub;
 interface stub-counters {
   use golem:rpc/types@0.1.0.{uri};
   use wasi:io/poll@0.2.0.{pollable};
+  use rpc:counters/api.{timeline-node};
 
   resource future-get-global-value-result {
     subscribe: func() -> pollable;
@@ -11,6 +12,10 @@ interface stub-counters {
   resource future-get-all-dropped-result {
     subscribe: func() -> pollable;
     get: func() -> option<list<tuple<string, u64>>>;
+  }
+  resource future-bug-wasm-rpc-i32-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<timeline-node>;
   }
   resource future-counter-get-value-result {
     subscribe: func() -> pollable;
@@ -32,6 +37,8 @@ interface stub-counters {
     get-global-value: func() -> future-get-global-value-result;
     blocking-get-all-dropped: func() -> list<tuple<string, u64>>;
     get-all-dropped: func() -> future-get-all-dropped-result;
+    blocking-bug-wasm-rpc-i32: func(in: timeline-node) -> timeline-node;
+    bug-wasm-rpc-i32: func(in: timeline-node) -> future-bug-wasm-rpc-i32-result;
   }
 
   resource counter {

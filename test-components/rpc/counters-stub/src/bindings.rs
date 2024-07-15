@@ -2190,6 +2190,332 @@ pub mod golem {
     }
 }
 #[allow(dead_code)]
+pub mod rpc {
+    #[allow(dead_code)]
+    pub mod counters {
+        #[allow(dead_code, clippy::all)]
+        pub mod api {
+            #[used]
+            #[doc(hidden)]
+            #[cfg(target_arch = "wasm32")]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Counter {
+                handle: _rt::Resource<Counter>,
+            }
+
+            impl Counter {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+
+            unsafe impl _rt::WasmResource for Counter {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "rpc:counters/api")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]counter"]
+                            fn drop(_: u32);
+                        }
+
+                        drop(_handle);
+                    }
+                }
+            }
+
+            #[derive(Clone, Copy)]
+            pub enum TimelineNode {
+                Leaf,
+            }
+            impl ::core::fmt::Debug for TimelineNode {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    match self {
+                        TimelineNode::Leaf => f.debug_tuple("TimelineNode::Leaf").finish(),
+                    }
+                }
+            }
+            impl Counter {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn new(name: &str) -> Self {
+                    unsafe {
+                        let vec0 = name;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "rpc:counters/api")]
+                        extern "C" {
+                            #[link_name = "[constructor]counter"]
+                            fn wit_import(_: *mut u8, _: usize) -> i32;
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: *mut u8, _: usize) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import(ptr0.cast_mut(), len0);
+                        Counter::from_handle(ret as u32)
+                    }
+                }
+            }
+            impl Counter {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn inc_by(&self, value: u64) {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "rpc:counters/api")]
+                        extern "C" {
+                            #[link_name = "[method]counter.inc-by"]
+                            fn wit_import(_: i32, _: i64);
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: i64) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, _rt::as_i64(&value));
+                    }
+                }
+            }
+            impl Counter {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn get_value(&self) -> u64 {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "rpc:counters/api")]
+                        extern "C" {
+                            #[link_name = "[method]counter.get-value"]
+                            fn wit_import(_: i32) -> i64;
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32) -> i64 {
+                            unreachable!()
+                        }
+                        let ret = wit_import((self).handle() as i32);
+                        ret as u64
+                    }
+                }
+            }
+            impl Counter {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn get_args(&self) -> _rt::Vec<_rt::String> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "rpc:counters/api")]
+                        extern "C" {
+                            #[link_name = "[method]counter.get-args"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = *ptr0.add(0).cast::<*mut u8>();
+                        let l2 = *ptr0.add(4).cast::<usize>();
+                        let base6 = l1;
+                        let len6 = l2;
+                        let mut result6 = _rt::Vec::with_capacity(len6);
+                        for i in 0..len6 {
+                            let base = base6.add(i * 8);
+                            let e6 = {
+                                let l3 = *base.add(0).cast::<*mut u8>();
+                                let l4 = *base.add(4).cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+
+                                _rt::string_lift(bytes5)
+                            };
+                            result6.push(e6);
+                        }
+                        _rt::cabi_dealloc(base6, len6 * 8, 4);
+                        result6
+                    }
+                }
+            }
+            impl Counter {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn get_env(&self) -> _rt::Vec<(_rt::String, _rt::String)> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "rpc:counters/api")]
+                        extern "C" {
+                            #[link_name = "[method]counter.get-env"]
+                            fn wit_import(_: i32, _: *mut u8);
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import((self).handle() as i32, ptr0);
+                        let l1 = *ptr0.add(0).cast::<*mut u8>();
+                        let l2 = *ptr0.add(4).cast::<usize>();
+                        let base9 = l1;
+                        let len9 = l2;
+                        let mut result9 = _rt::Vec::with_capacity(len9);
+                        for i in 0..len9 {
+                            let base = base9.add(i * 16);
+                            let e9 = {
+                                let l3 = *base.add(0).cast::<*mut u8>();
+                                let l4 = *base.add(4).cast::<usize>();
+                                let len5 = l4;
+                                let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                                let l6 = *base.add(8).cast::<*mut u8>();
+                                let l7 = *base.add(12).cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+
+                                (_rt::string_lift(bytes5), _rt::string_lift(bytes8))
+                            };
+                            result9.push(e9);
+                        }
+                        _rt::cabi_dealloc(base9, len9 * 16, 4);
+                        result9
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn inc_global_by(value: u64) {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "rpc:counters/api")]
+                    extern "C" {
+                        #[link_name = "inc-global-by"]
+                        fn wit_import(_: i64);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64) {
+                        unreachable!()
+                    }
+                    wit_import(_rt::as_i64(&value));
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn get_global_value() -> u64 {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "rpc:counters/api")]
+                    extern "C" {
+                        #[link_name = "get-global-value"]
+                        fn wit_import() -> i64;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import() -> i64 {
+                        unreachable!()
+                    }
+                    let ret = wit_import();
+                    ret as u64
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn get_all_dropped() -> _rt::Vec<(_rt::String, u64)> {
+                unsafe {
+                    #[repr(align(4))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "rpc:counters/api")]
+                    extern "C" {
+                        #[link_name = "get-all-dropped"]
+                        fn wit_import(_: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<*mut u8>();
+                    let l2 = *ptr0.add(4).cast::<usize>();
+                    let base7 = l1;
+                    let len7 = l2;
+                    let mut result7 = _rt::Vec::with_capacity(len7);
+                    for i in 0..len7 {
+                        let base = base7.add(i * 16);
+                        let e7 = {
+                            let l3 = *base.add(0).cast::<*mut u8>();
+                            let l4 = *base.add(4).cast::<usize>();
+                            let len5 = l4;
+                            let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                            let l6 = *base.add(8).cast::<i64>();
+
+                            (_rt::string_lift(bytes5), l6 as u64)
+                        };
+                        result7.push(e7);
+                    }
+                    _rt::cabi_dealloc(base7, len7 * 16, 8);
+                    result7
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn bug_wasm_rpc_i32(in_: TimelineNode) -> TimelineNode {
+                unsafe {
+                    let result0 = match in_ {
+                        TimelineNode::Leaf => 0i32,
+                    };
+
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "rpc:counters/api")]
+                    extern "C" {
+                        #[link_name = "bug-wasm-rpc-i32"]
+                        fn wit_import(_: i32) -> i32;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import(result0);
+                    let v1 = match ret {
+                        n => {
+                            debug_assert_eq!(n, 0, "invalid enum discriminant");
+                            TimelineNode::Leaf
+                        }
+                    };
+                    v1
+                }
+            }
+        }
+    }
+}
+#[allow(dead_code)]
 pub mod wasi {
     #[allow(dead_code)]
     pub mod io {
@@ -2379,6 +2705,8 @@ pub mod exports {
                 use super::super::super::super::_rt;
                 pub type Uri = super::super::super::super::golem::rpc::types::Uri;
                 pub type Pollable = super::super::super::super::wasi::io::poll::Pollable;
+                pub type TimelineNode =
+                    super::super::super::super::rpc::counters::api::TimelineNode;
 
                 #[derive(Debug)]
                 #[repr(transparent)]
@@ -2659,6 +2987,149 @@ pub mod exports {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
                                 #[link_name = "[resource-drop]future-get-all-dropped-result"]
+                                fn drop(_: u32);
+                            }
+
+                            drop(_handle);
+                        }
+                    }
+                }
+
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureBugWasmRpcI32Result {
+                    handle: _rt::Resource<FutureBugWasmRpcI32Result>,
+                }
+
+                type _FutureBugWasmRpcI32ResultRep<T> = Option<T>;
+
+                impl FutureBugWasmRpcI32Result {
+                    /// Creates a new resource from the specified representation.
+                    ///
+                    /// This function will create a new resource handle by moving `val` onto
+                    /// the heap and then passing that heap pointer to the component model to
+                    /// create a handle. The owned handle is then returned as `FutureBugWasmRpcI32Result`.
+                    pub fn new<T: GuestFutureBugWasmRpcI32Result>(val: T) -> Self {
+                        Self::type_guard::<T>();
+                        let val: _FutureBugWasmRpcI32ResultRep<T> = Some(val);
+                        let ptr: *mut _FutureBugWasmRpcI32ResultRep<T> =
+                            _rt::Box::into_raw(_rt::Box::new(val));
+                        unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
+                    }
+
+                    /// Gets access to the underlying `T` which represents this resource.
+                    pub fn get<T: GuestFutureBugWasmRpcI32Result>(&self) -> &T {
+                        let ptr = unsafe { &*self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+
+                    /// Gets mutable access to the underlying `T` which represents this
+                    /// resource.
+                    pub fn get_mut<T: GuestFutureBugWasmRpcI32Result>(&mut self) -> &mut T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_mut().unwrap()
+                    }
+
+                    /// Consumes this resource and returns the underlying `T`.
+                    pub fn into_inner<T: GuestFutureBugWasmRpcI32Result>(self) -> T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.take().unwrap()
+                    }
+
+                    #[doc(hidden)]
+                    pub unsafe fn from_handle(handle: u32) -> Self {
+                        Self {
+                            handle: _rt::Resource::from_handle(handle),
+                        }
+                    }
+
+                    #[doc(hidden)]
+                    pub fn take_handle(&self) -> u32 {
+                        _rt::Resource::take_handle(&self.handle)
+                    }
+
+                    #[doc(hidden)]
+                    pub fn handle(&self) -> u32 {
+                        _rt::Resource::handle(&self.handle)
+                    }
+
+                    // It's theoretically possible to implement the `GuestFutureBugWasmRpcI32Result` trait twice
+                    // so guard against using it with two different types here.
+                    #[doc(hidden)]
+                    fn type_guard<T: 'static>() {
+                        use core::any::TypeId;
+                        static mut LAST_TYPE: Option<TypeId> = None;
+                        unsafe {
+                            assert!(!cfg!(target_feature = "threads"));
+                            let id = TypeId::of::<T>();
+                            match LAST_TYPE {
+                                Some(ty) => assert!(
+                                    ty == id,
+                                    "cannot use two types with this resource type"
+                                ),
+                                None => LAST_TYPE = Some(id),
+                            }
+                        }
+                    }
+
+                    #[doc(hidden)]
+                    pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
+                        Self::type_guard::<T>();
+                        let _ = _rt::Box::from_raw(handle as *mut _FutureBugWasmRpcI32ResultRep<T>);
+                    }
+
+                    fn as_ptr<T: GuestFutureBugWasmRpcI32Result>(
+                        &self,
+                    ) -> *mut _FutureBugWasmRpcI32ResultRep<T> {
+                        FutureBugWasmRpcI32Result::type_guard::<T>();
+                        T::_resource_rep(self.handle()).cast()
+                    }
+                }
+
+                /// A borrowed version of [`FutureBugWasmRpcI32Result`] which represents a borrowed value
+                /// with the lifetime `'a`.
+                #[derive(Debug)]
+                #[repr(transparent)]
+                pub struct FutureBugWasmRpcI32ResultBorrow<'a> {
+                    rep: *mut u8,
+                    _marker: core::marker::PhantomData<&'a FutureBugWasmRpcI32Result>,
+                }
+
+                impl<'a> FutureBugWasmRpcI32ResultBorrow<'a> {
+                    #[doc(hidden)]
+                    pub unsafe fn lift(rep: usize) -> Self {
+                        Self {
+                            rep: rep as *mut u8,
+                            _marker: core::marker::PhantomData,
+                        }
+                    }
+
+                    /// Gets access to the underlying `T` in this resource.
+                    pub fn get<T: GuestFutureBugWasmRpcI32Result>(&self) -> &T {
+                        let ptr = unsafe { &mut *self.as_ptr::<T>() };
+                        ptr.as_ref().unwrap()
+                    }
+
+                    // NB: mutable access is not allowed due to the component model allowing
+                    // multiple borrows of the same resource.
+
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureBugWasmRpcI32ResultRep<T> {
+                        FutureBugWasmRpcI32Result::type_guard::<T>();
+                        self.rep.cast()
+                    }
+                }
+
+                unsafe impl _rt::WasmResource for FutureBugWasmRpcI32Result {
+                    #[inline]
+                    unsafe fn drop(_handle: u32) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unreachable!();
+
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                            extern "C" {
+                                #[link_name = "[resource-drop]future-bug-wasm-rpc-i32-result"]
                                 fn drop(_: u32);
                             }
 
@@ -3510,6 +3981,48 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_bug_wasm_rpc_i32_result_subscribe_cabi<
+                    T: GuestFutureBugWasmRpcI32Result,
+                >(
+                    arg0: *mut u8,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let result0 = T::subscribe(
+                        FutureBugWasmRpcI32ResultBorrow::lift(arg0 as u32 as usize).get(),
+                    );
+                    (result0).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_future_bug_wasm_rpc_i32_result_get_cabi<
+                    T: GuestFutureBugWasmRpcI32Result,
+                >(
+                    arg0: *mut u8,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let result0 =
+                        T::get(FutureBugWasmRpcI32ResultBorrow::lift(arg0 as u32 as usize).get());
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result0 {
+                        Some(e) => {
+                            *ptr1.add(0).cast::<u8>() = (1i32) as u8;
+                            use super::super::super::super::rpc::counters::api::TimelineNode as V2;
+                            match e {
+                                V2::Leaf => {
+                                    *ptr1.add(1).cast::<u8>() = (0i32) as u8;
+                                }
+                            }
+                        }
+                        None => {
+                            *ptr1.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
                 pub unsafe fn _export_method_future_counter_get_value_result_subscribe_cabi<
                     T: GuestFutureCounterGetValueResult,
                 >(
@@ -3869,6 +4382,50 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
+                pub unsafe fn _export_method_api_blocking_bug_wasm_rpc_i32_cabi<T: GuestApi>(
+                    arg0: *mut u8,
+                    arg1: i32,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    use super::super::super::super::rpc::counters::api::TimelineNode as V0;
+                    let v0 = match arg1 {
+                        n => {
+                            debug_assert_eq!(n, 0, "invalid enum discriminant");
+                            V0::Leaf
+                        }
+                    };
+                    let result1 = T::blocking_bug_wasm_rpc_i32(
+                        ApiBorrow::lift(arg0 as u32 as usize).get(),
+                        v0,
+                    );
+                    use super::super::super::super::rpc::counters::api::TimelineNode as V2;
+                    let result3 = match result1 {
+                        V2::Leaf => 0i32,
+                    };
+                    result3
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_method_api_bug_wasm_rpc_i32_cabi<T: GuestApi>(
+                    arg0: *mut u8,
+                    arg1: i32,
+                ) -> i32 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    use super::super::super::super::rpc::counters::api::TimelineNode as V0;
+                    let v0 = match arg1 {
+                        n => {
+                            debug_assert_eq!(n, 0, "invalid enum discriminant");
+                            V0::Leaf
+                        }
+                    };
+                    let result1 =
+                        T::bug_wasm_rpc_i32(ApiBorrow::lift(arg0 as u32 as usize).get(), v0);
+                    (result1).take_handle() as i32
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
                 pub unsafe fn _export_constructor_counter_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                     arg1: usize,
@@ -4082,6 +4639,7 @@ pub mod exports {
                 pub trait Guest {
                     type FutureGetGlobalValueResult: GuestFutureGetGlobalValueResult;
                     type FutureGetAllDroppedResult: GuestFutureGetAllDroppedResult;
+                    type FutureBugWasmRpcI32Result: GuestFutureBugWasmRpcI32Result;
                     type FutureCounterGetValueResult: GuestFutureCounterGetValueResult;
                     type FutureCounterGetArgsResult: GuestFutureCounterGetArgsResult;
                     type FutureCounterGetEnvResult: GuestFutureCounterGetEnvResult;
@@ -4183,6 +4741,54 @@ pub mod exports {
 
                     fn subscribe(&self) -> Pollable;
                     fn get(&self) -> Option<_rt::Vec<(_rt::String, u64)>>;
+                }
+                pub trait GuestFutureBugWasmRpcI32Result: 'static {
+                    #[doc(hidden)]
+                    unsafe fn _resource_new(val: *mut u8) -> u32
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = val;
+                            unreachable!();
+                        }
+
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                            extern "C" {
+                                #[link_name = "[resource-new]future-bug-wasm-rpc-i32-result"]
+                                fn new(_: *mut u8) -> u32;
+                            }
+                            new(val)
+                        }
+                    }
+
+                    #[doc(hidden)]
+                    fn _resource_rep(handle: u32) -> *mut u8
+                    where
+                        Self: Sized,
+                    {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let _ = handle;
+                            unreachable!();
+                        }
+
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
+                            extern "C" {
+                                #[link_name = "[resource-rep]future-bug-wasm-rpc-i32-result"]
+                                fn rep(_: u32) -> *mut u8;
+                            }
+                            unsafe { rep(handle) }
+                        }
+                    }
+
+                    fn subscribe(&self) -> Pollable;
+                    fn get(&self) -> Option<TimelineNode>;
                 }
                 pub trait GuestFutureCounterGetValueResult: 'static {
                     #[doc(hidden)]
@@ -4380,6 +4986,8 @@ pub mod exports {
                     fn get_global_value(&self) -> FutureGetGlobalValueResult;
                     fn blocking_get_all_dropped(&self) -> _rt::Vec<(_rt::String, u64)>;
                     fn get_all_dropped(&self) -> FutureGetAllDroppedResult;
+                    fn blocking_bug_wasm_rpc_i32(&self, in_: TimelineNode) -> TimelineNode;
+                    fn bug_wasm_rpc_i32(&self, in_: TimelineNode) -> FutureBugWasmRpcI32Result;
                 }
                 pub trait GuestCounter: 'static {
                     #[doc(hidden)]
@@ -4461,6 +5069,14 @@ pub mod exports {
     unsafe extern "C" fn _post_return_method_future_get_all_dropped_result_get(arg0: *mut u8,) {
       $($path_to_types)*::__post_return_method_future_get_all_dropped_result_get::<<$ty as $($path_to_types)*::Guest>::FutureGetAllDroppedResult>(arg0)
     }
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-bug-wasm-rpc-i32-result.subscribe"]
+    unsafe extern "C" fn export_method_future_bug_wasm_rpc_i32_result_subscribe(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_future_bug_wasm_rpc_i32_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureBugWasmRpcI32Result>(arg0)
+    }
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-bug-wasm-rpc-i32-result.get"]
+    unsafe extern "C" fn export_method_future_bug_wasm_rpc_i32_result_get(arg0: *mut u8,) -> *mut u8 {
+      $($path_to_types)*::_export_method_future_bug_wasm_rpc_i32_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureBugWasmRpcI32Result>(arg0)
+    }
     #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-value-result.subscribe"]
     unsafe extern "C" fn export_method_future_counter_get_value_result_subscribe(arg0: *mut u8,) -> i32 {
       $($path_to_types)*::_export_method_future_counter_get_value_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetValueResult>(arg0)
@@ -4524,6 +5140,14 @@ pub mod exports {
     #[export_name = "rpc:counters-stub/stub-counters#[method]api.get-all-dropped"]
     unsafe extern "C" fn export_method_api_get_all_dropped(arg0: *mut u8,) -> i32 {
       $($path_to_types)*::_export_method_api_get_all_dropped_cabi::<<$ty as $($path_to_types)*::Guest>::Api>(arg0)
+    }
+    #[export_name = "rpc:counters-stub/stub-counters#[method]api.blocking-bug-wasm-rpc-i32"]
+    unsafe extern "C" fn export_method_api_blocking_bug_wasm_rpc_i32(arg0: *mut u8,arg1: i32,) -> i32 {
+      $($path_to_types)*::_export_method_api_blocking_bug_wasm_rpc_i32_cabi::<<$ty as $($path_to_types)*::Guest>::Api>(arg0, arg1)
+    }
+    #[export_name = "rpc:counters-stub/stub-counters#[method]api.bug-wasm-rpc-i32"]
+    unsafe extern "C" fn export_method_api_bug_wasm_rpc_i32(arg0: *mut u8,arg1: i32,) -> i32 {
+      $($path_to_types)*::_export_method_api_bug_wasm_rpc_i32_cabi::<<$ty as $($path_to_types)*::Guest>::Api>(arg0, arg1)
     }
     #[export_name = "rpc:counters-stub/stub-counters#[constructor]counter"]
     unsafe extern "C" fn export_constructor_counter(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> i32 {
@@ -4589,6 +5213,18 @@ pub mod exports {
       unsafe extern "C" fn dtor(rep: *mut u8) {
         $($path_to_types)*::FutureGetAllDroppedResult::dtor::<
         <$ty as $($path_to_types)*::Guest>::FutureGetAllDroppedResult
+        >(rep)
+      }
+    };
+
+
+    const _: () = {
+      #[doc(hidden)]
+      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-bug-wasm-rpc-i32-result"]
+      #[allow(non_snake_case)]
+      unsafe extern "C" fn dtor(rep: *mut u8) {
+        $($path_to_types)*::FutureBugWasmRpcI32Result::dtor::<
+        <$ty as $($path_to_types)*::Guest>::FutureBugWasmRpcI32Result
         >(rep)
       }
     };
@@ -4982,9 +5618,9 @@ pub(crate) use __export_wasm_rpc_stub_counters_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:wasm-rpc-stub-counters:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3005] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb0\x16\x01A\x02\x01\
-A\x08\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3722] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfd\x1b\x01A\x02\x01\
+A\x0b\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
 \x03\x01\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\
@@ -5008,41 +5644,56 @@ d]wasm-rpc.invoke\x01\x1c\x01i\x14\x01@\x03\x04self\x17\x0dfunction-names\x0ffun
 ction-params\x18\0\x1d\x04\0'[method]wasm-rpc.async-invoke-and-await\x01\x1e\x01\
 h\x14\x01i\x01\x01@\x01\x04self\x1f\0\x20\x04\0&[method]future-invoke-result.sub\
 scribe\x01!\x01k\x19\x01@\x01\x04self\x1f\0\"\x04\0\x20[method]future-invoke-res\
-ult.get\x01#\x03\x01\x15golem:rpc/types@0.1.0\x05\x02\x02\x03\0\x01\x03uri\x01BU\
-\x02\x03\x02\x01\x03\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
-\0\x02\x04\0\x1efuture-get-global-value-result\x03\x01\x04\0\x1dfuture-get-all-d\
-ropped-result\x03\x01\x04\0\x1ffuture-counter-get-value-result\x03\x01\x04\0\x1e\
-future-counter-get-args-result\x03\x01\x04\0\x1dfuture-counter-get-env-result\x03\
-\x01\x04\0\x03api\x03\x01\x04\0\x07counter\x03\x01\x01h\x04\x01i\x03\x01@\x01\x04\
-self\x0b\0\x0c\x04\00[method]future-get-global-value-result.subscribe\x01\x0d\x01\
-kw\x01@\x01\x04self\x0b\0\x0e\x04\0*[method]future-get-global-value-result.get\x01\
-\x0f\x01h\x05\x01@\x01\x04self\x10\0\x0c\x04\0/[method]future-get-all-dropped-re\
-sult.subscribe\x01\x11\x01o\x02sw\x01p\x12\x01k\x13\x01@\x01\x04self\x10\0\x14\x04\
-\0)[method]future-get-all-dropped-result.get\x01\x15\x01h\x06\x01@\x01\x04self\x16\
-\0\x0c\x04\01[method]future-counter-get-value-result.subscribe\x01\x17\x01@\x01\x04\
-self\x16\0\x0e\x04\0+[method]future-counter-get-value-result.get\x01\x18\x01h\x07\
-\x01@\x01\x04self\x19\0\x0c\x04\00[method]future-counter-get-args-result.subscri\
-be\x01\x1a\x01ps\x01k\x1b\x01@\x01\x04self\x19\0\x1c\x04\0*[method]future-counte\
-r-get-args-result.get\x01\x1d\x01h\x08\x01@\x01\x04self\x1e\0\x0c\x04\0/[method]\
-future-counter-get-env-result.subscribe\x01\x1f\x01o\x02ss\x01p\x20\x01k!\x01@\x01\
-\x04self\x1e\0\"\x04\0)[method]future-counter-get-env-result.get\x01#\x01i\x09\x01\
-@\x01\x08location\x01\0$\x04\0\x10[constructor]api\x01%\x01h\x09\x01@\x02\x04sel\
-f&\x05valuew\x01\0\x04\0\"[method]api.blocking-inc-global-by\x01'\x04\0\x19[meth\
-od]api.inc-global-by\x01'\x01@\x01\x04self&\0w\x04\0%[method]api.blocking-get-gl\
-obal-value\x01(\x01i\x04\x01@\x01\x04self&\0)\x04\0\x1c[method]api.get-global-va\
-lue\x01*\x01@\x01\x04self&\0\x13\x04\0$[method]api.blocking-get-all-dropped\x01+\
-\x01i\x05\x01@\x01\x04self&\0,\x04\0\x1b[method]api.get-all-dropped\x01-\x01i\x0a\
-\x01@\x02\x08location\x01\x04names\0.\x04\0\x14[constructor]counter\x01/\x01h\x0a\
-\x01@\x02\x04self0\x05valuew\x01\0\x04\0\x1f[method]counter.blocking-inc-by\x011\
-\x04\0\x16[method]counter.inc-by\x011\x01@\x01\x04self0\0w\x04\0\"[method]counte\
-r.blocking-get-value\x012\x01i\x06\x01@\x01\x04self0\03\x04\0\x19[method]counter\
-.get-value\x014\x01@\x01\x04self0\0\x1b\x04\0![method]counter.blocking-get-args\x01\
-5\x01i\x07\x01@\x01\x04self0\06\x04\0\x18[method]counter.get-args\x017\x01@\x01\x04\
-self0\0!\x04\0\x20[method]counter.blocking-get-env\x018\x01i\x08\x01@\x01\x04sel\
-f0\09\x04\0\x17[method]counter.get-env\x01:\x04\x01\x1frpc:counters-stub/stub-co\
-unters\x05\x04\x04\x01(rpc:counters-stub/wasm-rpc-stub-counters\x04\0\x0b\x1c\x01\
-\0\x16wasm-rpc-stub-counters\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
-wit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+ult.get\x01#\x03\x01\x15golem:rpc/types@0.1.0\x05\x02\x01B\x1c\x04\0\x07counter\x03\
+\x01\x01q\x01\x04leaf\0\0\x04\0\x0dtimeline-node\x03\0\x01\x01i\0\x01@\x01\x04na\
+mes\0\x03\x04\0\x14[constructor]counter\x01\x04\x01h\0\x01@\x02\x04self\x05\x05v\
+aluew\x01\0\x04\0\x16[method]counter.inc-by\x01\x06\x01@\x01\x04self\x05\0w\x04\0\
+\x19[method]counter.get-value\x01\x07\x01ps\x01@\x01\x04self\x05\0\x08\x04\0\x18\
+[method]counter.get-args\x01\x09\x01o\x02ss\x01p\x0a\x01@\x01\x04self\x05\0\x0b\x04\
+\0\x17[method]counter.get-env\x01\x0c\x01@\x01\x05valuew\x01\0\x04\0\x0dinc-glob\
+al-by\x01\x0d\x01@\0\0w\x04\0\x10get-global-value\x01\x0e\x01o\x02sw\x01p\x0f\x01\
+@\0\0\x10\x04\0\x0fget-all-dropped\x01\x11\x01@\x01\x02in\x02\0\x02\x04\0\x10bug\
+-wasm-rpc-i32\x01\x12\x03\x01\x10rpc:counters/api\x05\x03\x02\x03\0\x01\x03uri\x02\
+\x03\0\x02\x0dtimeline-node\x01Bc\x02\x03\x02\x01\x04\x04\0\x03uri\x03\0\0\x02\x03\
+\x02\x01\x01\x04\0\x08pollable\x03\0\x02\x02\x03\x02\x01\x05\x04\0\x0dtimeline-n\
+ode\x03\0\x04\x04\0\x1efuture-get-global-value-result\x03\x01\x04\0\x1dfuture-ge\
+t-all-dropped-result\x03\x01\x04\0\x1efuture-bug-wasm-rpc-i32-result\x03\x01\x04\
+\0\x1ffuture-counter-get-value-result\x03\x01\x04\0\x1efuture-counter-get-args-r\
+esult\x03\x01\x04\0\x1dfuture-counter-get-env-result\x03\x01\x04\0\x03api\x03\x01\
+\x04\0\x07counter\x03\x01\x01h\x06\x01i\x03\x01@\x01\x04self\x0e\0\x0f\x04\00[me\
+thod]future-get-global-value-result.subscribe\x01\x10\x01kw\x01@\x01\x04self\x0e\
+\0\x11\x04\0*[method]future-get-global-value-result.get\x01\x12\x01h\x07\x01@\x01\
+\x04self\x13\0\x0f\x04\0/[method]future-get-all-dropped-result.subscribe\x01\x14\
+\x01o\x02sw\x01p\x15\x01k\x16\x01@\x01\x04self\x13\0\x17\x04\0)[method]future-ge\
+t-all-dropped-result.get\x01\x18\x01h\x08\x01@\x01\x04self\x19\0\x0f\x04\00[meth\
+od]future-bug-wasm-rpc-i32-result.subscribe\x01\x1a\x01k\x05\x01@\x01\x04self\x19\
+\0\x1b\x04\0*[method]future-bug-wasm-rpc-i32-result.get\x01\x1c\x01h\x09\x01@\x01\
+\x04self\x1d\0\x0f\x04\01[method]future-counter-get-value-result.subscribe\x01\x1e\
+\x01@\x01\x04self\x1d\0\x11\x04\0+[method]future-counter-get-value-result.get\x01\
+\x1f\x01h\x0a\x01@\x01\x04self\x20\0\x0f\x04\00[method]future-counter-get-args-r\
+esult.subscribe\x01!\x01ps\x01k\"\x01@\x01\x04self\x20\0#\x04\0*[method]future-c\
+ounter-get-args-result.get\x01$\x01h\x0b\x01@\x01\x04self%\0\x0f\x04\0/[method]f\
+uture-counter-get-env-result.subscribe\x01&\x01o\x02ss\x01p'\x01k(\x01@\x01\x04s\
+elf%\0)\x04\0)[method]future-counter-get-env-result.get\x01*\x01i\x0c\x01@\x01\x08\
+location\x01\0+\x04\0\x10[constructor]api\x01,\x01h\x0c\x01@\x02\x04self-\x05val\
+uew\x01\0\x04\0\"[method]api.blocking-inc-global-by\x01.\x04\0\x19[method]api.in\
+c-global-by\x01.\x01@\x01\x04self-\0w\x04\0%[method]api.blocking-get-global-valu\
+e\x01/\x01i\x06\x01@\x01\x04self-\00\x04\0\x1c[method]api.get-global-value\x011\x01\
+@\x01\x04self-\0\x16\x04\0$[method]api.blocking-get-all-dropped\x012\x01i\x07\x01\
+@\x01\x04self-\03\x04\0\x1b[method]api.get-all-dropped\x014\x01@\x02\x04self-\x02\
+in\x05\0\x05\x04\0%[method]api.blocking-bug-wasm-rpc-i32\x015\x01i\x08\x01@\x02\x04\
+self-\x02in\x05\06\x04\0\x1c[method]api.bug-wasm-rpc-i32\x017\x01i\x0d\x01@\x02\x08\
+location\x01\x04names\08\x04\0\x14[constructor]counter\x019\x01h\x0d\x01@\x02\x04\
+self:\x05valuew\x01\0\x04\0\x1f[method]counter.blocking-inc-by\x01;\x04\0\x16[me\
+thod]counter.inc-by\x01;\x01@\x01\x04self:\0w\x04\0\"[method]counter.blocking-ge\
+t-value\x01<\x01i\x09\x01@\x01\x04self:\0=\x04\0\x19[method]counter.get-value\x01\
+>\x01@\x01\x04self:\0\"\x04\0![method]counter.blocking-get-args\x01?\x01i\x0a\x01\
+@\x01\x04self:\0\xc0\0\x04\0\x18[method]counter.get-args\x01A\x01@\x01\x04self:\0\
+(\x04\0\x20[method]counter.blocking-get-env\x01B\x01i\x0b\x01@\x01\x04self:\0\xc3\
+\0\x04\0\x17[method]counter.get-env\x01D\x04\x01\x1frpc:counters-stub/stub-count\
+ers\x05\x06\x04\x01(rpc:counters-stub/wasm-rpc-stub-counters\x04\0\x0b\x1c\x01\0\
+\x16wasm-rpc-stub-counters\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwi\
+t-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]
