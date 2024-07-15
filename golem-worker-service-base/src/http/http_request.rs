@@ -106,7 +106,7 @@ mod tests {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
     use serde_json::Value;
     use std::sync::Arc;
@@ -177,7 +177,7 @@ mod tests {
         let mut name_value_pairs = vec![];
 
         for (key, value) in values.iter() {
-            let typ = get_type(value)
+            let typ = Type::try_from(value)
                 .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),

@@ -1674,7 +1674,7 @@ mod tests {
         pub(crate) fn create_none(typ: &AnalysedType) -> TypeAnnotatedValue {
             TypeAnnotatedValue::Option(Box::new(TypedOption {
                 value: None,
-                typ: Some(typ.to_type()),
+                typ: Some(typ.into()),
             }))
         }
 

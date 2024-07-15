@@ -176,7 +176,7 @@ mod internal {
                     .typ
                     .clone()
                     .ok_or(ContentTypeMapError::internal("Failed to fetch list type"))?;
-                let analysed_type = AnalysedType::from_type(&typ).map_err(|_| {
+                let analysed_type = AnalysedType::try_from(&typ).map_err(|_| {
                     ContentTypeMapError::internal("Failed to convert type to analysed type")
                 })?;
                 let vec = typed_list
@@ -244,10 +244,9 @@ mod internal {
                     if content_header.has_application_json() {
                         get_json_null()
                     } else {
-                        let typ =
-                            AnalysedType::try_from(type_annotated_value.clone()).map_err(|_| {
-                                ContentTypeMapError::internal("Failed to resolve type of data")
-                            })?;
+                        let typ = AnalysedType::try_from(type_annotated_value).map_err(|_| {
+                            ContentTypeMapError::internal("Failed to resolve type of data")
+                        })?;
                         Err(ContentTypeMapError::illegal_mapping(&typ, content_header))
                     }
                 }
