@@ -1522,9 +1522,7 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let inner_record =
-            internal::create_singleton_record("a", &TypeAnnotatedValue::U64(1)).unwrap();
-        let inner_record_ok = internal::create_ok_result(inner_record).unwrap();
+        let inner_record_ok = internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap();
         let record = internal::create_record(vec![("a".to_string(), inner_record_ok)]).unwrap();
 
         let expected = Ok(ExprEvaluationResult::Value(record));
