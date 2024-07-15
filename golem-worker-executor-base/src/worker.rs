@@ -1698,7 +1698,7 @@ pub async fn calculate_last_known_status<T>(
     metadata: &Option<WorkerMetadata>,
 ) -> Result<WorkerStatusRecord, GolemError>
 where
-    T: HasOplogService + HasWorkerService + HasConfig,
+    T: HasOplogService + HasConfig,
 {
     let last_known = metadata
         .as_ref()

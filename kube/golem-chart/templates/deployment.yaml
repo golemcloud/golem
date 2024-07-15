@@ -285,6 +285,17 @@ spec:
               value: {{ .Values.workerService.postgres.schema }}
             - name: GOLEM__DB__CONFIG__HOST
               value: {{ .Values.workerService.postgres.host }}
+{{- if .Values.workerService.postgres.password.plain }}
+            - name: GOLEM__DB__CONFIG__PASSWORD
+              value: "{{ .Values.workerService.postgres.password.plain }}"
+{{- end }}
+{{- if .Values.workerService.postgres.password.fromSecret.name }}
+            - name: GOLEM__DB__CONFIG__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.workerService.postgres.password.fromSecret.name }}
+                  key: {{ .Values.workerService.postgres.password.fromSecret.key }}
+{{- end }}
             - name: GOLEM__DB__CONFIG__PORT
               value: "{{ .Values.workerService.postgres.port }}"
             - name: GOLEM__DB__CONFIG__USERNAME

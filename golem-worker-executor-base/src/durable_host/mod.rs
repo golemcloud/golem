@@ -35,7 +35,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
+use crate::services::{golem_config, worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement, IoCapturing,
@@ -1012,7 +1012,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         last_error_and_retry_count(this, owned_worker_id).await
     }
 
-    async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
@@ -1732,6 +1732,12 @@ impl HasOplogService for PrivateDurableWorkerState {
 impl HasOplog for PrivateDurableWorkerState {
     fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
         self.oplog.clone()
+    }
+}
+
+impl HasConfig for PrivateDurableWorkerState {
+    fn config(&self) -> Arc<golem_config::GolemConfig> {
+        self.config.clone()
     }
 }
 

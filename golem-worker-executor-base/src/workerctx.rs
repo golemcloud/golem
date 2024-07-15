@@ -41,7 +41,9 @@ use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
+use crate::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
+};
 use crate::worker::{RetryDecision, Worker};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -330,7 +332,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> Option<LastError>;
 
     /// Gets a best-effort current worker status without activating the worker
-    async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
