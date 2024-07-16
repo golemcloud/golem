@@ -79,7 +79,7 @@ impl Guest for Component {
             println!("Calling the poll endpoint");
             match client.get(format!("http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}")).send() {
                 Ok(response) => {
-                    let s = response.text().unwrap();
+                    let s = response.text().unwrap_or_else(|err| format!("error receiving body: {err:?}"));
                     println!("Received {s}");
                     if s == until {
                         println!("Poll loop finished");
