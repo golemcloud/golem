@@ -81,7 +81,7 @@ impl From<&Component> for ComponentView {
                     Export::Instance(ExportInstance { name, functions }) => {
                         let fs: Vec<String> = functions
                             .iter()
-                            .map(|f| show_exported_function(&format!("{name}"), f))
+                            .map(|f| show_exported_function(name, f))
                             .collect();
                         fs
                     }
