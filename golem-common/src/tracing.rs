@@ -344,14 +344,18 @@ where
     match &config.file_name {
         Some(file_name) if config.file.enabled => {
             let file_path = Path::new(config.file_dir.as_deref().unwrap_or(".")).join(file_name);
-            let file = OpenOptions::new()
-                .append(true)
-                .create(true)
-                .truncate(config.file_truncate)
-                .open(&file_path)
-                .unwrap_or_else(|err| {
-                    panic!("cannot create log file: {:?}, error: {}", &file_path, err)
-                });
+
+            let mut open_options = OpenOptions::new();
+            if config.file_truncate {
+                open_options.write(true).create(true).truncate(true);
+            } else {
+                open_options.append(true).create(true).truncate(false);
+            }
+
+            let file = open_options.open(&file_path).unwrap_or_else(|err| {
+                panic!("cannot create log file: {:?}, error: {}", &file_path, err)
+            });
+
             layers.push(make_layer(
                 &config.file,
                 make_filter(Output::File),
