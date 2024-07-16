@@ -208,7 +208,7 @@ cargo test --package golem-worker-executor-base --test integration wasi -- --noc
 
 [tasks.worker-executor-tests-group4]
 description = "Runs worker executor tests only (group 4/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration scalability -- --nocapture
 cargo test --package golem-worker-executor-base --test integration hot_update -- --nocapture

@@ -93,10 +93,17 @@ pub trait OplogService: Debug {
         start_idx: OplogIndex,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
+        assert!(
+            start_idx <= last_idx,
+            "Invalid range passed to OplogService::read_range: start_idx = {}, last_idx = {}",
+            start_idx,
+            last_idx
+        );
+
         self.read(
             owned_worker_id,
             start_idx,
-            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
+            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1, // OVERFLOW ERROR??
         )
         .await
     }
