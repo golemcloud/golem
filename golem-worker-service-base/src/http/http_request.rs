@@ -993,7 +993,7 @@ mod tests {
 
             let expression = r#"
             let param = request.body;
-            let response = golem:it/api/get-cart-contents();
+            let response = golem:it/api.{get-cart-contents};
             response
             "#;
 
