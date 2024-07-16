@@ -486,3 +486,43 @@ use std::time::SystemTime;
 //             ]),]),
 //     );
 // }
+//
+// #[tokio::test]
+// #[tracing::instrument]
+// async fn wasm_rpc_bug_32_test() {
+//     let context = common::TestContext::new();
+//     let executor = common::start(&context).await.unwrap();
+//
+//     let counters_component_id = executor.store_component("counters").await;
+//     let caller_component_id = executor.store_component("caller_composed").await;
+//
+//     let mut env = HashMap::new();
+//     env.insert(
+//         "COUNTERS_COMPONENT_ID".to_string(),
+//         counters_component_id.to_string(),
+//     );
+//     let caller_worker_id = executor
+//         .start_worker_with(&caller_component_id, "rpc-counters-bug32", vec![], env)
+//         .await;
+//
+//     let result = executor
+//         .invoke_and_await(
+//             &caller_worker_id,
+//             "bug-wasm-rpc-i32",
+//             vec![Value::Variant {
+//                 case_idx: 0,
+//                 case_value: None,
+//             }],
+//         )
+//         .await;
+//
+//     drop(executor);
+//
+//     check!(
+//         result
+//             == Ok(vec![Value::Variant {
+//                 case_idx: 0,
+//                 case_value: None,
+//             }])
+//     );
+// }
