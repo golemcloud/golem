@@ -587,7 +587,7 @@ async fn http_client_interrupting_response_stream() {
         let route = warp::path("big-byte-array").and(warp::get()).map(move || {
             let (sender, body) = Body::channel();
             let signal_tx = signal_tx.clone();
-            let _ = spawn(async move {
+            let _handle = spawn(async move {
                 let mut sender = sender;
                 let buf = vec![0; 1024];
                 for i in 0..100 {
@@ -627,7 +627,7 @@ async fn http_client_interrupting_response_stream() {
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
     let key_clone = key.clone();
-    let _ = spawn(async move {
+    let _handle = spawn(async move {
         let _ = executor_clone
             .invoke_and_await_with_key(
                 &worker_id_clone,
