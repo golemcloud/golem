@@ -295,21 +295,21 @@ jobs:
         uses: arduino/setup-protoc@v1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-#      - name: Check that OpenAPI specs are up-to-date
-#        env:
-#          SCCACHE_GHA_ENABLED: "true"
-#          RUSTC_WRAPPER: "sccache"
-#        run: cargo make check-openapi
-#      - name: Check that configs are up-to-date
-#        env:
-#          SCCACHE_GHA_ENABLED: "true"
-#          RUSTC_WRAPPER: "sccache"
-#        run: cargo make check-configs
-#      - name: Unit tests
-#        env:
-#          SCCACHE_GHA_ENABLED: "true"
-#          RUSTC_WRAPPER: "sccache"
-#        run: cargo make unit-tests
+      - name: Check that OpenAPI specs are up-to-date
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make check-openapi
+      - name: Check that configs are up-to-date
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make check-configs
+      - name: Unit tests
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make unit-tests
   worker-tests:
     runs-on: ubuntu-latest-large
     strategy:
