@@ -27,7 +27,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
-use wasmtime::component::Component;
 use wasmtime::Error;
 
 use crate::error::*;
@@ -63,13 +62,12 @@ use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
-use crate::services::{worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps, HasComponentService, HasWasmtimeEngine};
+use crate::services::{worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_service_base::model::ExportFunction;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use rib::ParsedFunctionName;
-use crate::services::component::ComponentMetadata;
 use crate::worker;
 
 pub enum GrpcError<E> {
