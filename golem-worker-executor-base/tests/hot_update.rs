@@ -180,6 +180,11 @@ async fn auto_update_on_running() {
 
     let result = fiber.await.unwrap();
     info!("result: {:?}", result);
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
+        .await
+        .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
     let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
@@ -392,6 +397,11 @@ async fn failing_auto_update_on_running() {
 
     let result = fiber.await.unwrap();
     info!("result: {:?}", result);
+
+    let _ = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
+        .await
+        .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
     let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
