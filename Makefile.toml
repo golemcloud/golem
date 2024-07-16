@@ -478,7 +478,7 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
 
 script = '''
-mkdir -pv logs
+mkdir -pv data logs
 
 redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &
 redis_pid=$!
