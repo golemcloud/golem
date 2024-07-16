@@ -1680,9 +1680,9 @@ enum WorkerCommand {
     Interrupt(InterruptKind),
 }
 
-pub async fn get_component_metadata<Ctx>(
+pub async fn get_component_metadata<Ctx : WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
-) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
+) -> Result<ComponentMetadata, GolemError> {
     let component_id = worker.owned_worker_id.component_id();
     let worker_metadata = worker.get_metadata().await?;
 
@@ -1690,12 +1690,12 @@ pub async fn get_component_metadata<Ctx>(
         .last_known_status
         .component_version;
 
-    let (component, component_metadata) = worker
+    let component_metadata = worker
         .component_service()
-        .get(&worker.engine(), &component_id, component_version)
+        .get_metadata(&component_id, Some(component_version))
         .await?;
 
-    Ok((worker_metadata, component, component_metadata))
+    Ok(component_metadata)
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.

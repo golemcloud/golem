@@ -584,7 +584,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let (_, _, component_metadata) = worker::get_component_metadata(&worker).await?;
+        let component_metadata = worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
         let function_type = exports::function_by_name(&exports, &full_function_name)
@@ -704,7 +704,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(request).await?;
 
-        let (_, _, component_metadata) = worker::get_component_metadata(&worker).await?;
+        let component_metadata = worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
         let function_type = exports::function_by_name(&exports, &full_function_name)
