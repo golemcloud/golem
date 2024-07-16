@@ -51,21 +51,26 @@ impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
 
         sqlx::query(
             "
-            WITH upsert AS (
-                UPDATE account_fuel
-                SET consumed = CASE
-                    WHEN month = EXTRACT(MONTH FROM current_date) AND year = EXTRACT(YEAR FROM current_date)
-                    THEN consumed + $2
-                    ELSE $2
-                END,
-                month = EXTRACT(MONTH FROM current_date),
-                year = EXTRACT(YEAR FROM current_date)
-                WHERE account_id = $1
-                RETURNING *
-            )
             INSERT INTO account_fuel (account_id, consumed, month, year)
-            SELECT $1, $2, EXTRACT(MONTH FROM current_date), EXTRACT(YEAR FROM current_date)
-            WHERE NOT EXISTS (SELECT * FROM upsert)
+            VALUES ($1, 0, 1, 2000)
+            ON CONFLICT DO NOTHING
+            ",
+        )
+        .bind(id.value.clone())
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            "
+            UPDATE account_fuel
+            SET consumed = CASE
+                WHEN month = EXTRACT(MONTH FROM current_date) AND year = EXTRACT(YEAR FROM current_date)
+                THEN consumed + $2
+                ELSE $2
+            END,
+            month = EXTRACT(MONTH FROM current_date),
+            year = EXTRACT(YEAR FROM current_date)
+            WHERE account_id = $1
             ",
         )
         .bind(id.value.clone())
