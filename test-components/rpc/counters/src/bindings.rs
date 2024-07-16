@@ -155,6 +155,17 @@ pub mod exports {
                     }
                 }
 
+                #[derive(Clone, Copy)]
+                pub enum TimelineNode {
+                    Leaf,
+                }
+                impl ::core::fmt::Debug for TimelineNode {
+                    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        match self {
+                            TimelineNode::Leaf => f.debug_tuple("TimelineNode::Leaf").finish(),
+                        }
+                    }
+                }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
                 pub unsafe fn _export_constructor_counter_cabi<T: GuestCounter>(
@@ -380,11 +391,29 @@ pub mod exports {
                     }
                     _rt::cabi_dealloc(base4, len4 * 16, 8);
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_bug_wasm_rpc_i32_cabi<T: Guest>(arg0: i32) -> i32 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let v0 = match arg0 {
+                        n => {
+                            debug_assert_eq!(n, 0, "invalid enum discriminant");
+                            TimelineNode::Leaf
+                        }
+                    };
+                    let result1 = T::bug_wasm_rpc_i32(v0);
+                    let result2 = match result1 {
+                        TimelineNode::Leaf => 0i32,
+                    };
+                    result2
+                }
                 pub trait Guest {
                     type Counter: GuestCounter;
                     fn inc_global_by(value: u64);
                     fn get_global_value() -> u64;
                     fn get_all_dropped() -> _rt::Vec<(_rt::String, u64)>;
+                    fn bug_wasm_rpc_i32(in_: TimelineNode) -> TimelineNode;
                 }
                 pub trait GuestCounter: 'static {
                     #[doc(hidden)]
@@ -485,6 +514,10 @@ pub mod exports {
     #[export_name = "cabi_post_rpc:counters/api#get-all-dropped"]
     unsafe extern "C" fn _post_return_get_all_dropped(arg0: *mut u8,) {
       $($path_to_types)*::__post_return_get_all_dropped::<$ty>(arg0)
+    }
+    #[export_name = "rpc:counters/api#bug-wasm-rpc-i32"]
+    unsafe extern "C" fn export_bug_wasm_rpc_i32(arg0: i32,) -> i32 {
+      $($path_to_types)*::_export_bug_wasm_rpc_i32_cabi::<$ty>(arg0)
     }
 
     const _: () = {
@@ -690,18 +723,20 @@ pub(crate) use __export_counters_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:counters:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 502] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf7\x02\x01A\x02\x01\
-A\x02\x01B\x18\x04\0\x07counter\x03\x01\x01i\0\x01@\x01\x04names\0\x01\x04\0\x14\
-[constructor]counter\x01\x02\x01h\0\x01@\x02\x04self\x03\x05valuew\x01\0\x04\0\x16\
-[method]counter.inc-by\x01\x04\x01@\x01\x04self\x03\0w\x04\0\x19[method]counter.\
-get-value\x01\x05\x01ps\x01@\x01\x04self\x03\0\x06\x04\0\x18[method]counter.get-\
-args\x01\x07\x01o\x02ss\x01p\x08\x01@\x01\x04self\x03\0\x09\x04\0\x17[method]cou\
-nter.get-env\x01\x0a\x01@\x01\x05valuew\x01\0\x04\0\x0dinc-global-by\x01\x0b\x01\
-@\0\0w\x04\0\x10get-global-value\x01\x0c\x01o\x02sw\x01p\x0d\x01@\0\0\x0e\x04\0\x0f\
-get-all-dropped\x01\x0f\x04\x01\x10rpc:counters/api\x05\0\x04\x01\x15rpc:counter\
-s/counters\x04\0\x0b\x0e\x01\0\x08counters\x03\0\0\0G\x09producers\x01\x0cproces\
-sed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 561] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb2\x03\x01A\x02\x01\
+A\x02\x01B\x1c\x04\0\x07counter\x03\x01\x01q\x01\x04leaf\0\0\x04\0\x0dtimeline-n\
+ode\x03\0\x01\x01i\0\x01@\x01\x04names\0\x03\x04\0\x14[constructor]counter\x01\x04\
+\x01h\0\x01@\x02\x04self\x05\x05valuew\x01\0\x04\0\x16[method]counter.inc-by\x01\
+\x06\x01@\x01\x04self\x05\0w\x04\0\x19[method]counter.get-value\x01\x07\x01ps\x01\
+@\x01\x04self\x05\0\x08\x04\0\x18[method]counter.get-args\x01\x09\x01o\x02ss\x01\
+p\x0a\x01@\x01\x04self\x05\0\x0b\x04\0\x17[method]counter.get-env\x01\x0c\x01@\x01\
+\x05valuew\x01\0\x04\0\x0dinc-global-by\x01\x0d\x01@\0\0w\x04\0\x10get-global-va\
+lue\x01\x0e\x01o\x02sw\x01p\x0f\x01@\0\0\x10\x04\0\x0fget-all-dropped\x01\x11\x01\
+@\x01\x02in\x02\0\x02\x04\0\x10bug-wasm-rpc-i32\x01\x12\x04\x01\x10rpc:counters/\
+api\x05\0\x04\x01\x15rpc:counters/counters\x04\0\x0b\x0e\x01\0\x08counters\x03\0\
+\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bi\
+ndgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

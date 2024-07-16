@@ -39,6 +39,12 @@ impl Guest for Component {
     fn get_global_value() -> u64 {
         with_state(|state| state.global)
     }
+
+    fn bug_wasm_rpc_i32(
+        in_: exports::rpc::counters::api::TimelineNode,
+    ) -> exports::rpc::counters::api::TimelineNode {
+        in_
+    }
 }
 
 pub struct Counter {
