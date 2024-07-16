@@ -1735,7 +1735,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
     sleep(Duration::from_secs(2)).await;
     let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
-    executor.interrupt(&worker_id).await; // Potential "body stream was interrupted" error
+    executor.interrupt(&worker_id).await;
 
     let mut events = drain_connection(rx).await;
     let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
