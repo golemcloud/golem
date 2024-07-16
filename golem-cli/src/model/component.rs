@@ -81,7 +81,7 @@ impl From<&Component> for ComponentView {
                     Export::Instance(ExportInstance { name, functions }) => {
                         let fs: Vec<String> = functions
                             .iter()
-                            .map(|f| show_exported_function(name, f))
+                            .map(|f| show_exported_function(&format!("{name}."), f))
                             .collect();
                         fs
                     }
@@ -168,7 +168,7 @@ fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
         let name = &f.name;
 
         DisplayNamedFunc {
-            name: format!("{prefix}.{{{name}}}"),
+            name: format!("{prefix}{{{name}}}"),
             func: func_to_analysed(f),
         }
         .to_string()
@@ -302,7 +302,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc()")
+        assert_eq!(repr, "{abc}()")
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc() -> bool")
+        assert_eq!(repr, "{abc}() -> bool")
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n1: bool, n2: bool) -> (bool, bool)")
+        assert_eq!(repr, "{abc}(n1: bool, n2: bool) -> (bool, bool)")
     }
 
     #[test]
@@ -425,7 +425,7 @@ mod tests {
     }
 
     fn ensure_same_export(typ: Type, expected: &str) {
-        let expected_wave = format!("wn() -> {expected}");
+        let expected_wave = format!("{{wn}}() -> {expected}");
         let expected_custom = format!("cn() -> tuple<handle<1>, {expected}>");
 
         let wave_f = ExportFunction {
