@@ -164,11 +164,11 @@ fn text_component_add(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -216,11 +216,11 @@ fn text_component_update(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -267,11 +267,11 @@ fn text_component_get(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())

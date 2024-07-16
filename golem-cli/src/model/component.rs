@@ -81,7 +81,7 @@ impl From<&Component> for ComponentView {
                     Export::Instance(ExportInstance { name, functions }) => {
                         let fs: Vec<String> = functions
                             .iter()
-                            .map(|f| show_exported_function(&format!("{name}/"), f))
+                            .map(|f| show_exported_function(&format!("{name}"), f))
                             .collect();
                         fs
                     }
@@ -168,7 +168,7 @@ fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
         let name = &f.name;
 
         DisplayNamedFunc {
-            name: format!("{prefix}{name}"),
+            name: format!("{prefix}.{{{name}}}"),
             func: func_to_analysed(f),
         }
         .to_string()
