@@ -56,6 +56,7 @@ use golem_common::model::{
 };
 use golem_common::to_json::FromToJson;
 use golem_common::{model as common_model, recorded_grpc_request};
+use golem_service_base::exports;
 
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
@@ -587,8 +588,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
-        let function_type = exports
-            .function_by_name(&full_function_name)
+        let function_type = exports::function_by_name(&exports, &full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
             })?
@@ -708,8 +708,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
-        let function_type = exports
-            .function_by_name(&full_function_name)
+        let function_type = exports::function_by_name(&exports, &full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
             })?

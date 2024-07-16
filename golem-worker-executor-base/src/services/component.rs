@@ -39,7 +39,7 @@ use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
-use golem_service_base::model::{Export, Exports};
+use golem_service_base::model::Export;
 use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
 use golem_wasm_ast::IgnoreAll;
 use http::Uri;
@@ -56,7 +56,7 @@ pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
-    pub exports: Exports,
+    pub exports: Vec<Export>,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -444,24 +444,22 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
-                    exports: Exports {
-                        exports: component
-                            .metadata
-                            .map(|metadata| {
-                                let export = metadata.exports;
-                                let vec: Vec<Result<Export, String>> = export
-                                    .into_iter()
-                                    .map(|proto_export| {
-                                        golem_service_base::model::Export::try_from(proto_export)
-                                    })
-                                    .collect();
-                                vec.into_iter().collect()
-                            })
-                            .unwrap_or_else(|| Ok(Vec::new()))
-                            .map_err(|_| {
-                                GrpcError::Unexpected("Failed to get the exports".to_string())
-                            })?,
-                    },
+                    exports: component
+                        .metadata
+                        .map(|metadata| {
+                            let export = metadata.exports;
+                            let vec: Vec<Result<Export, String>> = export
+                                .into_iter()
+                                .map(|proto_export| {
+                                    golem_service_base::model::Export::try_from(proto_export)
+                                })
+                                .collect();
+                            vec.into_iter().collect()
+                        })
+                        .unwrap_or_else(|| Ok(Vec::new()))
+                        .map_err(|_| {
+                            GrpcError::Unexpected("Failed to get the exports".to_string())
+                        })?,
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
@@ -640,7 +638,7 @@ impl ComponentServiceLocalFileSystem {
     async fn analyze_memories_and_exports(
         component_id: &ComponentId,
         path: &&PathBuf,
-    ) -> Result<(Vec<LinearMemory>, Exports), GolemError> {
+    ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
         let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
             golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
                 .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
@@ -658,12 +656,10 @@ impl ComponentServiceLocalFileSystem {
             }
         })?;
 
-        let exports = Exports {
-            exports: analysed_exports
-                .into_iter()
-                .map(|export| export.into())
-                .collect::<Vec<_>>(),
-        };
+        let exports = analysed_exports
+            .into_iter()
+            .map(|export| export.into())
+            .collect::<Vec<_>>();
 
         let linear_memories = analysis
             .get_all_memories()
@@ -728,7 +724,7 @@ impl ComponentServiceLocalFileSystem {
         let size = tokio::fs::metadata(&path).await?.len();
         let (memories, exports) = Self::analyze_memories_and_exports(component_id, &path)
             .await
-            .unwrap_or((vec![], Exports::empty())); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
+            .unwrap_or((vec![], vec![])); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
 
         Ok(ComponentMetadata {
             version: *version,

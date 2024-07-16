@@ -51,10 +51,7 @@ impl FromToJson for ProtoJson {
             Value::String(s) => Kind::StringValue(s.clone()),
             Value::Bool(b) => Kind::BoolValue(*b),
             Value::Array(a) => Kind::ArrayValue(JsonArray {
-                values: a
-                    .iter()
-                    .map(ProtoJson::from_serde_json_value)
-                    .collect(),
+                values: a.iter().map(ProtoJson::from_serde_json_value).collect(),
             }),
             Value::Object(o) => Kind::ObjectValue(JsonObject {
                 fields: {

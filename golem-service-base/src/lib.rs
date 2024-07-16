@@ -15,6 +15,7 @@ pub mod api_tags;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod exports;
 pub mod model;
 pub mod routing_table;
 pub mod service;

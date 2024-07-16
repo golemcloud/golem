@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::exports;
 use bincode::{Decode, Encode};
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use poem_openapi::{Enum, NewType, Object, Union};
-use rib::ParsedFunctionName;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
@@ -1797,92 +1797,22 @@ impl From<LinearMemory> for golem_api_grpc::proto::golem::component::LinearMemor
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct ComponentMetadata {
-    pub exports: Exports,
+    pub exports: Vec<Export>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
-pub struct Exports {
-    pub exports: Vec<Export>,
-}
-
-impl Exports {
-    pub fn empty() -> Exports {
-        Exports { exports: vec![] }
-    }
-
-    pub fn instances(&self) -> Vec<ExportInstance> {
-        let mut instances = vec![];
-        for export in self.exports.clone() {
-            if let Export::Instance(instance) = export {
-                instances.push(instance.clone())
-            }
-        }
-        instances
-    }
-
-    pub fn functions(&self) -> Vec<ExportFunction> {
-        let mut functions = vec![];
-        for export in self.exports.clone() {
-            if let Export::Function(function) = export {
-                functions.push(function.clone())
-            }
-        }
-        functions
-    }
-
-    pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
-        let parsed = ParsedFunctionName::parse(name)?;
-
-        match &parsed.site().interface_name() {
-            None => Ok(self.functions().iter().find(|f| f.name == *name).cloned()),
-            Some(interface_name) => {
-                let exported_function = self
-                    .instances()
-                    .iter()
-                    .find(|instance| instance.name == *interface_name)
-                    .and_then(|instance| {
-                        instance
-                            .functions
-                            .iter()
-                            .find(|f| f.name == parsed.function().function_name())
-                            .cloned()
-                    });
-                if exported_function.is_none() {
-                    match parsed.method_as_static() {
-                        Some(parsed_static) => Ok(self
-                            .instances()
-                            .iter()
-                            .find(|instance| instance.name == *interface_name)
-                            .and_then(|instance| {
-                                instance
-                                    .functions
-                                    .iter()
-                                    .find(|f| f.name == parsed_static.function().function_name())
-                                    .cloned()
-                            })),
-                        None => Ok(None),
-                    }
-                } else {
-                    Ok(exported_function)
-                }
-            }
-        }
-    }
-}
-
 impl ComponentMetadata {
     pub fn instances(&self) -> Vec<ExportInstance> {
-        self.exports.instances()
+        exports::instances(&self.exports)
     }
 
     pub fn functions(&self) -> Vec<ExportFunction> {
-        self.exports.functions()
+        exports::functions(&self.exports)
     }
 
     pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
-        self.exports.function_by_name(name)
+        exports::function_by_name(&self.exports, name)
     }
 
     /// Gets the sum of all the initial memory sizes of the component
@@ -1903,13 +1833,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for Com
         value: golem_api_grpc::proto::golem::component::ComponentMetadata,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            exports: Exports {
-                exports: value
-                    .exports
-                    .into_iter()
-                    .map(|export| export.try_into())
-                    .collect::<Result<_, _>>()?,
-            },
+            exports: value
+                .exports
+                .into_iter()
+                .map(|export| export.try_into())
+                .collect::<Result<_, _>>()?,
             producers: value
                 .producers
                 .into_iter()
@@ -1928,7 +1856,6 @@ impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::Compon
     fn from(value: ComponentMetadata) -> Self {
         Self {
             exports: value
-                .exports
                 .exports
                 .into_iter()
                 .map(|export| export.into())
@@ -3302,7 +3229,6 @@ pub struct Component {
 impl Component {
     pub fn function_names(&self) -> Vec<String> {
         self.metadata
-            .exports
             .exports
             .iter()
             .flat_map(|x| x.function_names())
