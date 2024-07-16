@@ -134,7 +134,6 @@ mod tests {
             &self,
             resolved_worker_request: WorkerRequest,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-
             let response = convert_to_worker_response(&resolved_worker_request);
 
             let response_dummy = create_tuple(vec![response]);
