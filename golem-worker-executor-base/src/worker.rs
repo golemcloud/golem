@@ -89,41 +89,6 @@ pub struct Worker<Ctx: WorkerCtx> {
     oom_retry_config: RetryConfig,
 }
 
-impl<Ctx: WorkerCtx> Worker<Ctx> {
-    pub async fn get_component_metadata(
-        worker: &Arc<Worker<Ctx>>,
-    ) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
-        let component_id = worker.owned_worker_id.component_id();
-        let worker_metadata = worker.get_metadata().await?;
-
-        let component_version = worker_metadata
-            .last_known_status
-            .pending_updates
-            .front()
-            .map_or(
-                worker_metadata.last_known_status.component_version,
-                |update| {
-                    let target_version = *update.description.target_version();
-                    info!(
-                        "Attempting {} update from {} to version {target_version}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
-                        },
-                        worker_metadata.last_known_status.component_version
-                    );
-                    target_version
-                },
-            );
-        let (component, component_metadata) = worker
-            .component_service()
-            .get(&worker.engine(), &component_id, component_version)
-            .await?;
-
-        Ok((worker_metadata, component, component_metadata))
-    }
-}
-
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
     fn oplog(&self) -> Arc<dyn Oplog + Send + Sync> {
         self.oplog.clone()
@@ -1191,8 +1156,32 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), GolemError> {
-        let (worker_metadata, component, component_metadata) =
-            Worker::get_component_metadata(&parent).await?;
+        let component_id = parent.owned_worker_id.component_id();
+        let worker_metadata = parent.get_metadata().await?;
+
+        let component_version = worker_metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .map_or(
+                worker_metadata.last_known_status.component_version,
+                |update| {
+                    let target_version = *update.description.target_version();
+                    info!(
+                        "Attempting {} update from {} to version {target_version}",
+                        match update.description {
+                            UpdateDescription::Automatic { .. } => "automatic",
+                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        },
+                        worker_metadata.last_known_status.component_version
+                    );
+                    target_version
+                },
+            );
+        let (component, component_metadata) = parent
+            .component_service()
+            .get(&parent.engine(), &component_id, component_version)
+            .await?;
 
         let context = Ctx::create(
             OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
@@ -1689,6 +1678,24 @@ pub enum RetryDecision {
 enum WorkerCommand {
     Invocation,
     Interrupt(InterruptKind),
+}
+
+pub async fn get_component_metadata<Ctx>(
+    worker: &Arc<Worker<Ctx>>,
+) -> Result<(WorkerMetadata, Component, ComponentMetadata), GolemError> {
+    let component_id = worker.owned_worker_id.component_id();
+    let worker_metadata = worker.get_metadata().await?;
+
+    let component_version = worker_metadata
+        .last_known_status
+        .component_version;
+
+    let (component, component_metadata) = worker
+        .component_service()
+        .get(&worker.engine(), &component_id, component_version)
+        .await?;
+
+    Ok((worker_metadata, component, component_metadata))
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.

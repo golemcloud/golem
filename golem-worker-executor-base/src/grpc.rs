@@ -27,6 +27,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
+use wasmtime::component::Component;
 use wasmtime::Error;
 
 use crate::error::*;
@@ -62,16 +63,14 @@ use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
-use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
-    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
-};
+use crate::services::{worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps, HasComponentService, HasWasmtimeEngine};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_service_base::model::ExportFunction;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use rib::ParsedFunctionName;
+use crate::services::component::ComponentMetadata;
+use crate::worker;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -585,7 +584,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let calling_convention = request.calling_convention();
 
-        let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
+        let (_, _, component_metadata) = worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
         let function_type = exports::function_by_name(&exports, &full_function_name)
@@ -705,7 +704,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(request).await?;
 
-        let (_, _, component_metadata) = Worker::get_component_metadata(&worker).await?;
+        let (_, _, component_metadata) = worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
         let function_type = exports::function_by_name(&exports, &full_function_name)
