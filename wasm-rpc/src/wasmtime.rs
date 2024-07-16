@@ -166,25 +166,35 @@ pub fn decode_param(
                         details: format!("could not get case for discriminant {}", case_idx),
                     })?;
                 let name = case.name;
-                let case_ty = match case.ty {
-                    Some(ref ty) => Ok(ty),
-                    None => Err(EncodingError::ValueMismatch {
-                        details: format!("could not get type information for case {}", name),
-                    }),
-                }?;
-                let decoded_value = case_value
-                    .as_ref()
-                    .map(|v| decode_param(v, case_ty, resource_store))
-                    .transpose()?;
-                match decoded_value {
-                    Some(decoded_value) => Ok(DecodeParamResult {
-                        val: Val::Variant(name.to_string(), Some(Box::new(decoded_value.val))),
-                        resources_to_drop: decoded_value.resources_to_drop,
-                    }),
-                    None => Ok(DecodeParamResult::simple(Val::Variant(
-                        name.to_string(),
-                        None,
-                    ))),
+                match case.ty {
+                    Some(ref case_ty) => {
+                        let decoded_value = case_value
+                            .as_ref()
+                            .map(|v| decode_param(v, case_ty, resource_store))
+                            .transpose()?;
+                        match decoded_value {
+                            Some(decoded_value) => Ok(DecodeParamResult {
+                                val: Val::Variant(
+                                    name.to_string(),
+                                    Some(Box::new(decoded_value.val)),
+                                ),
+                                resources_to_drop: decoded_value.resources_to_drop,
+                            }),
+                            None => Ok(DecodeParamResult::simple(Val::Variant(
+                                name.to_string(),
+                                None,
+                            ))),
+                        }
+                    }
+                    None => match case_value {
+                        Some(_) => Err(EncodingError::ValueMismatch {
+                            details: "expected no value for unit variant".to_string(),
+                        }),
+                        None => Ok(DecodeParamResult::simple(Val::Variant(
+                            name.to_string(),
+                            None,
+                        ))),
+                    },
                 }
             }
             _ => Err(EncodingError::ParamTypeMismatch),
