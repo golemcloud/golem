@@ -589,6 +589,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
 
+        dbg!(exports.clone());
+
         let function_type = exports::function_by_name(&exports, &full_function_name)
             .map_err(|err| {
                 GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
@@ -600,6 +602,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
+        dbg!(request.input().clone());
+
         let params_val = request
             .input()
             .validate_function_parameters(
@@ -609,6 +613,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|err| GolemError::ValueMismatch {
                 details: err.join(", "),
             })?;
+
+        dbg!(params_val.clone());
 
         let idempotency_key = request
             .idempotency_key()?
@@ -629,8 +635,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
+        dbg!(values.clone());
+
         let results: Vec<Val> = values.into_iter().map(Val::from).collect();
 
+        dbg!(results.clone());
         Ok((function_type, results))
     }
 
@@ -1940,7 +1949,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 }
 
 trait GrpcInvokeRequest {
-    type FunctionInput: TypeCheckIn;
+    type FunctionInput: TypeCheckIn + Clone + Debug;
 
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;

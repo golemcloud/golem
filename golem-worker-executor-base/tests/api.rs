@@ -2005,7 +2005,10 @@ async fn counter_resource_test_1() {
 
     drop(executor);
 
+    dbg!(result1.clone());
     check!(result1 == Ok(vec![Value::U64(5)]));
+
+    dbg!(result2.clone());
     check!(
         result2
             == Ok(vec![Value::List(vec![Value::Tuple(vec![
