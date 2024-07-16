@@ -60,11 +60,20 @@ pub mod exports {
                     let result0 = T::get_count();
                     _rt::as_i64(result0)
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_slow_body_stream_cabi<T: Guest>() -> i64 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let result0 = T::slow_body_stream();
+                    _rt::as_i64(result0)
+                }
                 pub trait Guest {
                     fn run() -> _rt::String;
                     fn start_polling(until: _rt::String);
                     fn increment();
                     fn get_count() -> u64;
+                    fn slow_body_stream() -> u64;
                 }
                 #[doc(hidden)]
 
@@ -90,6 +99,10 @@ pub mod exports {
     #[export_name = "golem:it/api#get-count"]
     unsafe extern "C" fn export_get_count() -> i64 {
       $($path_to_types)*::_export_get_count_cabi::<$ty>()
+    }
+    #[export_name = "golem:it/api#slow-body-stream"]
+    unsafe extern "C" fn export_slow_body_stream() -> i64 {
+      $($path_to_types)*::_export_slow_body_stream_cabi::<$ty>()
     }
   };);
 }
@@ -187,13 +200,14 @@ pub(crate) use __export_http_client_test_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:http-client-test:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 272] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x89\x01\x01A\x02\x01\
-A\x02\x01B\x08\x01@\0\0s\x04\0\x03run\x01\0\x01@\x01\x05untils\x01\0\x04\0\x0dst\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 293] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9e\x01\x01A\x02\x01\
+A\x02\x01B\x09\x01@\0\0s\x04\0\x03run\x01\0\x01@\x01\x05untils\x01\0\x04\0\x0dst\
 art-polling\x01\x01\x01@\0\x01\0\x04\0\x09increment\x01\x02\x01@\0\0w\x04\0\x09g\
-et-count\x01\x03\x04\x01\x0cgolem:it/api\x05\0\x04\x01\x19golem:it/http-client-t\
-est\x04\0\x0b\x16\x01\0\x10http-client-test\x03\0\0\0G\x09producers\x01\x0cproce\
-ssed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+et-count\x01\x03\x04\0\x10slow-body-stream\x01\x03\x04\x01\x0cgolem:it/api\x05\0\
+\x04\x01\x19golem:it/http-client-test\x04\0\x0b\x16\x01\0\x10http-client-test\x03\
+\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-\
+bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]
