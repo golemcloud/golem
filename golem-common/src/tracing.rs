@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::stdout;
 use std::path::Path;
 use std::sync::Arc;
@@ -135,6 +135,7 @@ pub struct TracingConfig {
     pub file: OutputConfig,
     pub file_dir: Option<String>,
     pub file_name: Option<String>,
+    pub file_truncate: bool,
     pub console: bool,
     pub dtor_friendly: bool,
 }
@@ -149,6 +150,7 @@ impl TracingConfig {
             },
             file_dir: None,
             file_name: Some(format!("{}.log", service_name)),
+            file_truncate: true,
             console: false,
             dtor_friendly: false,
         }
@@ -191,6 +193,7 @@ impl Default for TracingConfig {
             },
             file_dir: None,
             file_name: None,
+            file_truncate: true,
             console: false,
             dtor_friendly: false,
         }
@@ -341,9 +344,14 @@ where
     match &config.file_name {
         Some(file_name) if config.file.enabled => {
             let file_path = Path::new(config.file_dir.as_deref().unwrap_or(".")).join(file_name);
-            let file = File::create(file_path.clone()).unwrap_or_else(|err| {
-                panic!("cannot create log file: {:?}, error: {}", file_path, err)
-            });
+            let file = OpenOptions::new()
+                .append(true)
+                .create(true)
+                .truncate(config.file_truncate)
+                .open(&file_path)
+                .unwrap_or_else(|err| {
+                    panic!("cannot create log file: {:?}, error: {}", &file_path, err)
+                });
             layers.push(make_layer(
                 &config.file,
                 make_filter(Output::File),

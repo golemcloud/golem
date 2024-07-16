@@ -123,6 +123,7 @@ suspend_after = "10s"
 console = false
 dtor_friendly = false
 file_name = "worker-executor.log"
+file_truncate = true
 
 [tracing.file]
 ansi = false
@@ -276,6 +277,7 @@ without_time = false
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
+# file_truncate = true
 # 
 # [tracing.file]
 # ansi = false
@@ -409,6 +411,7 @@ without_time = false
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
+# file_truncate = true
 # 
 # [tracing.file]
 # ansi = false
