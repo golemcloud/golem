@@ -118,6 +118,8 @@ async fn coordinated_scenario1() {
     .await;
 }
 async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
+    DEPS.redis().flush_db(0);
+
     let (worker_command_tx, worker_command_rx) = tokio::sync::mpsc::channel(128);
     let (worker_event_tx, mut worker_event_rx) = tokio::sync::mpsc::channel(128);
     let (env_command_tx, env_command_rx) = std::sync::mpsc::channel();
