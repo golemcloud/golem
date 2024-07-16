@@ -16,7 +16,11 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::test("sharding-tests"));
+        // TODO: add generic env var for this in tracing
+        let mut tracing_config = TracingConfig::test("sharding-tests");
+        tracing_config.file_dir = Some("../logs".to_string());
+        tracing_config.file.enabled = true;
+        init_tracing_with_default_debug_env_filter(&tracing_config);
         Self
     }
 }
@@ -46,7 +50,6 @@ pub static TRACING: Tracing = Tracing::init();
 
 #[tokio::test]
 #[tracing::instrument]
-#[ignore] // TODO: Re-enable when sharding manager is fixed
 async fn service_is_responsive_to_shard_changes() {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     let chaos = std::thread::spawn(|| {
@@ -84,9 +87,9 @@ async fn service_is_responsive_to_shard_changes() {
 }
 
 #[tokio::test]
-#[tracing::instrument]
-#[ignore] // TODO: Re-enable when sharding manager is fixed
 async fn coordinated_scenario1() {
+    DEPS.redis().flush_db(0);
+
     coordinated_scenario(
         1,
         vec![
@@ -118,8 +121,6 @@ async fn coordinated_scenario1() {
     .await;
 }
 async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
-    DEPS.redis().flush_db(0);
-
     let (worker_command_tx, worker_command_rx) = tokio::sync::mpsc::channel(128);
     let (worker_event_tx, mut worker_event_rx) = tokio::sync::mpsc::channel(128);
     let (env_command_tx, env_command_rx) = std::sync::mpsc::channel();

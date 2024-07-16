@@ -1,6 +1,6 @@
 ## Generated from default config
 http_port = 8081
-number_of_shards = 1024
+number_of_shards = 16 # TODO: from integ test config
 rebalance_threshold = 0.1
 
 [health_check]

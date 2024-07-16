@@ -253,6 +253,24 @@ args = [
     "--test-threads=1",
 ]
 
+# TODO: drop or add test case filter and document before merge
+[tasks.sharding-tests-debug]
+dependencies = ["build-bins"]
+script = '''
+rm -rf logs data
+mkdir -pv logs data
+
+export RUST_BACKTRACE=1
+export GOLEM__TRACING__FILE_DIR=../logs
+export GOLEM__TRACING__FILE_TRUNCATE=false
+export GOLEM__TRACING__FILE__ENABLED=true
+
+cargo test \
+--package integration-tests \
+--test sharding coordinated_scenario1 \
+-- --exact --nocapture --test-threads=1
+'''
+
 [tasks.cli-tests]
 description = "Runs CLI tests only"
 dependencies = ["build-bins"]

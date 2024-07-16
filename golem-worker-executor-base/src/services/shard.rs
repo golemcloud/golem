@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::{ShardAssignment, ShardId, WorkerId};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
-
-use golem_common::model::{ShardAssignment, ShardId, WorkerId};
+use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::sharding::*;
@@ -51,7 +51,19 @@ impl ShardServiceDefault {
 impl ShardService for ShardServiceDefault {
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>) {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
+        // TODO: drop before merge or make it less verbose
+        debug!(
+            shard_ids = format!("{:?}", shard_assignment.shard_ids),
+            shard_ids_to_add = format!("{:?}", shard_ids),
+            "assign_shards_before"
+        );
         shard_assignment.assign_shards(shard_ids);
+        // TODO: drop merge or make it less verbose
+        debug!(
+            shard_ids = format!("{:?}", shard_assignment.shard_ids),
+            shard_ids_to_add = format!("{:?}", shard_ids),
+            "assign_shards_after"
+        );
         let assigned_shard_count = shard_assignment.shard_ids.len();
         record_assigned_shard_count(assigned_shard_count);
     }
