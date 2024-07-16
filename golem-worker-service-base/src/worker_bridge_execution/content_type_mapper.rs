@@ -267,7 +267,7 @@ mod internal {
         match type_annotated_value {
             TypeAnnotatedValue::Record { .. } => get_json(type_annotated_value),
             TypeAnnotatedValue::List(TypedList { values, typ }) => {
-                match typ.clone().map(|v| v.r#type).flatten() {
+                match typ.clone().and_then(|v| v.r#type) {
                     Some(golem_wasm_rpc::protobuf::r#type::Type::Primitive(primitive)) => {
                         match PrimitiveType::try_from(primitive.primitive) {
                             Ok(PrimitiveType::U8) => {
@@ -493,8 +493,6 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evaluator::EvaluationError;
-    use golem_service_base::model::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedList, TypedRecord};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;

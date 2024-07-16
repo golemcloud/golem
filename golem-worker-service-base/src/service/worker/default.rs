@@ -363,7 +363,7 @@ where
         let calling_convention = *calling_convention;
         let params_: Vec<JsonValue> = params
             .iter()
-            .map(|v| JsonValue::from_serde_json_value(v))
+            .map(JsonValue::from_serde_json_value)
             .collect::<Vec<_>>();
 
         let invoke_response = self.call_worker_executor(

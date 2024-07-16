@@ -200,7 +200,7 @@ fn handle_ok(
                             ))?;
 
                     if let Some(bv) = binding_variable {
-                        let record = internal::create_singleton_record(&bv.0, &outer)?;
+                        let record = internal::create_singleton_record(&bv.0, outer)?;
                         input.merge_variables(&record);
                     }
 
@@ -243,7 +243,7 @@ fn handle_err(
                         ))?;
 
                     if let Some(bv) = binding_variable {
-                        let record = internal::create_singleton_record(&bv.0, &outer)?;
+                        let record = internal::create_singleton_record(&bv.0, outer)?;
                         input.merge_variables(&record);
                     }
 
@@ -357,7 +357,7 @@ fn handle_variant(
                         ))?;
 
                     if let Some(bv) = binding_variable {
-                        let record = internal::create_singleton_record(&bv.0, &result)?;
+                        let record = internal::create_singleton_record(&bv.0, result)?;
                         input.merge_variables(&record);
                     }
 

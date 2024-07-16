@@ -103,7 +103,6 @@ pub mod router {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
@@ -112,9 +111,6 @@ mod tests {
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
-    use golem_service_base::model::{
-        ComponentMetadata, Export, ExportFunction, ExportInstance, FunctionResult, WorkerId,
-    };
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
@@ -138,10 +134,6 @@ mod tests {
             &self,
             resolved_worker_request: WorkerRequest,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-            let function_result_type = FunctionResult {
-                name: None,
-                typ: AnalysedType::Str.into(),
-            };
 
             let response = convert_to_worker_response(&resolved_worker_request);
 

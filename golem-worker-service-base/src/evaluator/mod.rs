@@ -464,7 +464,6 @@ mod tests {
     use async_trait::async_trait;
     use std::str::FromStr;
 
-    use golem_service_base::model::FunctionResult;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;

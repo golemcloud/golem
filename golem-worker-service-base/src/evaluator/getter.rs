@@ -34,10 +34,9 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                     PathComponent::KeyName(key) => match type_annotated_value {
                         TypeAnnotatedValue::Record(TypedRecord { value, .. }) => {
                             let new_value = value
-                                .into_iter()
+                                .iter()
                                 .find(|name_value| name_value.name == key.0)
-                                .map(|v| v.value.clone().map(|vv| vv.type_annotated_value))
-                                .flatten()
+                                .and_then(|v| v.value.clone().map(|vv| vv.type_annotated_value))
                                 .flatten();
 
                             match new_value {
@@ -78,14 +77,14 @@ fn get_array(value: &TypeAnnotatedValue) -> Option<Vec<TypeAnnotatedValue>> {
     match value {
         TypeAnnotatedValue::List(TypedList { values, .. }) => {
             let vec = values
-                .into_iter()
+                .iter()
                 .filter_map(|v| v.clone().type_annotated_value)
                 .collect::<Vec<_>>();
             Some(vec)
         }
         TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) => {
             let vec = value
-                .into_iter()
+                .iter()
                 .filter_map(|v| v.clone().type_annotated_value)
                 .collect::<Vec<_>>();
             Some(vec)

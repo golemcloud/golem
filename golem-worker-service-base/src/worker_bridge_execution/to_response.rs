@@ -212,8 +212,7 @@ mod internal {
                         let value_str = name_value_pair
                             .value
                             .as_ref()
-                            .map(|v| v.type_annotated_value.clone())
-                            .flatten()
+                            .and_then(|v| v.type_annotated_value.clone())
                             .ok_or("Unable to resolve header value".to_string())?
                             .get_primitive()
                             .map(|primitive| primitive.to_string())
