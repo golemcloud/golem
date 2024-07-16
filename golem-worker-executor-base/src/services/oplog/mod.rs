@@ -103,7 +103,7 @@ pub trait OplogService: Debug {
         self.read(
             owned_worker_id,
             start_idx,
-            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1, // OVERFLOW ERROR??
+            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
         )
         .await
     }
