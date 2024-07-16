@@ -62,13 +62,17 @@ use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
-use crate::services::{worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps};
+use crate::services::{
+    worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
+    HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_service_base::model::ExportFunction;
 use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use rib::ParsedFunctionName;
-use crate::worker;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),

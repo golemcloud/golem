@@ -19,7 +19,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
@@ -1679,15 +1678,13 @@ enum WorkerCommand {
     Interrupt(InterruptKind),
 }
 
-pub async fn get_component_metadata<Ctx : WorkerCtx>(
+pub async fn get_component_metadata<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
 ) -> Result<ComponentMetadata, GolemError> {
     let component_id = worker.owned_worker_id.component_id();
     let worker_metadata = worker.get_metadata().await?;
 
-    let component_version = worker_metadata
-        .last_known_status
-        .component_version;
+    let component_version = worker_metadata.last_known_status.component_version;
 
     let component_metadata = worker
         .component_service()
