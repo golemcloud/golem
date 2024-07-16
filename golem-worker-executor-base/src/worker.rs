@@ -635,9 +635,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn update_status(&self, status_value: WorkerStatusRecord) {
+        // Need to make sure the oplog is committed, because the updated status stores the current
+        // last oplog index as reference.
+        self.oplog().commit().await;
+        // Storing the status in the key-value storage
         self.worker_service()
             .update_status(&self.owned_worker_id, &status_value)
             .await;
+        // Updating the status in memory
         self.execution_status
             .write()
             .unwrap()
