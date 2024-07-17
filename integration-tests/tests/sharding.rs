@@ -24,7 +24,7 @@ impl Tracing {
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::blocking_new(10);
+    let deps = EnvBasedTestDependencies::from_worker_executor_cluster_size(10);
 
     deps.redis_monitor().assert_valid();
     println!(
