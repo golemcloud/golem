@@ -69,15 +69,9 @@ impl Pod {
     }
 
     pub fn from_register_request(
-        request: tonic::Request<golem::shardmanager::RegisterRequest>,
+        source_ip: IpAddr,
+        request: golem::shardmanager::RegisterRequest,
     ) -> Result<Self, ShardManagerError> {
-        let source_ip = request
-            .remote_addr()
-            .ok_or(ShardManagerError::invalid_request(
-                "could not get source IP",
-            ))?
-            .ip();
-        let request = request.into_inner();
         let pod = Pod {
             host: request.host,
             port: request.port as u16,
