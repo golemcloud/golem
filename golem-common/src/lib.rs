@@ -14,6 +14,7 @@
 
 pub mod cache;
 pub mod client;
+pub mod component_metadata;
 pub mod config;
 pub mod grpc;
 pub mod metrics;
@@ -24,4 +25,3 @@ pub mod retries;
 pub mod serialization;
 pub mod to_json;
 pub mod tracing;
-pub mod component_metadata;

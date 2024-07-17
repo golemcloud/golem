@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Display};
+use std::fmt::Display;
 
 use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
 
@@ -45,6 +45,3 @@ pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProc
         memories,
     })
 }
-
-
-

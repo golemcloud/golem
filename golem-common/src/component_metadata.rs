@@ -14,19 +14,19 @@
 
 use std::fmt::{self, Display, Formatter};
 
+use golem_wasm_ast::core::{Export, Mem};
+use golem_wasm_ast::metadata::Producers;
 use golem_wasm_ast::{
     analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
     component::Component,
     IgnoreAllButMetadata,
 };
-use golem_wasm_ast::core::{Export, Mem};
-use golem_wasm_ast::metadata::Producers;
 
 // Metadata of Component in terms of golem_wasm_ast types
 pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
-    pub memories: Vec<Mem>
+    pub memories: Vec<Mem>,
 }
 
 impl RawComponentMetadata {
@@ -47,9 +47,7 @@ impl RawComponentMetadata {
 
         add_resource_drops(&mut exports);
 
-        let exports = exports
-            .into_iter()
-            .collect::<Vec<_>>();
+        let exports = exports.into_iter().collect::<Vec<_>>();
 
         let memories: Vec<Mem> = state
             .get_all_memories()
@@ -60,11 +58,10 @@ impl RawComponentMetadata {
         Ok(RawComponentMetadata {
             exports,
             producers,
-            memories
+            memories,
         })
-    }}
-
-
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentProcessingError {

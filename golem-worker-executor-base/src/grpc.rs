@@ -622,7 +622,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         dbg!(full_function_name.clone());
-        
+
         let values = worker
             .invoke_and_await(
                 idempotency_key,

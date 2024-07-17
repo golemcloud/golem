@@ -35,6 +35,7 @@ use golem_api_grpc::proto::golem::component::{
 use golem_api_grpc::proto::golem::component::{ComponentError, LinearMemory};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::component_metadata::RawComponentMetadata;
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::{ComponentId, ComponentVersion};
@@ -50,7 +51,6 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_common::component_metadata::RawComponentMetadata;
 
 #[derive(Debug, Clone)]
 pub struct ComponentMetadata {
@@ -642,13 +642,15 @@ impl ComponentServiceLocalFileSystem {
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
         let bytes = &tokio::fs::read(&path).await?;
 
-        let raw_component_metadata =
-            RawComponentMetadata::from_data(bytes).map_err(|err| GolemError::GetLatestVersionOfComponentFailed {
+        let raw_component_metadata = RawComponentMetadata::from_data(bytes).map_err(|err| {
+            GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
                 reason: format!("Failed to get metadata from component: {}", err),
-            })?;
+            }
+        })?;
 
-        let exports = raw_component_metadata.exports
+        let exports = raw_component_metadata
+            .exports
             .into_iter()
             .map(|export| export.into())
             .collect::<Vec<_>>();

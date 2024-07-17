@@ -516,7 +516,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         match invoke_response.result {
             None => Err(anyhow!("No response from invoke_and_await")),
             Some(invoke_and_await_response::Result::Success(response)) => {
-
                 dbg!(response.clone());
 
                 Ok(Ok(response
@@ -524,8 +523,10 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                     .into_iter()
                     .map(|v| v.try_into())
                     .collect::<Result<Vec<Value>, String>>()
-                    .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?))
-            },
+                    .map_err(|err| {
+                        anyhow!("Invocation result had unexpected format: {err}")
+                    })?))
+            }
             Some(invoke_and_await_response::Result::Error(WorkerError { error: Some(error) })) => {
                 Ok(Err(error))
             }
