@@ -34,7 +34,7 @@ use crate::preview2::golem::api::host::{
     WorkerMetadata,
 };
 use crate::services::HasWorker;
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{StatusManagement, WorkerCtx};
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, OwnedWorkerId, PromiseId, ScanCursor, WorkerId};
