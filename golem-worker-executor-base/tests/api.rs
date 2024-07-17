@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use assert2::check;
-use http_02::{Response, StatusCode};
+use http::{Response, StatusCode};
 use redis::Commands;
 
 use golem_api_grpc::proto::golem::worker::{

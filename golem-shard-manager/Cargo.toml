@@ -23,7 +23,6 @@ figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }

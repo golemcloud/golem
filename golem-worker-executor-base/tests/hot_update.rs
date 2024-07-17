@@ -17,7 +17,7 @@ use assert2::check;
 use async_mutex::Mutex;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::{Response, StatusCode};
 use log::info;
 use std::collections::HashMap;
 use std::net::SocketAddr;

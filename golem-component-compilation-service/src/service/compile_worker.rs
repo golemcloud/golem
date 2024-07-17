@@ -75,7 +75,7 @@ impl CompileWorker {
                     ComponentServiceClient::new(channel)
                         .max_decoding_message_size(max_component_size)
                 },
-                uri.as_http_02(),
+                uri,
                 GrpcClientConfig {
                     retries_on_unavailable: config.retries.clone(),
                     ..Default::default() // TODO

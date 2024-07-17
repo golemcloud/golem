@@ -45,7 +45,7 @@ impl RemoteComponentService {
         Self {
             client: GrpcClient::new(
                 ComponentServiceClient::new,
-                uri.as_http_02(),
+                uri,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO

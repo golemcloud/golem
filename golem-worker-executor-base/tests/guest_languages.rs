@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 
 use chrono::Datelike;
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::{Response, StatusCode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

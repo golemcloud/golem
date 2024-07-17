@@ -12,13 +12,3 @@ pub mod repo;
 pub mod service;
 mod worker_binding;
 pub mod worker_bridge_execution;
-
-pub trait UriBackConversion {
-    fn as_http_02(&self) -> http_02::Uri;
-}
-
-impl UriBackConversion for Uri {
-    fn as_http_02(&self) -> http_02::Uri {
-        self.to_string().parse().unwrap()
-    }
-}

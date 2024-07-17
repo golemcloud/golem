@@ -53,7 +53,7 @@ impl ShardManagerServiceGrpc {
     pub fn new(config: ShardManagerServiceGrpcConfig) -> Self {
         let client = GrpcClient::new(
             ShardManagerServiceClient::new,
-            config.uri().as_http_02(),
+            config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
                 ..Default::default()

@@ -542,8 +542,8 @@ impl Pod {
             .expect("Failed to build URI")
     }
 
-    pub fn uri_02(&self) -> http_02::Uri {
-        http_02::Uri::builder()
+    pub fn uri_02(&self) -> http::Uri {
+        http::Uri::builder()
             .scheme("http")
             .authority(format!("{}:{}", self.host, self.port).as_str())
             .path_and_query("/")

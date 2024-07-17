@@ -37,7 +37,7 @@ pub struct RoutingTableConfig {
 }
 
 impl RoutingTableConfig {
-    pub fn url(&self) -> http_02::Uri {
+    pub fn url(&self) -> http::Uri {
         format!("http://{}:{}", self.host, self.port)
             .parse()
             .expect("Failed to parse shard manager URL")
