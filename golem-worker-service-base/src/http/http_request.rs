@@ -698,8 +698,6 @@ mod tests {
           response
         "#;
 
-        dbg!(rib::from_string(expression).unwrap());
-
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
 

@@ -378,14 +378,11 @@ fn handle_variant(
                 }
             }
 
-            type_annotated_value => {
-                dbg!(type_annotated_value.clone());
-                Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
-                    expected_type: format!("Variant::{}", variant_name),
-                    actual_type: AnalysedType::try_from(type_annotated_value)
-                        .map_or("".to_string(), |typ| format!("{:?}", typ)),
-                }))
-            }
+            type_annotated_value => Ok(ArmPatternOutput::TypeMisMatch(TypeMisMatchResult {
+                expected_type: format!("Variant::{}", variant_name),
+                actual_type: AnalysedType::try_from(type_annotated_value)
+                    .map_or("".to_string(), |typ| format!("{:?}", typ)),
+            })),
         }
     }
 }

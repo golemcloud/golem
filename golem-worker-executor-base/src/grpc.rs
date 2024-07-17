@@ -580,7 +580,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<(ExportFunction, Vec<Val>), GolemError> {
-        dbg!("Hello {}", request.name());
         let full_function_name = request.name();
 
         let worker = self.get_or_create(request).await?;
@@ -620,8 +619,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
-
-        dbg!(full_function_name.clone());
 
         let values = worker
             .invoke_and_await(

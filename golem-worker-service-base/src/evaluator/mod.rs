@@ -660,7 +660,6 @@ mod tests {
         let expr = rib::from_string("${request.body.address.street} ${request.body.address.city}")
             .unwrap();
 
-        dbg!(expr.clone());
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_request)
@@ -1260,7 +1259,6 @@ mod tests {
             rib::from_string("${match worker.response { ok(_) => ok(1), err(_) => err(2) }}")
                 .unwrap();
 
-        dbg!(expr.clone());
         let result = noop_executor
             .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
@@ -1292,8 +1290,6 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await
             .unwrap();
-
-        dbg!(result.clone());
 
         let output_json = golem_wasm_rpc::json::get_json_from_typed_value(&result);
 
@@ -1641,7 +1637,6 @@ mod tests {
           ";
 
         let expr = rib::from_string(format!("${{{}}}", program)).unwrap();
-        dbg!(expr.clone());
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
