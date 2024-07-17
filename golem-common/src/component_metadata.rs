@@ -14,7 +14,7 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use golem_wasm_ast::core::{Export, Mem};
+use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers;
 use golem_wasm_ast::{
     analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},

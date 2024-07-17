@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Display;
-
 use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
 
 use golem_service_base::model::{ComponentMetadata, LinearMemory};
@@ -36,7 +34,7 @@ pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProc
     let memories = raw_component_metadata
         .memories
         .into_iter()
-        .map(|mem| LinearMemory::from(mem))
+        .map(LinearMemory::from)
         .collect();
 
     Ok(ComponentMetadata {

@@ -41,8 +41,6 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
 use golem_service_base::model::Export;
-use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
-use golem_wasm_ast::IgnoreAll;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
