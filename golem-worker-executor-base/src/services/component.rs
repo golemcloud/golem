@@ -638,31 +638,49 @@ impl ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         path: &&PathBuf,
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
-        let bytes = &tokio::fs::read(&path).await?;
 
-        let raw_component_metadata = RawComponentMetadata::from_data(bytes).map_err(|err| {
-            GolemError::GetLatestVersionOfComponentFailed {
-                component_id: component_id.clone(),
-                reason: format!("Failed to get metadata from component: {}", err),
-            }
-        })?;
+        let optional_metadata_bytes = &tokio::fs::read(&path.join(".json")).await?;
 
-        let exports = raw_component_metadata
-            .exports
-            .into_iter()
-            .map(|export| export.into())
-            .collect::<Vec<_>>();
+        let component_metadata_opt: Option<golem_service_base::model::ComponentMetadata> =
+            serde_json::from_slice(optional_metadata_bytes).ok();
 
-        let linear_memories: Vec<LinearMemory> = raw_component_metadata
-            .memories
-            .into_iter()
-            .map(|mem| LinearMemory {
-                initial: mem.mem_type.limits.min * 65536,
-                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
-            })
-            .collect::<Vec<_>>();
+        if let Some(ComponentMetadata {memories, exports, ..}) =   serde_json::from_slice(bytes).ok() {
+            let linear_memories = memories
+                .into_iter()
+                .map(|mem| LinearMemory {
+                    initial: mem.initial,
+                    maximum: mem.maximum
+                })
+                .collect::<Vec<_>>();
 
-        Ok((linear_memories, exports))
+            Ok((linear_memories, exports))
+        } else {
+            let component_bytes = &tokio::fs::read(&path).await?;
+            let raw_component_metadata =
+                RawComponentMetadata::from_data(component_bytes).map_err(|reason| {
+                    GolemError::GetLatestVersionOfComponentFailed {
+                        component_id: component_id.clone(),
+                        reason: reason.to_string(),
+                    }
+                })?;
+
+            let exports = raw_component_metadata
+                .exports
+                .into_iter()
+                .map(|export| export.into())
+                .collect::<Vec<_>>();
+
+            let linear_memories: Vec<LinearMemory> = raw_component_metadata
+                .memories
+                .into_iter()
+                .map(|mem| LinearMemory {
+                    initial: mem.mem_type.limits.min * 65536,
+                    maximum: mem.mem_type.limits.max.map(|m| m * 65536),
+                })
+                .collect::<Vec<_>>();
+
+            Ok((linear_memories, exports))
+        }
     }
 
     async fn get_metadata_impl(

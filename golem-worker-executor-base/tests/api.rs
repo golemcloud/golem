@@ -1360,6 +1360,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     // trying to invoke the previously created worker
     let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
 
+    dbg!(result.clone());
     check!(result.is_err());
     check!(is_worker_execution_error(
         &result.err().unwrap(),

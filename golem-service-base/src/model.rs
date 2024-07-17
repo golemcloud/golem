@@ -21,6 +21,7 @@ use poem_openapi::{Enum, NewType, Object, Union};
 use rib::ParsedFunctionName;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
+use golem_common::component_metadata::RawComponentMetadata;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {
@@ -1870,6 +1871,35 @@ impl ComponentMetadata {
     /// Gets the sum of the maximum memory sizes, if all are bounded
     pub fn total_maximum_memory(&self) -> Option<u64> {
         self.memories.iter().map(|m| m.maximum).sum()
+    }
+}
+
+impl From<RawComponentMetadata> for ComponentMetadata {
+    fn from(value: RawComponentMetadata) -> Self {
+
+        let producers = value
+            .producers
+            .into_iter()
+            .map(|producers| producers.into())
+            .collect::<Vec<_>>();
+
+        let exports = value
+            .exports
+            .into_iter()
+            .map(|export| export.into())
+            .collect::<Vec<_>>();
+
+        let memories = value
+            .memories
+            .into_iter()
+            .map(LinearMemory::from)
+            .collect();
+
+        ComponentMetadata {
+            exports,
+            producers,
+            memories
+        }
     }
 }
 
