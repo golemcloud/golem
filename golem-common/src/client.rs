@@ -25,7 +25,7 @@ use tonic::{Code, Status};
 
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
-    endpoint: http_02::Uri,
+    endpoint: http::Uri,
     config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync + 'static>,
@@ -34,7 +34,7 @@ pub struct GrpcClient<T: Clone> {
 impl<T: Clone> GrpcClient<T> {
     pub fn new(
         client_factory: impl Fn(Channel) -> T + Send + Sync + 'static,
-        endpoint: http_02::Uri,
+        endpoint: http::Uri,
         config: GrpcClientConfig,
     ) -> Self {
         Self {
@@ -96,7 +96,7 @@ impl<T: Clone> GrpcClient<T> {
 #[derive(Clone)]
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
-    clients: Arc<DashMap<http_02::Uri, GrpcClientConnection<T>>>,
+    clients: Arc<DashMap<http::Uri, GrpcClientConnection<T>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync>,
 }
 
@@ -112,7 +112,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         }
     }
 
-    pub async fn call<F, R>(&self, endpoint: http_02::Uri, f: F) -> Result<R, Status>
+    pub async fn call<F, R>(&self, endpoint: http::Uri, f: F) -> Result<R, Status>
     where
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
@@ -143,7 +143,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
 
     fn get(
         &self,
-        endpoint: http_02::Uri,
+        endpoint: http::Uri,
     ) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
         let connect_timeout = self.config.connect_timeout;
         let entry = self

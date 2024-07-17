@@ -25,7 +25,7 @@ use golem_test_framework::dsl::{
     drain_connection, stderr_event, stdout_event, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::{Response, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
 use tonic::transport::Body;

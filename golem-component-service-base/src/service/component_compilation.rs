@@ -31,7 +31,7 @@ pub struct ComponentCompilationServiceDefault {
 }
 
 impl ComponentCompilationServiceDefault {
-    pub fn new(uri: http_02::Uri) -> Self {
+    pub fn new(uri: http::Uri) -> Self {
         let client = GrpcClient::new(
             ComponentCompilationServiceClient::new,
             uri,

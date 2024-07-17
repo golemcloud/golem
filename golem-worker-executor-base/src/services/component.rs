@@ -148,7 +148,7 @@ impl ComponentServiceGrpc {
                     ComponentServiceClient::new(channel)
                         .max_decoding_message_size(max_component_size)
                 },
-                endpoint.as_http_02(),
+                endpoint,
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),
                     ..Default::default() // TODO

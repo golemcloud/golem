@@ -1830,16 +1830,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
     }
 }
 
-pub trait UriBackConversion {
-    fn as_http_02(&self) -> http_02::Uri;
-}
-
-impl UriBackConversion for http::Uri {
-    fn as_http_02(&self) -> http_02::Uri {
-        self.to_string().parse().unwrap()
-    }
-}
-
 pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T> {
     let mut req = Request::new(request);
     req.metadata_mut().insert(

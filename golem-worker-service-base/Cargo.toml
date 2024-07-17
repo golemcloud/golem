@@ -26,7 +26,6 @@ figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
-http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true }

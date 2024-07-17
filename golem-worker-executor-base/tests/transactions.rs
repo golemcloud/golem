@@ -19,7 +19,7 @@ use golem_test_framework::dsl::{
     drain_connection, stdout_event, stdout_event_starting_with, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
-use http_02::{Response, StatusCode};
+use http::{Response, StatusCode};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};

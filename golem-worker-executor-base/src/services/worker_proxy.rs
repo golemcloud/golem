@@ -150,7 +150,7 @@ impl RemoteWorkerProxy {
         Self {
             client: GrpcClient::new(
                 WorkerServiceClient::new,
-                endpoint.as_http_02(),
+                endpoint,
                 Default::default(), // TODO
             ),
             access_token,
