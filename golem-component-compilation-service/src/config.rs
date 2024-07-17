@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Debug;
-use std::net::{Ipv4Addr, SocketAddrV4};
-
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::path::Path;
 use uuid::Uuid;
 
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
@@ -128,7 +128,7 @@ impl Default for CompileWorkerConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<ServerConfig> {
-    ConfigLoader::new_with_examples("config/component-compilation-service.toml".to_owned())
+    ConfigLoader::new_with_examples(Path::new("config/component-compilation-service.toml"))
 }
 
 #[cfg(test)]
