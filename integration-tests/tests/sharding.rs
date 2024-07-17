@@ -90,10 +90,6 @@ async fn service_is_responsive_to_shard_changes() {
 
 #[tokio::test]
 async fn coordinated_scenario1() {
-    DEPS.shard_manager().kill();
-    DEPS.redis().flush_db(0);
-    DEPS.shard_manager().blocking_restart();
-
     coordinated_scenario(
         1,
         vec![
@@ -134,9 +130,22 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
         coordinated_environment(env_command_rx, env_event_tx);
     });
 
+    let send_env_command = |command: EnvCommand| {
+        let response_event = command.response_event();
+        env_command_tx.send(command).unwrap();
+        if let Some(response_event) = response_event {
+            let event = env_event_rx.recv().unwrap();
+            assert_eq!(event, response_event);
+        }
+    };
+
     let invoker = tokio::task::spawn(async {
         worker_invocation(worker_command_rx, worker_event_tx).await;
     });
+
+    send_env_command(EnvCommand::StopShardManager);
+    send_env_command(EnvCommand::FlushRedis);
+    send_env_command(EnvCommand::StartShardManager);
 
     let component_id = DEPS.store_component("option-service").await;
 
@@ -154,25 +163,19 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
 
     for step in steps {
         let formatted_step = format!("{:?}", step);
-        info!("Executing step: {}", formatted_step);
+        info!("Step: {} - Started", formatted_step);
         match step {
             Step::StartShards(n) => {
-                env_command_tx.send(EnvCommand::StartShards(n)).unwrap();
-                let _ = env_event_rx.recv().unwrap();
+                send_env_command(EnvCommand::StartShards(n));
             }
             Step::StopShards(n) => {
-                env_command_tx.send(EnvCommand::StopShards(n)).unwrap();
-                let _ = env_event_rx.recv().unwrap();
+                send_env_command(EnvCommand::StopShards(n));
             }
             Step::StopAllShards => {
-                env_command_tx.send(EnvCommand::StopAllShards).unwrap();
-                let _ = env_event_rx.recv().unwrap();
+                send_env_command(EnvCommand::StopAllShards);
             }
             Step::RestartShardManager => {
-                env_command_tx
-                    .send(EnvCommand::RestartShardManager)
-                    .unwrap();
-                let _ = env_event_rx.recv().unwrap();
+                send_env_command(EnvCommand::RestartShardManager);
             }
             Step::Sleep(duration) => {
                 tokio::time::sleep(duration).await;
@@ -191,12 +194,12 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
                 info!("Invoke and await completed: {evt:?}");
             }
         }
-        info!("Executed step: {}", formatted_step);
+        info!("Step: {} - Done", formatted_step);
     }
 
     info!("Sharding test completed");
     worker_command_tx.send(WorkerCommand::Stop).await.unwrap();
-    env_command_tx.send(EnvCommand::Stop).unwrap();
+    send_env_command(EnvCommand::Stop);
     chaos.join().unwrap();
     invoker.await.unwrap();
 }
@@ -262,9 +265,21 @@ fn stop_all_shards() {
     }
 }
 
+fn start_shard_manager() {
+    DEPS.shard_manager().blocking_restart();
+}
+
+fn stop_shard_manager() {
+    DEPS.shard_manager().kill();
+}
+
 fn reload_shard_manager() {
     DEPS.shard_manager().kill();
     DEPS.shard_manager().blocking_restart();
+}
+
+fn flush_redis_db() {
+    DEPS.redis().flush_db(0);
 }
 
 async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::worker_error::Error> {
@@ -309,20 +324,43 @@ enum Step {
     WaitForInvokeAndAwaitResult,
 }
 
+#[derive(Debug)]
 enum EnvCommand {
     StartShards(usize),
     StopShards(usize),
     StopAllShards,
+    StartShardManager,
+    StopShardManager,
     RestartShardManager,
+    FlushRedis,
     Stop,
 }
 
+impl EnvCommand {
+    fn response_event(&self) -> Option<EnvEvent> {
+        match self {
+            EnvCommand::StartShards(_) => Some(EnvEvent::StartShardsDone),
+            EnvCommand::StopShards(_) => Some(EnvEvent::StopShardsDone),
+            EnvCommand::StopAllShards => Some(EnvEvent::StopAllShardsDone),
+            EnvCommand::StartShardManager => Some(EnvEvent::StartShardManagerDone),
+            EnvCommand::StopShardManager => Some(EnvEvent::StopShardManagerDone),
+            EnvCommand::RestartShardManager => Some(EnvEvent::RestartShardManagerDone),
+            EnvCommand::FlushRedis => Some(EnvEvent::FlushRedisDone),
+            EnvCommand::Stop => None,
+        }
+    }
+}
+
 #[allow(clippy::enum_variant_names)]
+#[derive(Debug, PartialEq)]
 enum EnvEvent {
     StartShardsDone,
     StopShardsDone,
     StopAllShardsDone,
+    StartShardManagerDone,
+    StopShardManagerDone,
     RestartShardManagerDone,
+    FlushRedisDone,
 }
 
 enum WorkerCommand {
@@ -346,33 +384,41 @@ fn coordinated_environment(
     info!("Starting Golem Sharding Tester");
 
     loop {
-        match command_rx.recv().unwrap() {
+        let command = command_rx.recv().unwrap();
+        let formatted_command = format!("{:?}", command);
+        let response_event = command.response_event();
+
+        info!("Command: {} - Started", formatted_command);
+        match command {
             EnvCommand::StartShards(n) => {
-                info!("Golem Sharding Tester starting shards({n})");
                 start_shards(n);
-                info!("Golem Sharding Tester started shards({n})");
-                event_tx.send(EnvEvent::StartShardsDone).unwrap();
             }
             EnvCommand::StopShards(n) => {
-                info!("Golem Sharding Tester stopping shards{n}");
                 stop_shards(n);
-                info!("Golem Sharding Tester stopped shard{n}");
-                event_tx.send(EnvEvent::StopShardsDone).unwrap();
             }
             EnvCommand::StopAllShards => {
-                info!("Golem Sharding Tester stopping all shards");
                 stop_all_shards();
-                info!("Golem Sharding Tester stopped all shard");
-                event_tx.send(EnvEvent::StopAllShardsDone).unwrap();
+            }
+            EnvCommand::StartShardManager => {
+                start_shard_manager();
+            }
+            EnvCommand::StopShardManager => {
+                stop_shard_manager();
             }
             EnvCommand::RestartShardManager => {
-                info!("Golem Sharding Tester reloading shard manager");
                 reload_shard_manager();
-                info!("Golem Sharding Tester reloaded shard manager");
-                event_tx.send(EnvEvent::RestartShardManagerDone).unwrap();
+            }
+            EnvCommand::FlushRedis => {
+                flush_redis_db();
             }
             EnvCommand::Stop => break,
         }
+
+        if let Some(response_event) = response_event {
+            event_tx.send(response_event).unwrap();
+        }
+
+        info!("Command: {} - Done", formatted_command);
     }
 }
 
