@@ -409,6 +409,11 @@ impl EnvBasedTestDependencies {
         };
 
         let redis = Self::make_redis(config.clone()).await;
+        {
+            let mut connection = redis.get_connection(0);
+            redis::cmd("FLUSHALL").execute(&mut connection);
+        }
+
         let redis_monitor_join =
             tokio::spawn(Self::make_redis_monitor(config.clone(), redis.clone()));
         let shard_manager_join =

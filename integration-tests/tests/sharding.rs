@@ -9,7 +9,9 @@ use tracing::info;
 use golem_api_grpc::proto::golem::worker;
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+};
 use golem_test_framework::dsl::TestDslUnsafe;
 
 struct Tracing;
@@ -24,7 +26,10 @@ impl Tracing {
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::from_worker_executor_cluster_size(10);
+    let deps = EnvBasedTestDependencies::from_config(EnvBasedTestDependenciesConfig {
+        number_of_shards_override: Some(16),
+        ..EnvBasedTestDependenciesConfig::new()
+    });
 
     deps.redis_monitor().assert_valid();
     println!(
@@ -85,7 +90,9 @@ async fn service_is_responsive_to_shard_changes() {
 
 #[tokio::test]
 async fn coordinated_scenario1() {
+    DEPS.shard_manager().kill();
     DEPS.redis().flush_db(0);
+    DEPS.shard_manager().blocking_restart();
 
     coordinated_scenario(
         1,
