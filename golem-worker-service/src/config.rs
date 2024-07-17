@@ -1,8 +1,9 @@
 use golem_common::config::ConfigLoader;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use std::path::Path;
 
 pub fn make_config_loader() -> ConfigLoader<WorkerServiceBaseConfig> {
-    ConfigLoader::new_with_examples("config/worker-service.toml".to_owned())
+    ConfigLoader::new_with_examples(Path::new("config/worker-service.toml"))
 }
 
 #[cfg(test)]

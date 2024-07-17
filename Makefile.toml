@@ -185,7 +185,7 @@ args = [
 
 [tasks.worker-executor-tests-group1]
 description = "Runs worker executor tests only (group 1/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration api -- --nocapture
 cargo test --package golem-worker-executor-base --test integration blobstore -- --nocapture
@@ -194,14 +194,14 @@ cargo test --package golem-worker-executor-base --test integration keyvalue -- -
 
 [tasks.worker-executor-tests-group2]
 description = "Runs worker executor tests only (group 2/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages -- --nocapture
 '''
 
 [tasks.worker-executor-tests-group3]
 description = "Runs worker executor tests only (group 3/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration transactions -- --nocapture
 cargo test --package golem-worker-executor-base --test integration wasi -- --nocapture
@@ -209,7 +209,7 @@ cargo test --package golem-worker-executor-base --test integration wasi -- --noc
 
 [tasks.worker-executor-tests-group4]
 description = "Runs worker executor tests only (group 4/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration scalability -- --nocapture
 cargo test --package golem-worker-executor-base --test integration hot_update -- --nocapture
@@ -218,7 +218,7 @@ cargo test --package golem-worker-executor-base --test integration rpc -- --noca
 
 [tasks.worker-executor-tests-group5]
 description = "Runs worker executor tests only (group 5/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "debug" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages2 -- --nocapture
 '''
@@ -226,7 +226,7 @@ cargo test --package golem-worker-executor-base --test integration guest_languag
 [tasks.integration-tests]
 description = "Runs integration tests only"
 dependencies = ["build-bins"]
-env = { "RUST_LOG" = "debug", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
     "test",
@@ -274,7 +274,7 @@ cargo test \
 [tasks.cli-tests]
 description = "Runs CLI tests only"
 dependencies = ["build-bins"]
-env = { "RUST_LOG" = "debug", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
     "test",

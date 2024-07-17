@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::shard_manager::{env_vars, ShardManager};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::shard_manager::{ShardManager, ShardManagerEnvVars};
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -40,15 +40,32 @@ impl DockerShardManager {
         number_of_shards_override: Option<usize>,
         verbosity: Level,
     ) -> Self {
-        info!("Starting golem-shard-manager container");
-
-        let env_vars = env_vars(
+        Self::new_base(
+            Box::new(GolemEnvVars()),
             number_of_shards_override,
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
             redis,
             verbosity,
-        );
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
+        number_of_shards_override: Option<usize>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> Self {
+        info!("Starting golem-shard-manager container");
+
+        let env_vars = env_vars
+            .env_vars(
+                number_of_shards_override,
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                redis,
+                verbosity,
+            )
+            .await;
 
         let mut image = RunnableImage::from(ShardManagerImage::new(
             Self::GRPC_PORT,

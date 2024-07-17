@@ -204,7 +204,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         ///
         /// It is used to get the next page of results. To get next page, use the cursor returned in the response.
         /// The cursor has the format 'layer/position' where both layer and position are numbers.
-        #[arg(short = 'P', long, value_parser = parse_cursor)]
+        #[arg(short = 'S', long, value_parser = parse_cursor)]
         cursor: Option<ScanCursor>,
 
         /// Count of listed values, if count is not provided, returns all values

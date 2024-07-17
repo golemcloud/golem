@@ -14,6 +14,12 @@ interface api {
   get-global-value: func() -> u64;
 
   get-all-dropped: func() -> list<tuple<string, u64>>;
+
+  variant timeline-node {
+    leaf,
+  }
+
+  bug-wasm-rpc-i32: func(in: timeline-node) -> timeline-node;
 }
 
 world counters {

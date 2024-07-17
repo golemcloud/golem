@@ -15,16 +15,6 @@
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
-use async_trait::async_trait;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::Value;
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
-use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-};
-
 use crate::error::GolemError;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
@@ -45,6 +35,15 @@ use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
 };
 use crate::worker::{RetryDecision, Worker};
+use async_trait::async_trait;
+use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::{
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::Value;
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -305,13 +304,18 @@ pub trait UpdateManagement {
 /// Note that the parameters are passed as unparsed WAVE strings instead of their parsed `Value`
 /// representation - the string representation is easier to hash and allows us to reduce the number
 /// of times we need to parse the parameters.
+#[async_trait]
 pub trait IndexedResourceStore {
-    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64>;
-    fn store_indexed_resource(
+    fn get_indexed_resource(
+        &self,
+        resource_name: &str,
+        resource_params: &[String],
+    ) -> Option<WorkerResourceId>;
+    async fn store_indexed_resource(
         &mut self,
         resource_name: &str,
         resource_params: &[String],
-        resource: u64,
+        resource: WorkerResourceId,
     );
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]);
 }

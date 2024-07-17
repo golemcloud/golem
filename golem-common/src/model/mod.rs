@@ -38,7 +38,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
-use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
+use crate::model::oplog::{
+    IndexedResourceKey, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
+};
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
@@ -827,6 +829,12 @@ impl WorkerMetadata {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct WorkerResourceDescription {
+    pub created_at: Timestamp,
+    pub indexed_resource_key: Option<IndexedResourceKey>,
+}
+
 /// Contains status information about a worker according to a given oplog index.
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
@@ -845,6 +853,7 @@ pub struct WorkerStatusRecord {
     pub component_version: ComponentVersion,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
 }
 
@@ -863,6 +872,7 @@ impl Default for WorkerStatusRecord {
             component_version: 0,
             component_size: 0,
             total_linear_memory_size: 0,
+            owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
         }
     }

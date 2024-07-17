@@ -35,7 +35,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
-use crate::services::{golem_config, worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
     ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement, IoCapturing,
@@ -46,13 +46,15 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, UpdateDescription, WorkerError, WrappedFunctionType,
+    IndexedResourceKey, OplogEntry, OplogIndex, UpdateDescription, WorkerError, WorkerResourceId,
+    WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -106,8 +108,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
-    temp_dir: Arc<TempDir>,
+    _temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -194,7 +195,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         component_metadata,
                         worker_config.total_linear_memory_size,
                     ),
-                    temp_dir,
+                    _temp_dir: temp_dir,
                     execution_status,
                 }
             },
@@ -239,89 +240,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiHttpView(self)
     }
 
-    pub fn check_interrupt(&self) -> Option<InterruptKind> {
-        let execution_status = self.execution_status.read().unwrap().clone();
-        match execution_status {
-            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
-            _ => None,
-        }
-    }
-
-    pub fn set_suspended(&self) {
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-            ExecutionStatus::Suspended { .. } => {}
-            ExecutionStatus::Interrupting {
-                await_interruption,
-                last_known_status,
-                ..
-            } => {
-                *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-                await_interruption.send(()).ok();
-            }
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-        }
-    }
-
-    pub fn set_running(&self) {
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Running {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-            ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Running {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-        }
-    }
-
-    pub async fn get_worker_status(&self) -> WorkerStatus {
-        match self.state.worker_service.get(&self.owned_worker_id).await {
-            Some(metadata) => {
-                if metadata.last_known_status.oplog_idx
-                    == self.state.oplog.current_oplog_index().await
-                {
-                    metadata.last_known_status.status
-                } else {
-                    WorkerStatus::Running
-                }
-            }
-            None => WorkerStatus::Idle,
-        }
-    }
-
     pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
         let mut status = self
             .execution_status
@@ -350,43 +268,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state.worker().update_status(status).await;
     }
 
-    pub async fn store_worker_status(&self, status: WorkerStatus) {
-        self.update_worker_status(|s| s.status = status.clone())
-            .await;
-        if status == WorkerStatus::Idle
-            || status == WorkerStatus::Failed
-            || status == WorkerStatus::Exited
-        {
-            debug!("Scheduling oplog archive");
-            let at = Utc::now().add(self.state.config.oplog.archive_interval);
-            self.state
-                .scheduler_service
-                .schedule(
-                    at,
-                    ScheduledAction::ArchiveOplog {
-                        owned_worker_id: self.owned_worker_id.clone(),
-                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
-                        next_after: self.state.config.oplog.archive_interval,
-                    },
-                )
-                .await;
-        }
-    }
-
-    pub async fn update_pending_invocations(&self) {
-        self.update_worker_status(|_| {}).await;
-    }
-
-    pub async fn update_pending_updates(&self) {
-        self.update_worker_status(|_| {}).await;
-    }
-
     pub fn get_stdio(&self) -> ManagedStandardIo {
         self.public_state.managed_stdio.clone()
-    }
-
-    pub async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.state.get_current_idempotency_key()
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
@@ -674,7 +557,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.get_current_idempotency_key().await
+        self.state.get_current_idempotency_key()
     }
 }
 
@@ -698,31 +581,117 @@ impl<Ctx: WorkerCtx> IoCapturing for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
-        self.check_interrupt()
+        let execution_status = self.execution_status.read().unwrap().clone();
+        match execution_status {
+            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
+            _ => None,
+        }
     }
 
     fn set_suspended(&self) {
-        self.set_suspended()
+        let mut execution_status = self.execution_status.write().unwrap();
+        let current_execution_status = execution_status.clone();
+        match current_execution_status {
+            ExecutionStatus::Running {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+            ExecutionStatus::Suspended { .. } => {}
+            ExecutionStatus::Interrupting {
+                await_interruption,
+                last_known_status,
+                ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+                await_interruption.send(()).ok();
+            }
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+        }
     }
 
     fn set_running(&self) {
-        self.set_running()
+        let mut execution_status = self.execution_status.write().unwrap();
+        let current_execution_status = execution_status.clone();
+        match current_execution_status {
+            ExecutionStatus::Running { .. } => {}
+            ExecutionStatus::Suspended {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+            ExecutionStatus::Interrupting { .. } => {}
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+        }
     }
 
     async fn get_worker_status(&self) -> WorkerStatus {
-        self.get_worker_status().await
+        match self.state.worker_service.get(&self.owned_worker_id).await {
+            Some(metadata) => {
+                if metadata.last_known_status.oplog_idx
+                    == self.state.oplog.current_oplog_index().await
+                {
+                    metadata.last_known_status.status
+                } else {
+                    WorkerStatus::Running
+                }
+            }
+            None => WorkerStatus::Idle,
+        }
     }
 
     async fn store_worker_status(&self, status: WorkerStatus) {
-        self.store_worker_status(status).await
+        self.update_worker_status(|s| s.status = status.clone())
+            .await;
+        if status == WorkerStatus::Idle
+            || status == WorkerStatus::Failed
+            || status == WorkerStatus::Exited
+        {
+            debug!("Scheduling oplog archive");
+            let at = Utc::now().add(self.state.config.oplog.archive_interval);
+            self.state
+                .scheduler_service
+                .schedule(
+                    at,
+                    ScheduledAction::ArchiveOplog {
+                        owned_worker_id: self.owned_worker_id.clone(),
+                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
+                        next_after: self.state.config.oplog.archive_interval,
+                    },
+                )
+                .await;
+        }
     }
 
     async fn update_pending_invocations(&self) {
-        self.update_pending_invocations().await
+        self.update_worker_status(|_| {}).await;
     }
 
     async fn update_pending_updates(&self) {
-        self.update_pending_invocations().await
+        self.update_worker_status(|_| {}).await;
     }
 }
 
@@ -887,16 +856,39 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         self.state.self_uri()
     }
 
-    fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.state.add(resource)
+    async fn add(&mut self, resource: ResourceAny) -> u64 {
+        let id = self.state.add(resource).await;
+        let resource_id = WorkerResourceId(id);
+        let entry = OplogEntry::create_resource(resource_id);
+        self.state.oplog.add(entry.clone()).await;
+        self.update_worker_status(move |status| {
+            status.owned_resources.insert(
+                resource_id,
+                WorkerResourceDescription {
+                    created_at: entry.timestamp(),
+                    indexed_resource_key: None,
+                },
+            );
+        })
+        .await;
+        id
     }
 
-    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.state.borrow(resource_id)
+    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        let result = self.state.borrow(resource_id).await;
+        if result.is_some() {
+            let id = WorkerResourceId(resource_id);
+            self.state.oplog.add(OplogEntry::drop_resource(id)).await;
+            self.update_worker_status(move |status| {
+                status.owned_resources.remove(&id);
+            })
+            .await;
+        }
+        result
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.state.borrow(resource_id)
+    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.state.borrow(resource_id).await
     }
 }
 
@@ -965,8 +957,13 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
 impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
-    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+    fn get_indexed_resource(
+        &self,
+        resource_name: &str,
+        resource_params: &[String],
+    ) -> Option<WorkerResourceId> {
         let key = IndexedResourceKey {
             resource_name: resource_name.to_string(),
             resource_params: resource_params.to_vec(),
@@ -974,17 +971,27 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
         self.state.indexed_resources.get(&key).copied()
     }
 
-    fn store_indexed_resource(
+    async fn store_indexed_resource(
         &mut self,
         resource_name: &str,
         resource_params: &[String],
-        resource: u64,
+        resource: WorkerResourceId,
     ) {
         let key = IndexedResourceKey {
             resource_name: resource_name.to_string(),
             resource_params: resource_params.to_vec(),
         };
-        self.state.indexed_resources.insert(key, resource);
+        self.state.indexed_resources.insert(key.clone(), resource);
+        self.state
+            .oplog
+            .add(OplogEntry::describe_resource(resource, key.clone()))
+            .await;
+        self.update_worker_status(|status| {
+            if let Some(description) = status.owned_resources.get_mut(&resource) {
+                description.indexed_resource_key = Some(key);
+            }
+        })
+        .await;
     }
 
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
@@ -1293,8 +1300,8 @@ pub struct PrivateDurableWorkerState {
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc + Send + Sync>,
     worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
-    resources: HashMap<u64, ResourceAny>,
-    last_resource_id: u64,
+    resources: HashMap<WorkerResourceId, ResourceAny>,
+    last_resource_id: WorkerResourceId,
     deleted_regions: DeletedRegions,
     next_deleted_region: Option<OplogRegion>,
     overridden_retry_policy: Option<RetryConfig>,
@@ -1307,7 +1314,7 @@ pub struct PrivateDurableWorkerState {
     last_replayed_index: OplogIndex,
     snapshotting_mode: Option<PersistenceLevel>,
 
-    indexed_resources: HashMap<IndexedResourceKey, u64>,
+    indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
     component_metadata: ComponentMetadata,
 
     total_linear_memory_size: u64,
@@ -1349,7 +1356,7 @@ impl PrivateDurableWorkerState {
             rpc,
             worker_proxy,
             resources: HashMap::new(),
-            last_resource_id: 0,
+            last_resource_id: WorkerResourceId::INITIAL,
             deleted_regions: deleted_regions.clone(),
             next_deleted_region: deleted_regions.find_next_deleted_region(OplogIndex::NONE),
             overridden_retry_policy: None,
@@ -1707,19 +1714,20 @@ impl ResourceStore for PrivateDurableWorkerState {
         Uri::golem_uri(&self.owned_worker_id.worker_id, None)
     }
 
-    fn add(&mut self, resource: ResourceAny) -> u64 {
+    async fn add(&mut self, resource: ResourceAny) -> u64 {
         let id = self.last_resource_id;
-        self.last_resource_id += 1;
+        self.last_resource_id = self.last_resource_id.next();
         self.resources.insert(id, resource);
-        id
+        id.0
     }
 
-    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        let resource_id = WorkerResourceId(resource_id);
         self.resources.remove(&resource_id)
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.resources.get(&resource_id).cloned()
+    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.resources.get(&WorkerResourceId(resource_id)).cloned()
     }
 }
 
@@ -1736,7 +1744,7 @@ impl HasOplog for PrivateDurableWorkerState {
 }
 
 impl HasConfig for PrivateDurableWorkerState {
-    fn config(&self) -> Arc<golem_config::GolemConfig> {
+    fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
     }
 }
@@ -1866,10 +1874,4 @@ macro_rules! get_oplog_entry {
             }
         }
     };
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct IndexedResourceKey {
-    pub resource_name: String,
-    pub resource_params: Vec<String>,
 }

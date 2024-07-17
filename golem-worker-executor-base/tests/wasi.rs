@@ -20,8 +20,10 @@ use std::time::{Duration, SystemTime};
 
 use crate::common::{start, TestContext};
 use assert2::{assert, check};
-use golem_common::model::WorkerStatus;
-use golem_test_framework::dsl::{stderr_event, stdout_event, worker_error_message, TestDslUnsafe};
+use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_test_framework::dsl::{
+    drain_connection, stderr_event, stdout_event, worker_error_message, TestDslUnsafe,
+};
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use tokio::spawn;
@@ -570,6 +572,92 @@ async fn http_client_response_persisted_between_invocations() {
                 "200 response is test-header test-body".to_string()
             )])
     );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn http_client_interrupting_response_stream() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+    let host_http_port = context.host_http_port();
+
+    let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let http_server = tokio::spawn(async move {
+        let route = warp::path("big-byte-array").and(warp::get()).map(move || {
+            let (sender, body) = Body::channel();
+            let signal_tx = signal_tx.clone();
+            let _handle = spawn(async move {
+                let mut sender = sender;
+                let buf = vec![0; 1024];
+                for i in 0..100 {
+                    sender.send_data(buf.clone().into()).await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    if i == 50 {
+                        signal_tx.send(()).unwrap();
+                    }
+                }
+            });
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(body)
+                .unwrap()
+        });
+
+        warp::serve(route)
+            .run(
+                format!("0.0.0.0:{}", host_http_port)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await;
+    });
+
+    let component_id = executor.store_component("http-client-2").await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "http-client-2", vec![], env)
+        .await;
+    let rx = executor.capture_output_with_termination(&worker_id).await;
+
+    let key = IdempotencyKey::fresh();
+
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let key_clone = key.clone();
+    let _handle = spawn(async move {
+        let _ = executor_clone
+            .invoke_and_await_with_key(
+                &worker_id_clone,
+                &key_clone,
+                "golem:it/api.{slow-body-stream}",
+                vec![],
+            )
+            .await;
+    });
+
+    signal_rx.recv().await.unwrap();
+
+    executor.interrupt(&worker_id).await; // Potential "body stream was interrupted" error
+
+    let _ = drain_connection(rx).await;
+
+    executor.resume(&worker_id).await;
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    executor.log_output(&worker_id).await;
+
+    let result = executor
+        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
+        .await;
+
+    drop(executor);
+
+    http_server.abort();
+
+    check!(result == Ok(vec![Value::U64(0)]));
 }
 
 #[tokio::test]

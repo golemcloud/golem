@@ -36,12 +36,13 @@ use anyhow::anyhow;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
+    WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
     SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::Value;
@@ -635,9 +636,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn update_status(&self, status_value: WorkerStatusRecord) {
+        // Need to make sure the oplog is committed, because the updated status stores the current
+        // last oplog index as reference.
+        self.oplog().commit().await;
+        // Storing the status in the key-value storage
         self.worker_service()
             .update_status(&self.owned_worker_id, &status_value)
             .await;
+        // Updating the status in memory
         self.execution_status
             .write()
             .unwrap()
@@ -869,7 +875,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             if let Some(fail_pending_invocations) = fail_pending_invocations {
                 // Publishing the provided initialization error to all pending invocations.
-                // We cannot persist these failures so they remain pending in the oplog, and
+                // We cannot persist these failures, so they remain pending in the oplog, and
                 // on next recovery they will be retried, but we still want waiting callers
                 // to get the error.
                 for item in queued_items {
@@ -1758,6 +1764,8 @@ where
         let total_linear_memory_size =
             calculate_total_linear_memory_size(last_known.total_linear_memory_size, &new_entries);
 
+        let owned_resources = calculate_owned_resources(last_known.owned_resources, &new_entries);
+
         let result = WorkerStatusRecord {
             oplog_idx: last_oplog_index,
             status,
@@ -1771,6 +1779,7 @@ where
             current_idempotency_key,
             component_version,
             component_size,
+            owned_resources,
             total_linear_memory_size,
         };
         Ok(result)
@@ -1859,6 +1868,9 @@ fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
+            OplogEntry::CreateResource { .. } => {}
+            OplogEntry::DropResource { .. } => {}
+            OplogEntry::DescribeResource { .. } => {}
         }
     }
     result
@@ -2062,6 +2074,40 @@ fn calculate_total_linear_memory_size(
     for entry in entries.values() {
         if let OplogEntry::GrowMemory { delta, .. } = entry {
             result += *delta;
+        }
+    }
+    result
+}
+
+fn calculate_owned_resources(
+    initial: HashMap<WorkerResourceId, WorkerResourceDescription>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> HashMap<WorkerResourceId, WorkerResourceDescription> {
+    let mut result = initial;
+    for entry in entries.values() {
+        match entry {
+            OplogEntry::CreateResource { id, timestamp } => {
+                result.insert(
+                    *id,
+                    WorkerResourceDescription {
+                        created_at: *timestamp,
+                        indexed_resource_key: None,
+                    },
+                );
+            }
+            OplogEntry::DropResource { id, .. } => {
+                result.remove(id);
+            }
+            OplogEntry::DescribeResource {
+                id,
+                indexed_resource,
+                ..
+            } => {
+                if let Some(description) = result.get_mut(id) {
+                    description.indexed_resource_key = Some(indexed_resource.clone());
+                }
+            }
+            _ => {}
         }
     }
     result

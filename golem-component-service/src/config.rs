@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::tracing::TracingConfig;
@@ -70,7 +71,7 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
-    ConfigLoader::new_with_examples("config/component-service.toml".to_owned())
+    ConfigLoader::new_with_examples(Path::new("config/component-service.toml"))
 }
 
 #[cfg(test)]

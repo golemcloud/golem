@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_compilation_service::{env_vars, ComponentCompilationService};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::component_compilation_service::{
+    ComponentCompilationService, ComponentCompilationServiceEnvVars,
+};
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -39,14 +41,24 @@ impl DockerComponentCompilationService {
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
     ) -> Self {
+        Self::new_base(Box::new(GolemEnvVars()), component_service, verbosity).await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentCompilationServiceEnvVars + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> Self {
         info!("Starting golem-component-compilation-service container");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_service,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_service,
+                verbosity,
+            )
+            .await;
 
         let image = RunnableImage::from(GolemComponentCompilationServiceImage::new(
             Self::GRPC_PORT,
