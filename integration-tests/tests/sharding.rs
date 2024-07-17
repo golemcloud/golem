@@ -1,3 +1,4 @@
+use std::env;
 use std::ops::Deref;
 use std::time::Duration;
 
@@ -16,11 +17,8 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        // TODO: add generic env var for this in tracing
-        let mut tracing_config = TracingConfig::test("sharding-tests");
-        tracing_config.file_dir = Some("../logs".to_string());
-        tracing_config.file.enabled = true;
-        init_tracing_with_default_debug_env_filter(&tracing_config);
+        let config = TracingConfig::test("sharding-tests").with_env_overrides();
+        init_tracing_with_default_debug_env_filter(&config);
         Self
     }
 }

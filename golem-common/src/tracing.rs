@@ -17,6 +17,10 @@ use std::io::stdout;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::config::env_config_provider;
+use crate::tracing::format::JsonFlattenSpanFormatter;
+use figment::providers::Serialized;
+use figment::Figment;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -25,8 +29,6 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
-
-use crate::tracing::format::JsonFlattenSpanFormatter;
 
 pub enum Output {
     Stdout,
@@ -141,7 +143,7 @@ pub struct TracingConfig {
 }
 
 impl TracingConfig {
-    pub fn local_dev(service_name: &str) -> Self {
+    pub fn local_dev(name: &str) -> Self {
         Self {
             stdout: OutputConfig::text_ansi(),
             file: OutputConfig {
@@ -149,37 +151,51 @@ impl TracingConfig {
                 ..OutputConfig::json_flatten_span()
             },
             file_dir: None,
-            file_name: Some(format!("{}.log", service_name)),
+            file_name: Some(format!("{}.log", name)),
             file_truncate: true,
             console: false,
             dtor_friendly: false,
         }
     }
 
-    pub fn test(service_name: &str) -> Self {
+    pub fn test(name: &str) -> Self {
         Self {
             dtor_friendly: true,
-            ..Self::local_dev(service_name)
+            ..Self::local_dev(name)
         }
     }
 
-    pub fn test_pretty(service_name: &str) -> Self {
-        let mut config = Self::test(service_name);
+    pub fn test_pretty(name: &str) -> Self {
+        let mut config = Self::test(name);
         config.stdout.pretty = true;
         config
     }
 
-    pub fn test_pretty_without_time(service_name: &str) -> Self {
-        let mut config = Self::test(service_name);
+    pub fn test_pretty_without_time(name: &str) -> Self {
+        let mut config = Self::test(name);
         config.stdout.pretty = true;
         config.stdout.without_time = true;
         config
     }
 
-    pub fn test_compact(service_name: &str) -> Self {
-        let mut config = Self::test(service_name);
+    pub fn test_compact(name: &str) -> Self {
+        let mut config = Self::test(name);
         config.stdout.compact = true;
         config
+    }
+
+    pub fn with_env_overrides(self) -> Self {
+        #[derive(Serialize, Deserialize)]
+        struct Config {
+            tracing: TracingConfig,
+        }
+
+        Figment::new()
+            .merge(Serialized::defaults(Config { tracing: self }))
+            .merge(env_config_provider())
+            .extract::<Config>()
+            .expect("Failed to load tracing config env overrides")
+            .tracing
     }
 }
 
