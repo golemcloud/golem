@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -124,7 +125,7 @@ pub struct HealthCheckK8sConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
-    ConfigLoader::new_with_examples("config/shard-manager.toml".to_string())
+    ConfigLoader::new_with_examples(Path::new("config/shard-manager.toml"))
 }
 
 #[cfg(test)]
