@@ -1,4 +1,3 @@
-use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -23,9 +22,9 @@ use golem_common::grpc::{
     proto_api_definition_draft_string, proto_api_definition_id_string,
     proto_api_definition_kind_string, proto_api_definition_version_string,
 };
-use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::recorded_grpc_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
+use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
 use golem_worker_service_base::{
     api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion},
     service::http::http_api_definition_validator::RouteValidationError,
@@ -80,7 +79,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             Ok(result) => record.succeed(create_api_definition_response::Result::Success(result)),
             Err(error) => record.fail(
                 create_api_definition_response::Result::Error(error.clone()),
-                &ApiDefinitionErrorKind(&error),
+                &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
@@ -110,7 +109,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             Ok(result) => record.succeed(update_api_definition_response::Result::Success(result)),
             Err(error) => record.fail(
                 update_api_definition_response::Result::Error(error.clone()),
-                &ApiDefinitionErrorKind(&error),
+                &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
@@ -141,7 +140,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             Ok(result) => record.succeed(get_api_definition_response::Result::Success(result)),
             Err(error) => record.fail(
                 get_api_definition_response::Result::Error(error.clone()),
-                &ApiDefinitionErrorKind(&error),
+                &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
@@ -175,7 +174,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             }
             Err(error) => record.fail(
                 get_api_definition_versions_response::Result::Error(error.clone()),
-                &ApiDefinitionErrorKind(&error),
+                &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
@@ -201,7 +200,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             )),
             Err(error) => record.fail(
                 get_all_api_definitions_response::Result::Error(error.clone()),
-                &ApiDefinitionErrorKind(&error),
+                &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
@@ -228,7 +227,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
             Ok(_) => record.succeed(delete_api_definition_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 delete_api_definition_response::Result::Error(error.clone()),
-                &ApiDefinitionErrorKind(&error),
+                &ApiDefinitionTraceErrorKind(&error),
             ),
         };
 
@@ -427,31 +426,5 @@ fn internal_error(error: impl Into<String>) -> ApiDefinitionError {
         error: Some(api_definition_error::Error::InternalError(ErrorBody {
             error: error.into(),
         })),
-    }
-}
-
-struct ApiDefinitionErrorKind<'a>(&'a ApiDefinitionError);
-
-impl<'a> Debug for ApiDefinitionErrorKind<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<'a> TraceErrorKind for ApiDefinitionErrorKind<'a> {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self.0.error {
-            None => "None",
-            Some(error) => match error {
-                api_definition_error::Error::BadRequest(_) => "BadRequest",
-                api_definition_error::Error::InvalidRoutes(_) => "InvalidRoutes",
-                api_definition_error::Error::Unauthorized(_) => "Unauthorized",
-                api_definition_error::Error::LimitExceeded(_) => "LimitExceeded",
-                api_definition_error::Error::NotFound(_) => "NotFound",
-                api_definition_error::Error::AlreadyExists(_) => "AlreadyExists",
-                api_definition_error::Error::InternalError(_) => "InternalError",
-                api_definition_error::Error::NotDraft(_) => "NotDraft",
-            },
-        }
     }
 }

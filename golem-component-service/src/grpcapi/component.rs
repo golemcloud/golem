@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use tracing::Instrument;
 
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
@@ -31,12 +32,14 @@ use golem_api_grpc::proto::golem::component::{
     GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
     UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
 };
+use golem_common::grpc::proto_component_id_string;
 use golem_common::model::ComponentId;
-use golem_service_base::stream::ByteStream;
-use tonic::{Request, Response, Status, Streaming};
-
+use golem_common::recorded_grpc_request;
+use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::stream::ByteStream;
+use tonic::{Request, Response, Status, Streaming};
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -187,16 +190,22 @@ impl ComponentService for ComponentGrpcApi {
         &self,
         request: Request<GetComponentsRequest>,
     ) -> Result<Response<GetComponentsResponse>, Status> {
-        match self.get_all(request.into_inner()).await {
-            Ok(components) => Ok(Response::new(GetComponentsResponse {
-                result: Some(get_components_response::Result::Success(
-                    GetComponentsSuccessResponse { components },
-                )),
-            })),
-            Err(err) => Ok(Response::new(GetComponentsResponse {
-                result: Some(get_components_response::Result::Error(err)),
-            })),
-        }
+        let request = request.into_inner();
+        let record = recorded_grpc_request!("get_components",);
+
+        let response = match self.get_all(request).instrument(record.span.clone()).await {
+            Ok(components) => record.succeed(get_components_response::Result::Success(
+                GetComponentsSuccessResponse { components },
+            )),
+            Err(error) => record.fail(
+                get_components_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetComponentsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn create_component(
@@ -212,6 +221,11 @@ impl ComponentService for ComponentGrpcApi {
             })
         });
 
+        let record = recorded_grpc_request!(
+            "create_component",
+            component_name = header.clone().map(|r| r.component_name)
+        );
+
         let result = match header {
             Some(request) => {
                 let data: Vec<u8> = chunks
@@ -226,19 +240,24 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.create(request, data).await
+                self.create(request, data)
+                    .instrument(record.span.clone())
+                    .await
             }
             None => Err(bad_request_error("Missing request")),
         };
 
-        match result {
-            Ok(v) => Ok(Response::new(CreateComponentResponse {
-                result: Some(create_component_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(CreateComponentResponse {
-                result: Some(create_component_response::Result::Error(err)),
-            })),
-        }
+        let result = match result {
+            Ok(v) => record.succeed(create_component_response::Result::Success(v)),
+            Err(error) => record.fail(
+                create_component_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CreateComponentResponse {
+            result: Some(result),
+        }))
     }
 
     type DownloadComponentStream = BoxStream<'static, Result<DownloadComponentResponse, Status>>;
@@ -247,76 +266,102 @@ impl ComponentService for ComponentGrpcApi {
         &self,
         request: Request<DownloadComponentRequest>,
     ) -> Result<Response<Self::DownloadComponentStream>, Status> {
-        match self.download(request.into_inner()).await {
-            Ok(response) => {
-                let stream = response.map(|content| {
-                    let res = match content {
-                        Ok(content) => DownloadComponentResponse {
-                            result: Some(download_component_response::Result::SuccessChunk(
-                                content,
-                            )),
-                        },
-                        Err(_) => DownloadComponentResponse {
-                            result: Some(download_component_response::Result::Error(
-                                internal_error("Internal error"),
-                            )),
-                        },
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "download_component",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+        let stream: Self::DownloadComponentStream =
+            match self.download(request).instrument(record.span.clone()).await {
+                Ok(response) => {
+                    let stream = response.map(|content| {
+                        let res = match content {
+                            Ok(content) => DownloadComponentResponse {
+                                result: Some(download_component_response::Result::SuccessChunk(
+                                    content,
+                                )),
+                            },
+                            Err(_) => DownloadComponentResponse {
+                                result: Some(download_component_response::Result::Error(
+                                    internal_error("Internal error"),
+                                )),
+                            },
+                        };
+                        Ok(res)
+                    });
+                    let stream: Self::DownloadComponentStream = Box::pin(stream);
+                    record.succeed(stream)
+                }
+                Err(err) => {
+                    let res = DownloadComponentResponse {
+                        result: Some(download_component_response::Result::Error(err.clone())),
                     };
-                    Ok(res)
-                });
-                let stream: Self::DownloadComponentStream = Box::pin(stream);
-                Ok(Response::new(stream))
-            }
-            Err(err) => {
-                let res = DownloadComponentResponse {
-                    result: Some(download_component_response::Result::Error(err)),
-                };
 
-                let stream: Self::DownloadComponentStream = Box::pin(tokio_stream::iter([Ok(res)]));
-                Ok(Response::new(stream))
-            }
-        }
+                    let stream: Self::DownloadComponentStream =
+                        Box::pin(tokio_stream::iter([Ok(res)]));
+                    record.fail(stream, &ComponentTraceErrorKind(&err))
+                }
+            };
+
+        Ok(Response::new(stream))
     }
 
     async fn get_component_metadata_all_versions(
         &self,
         request: Request<GetComponentRequest>,
     ) -> Result<Response<GetComponentMetadataAllVersionsResponse>, Status> {
-        match self.get(request.into_inner()).await {
-            Ok(components) => Ok(Response::new(GetComponentMetadataAllVersionsResponse {
-                result: Some(
-                    get_component_metadata_all_versions_response::Result::Success(
-                        GetComponentSuccessResponse { components },
-                    ),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "get_component_metadata_all_versions",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+
+        let response = match self.get(request).instrument(record.span.clone()).await {
+            Ok(components) => record.succeed(
+                get_component_metadata_all_versions_response::Result::Success(
+                    GetComponentSuccessResponse { components },
                 ),
-            })),
-            Err(err) => Ok(Response::new(GetComponentMetadataAllVersionsResponse {
-                result: Some(get_component_metadata_all_versions_response::Result::Error(
-                    err,
-                )),
-            })),
-        }
+            ),
+            Err(error) => record.fail(
+                get_component_metadata_all_versions_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetComponentMetadataAllVersionsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_latest_component_metadata(
         &self,
         request: Request<GetLatestComponentRequest>,
     ) -> Result<Response<GetComponentMetadataResponse>, Status> {
-        match self
-            .get_latest_component_metadata(request.into_inner())
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "get_latest_component_metadata",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+
+        let response = match self
+            .get_latest_component_metadata(request)
+            .instrument(record.span.clone())
             .await
         {
-            Ok(component) => Ok(Response::new(GetComponentMetadataResponse {
-                result: Some(get_component_metadata_response::Result::Success(
-                    GetComponentMetadataSuccessResponse {
-                        component: Some(component),
-                    },
-                )),
-            })),
-            Err(err) => Ok(Response::new(GetComponentMetadataResponse {
-                result: Some(get_component_metadata_response::Result::Error(err)),
-            })),
-        }
+            Ok(component) => record.succeed(get_component_metadata_response::Result::Success(
+                GetComponentMetadataSuccessResponse {
+                    component: Some(component),
+                },
+            )),
+            Err(error) => record.fail(
+                get_component_metadata_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetComponentMetadataResponse {
+            result: Some(response),
+        }))
     }
 
     async fn update_component(
@@ -333,6 +378,11 @@ impl ComponentService for ComponentGrpcApi {
             })
         });
 
+        let record = recorded_grpc_request!(
+            "update_component",
+            component_id = proto_component_id_string(&header.clone().and_then(|r| r.component_id))
+        );
+
         let result = match header {
             Some(request) => {
                 let data: Vec<u8> = chunks
@@ -347,36 +397,52 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.update(request, data).await
+                self.update(request, data)
+                    .instrument(record.span.clone())
+                    .await
             }
             None => Err(bad_request_error("Missing request")),
         };
 
-        match result {
-            Ok(v) => Ok(Response::new(UpdateComponentResponse {
-                result: Some(update_component_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(UpdateComponentResponse {
-                result: Some(update_component_response::Result::Error(err)),
-            })),
-        }
+        let result = match result {
+            Ok(v) => record.succeed(update_component_response::Result::Success(v)),
+            Err(error) => record.fail(
+                update_component_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateComponentResponse {
+            result: Some(result),
+        }))
     }
 
     async fn get_component_metadata(
         &self,
         request: Request<GetVersionedComponentRequest>,
     ) -> Result<Response<GetComponentMetadataResponse>, Status> {
-        match self.get_component_metadata(request.into_inner()).await {
-            Ok(optional_component) => Ok(Response::new(GetComponentMetadataResponse {
-                result: Some(get_component_metadata_response::Result::Success(
-                    GetComponentMetadataSuccessResponse {
-                        component: optional_component,
-                    },
-                )),
-            })),
-            Err(err) => Ok(Response::new(GetComponentMetadataResponse {
-                result: Some(get_component_metadata_response::Result::Error(err)),
-            })),
-        }
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "get_component_metadata",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+
+        let response = match self
+            .get_component_metadata(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(component) => record.succeed(get_component_metadata_response::Result::Success(
+                GetComponentMetadataSuccessResponse { component },
+            )),
+            Err(error) => record.fail(
+                get_component_metadata_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetComponentMetadataResponse {
+            result: Some(response),
+        }))
     }
 }
