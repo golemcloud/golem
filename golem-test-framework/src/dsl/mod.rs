@@ -41,7 +41,7 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
@@ -168,11 +168,15 @@ pub trait TestDsl {
 #[async_trait]
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component(&self, name: &str) -> ComponentId {
+        dbg!("The name is, {}", name);
         let source_path = self.component_directory().join(format!("{name}.wasm"));
-        dump_component_info(&source_path);
-        self.component_service()
+        let component_id = self.component_service()
             .get_or_add_component(&source_path)
-            .await
+            .await;
+
+        let _ = log_and_save_component_metadata(&source_path, &component_id).await;
+
+        component_id
     }
 
     async fn store_unique_component(&self, name: &str) -> ComponentId {
@@ -1026,6 +1030,30 @@ fn dump_component_info(path: &Path) {
     info!("Exports of {path:?}: {exports:?}");
     info!("Linear memories of {path:?}: {mems:?}");
     let _ = exports.unwrap();
+}
+
+async fn log_and_save_component_metadata(path: &Path, component_id: &ComponentId) {
+    let data = std::fs::read(path).unwrap();
+
+    let component_metadata: golem_service_base::model::ComponentMetadata =
+        golem_service_base::model::ComponentMetadata::from_data(&data).unwrap();
+
+    let exports = &component_metadata.exports;
+    let mems = &component_metadata.memories;
+
+    info!("Exports of {path:?}: {exports:?}");
+    info!("Linear memories of {path:?}: {mems:?}");
+
+    let json_data =
+        serde_json::to_string(&component_metadata).unwrap();
+
+    // Writing the metadata to a path corresponding to component-id
+    let new_path =
+        PathBuf::from("data/components/").join(Path::new(&format!("{component_id}-0.json")));
+
+    dbg!(new_path.clone());
+
+    tokio::fs::write(&new_path, json_data).await.unwrap()
 }
 
 #[async_trait]

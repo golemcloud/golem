@@ -636,15 +636,28 @@ impl ComponentServiceLocalFileSystem {
 
     async fn analyze_memories_and_exports(
         component_id: &ComponentId,
-        path: &&PathBuf,
+        path: &PathBuf,
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
 
-        let optional_metadata_bytes = &tokio::fs::read(&path.join(".json")).await?;
+        dbg!("What is going on?");
+        dbg!("path is {}", path.clone());
+        let mut path_buf = path.clone();
+        path_buf.set_extension("json");
+
+        dbg!(path_buf.clone());
+
+        let optional_metadata_bytes = &tokio::fs::read(path_buf).await?;
+
 
         let component_metadata_opt: Option<golem_service_base::model::ComponentMetadata> =
             serde_json::from_slice(optional_metadata_bytes).ok();
 
-        if let Some(ComponentMetadata {memories, exports, ..}) =   serde_json::from_slice(bytes).ok() {
+        dbg!(component_metadata_opt.clone());
+
+        if let Some(golem_service_base::model::ComponentMetadata {memories, exports, ..}) = component_metadata_opt {
+
+            dbg!("hello");
+
             let linear_memories = memories
                 .into_iter()
                 .map(|mem| LinearMemory {
@@ -726,7 +739,7 @@ impl ComponentServiceLocalFileSystem {
         };
 
         let size = tokio::fs::metadata(&path).await?.len();
-        let (memories, exports) = Self::analyze_memories_and_exports(component_id, &path)
+        let (memories, exports) = Self::analyze_memories_and_exports(component_id, path)
             .await
             .unwrap_or((vec![], vec![])); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
 

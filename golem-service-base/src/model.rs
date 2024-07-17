@@ -21,7 +21,7 @@ use poem_openapi::{Enum, NewType, Object, Union};
 use rib::ParsedFunctionName;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-use golem_common::component_metadata::RawComponentMetadata;
+use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {
@@ -1804,6 +1804,12 @@ pub struct ComponentMetadata {
 }
 
 impl ComponentMetadata {
+
+    pub fn from_data(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
+        let raw = RawComponentMetadata::from_data(data)?;
+        Ok(raw.into())
+    }
+
     pub fn instances(&self) -> Vec<ExportInstance> {
         let mut instances = vec![];
         for export in self.exports.clone() {

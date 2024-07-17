@@ -3697,6 +3697,7 @@ dependencies = [
  "console-subscriber",
  "golem-api-grpc",
  "golem-common",
+ "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc 0.0.0",
  "itertools 0.13.0",
