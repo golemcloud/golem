@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::oplog::WorkerError;
+use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
@@ -285,7 +285,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                 0,
                 vec![Value::Handle {
                     uri: store.data().self_uri(),
-                    resource_id,
+                    resource_id: resource_id.0,
                 }],
             ))
         }
@@ -316,11 +316,14 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             if let InvokeResult::Succeeded { output, .. } = &constructor_result {
                 if let Some(Value::Handle { resource_id, .. }) = output.first() {
                     debug!("Storing indexed resource with id {resource_id}");
-                    store.data_mut().store_indexed_resource(
-                        resource_name,
-                        raw_constructor_params,
-                        *resource_id,
-                    );
+                    store
+                        .data_mut()
+                        .store_indexed_resource(
+                            resource_name,
+                            raw_constructor_params,
+                            WorkerResourceId(*resource_id),
+                        )
+                        .await;
                 } else {
                     return Err(GolemError::invalid_request(
                         "Resource constructor did not return a resource handle",
@@ -353,8 +356,9 @@ async fn invoke<Ctx: WorkerCtx>(
             let mut params = Vec::new();
             let mut resources_to_drop = Vec::new();
             for (param, param_type) in function_input.iter().zip(param_types.iter()) {
-                let result =
-                    decode_param(param, param_type, store.data_mut()).map_err(GolemError::from)?;
+                let result = decode_param(param, param_type, store.data_mut())
+                    .await
+                    .map_err(GolemError::from)?;
                 params.push(result.val);
                 resources_to_drop.extend(result.resources_to_drop);
             }
@@ -372,8 +376,9 @@ async fn invoke<Ctx: WorkerCtx>(
                     let types = function.results(&store);
                     let mut output: Vec<Value> = Vec::new();
                     for (val, typ) in results.iter().zip(types.iter()) {
-                        let result_value =
-                            encode_output(val, typ, store.data_mut()).map_err(GolemError::from)?;
+                        let result_value = encode_output(val, typ, store.data_mut())
+                            .await
+                            .map_err(GolemError::from)?;
                         output.push(result_value);
                     }
 
@@ -452,7 +457,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
             .drop_indexed_resource(resource, resource_params);
     }
 
-    if let Some(resource) = store.data_mut().get(resource) {
+    if let Some(resource) = store.data_mut().get(resource).await {
         debug!("Dropping resource {resource:?} in {context}");
         store.data_mut().borrow_fuel().await?;
 
