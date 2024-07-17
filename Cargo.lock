@@ -3737,11 +3737,12 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.34"
+version = "0.0.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97ee5e0d1f50f783f03ee6bcb9cc0af496df1daad0d80d3d18ee2ec8a5fdf356"
+checksum = "079ce008236e7114fffcaf57a7573cb8c8abac69176995b78548ca1b07b6761f"
 dependencies = [
  "arbitrary",
+ "async-recursion",
  "async-trait",
  "bigdecimal",
  "bincode",
@@ -3758,9 +3759,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.34"
+version = "0.0.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a74915c17c6acb3df7497376f7849ad9d488d3767d13e6f8d4534c751c871705"
+checksum = "52ba3b003983e72a478cbc752128aa38020f9623c3f654c6ae5d1e1503c8e446"
 dependencies = [
  "anyhow",
  "cargo-component",
