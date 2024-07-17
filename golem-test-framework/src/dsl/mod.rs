@@ -165,7 +165,6 @@ pub trait TestDsl {
 #[async_trait]
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component(&self, name: &str) -> ComponentId {
-        dbg!("The name is, {}", name);
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let component_id = self
             .component_service()
