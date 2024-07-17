@@ -17,6 +17,7 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
 
@@ -33,13 +34,16 @@ pub trait HasConfigExamples<T> {
 }
 
 pub struct ConfigLoader<T: ConfigLoaderConfig> {
-    pub config_file_name: String,
+    pub config_file_name: PathBuf,
     pub make_examples: Option<fn() -> Vec<ConfigExample<T>>>,
     config_type: std::marker::PhantomData<T>,
 }
 
 impl<T: ConfigLoaderConfig> ConfigLoader<T> {
-    pub fn new(config_file_name: String) -> ConfigLoader<T> {
+    pub fn new(config_file_name: &Path) -> ConfigLoader<T> {
+        let config_file_name = std::env::current_dir()
+            .expect("Failed to get current directory")
+            .join(config_file_name);
         Self {
             config_file_name,
             make_examples: None,
@@ -47,10 +51,13 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         }
     }
 
-    pub fn new_with_examples(config_file_name: String) -> ConfigLoader<T>
+    pub fn new_with_examples(config_file_name: &Path) -> ConfigLoader<T>
     where
         T: HasConfigExamples<T>,
     {
+        let config_file_name = std::env::current_dir()
+            .expect("Failed to get current directory")
+            .join(config_file_name);
         Self {
             config_file_name,
             make_examples: Some(T::examples),
@@ -73,7 +80,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     pub fn figment(&self) -> Figment {
         Figment::new()
             .merge(Serialized::defaults(T::default()))
-            .merge(Toml::file(self.config_file_name.clone()))
+            .merge(Toml::file_exact(self.config_file_name.clone()))
             .merge(Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR))
     }
 
@@ -92,6 +99,11 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         dump::Source::Loaded(self.figment())
     }
 
+    /// Parses command line arguments looking for config dump flags
+    /// If found, dumps the config and returns None
+    /// Otherwise it tries to load the configuration, and returns it.
+    /// If loading the configuration fails, it prints a user-friendly error and
+    /// returns None.
     pub fn load_or_dump_config(&self) -> Option<T> {
         let args: Vec<String> = std::env::args().collect();
         match args.get(1).map_or("", |a| a.as_str()) {
@@ -107,7 +119,13 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
                 if other.starts_with("--dump-config") {
                     panic!("Unknown dump config parameter: {}", other);
                 } else {
-                    Some(self.load().expect("Failed to load config"))
+                    match self.load() {
+                        Ok(config) => Some(config),
+                        Err(err) => {
+                            eprintln!("Failed to load config: {err}");
+                            None
+                        }
+                    }
                 }
             }
         }

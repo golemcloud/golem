@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -575,5 +575,5 @@ impl Default for MemoryConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
-    ConfigLoader::new_with_examples("config/worker-executor.toml".to_string())
+    ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))
 }
