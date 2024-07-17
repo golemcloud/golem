@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
+use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
@@ -21,7 +22,6 @@ use poem_openapi::{Enum, NewType, Object, Union};
 use rib::ParsedFunctionName;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {
@@ -1804,7 +1804,6 @@ pub struct ComponentMetadata {
 }
 
 impl ComponentMetadata {
-
     pub fn from_data(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
         let raw = RawComponentMetadata::from_data(data)?;
         Ok(raw.into())
@@ -1882,7 +1881,6 @@ impl ComponentMetadata {
 
 impl From<RawComponentMetadata> for ComponentMetadata {
     fn from(value: RawComponentMetadata) -> Self {
-
         let producers = value
             .producers
             .into_iter()
@@ -1895,16 +1893,12 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             .map(|export| export.into())
             .collect::<Vec<_>>();
 
-        let memories = value
-            .memories
-            .into_iter()
-            .map(LinearMemory::from)
-            .collect();
+        let memories = value.memories.into_iter().map(LinearMemory::from).collect();
 
         ComponentMetadata {
             exports,
             producers,
-            memories
+            memories,
         }
     }
 }

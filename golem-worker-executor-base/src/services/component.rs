@@ -638,7 +638,6 @@ impl ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         path: &PathBuf,
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
-
         dbg!("What is going on?");
         dbg!("path is {}", path.clone());
         let mut path_buf = path.clone();
@@ -648,21 +647,22 @@ impl ComponentServiceLocalFileSystem {
 
         let optional_metadata_bytes = &tokio::fs::read(path_buf).await?;
 
-
         let component_metadata_opt: Option<golem_service_base::model::ComponentMetadata> =
             serde_json::from_slice(optional_metadata_bytes).ok();
 
         dbg!(component_metadata_opt.clone());
 
-        if let Some(golem_service_base::model::ComponentMetadata {memories, exports, ..}) = component_metadata_opt {
-
+        if let Some(golem_service_base::model::ComponentMetadata {
+            memories, exports, ..
+        }) = component_metadata_opt
+        {
             dbg!("hello");
 
             let linear_memories = memories
                 .into_iter()
                 .map(|mem| LinearMemory {
                     initial: mem.initial,
-                    maximum: mem.maximum
+                    maximum: mem.maximum,
                 })
                 .collect::<Vec<_>>();
 
