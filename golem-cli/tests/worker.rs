@@ -668,7 +668,7 @@ fn worker_list(
         format!("name like {}_worker", name).as_str(),
         &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
-        &cfg.arg('P', "cursor"),
+        &cfg.arg('S', "cursor"),
         &cursor,
     ])?;
 
@@ -687,7 +687,7 @@ fn worker_list(
             format!("name like {}_worker", name).as_str(),
             &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
-            &cfg.arg('P', "cursor"),
+            &cfg.arg('S', "cursor"),
             &cursor2,
         ])?;
         assert_eq!(result3.workers.len(), 0);
