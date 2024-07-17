@@ -75,17 +75,23 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 }
 
 fn env_vars(
+    number_of_shards_override: Option<usize>,
     http_port: u16,
     grpc_port: u16,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
 ) -> HashMap<String, String> {
-    EnvVarBuilder::golem_service(verbosity)
+    let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with("GOLEM__REDIS__HOST", redis.private_host())
         .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
         .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
-        .with("REDIS__HOST", redis.private_host())
-        .build()
+        .with("REDIS__HOST", redis.private_host());
+
+    if let Some(number_of_shards) = number_of_shards_override {
+        builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+    }
+
+    builder.build()
 }

@@ -377,8 +377,9 @@ impl CliTestDependencies {
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
-        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
-            Arc::new(DockerShardManager::new(redis.clone(), params.service_verbosity()).await);
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+            DockerShardManager::new(redis.clone(), None, params.service_verbosity()).await,
+        );
 
         let (rdb, component_service, component_compilation_service) =
             rdb_and_component_service_join
@@ -516,6 +517,7 @@ impl CliTestDependencies {
             SpawnedShardManager::new(
                 &build_root.join("golem-shard-manager"),
                 &workspace_root.join("golem-shard-manager"),
+                None,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
                 redis.clone(),

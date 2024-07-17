@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::shard_manager::{env_vars, wait_for_startup, ShardManager};
-use crate::components::ChildProcessLogger;
-use async_trait::async_trait;
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tracing::info;
 use tracing::Level;
+
+use crate::components::redis::Redis;
+use crate::components::shard_manager::{env_vars, wait_for_startup, ShardManager};
+use crate::components::ChildProcessLogger;
 
 pub struct SpawnedShardManager {
     http_port: u16,
     grpc_port: u16,
+    number_of_shards_override: Option<usize>,
     child: Arc<Mutex<Option<Child>>>,
     logger: Arc<Mutex<Option<ChildProcessLogger>>>,
     executable: PathBuf,
@@ -42,6 +43,7 @@ impl SpawnedShardManager {
     pub async fn new(
         executable: &Path,
         working_directory: &Path,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -58,6 +60,7 @@ impl SpawnedShardManager {
         let (child, logger) = Self::start(
             executable,
             working_directory,
+            number_of_shards_override,
             http_port,
             grpc_port,
             redis.clone(),
@@ -70,6 +73,7 @@ impl SpawnedShardManager {
         Self {
             http_port,
             grpc_port,
+            number_of_shards_override,
             child: Arc::new(Mutex::new(Some(child))),
             logger: Arc::new(Mutex::new(Some(logger))),
             executable: executable.to_path_buf(),
@@ -84,6 +88,7 @@ impl SpawnedShardManager {
     async fn start(
         executable: &Path,
         working_directory: &Path,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -93,7 +98,13 @@ impl SpawnedShardManager {
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(http_port, grpc_port, redis, verbosity))
+            .envs(env_vars(
+                number_of_shards_override,
+                http_port,
+                grpc_port,
+                redis,
+                verbosity,
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -141,6 +152,7 @@ impl ShardManager for SpawnedShardManager {
         let (child, logger) = Self::start(
             &self.executable,
             &self.working_directory,
+            self.number_of_shards_override,
             self.http_port,
             self.grpc_port,
             self.redis.clone(),

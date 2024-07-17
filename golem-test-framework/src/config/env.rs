@@ -15,8 +15,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tracing::Level;
-
 use crate::components;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
@@ -43,9 +41,11 @@ use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
+use tracing::Level;
 
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
+    pub number_of_shards_override: Option<usize>,
     pub shared_client: bool,
     pub db_type: DbType,
     pub quiet: bool,
@@ -122,6 +122,7 @@ impl Default for EnvBasedTestDependenciesConfig {
     fn default() -> Self {
         Self {
             worker_executor_cluster_size: 4,
+            number_of_shards_override: None,
             shared_client: false,
             db_type: DbType::Postgres,
             quiet: false,
@@ -215,12 +216,20 @@ impl EnvBasedTestDependencies {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
         if config.golem_docker_services {
-            Arc::new(DockerShardManager::new(redis, config.default_verbosity()).await)
+            Arc::new(
+                DockerShardManager::new(
+                    redis,
+                    config.number_of_shards_override,
+                    config.default_verbosity(),
+                )
+                .await,
+            )
         } else {
             Arc::new(
                 SpawnedShardManager::new(
                     Path::new("../target/debug/golem-shard-manager"),
                     Path::new("../golem-shard-manager"),
+                    config.number_of_shards_override,
                     9021,
                     9020,
                     redis,

@@ -35,18 +35,33 @@ impl DockerShardManager {
     const HTTP_PORT: u16 = 9021;
     const GRPC_PORT: u16 = 9020;
 
-    pub async fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
+    pub async fn new(
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        number_of_shards_override: Option<usize>,
+        verbosity: Level,
+    ) -> Self {
         info!("Starting golem-shard-manager container");
 
-        let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
+        let env_vars = env_vars(
+            number_of_shards_override,
+            Self::HTTP_PORT,
+            Self::GRPC_PORT,
+            redis,
+            verbosity,
+        );
 
-        let image = RunnableImage::from(ShardManagerImage::new(
+        let mut image = RunnableImage::from(ShardManagerImage::new(
             Self::GRPC_PORT,
             Self::HTTP_PORT,
             env_vars,
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
+
+        if let Some(number_of_shards) = number_of_shards_override {
+            image = image.with_env_var(("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string()))
+        }
+
         let container = DOCKER.run(image);
 
         let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);

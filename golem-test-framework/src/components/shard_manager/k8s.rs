@@ -54,7 +54,7 @@ impl K8sShardManager {
     ) -> Self {
         info!("Starting Golem Shard Manager pod");
 
-        let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
+        let env_vars = env_vars(None, Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))
