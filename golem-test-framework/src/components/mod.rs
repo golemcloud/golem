@@ -97,7 +97,7 @@ impl ChildProcessLogger {
     }
 }
 
-async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: Duration) {
+pub async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: Duration) {
     info!(
         "Waiting for {name} start on host {host}:{grpc_port}, timeout: {}s",
         timeout.as_secs()
