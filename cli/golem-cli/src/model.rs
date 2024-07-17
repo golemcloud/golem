@@ -424,6 +424,8 @@ pub struct WorkerMetadata {
     pub component_size: u64,
     #[serde(rename = "totalLinearMemorySize")]
     pub total_linear_memory_size: u64,
+    #[serde(rename = "ownedResources")]
+    pub owned_resources: HashMap<String, golem_client::model::ResourceMetadata>,
 }
 
 impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
@@ -441,6 +443,7 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
             last_error,
             component_size,
             total_linear_memory_size,
+            owned_resources,
         } = value;
 
         WorkerMetadata {
@@ -457,6 +460,7 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
             last_error,
             component_size,
             total_linear_memory_size,
+            owned_resources,
         }
     }
 }
