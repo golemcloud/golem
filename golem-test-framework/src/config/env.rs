@@ -50,6 +50,7 @@ pub struct EnvBasedTestDependenciesConfig {
     pub db_type: DbType,
     pub quiet: bool,
     pub golem_docker_services: bool,
+    pub keep_docker_containers: bool,
     pub redis_host: String,
     pub redis_port: u16,
     pub redis_key_prefix: String,
@@ -70,8 +71,12 @@ impl EnvBasedTestDependenciesConfig {
             self.quiet = quiet;
         }
 
-        if let Some(use_docker) = opt_env_var_bool("GOLEM_DOCKER_SERVICES") {
-            self.golem_docker_services = use_docker;
+        if let Some(golem_docker_services) = opt_env_var_bool("GOLEM_DOCKER_SERVICES") {
+            self.golem_docker_services = golem_docker_services;
+        }
+
+        if let Some(keep_docker_containers) = opt_env_var_bool("KEEP_DOCKER_CONTAINERS") {
+            self.keep_docker_containers = keep_docker_containers
         }
 
         if let Some(redis_port) = opt_env_var("REDIS_KEY_PREFIX") {
@@ -127,6 +132,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             db_type: DbType::Postgres,
             quiet: false,
             golem_docker_services: false,
+            keep_docker_containers: false,
             redis_host: "localhost".to_string(),
             redis_port: 6379,
             redis_key_prefix: "".to_string(),
@@ -171,9 +177,13 @@ impl EnvBasedTestDependencies {
                 let sqlite_path = Path::new("../target/golem_test_db");
                 Arc::new(SqliteRdb::new(sqlite_path))
             }
-            DbType::Postgres => {
-                Arc::new(DockerPostgresRdb::new(!config.golem_docker_services).await)
-            }
+            DbType::Postgres => Arc::new(
+                DockerPostgresRdb::new(
+                    !config.golem_docker_services,
+                    config.keep_docker_containers,
+                )
+                .await,
+            ),
         }
     }
 
@@ -182,7 +192,7 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn Redis + Send + Sync + 'static> {
         let prefix = config.redis_key_prefix.clone();
         if config.golem_docker_services {
-            Arc::new(DockerRedis::new(prefix).await)
+            Arc::new(DockerRedis::new(prefix, config.keep_docker_containers).await)
         } else {
             let host = config.redis_host.clone();
             let port = config.redis_port;
@@ -221,6 +231,7 @@ impl EnvBasedTestDependencies {
                     redis,
                     config.number_of_shards_override,
                     config.default_verbosity(),
+                    config.keep_docker_containers,
                 )
                 .await,
             )
@@ -256,6 +267,7 @@ impl EnvBasedTestDependencies {
                     rdb,
                     config.default_verbosity(),
                     config.shared_client,
+                    config.keep_docker_containers,
                 )
                 .await,
             )
@@ -286,6 +298,7 @@ impl EnvBasedTestDependencies {
             Arc::new(
                 DockerComponentCompilationService::new(
                     component_service,
+                    config.keep_docker_containers,
                     config.default_verbosity(),
                 )
                 .await,
@@ -321,6 +334,7 @@ impl EnvBasedTestDependencies {
                     rdb,
                     config.default_verbosity(),
                     config.shared_client,
+                    config.keep_docker_containers,
                 )
                 .await,
             )
@@ -364,6 +378,7 @@ impl EnvBasedTestDependencies {
                     worker_service,
                     config.default_verbosity(),
                     config.shared_client,
+                    config.keep_docker_containers,
                 )
                 .await,
             )

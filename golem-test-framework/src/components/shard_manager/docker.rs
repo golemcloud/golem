@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use testcontainers::core::WaitFor;
+use testcontainers::{Container, Image, RunnableImage};
+use tracing::{info, Level};
+
+use crate::components::docker::KillContainer;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::{ShardManager, ShardManagerEnvVars};
 use crate::components::{GolemEnvVars, DOCKER, NETWORK};
-use async_trait::async_trait;
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
-
-use tracing::{info, Level};
 
 pub struct DockerShardManager {
     container: Container<'static, ShardManagerImage>,
+    keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
 }
@@ -39,12 +41,14 @@ impl DockerShardManager {
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         number_of_shards_override: Option<usize>,
         verbosity: Level,
+        keep_container: bool,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
             number_of_shards_override,
             redis,
             verbosity,
+            keep_container,
         )
         .await
     }
@@ -54,6 +58,7 @@ impl DockerShardManager {
         number_of_shards_override: Option<usize>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         verbosity: Level,
+        keep_container: bool,
     ) -> Self {
         info!("Starting golem-shard-manager container");
 
@@ -86,6 +91,7 @@ impl DockerShardManager {
 
         Self {
             container,
+            keep_container,
             public_http_port,
             public_grpc_port,
         }
@@ -119,7 +125,7 @@ impl ShardManager for DockerShardManager {
     }
 
     fn kill(&self) {
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 
     async fn restart(&self) {

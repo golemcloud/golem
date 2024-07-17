@@ -12,21 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
-use crate::components::rdb::Rdb;
-use crate::components::{GolemEnvVars, DOCKER, NETWORK};
-use async_trait::async_trait;
-
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use async_trait::async_trait;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
+use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+
+use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
+use crate::components::docker::KillContainer;
+use crate::components::rdb::Rdb;
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
+
 pub struct DockerComponentService {
     container: Container<'static, GolemComponentServiceImage>,
+    keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
     client: Option<ComponentServiceClient<Channel>>,
@@ -42,6 +46,7 @@ impl DockerComponentService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
+        keep_container: bool,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
@@ -49,6 +54,7 @@ impl DockerComponentService {
             rdb,
             verbosity,
             shared_client,
+            keep_container,
         )
         .await
     }
@@ -59,6 +65,7 @@ impl DockerComponentService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
+        keep_container: bool,
     ) -> Self {
         info!("Starting golem-component-service container");
 
@@ -87,6 +94,7 @@ impl DockerComponentService {
 
         Self {
             container,
+            keep_container,
             public_http_port,
             public_grpc_port,
             client: if shared_client {
@@ -132,7 +140,7 @@ impl ComponentService for DockerComponentService {
     }
 
     fn kill(&self) {
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 }
 

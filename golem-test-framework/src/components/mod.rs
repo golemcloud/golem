@@ -37,6 +37,7 @@ pub mod shard_manager;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
+mod docker;
 
 const NETWORK: &str = "golem_test_network";
 
