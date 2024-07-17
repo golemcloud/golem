@@ -638,7 +638,6 @@ impl ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         path: &PathBuf,
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
-
         // check if component metadata is already available in a corresponding `json` file
         // otherwise, try to analyse the component file.
         let mut path_buf = path.clone();
