@@ -10,6 +10,7 @@
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make cli-tests`: runs CLI tests only
 # - `cargo make sharding-tests`: runs sharding integration tests only
+# - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
@@ -253,7 +254,6 @@ args = [
     "--test-threads=1",
 ]
 
-# TODO: drop or add test case filter and document before merge
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins"]
 script = '''
@@ -267,7 +267,7 @@ export GOLEM__TRACING__FILE__ENABLED=true
 
 cargo test \
 --package integration-tests \
---test sharding coordinated_scenario1 \
+--test sharding ${@} \
 -- --exact --nocapture --test-threads=1
 '''
 
