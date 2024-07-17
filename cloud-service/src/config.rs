@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use cloud_common::model::PlanId;
@@ -178,7 +179,7 @@ impl Default for WorkerExecutorClientCacheConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<CloudServiceConfig> {
-    ConfigLoader::new("config/cloud-service.toml".to_string())
+    ConfigLoader::new(&PathBuf::from("config/cloud-service.toml"))
 }
 
 #[cfg(test)]

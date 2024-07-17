@@ -4,6 +4,7 @@ use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_service_base::config::{ComponentStoreConfig, DbConfig};
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use url::Url;
 use uuid::Uuid;
 
@@ -79,7 +80,7 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
-    ConfigLoader::new_with_examples("config/component-service.toml".to_string())
+    ConfigLoader::new_with_examples(&PathBuf::from("config/component-service.toml"))
 }
 
 #[cfg(test)]

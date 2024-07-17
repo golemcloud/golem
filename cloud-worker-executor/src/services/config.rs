@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
@@ -71,7 +72,7 @@ impl Default for ResourceLimitsConfig {
 }
 
 pub fn make_additional_config_loader() -> ConfigLoader<AdditionalGolemConfig> {
-    ConfigLoader::new_with_examples("config/worker-executor.toml".to_string())
+    ConfigLoader::new_with_examples(&PathBuf::from("config/worker-executor.toml"))
 }
 
 pub fn load_or_dump_config() -> Option<(GolemConfig, AdditionalGolemConfig)> {

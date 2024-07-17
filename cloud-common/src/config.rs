@@ -1,7 +1,8 @@
 use golem_common::config::{ConfigLoader, ConfigLoaderConfig};
+use std::path::PathBuf;
 
 pub struct MergedConfigLoader<T> {
-    config_file_name: String,
+    config_file_name: PathBuf,
     config: figment::Result<T>,
 }
 
@@ -22,7 +23,7 @@ impl<T: ConfigLoaderConfig> MergedConfigLoader<T> {
     ) -> MergedConfigLoader<V> {
         if self.config_file_name != config_loader.config_file_name {
             panic!(
-                "config_file_name mismatch while loading for '{}' config: {} <-> {}",
+                "config_file_name mismatch while loading for '{}' config: {:?} <-> {:?}",
                 name, self.config_file_name, config_loader.config_file_name,
             );
         }
@@ -49,7 +50,7 @@ impl<T> MergedConfigLoader<T> {
 }
 
 pub struct MergedConfigLoaderOrDumper<T> {
-    config_file_name: String,
+    config_file_name: PathBuf,
     config: Option<T>,
     dummy: bool,
 }
@@ -72,7 +73,7 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
     ) -> MergedConfigLoaderOrDumper<V> {
         if self.config_file_name != config_loader.config_file_name {
             panic!(
-                "config_file_name mismatch while loading (or dumping) for '{}' config: {} <-> {}",
+                "config_file_name mismatch while loading (or dumping) for '{}' config: {:?} <-> {:?}",
                 name, self.config_file_name, config_loader.config_file_name,
             );
         }

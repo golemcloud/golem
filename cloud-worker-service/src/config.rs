@@ -2,6 +2,7 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, Retry
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use url::Url;
 use uuid::Uuid;
 
@@ -164,11 +165,11 @@ fn domain_match(domain: &str, domain_cfg: &str) -> bool {
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";
 
 pub fn make_worker_service_base_config_loader() -> ConfigLoader<WorkerServiceBaseConfig> {
-    ConfigLoader::new_with_examples(CONFIG_FILE_NAME.to_string())
+    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME))
 }
 
 pub fn make_cloud_specific_config_loader() -> ConfigLoader<CloudSpecificWorkerServiceConfig> {
-    ConfigLoader::new_with_examples(CONFIG_FILE_NAME.to_string())
+    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME))
 }
 
 pub fn load_or_dump_config() -> Option<WorkerServiceCloudConfig> {
