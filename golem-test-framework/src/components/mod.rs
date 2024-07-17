@@ -206,3 +206,6 @@ impl EnvVarBuilder {
         self.env_vars
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct GolemEnvVars();

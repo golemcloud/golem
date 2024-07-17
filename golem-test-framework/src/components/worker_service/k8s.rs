@@ -19,7 +19,10 @@ use crate::components::k8s::{
 };
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, new_client, wait_for_startup, WorkerService};
+use crate::components::worker_service::{
+    new_client, wait_for_startup, WorkerService, WorkerServiceEnvVars,
+};
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use async_trait::async_trait;
@@ -61,17 +64,46 @@ impl K8sWorkerService {
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
     ) -> Self {
-        info!("Starting Golem Worker Service pod");
-
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            Self::CUSTOM_REQUEST_PORT,
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            verbosity,
             component_service,
             shard_manager,
             rdb,
-            verbosity,
-        );
+            timeout,
+            service_annotations,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        verbosity: Level,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
+    ) -> Self {
+        info!("Starting Golem Worker Service pod");
+
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                Self::CUSTOM_REQUEST_PORT,
+                component_service,
+                shard_manager,
+                rdb,
+                verbosity,
+            )
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

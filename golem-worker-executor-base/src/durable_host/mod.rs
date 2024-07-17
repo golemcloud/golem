@@ -108,8 +108,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    #[allow(unused)] // note: need to keep reference to it to keep the temp dir alive
-    temp_dir: Arc<TempDir>,
+    _temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -196,7 +195,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         component_metadata,
                         worker_config.total_linear_memory_size,
                     ),
-                    temp_dir,
+                    _temp_dir: temp_dir,
                     execution_status,
                 }
             },
@@ -241,89 +240,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiHttpView(self)
     }
 
-    pub fn check_interrupt(&self) -> Option<InterruptKind> {
-        let execution_status = self.execution_status.read().unwrap().clone();
-        match execution_status {
-            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
-            _ => None,
-        }
-    }
-
-    pub fn set_suspended(&self) {
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-            ExecutionStatus::Suspended { .. } => {}
-            ExecutionStatus::Interrupting {
-                await_interruption,
-                last_known_status,
-                ..
-            } => {
-                *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-                await_interruption.send(()).ok();
-            }
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-        }
-    }
-
-    pub fn set_running(&self) {
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Running {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-            ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => {
-                *execution_status = ExecutionStatus::Running {
-                    last_known_status,
-                    timestamp: Timestamp::now_utc(),
-                };
-            }
-        }
-    }
-
-    pub async fn get_worker_status(&self) -> WorkerStatus {
-        match self.state.worker_service.get(&self.owned_worker_id).await {
-            Some(metadata) => {
-                if metadata.last_known_status.oplog_idx
-                    == self.state.oplog.current_oplog_index().await
-                {
-                    metadata.last_known_status.status
-                } else {
-                    WorkerStatus::Running
-                }
-            }
-            None => WorkerStatus::Idle,
-        }
-    }
-
     pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
         let mut status = self
             .execution_status
@@ -352,43 +268,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state.worker().update_status(status).await;
     }
 
-    pub async fn store_worker_status(&self, status: WorkerStatus) {
-        self.update_worker_status(|s| s.status = status.clone())
-            .await;
-        if status == WorkerStatus::Idle
-            || status == WorkerStatus::Failed
-            || status == WorkerStatus::Exited
-        {
-            debug!("Scheduling oplog archive");
-            let at = Utc::now().add(self.state.config.oplog.archive_interval);
-            self.state
-                .scheduler_service
-                .schedule(
-                    at,
-                    ScheduledAction::ArchiveOplog {
-                        owned_worker_id: self.owned_worker_id.clone(),
-                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
-                        next_after: self.state.config.oplog.archive_interval,
-                    },
-                )
-                .await;
-        }
-    }
-
-    pub async fn update_pending_invocations(&self) {
-        self.update_worker_status(|_| {}).await;
-    }
-
-    pub async fn update_pending_updates(&self) {
-        self.update_worker_status(|_| {}).await;
-    }
-
     pub fn get_stdio(&self) -> ManagedStandardIo {
         self.public_state.managed_stdio.clone()
-    }
-
-    pub async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.state.get_current_idempotency_key()
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
@@ -676,7 +557,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.get_current_idempotency_key().await
+        self.state.get_current_idempotency_key()
     }
 }
 
@@ -700,31 +581,117 @@ impl<Ctx: WorkerCtx> IoCapturing for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
-        self.check_interrupt()
+        let execution_status = self.execution_status.read().unwrap().clone();
+        match execution_status {
+            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind),
+            _ => None,
+        }
     }
 
     fn set_suspended(&self) {
-        self.set_suspended()
+        let mut execution_status = self.execution_status.write().unwrap();
+        let current_execution_status = execution_status.clone();
+        match current_execution_status {
+            ExecutionStatus::Running {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+            ExecutionStatus::Suspended { .. } => {}
+            ExecutionStatus::Interrupting {
+                await_interruption,
+                last_known_status,
+                ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+                await_interruption.send(()).ok();
+            }
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Suspended {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+        }
     }
 
     fn set_running(&self) {
-        self.set_running()
+        let mut execution_status = self.execution_status.write().unwrap();
+        let current_execution_status = execution_status.clone();
+        match current_execution_status {
+            ExecutionStatus::Running { .. } => {}
+            ExecutionStatus::Suspended {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+            ExecutionStatus::Interrupting { .. } => {}
+            ExecutionStatus::Loading {
+                last_known_status, ..
+            } => {
+                *execution_status = ExecutionStatus::Running {
+                    last_known_status,
+                    timestamp: Timestamp::now_utc(),
+                };
+            }
+        }
     }
 
     async fn get_worker_status(&self) -> WorkerStatus {
-        self.get_worker_status().await
+        match self.state.worker_service.get(&self.owned_worker_id).await {
+            Some(metadata) => {
+                if metadata.last_known_status.oplog_idx
+                    == self.state.oplog.current_oplog_index().await
+                {
+                    metadata.last_known_status.status
+                } else {
+                    WorkerStatus::Running
+                }
+            }
+            None => WorkerStatus::Idle,
+        }
     }
 
     async fn store_worker_status(&self, status: WorkerStatus) {
-        self.store_worker_status(status).await
+        self.update_worker_status(|s| s.status = status.clone())
+            .await;
+        if status == WorkerStatus::Idle
+            || status == WorkerStatus::Failed
+            || status == WorkerStatus::Exited
+        {
+            debug!("Scheduling oplog archive");
+            let at = Utc::now().add(self.state.config.oplog.archive_interval);
+            self.state
+                .scheduler_service
+                .schedule(
+                    at,
+                    ScheduledAction::ArchiveOplog {
+                        owned_worker_id: self.owned_worker_id.clone(),
+                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
+                        next_after: self.state.config.oplog.archive_interval,
+                    },
+                )
+                .await;
+        }
     }
 
     async fn update_pending_invocations(&self) {
-        self.update_pending_invocations().await
+        self.update_worker_status(|_| {}).await;
     }
 
     async fn update_pending_updates(&self) {
-        self.update_pending_invocations().await
+        self.update_worker_status(|_| {}).await;
     }
 }
 
