@@ -24,3 +24,4 @@ pub mod retries;
 pub mod serialization;
 pub mod to_json;
 pub mod tracing;
+pub mod component_metadata;

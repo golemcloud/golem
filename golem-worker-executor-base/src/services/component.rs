@@ -50,6 +50,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use golem_common::component_metadata::RawComponentMetadata;
 
 #[derive(Debug, Clone)]
 pub struct ComponentMetadata {
@@ -639,36 +640,21 @@ impl ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         path: &&PathBuf,
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
-        let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
-            golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
-                .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
-                    component_id: component_id.clone(),
-                    reason,
-                })?,
-        );
+        let bytes = &tokio::fs::read(&path).await?;
 
-        let analysed_exports = analysis.get_top_level_exports().map_err(|reason| {
-            GolemError::GetLatestVersionOfComponentFailed {
+        let raw_component_metadata =
+            RawComponentMetadata::from_data(bytes).map_err(|err| GolemError::GetLatestVersionOfComponentFailed {
                 component_id: component_id.clone(),
-                reason: match reason {
-                    AnalysisFailure::Failed(reason) => reason,
-                },
-            }
-        })?;
+                reason: format!("Failed to get metadata from component: {}", err),
+            })?;
 
-        let exports = analysed_exports
+        let exports = raw_component_metadata.exports
             .into_iter()
             .map(|export| export.into())
             .collect::<Vec<_>>();
 
-        let linear_memories = analysis
-            .get_all_memories()
-            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
-                component_id: component_id.clone(),
-                reason: match reason {
-                    AnalysisFailure::Failed(reason) => reason,
-                },
-            })?
+        let linear_memories: Vec<LinearMemory> = raw_component_metadata
+            .memories
             .into_iter()
             .map(|mem| LinearMemory {
                 initial: mem.mem_type.limits.min * 65536,

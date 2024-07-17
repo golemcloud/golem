@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::exports;
 use bincode::{Decode, Encode};
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use poem_openapi::{Enum, NewType, Object, Union};
+use rib::ParsedFunctionName;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
@@ -1804,15 +1804,62 @@ pub struct ComponentMetadata {
 
 impl ComponentMetadata {
     pub fn instances(&self) -> Vec<ExportInstance> {
-        exports::instances(&self.exports)
+        let mut instances = vec![];
+        for export in self.exports.clone() {
+            if let Export::Instance(instance) = export {
+                instances.push(instance.clone())
+            }
+        }
+        instances
     }
 
     pub fn functions(&self) -> Vec<ExportFunction> {
-        exports::functions(&self.exports)
+        let mut functions = vec![];
+        for export in self.exports.clone() {
+            if let Export::Function(function) = export {
+                functions.push(function.clone())
+            }
+        }
+        functions
     }
 
     pub fn function_by_name(&self, name: &str) -> Result<Option<ExportFunction>, String> {
-        exports::function_by_name(&self.exports, name)
+        let parsed = ParsedFunctionName::parse(name)?;
+
+        match &parsed.site().interface_name() {
+            None => Ok(self.functions().iter().find(|f| f.name == *name).cloned()),
+            Some(interface_name) => {
+                let exported_function = self
+                    .instances()
+                    .iter()
+                    .find(|instance| instance.name == *interface_name)
+                    .and_then(|instance| {
+                        instance
+                            .functions
+                            .iter()
+                            .find(|f| f.name == parsed.function().function_name())
+                            .cloned()
+                    });
+                if exported_function.is_none() {
+                    match parsed.method_as_static() {
+                        Some(parsed_static) => Ok(self
+                            .instances()
+                            .iter()
+                            .find(|instance| instance.name == *interface_name)
+                            .and_then(|instance| {
+                                instance
+                                    .functions
+                                    .iter()
+                                    .find(|f| f.name == parsed_static.function().function_name())
+                                    .cloned()
+                            })),
+                        None => Ok(None),
+                    }
+                } else {
+                    Ok(exported_function)
+                }
+            }
+        }
     }
 
     /// Gets the sum of all the initial memory sizes of the component
@@ -3320,5 +3367,3 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         }
     }
 }
-
-pub struct FunctionParameters(pub serde_json::value::Value);

@@ -580,6 +580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<(ExportFunction, Vec<Val>), GolemError> {
+        dbg!("Hello {}", request.name());
         let full_function_name = request.name();
 
         let worker = self.get_or_create(request).await?;
@@ -588,8 +589,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let component_metadata = worker::get_component_metadata(&worker).await?;
         let exports = component_metadata.exports;
-
-        dbg!(exports.clone());
 
         let function_type = exports::function_by_name(&exports, &full_function_name)
             .map_err(|err| {
@@ -602,8 +601,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        dbg!(request.input().clone());
-
         let params_val = request
             .input()
             .validate_function_parameters(
@@ -614,18 +611,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 details: err.join(", "),
             })?;
 
-        dbg!(params_val.clone());
-
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
         let function_input = params_val
-            .iter()
+            .into_iter()
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
+        dbg!(full_function_name.clone());
+        
         let values = worker
             .invoke_and_await(
                 idempotency_key,
@@ -635,11 +632,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        dbg!(values.clone());
-
         let results: Vec<Val> = values.into_iter().map(Val::from).collect();
-
-        dbg!(results.clone());
         Ok((function_type, results))
     }
 
@@ -1949,7 +1942,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 }
 
 trait GrpcInvokeRequest {
-    type FunctionInput: TypeCheckIn + Clone + Debug;
+    type FunctionInput: TypeCheckIn + Clone + Debug + IntoIterator;
 
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
