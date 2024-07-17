@@ -31,12 +31,13 @@ use golem_api_grpc::proto::golem::worker::{
 use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus,
 };
 use golem_wasm_rpc::Value;
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event, worker_error_message, TestDslUnsafe,
@@ -1991,6 +1992,8 @@ async fn counter_resource_test_1() {
         )
         .await;
 
+    let metadata1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+
     let _ = executor
         .invoke_and_await(
             &worker_id,
@@ -2003,6 +2006,8 @@ async fn counter_resource_test_1() {
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
+    let metadata2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(5)]));
@@ -2013,6 +2018,49 @@ async fn counter_resource_test_1() {
                 Value::U64(5)
             ])])])
     );
+
+    let ts = Timestamp::now_utc();
+    let mut resources1 = metadata1
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    resources1.sort_by_key(|(k, _v)| *k);
+    check!(
+        resources1
+            == vec![(
+                WorkerResourceId(0),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    indexed_resource_key: None
+                }
+            ),]
+    );
+
+    let resources2 = metadata2
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    check!(resources2 == vec![]);
 }
 
 #[tokio::test]
@@ -2063,6 +2111,8 @@ async fn counter_resource_test_2() {
         )
         .await;
 
+    let metadata1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+
     let _ = executor
         .invoke_and_await(
             &worker_id,
@@ -2082,6 +2132,8 @@ async fn counter_resource_test_2() {
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
+    let metadata2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(5)]));
@@ -2093,6 +2145,64 @@ async fn counter_resource_test_2() {
                 Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
             ])])
     );
+
+    let ts = Timestamp::now_utc();
+    let mut resources1 = metadata1
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    resources1.sort_by_key(|(k, _v)| *k);
+    check!(
+        resources1
+            == vec![
+                (
+                    WorkerResourceId(0),
+                    WorkerResourceDescription {
+                        created_at: ts,
+                        indexed_resource_key: Some(IndexedResourceKey {
+                            resource_name: "counter".to_string(),
+                            resource_params: vec!["\"counter1\"".to_string()]
+                        })
+                    }
+                ),
+                (
+                    WorkerResourceId(1),
+                    WorkerResourceDescription {
+                        created_at: ts,
+                        indexed_resource_key: Some(IndexedResourceKey {
+                            resource_name: "counter".to_string(),
+                            resource_params: vec!["\"counter2\"".to_string()]
+                        })
+                    }
+                )
+            ]
+    );
+
+    let resources2 = metadata2
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    check!(resources2 == vec![]);
 }
 
 #[tokio::test]

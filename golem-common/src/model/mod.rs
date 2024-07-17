@@ -829,7 +829,7 @@ impl WorkerMetadata {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
     pub indexed_resource_key: Option<IndexedResourceKey>,

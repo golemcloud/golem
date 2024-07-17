@@ -909,7 +909,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
 
     async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
         let result = self.state.borrow(resource_id).await;
-        if let Some(_) = result {
+        if result.is_some() {
             let id = WorkerResourceId(resource_id);
             self.state.oplog.add(OplogEntry::drop_resource(id)).await;
             self.update_worker_status(move |status| {
@@ -1019,11 +1019,10 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
             .oplog
             .add(OplogEntry::describe_resource(resource, key.clone()))
             .await;
-        self.update_worker_status(|status| match status.owned_resources.get_mut(&resource) {
-            Some(description) => {
+        self.update_worker_status(|status| {
+            if let Some(description) = status.owned_resources.get_mut(&resource) {
                 description.indexed_resource_key = Some(key);
             }
-            None => {}
         })
         .await;
     }

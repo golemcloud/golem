@@ -136,6 +136,24 @@ pub struct IndexedResourceKey {
     pub resource_params: Vec<String>,
 }
 
+impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+    fn from(value: IndexedResourceKey) -> Self {
+        golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+        IndexedResourceKey {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     Create {
