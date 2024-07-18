@@ -597,30 +597,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(values)
     }
 
-    fn get_expected_function_parameters(
-        function_name: &str,
-        function_type: &ExportFunction,
-    ) -> Vec<AnalysedFunctionParameter> {
-        let is_indexed = ParsedFunctionName::parse(function_name)
-            .ok()
-            .map(|parsed| parsed.function().is_indexed_resource())
-            .unwrap_or(false);
-        if is_indexed {
-            function_type
-                .parameters
-                .iter()
-                .skip(1)
-                .map(|x| x.clone().into())
-                .collect()
-        } else {
-            function_type
-                .parameters
-                .iter()
-                .map(|x| x.clone().into())
-                .collect()
-        }
-    }
-
     async fn get_or_create<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,

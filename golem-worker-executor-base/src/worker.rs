@@ -34,7 +34,9 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::val::Val;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -55,6 +57,10 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
+use golem_service_base::exports;
+use golem_service_base::model::{Export, ExportFunction};
+use rib::ParsedFunctionName;
+use golem_service_base::typechecker::TypeCheckIn;
 
 /// Represents worker that may be running or suspended.
 ///
@@ -1342,9 +1348,6 @@ impl RunningWorker {
                             let mut store_mutex = store.lock().await;
                             let store = store_mutex.deref_mut();
 
-                            let component_metadata =
-                                store.as_context().data().component_metadata().clone();
-
                             match message.invocation {
                                 WorkerInvocation::ExportedFunction {
                                     idempotency_key: invocation_key,
@@ -1352,6 +1355,9 @@ impl RunningWorker {
                                     function_input,
                                     calling_convention,
                                 } => {
+                                    let component_metadata =
+                                        store.as_context().data().component_metadata().clone();
+
                                     let span = span!(
                                         Level::INFO,
                                         "invocation",
@@ -1619,6 +1625,57 @@ impl RunningWorker {
             }
         } else {
             None
+        }
+    }
+
+
+    fn validate_input(metadata: &Vec<Export>, function_name: &str, params: Vec<Value>) -> Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError> {
+        let function_type = exports::function_by_name(metadata, &function_name)
+            .map_err(|err| {
+                GolemError::invalid_request(format!(
+                    "Failed to parse the function name: {}",
+                    err
+                ))
+            })?
+            .ok_or_else(|| {
+                GolemError::invalid_request(format!(
+                    "Failed to find the function {}",
+                    &function_name,
+                ))
+            })?;
+
+
+        let params_val = params
+            .validate_function_parameters(
+                Self::get_expected_function_parameters(&function_name, &function_type),
+                CallingConvention::Component,
+            )
+            .map_err(|err| GolemError::invalid_request(err.join(", ")))?;
+
+        Ok(params_val)
+    }
+
+    fn get_expected_function_parameters(
+        function_name: &str,
+        function_type: &ExportFunction,
+    ) -> Vec<AnalysedFunctionParameter> {
+        let is_indexed = ParsedFunctionName::parse(function_name)
+            .ok()
+            .map(|parsed| parsed.function().is_indexed_resource())
+            .unwrap_or(false);
+        if is_indexed {
+            function_type
+                .parameters
+                .iter()
+                .skip(1)
+                .map(|x| x.clone().into())
+                .collect()
+        } else {
+            function_type
+                .parameters
+                .iter()
+                .map(|x| x.clone().into())
+                .collect()
         }
     }
 }

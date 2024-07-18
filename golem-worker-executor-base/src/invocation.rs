@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm_rpc::protobuf::{type_annotated_value, TypeAnnotatedValue};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
@@ -19,7 +20,8 @@ use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
-use wasmtime::{AsContextMut, StoreContextMut};
+use wasmtime::{AsContext, AsContextMut, StoreContextMut};
+use golem_service_base::typechecker::TypeCheckOut;
 
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
@@ -367,6 +369,9 @@ async fn invoke<Ctx: WorkerCtx>(
                 resource.resource_drop_async(&mut store).await?;
             }
 
+            let component_metadata =
+                store.as_context().data().component_metadata().clone();
+
             match results {
                 Ok(results) => {
                     let types = function.results(&store);
@@ -377,7 +382,11 @@ async fn invoke<Ctx: WorkerCtx>(
                         output.push(result_value);
                     }
 
-                    Ok(InvokeResult::from_success(consumed_fuel, output))
+                    let result =
+                        output.validate_function_result(vec![], CallingConvention::Component)?;
+
+
+                    Ok(InvokeResult::from_success(consumed_fuel, result))
                 }
                 Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
             }
@@ -528,7 +537,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: type_annotated_value::TypeAnnotatedValue
     },
     /// The function was running but got interrupted
     Interrupted {
@@ -538,7 +547,7 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
-    pub fn from_success(consumed_fuel: i64, output: Vec<Value>) -> Self {
+    pub fn from_success(consumed_fuel: i64, output: type_annotated_value::TypeAnnotatedValue) -> Self {
         InvokeResult::Succeeded {
             consumed_fuel,
             output,

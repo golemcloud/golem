@@ -60,6 +60,12 @@ impl TypeCheckIn for Vec<Value> {
     }
 }
 
+impl TypeCheckIn for Vec<golem_wasm_rpc::Value> {
+    fn validate_function_parameters(self, expected_parameters: Vec<AnalysedFunctionParameter>, calling_convention: CallingConvention) -> Result<Vec<Val>, Vec<String>> {
+        let values: Vec<Value> = self.into_iter().map(|v| v.into()).collect();
+        values.validate_function_parameters(expected_parameters, calling_convention)
+    }
+}
 impl TypeCheckIn for Vec<Val> {
     fn validate_function_parameters(
         self,
@@ -100,7 +106,7 @@ pub trait TypeCheckOut {
     ) -> Result<TypeAnnotatedValue, Vec<String>>;
 }
 
-impl TypeCheckOut for Vec<Val> {
+impl TypeCheckOut for Vec<golem_wasm_rpc::Value> {
     fn validate_function_result(
         self,
         expected_types: Vec<AnalysedFunctionResult>,
@@ -108,47 +114,28 @@ impl TypeCheckOut for Vec<Val> {
     ) -> Result<TypeAnnotatedValue, Vec<String>> {
         match calling_convention {
             CallingConvention::Component => {
-                let mut errors = Vec::new();
-                let mut results = Vec::new();
-                for proto_value in self {
-                    match proto_value.try_into() {
-                        Ok(value) => results.push(value),
-                        Err(err) => errors.push(err),
-                    }
-                }
-
-                if errors.is_empty() {
-                    let result_json = json::function_result_typed(results, &expected_types)?;
-                    Ok(result_json)
-                } else {
-                    Err(errors)
-                }
+                let result_json = json::function_result_typed(self, &expected_types)?;
+                Ok(result_json)
             }
 
             CallingConvention::Stdio => {
-                if self.len() == 1 {
-                    let value_opt = &self[0].val;
-
-                    match value_opt {
-                        Some(val::Val::String(s)) => {
-                            let analysed_typ = AnalysedType::Str;
-                            if s.is_empty() {
-                                Ok(TypeAnnotatedValue::Option(
-                                    Box::new(TypedOption {
-                                        value: None,
-                                        typ: Some(Type::from(&analysed_typ)),
-                                    })
-                                ))
-                            } else {
-                                let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
-                                let typ = infer_analysed_type(&result);
-                                json::get_typed_value_from_json(&result, &typ)
-                            }
+                match self.first() {
+                    Some(golem_wasm_rpc::Value::String(s)) => {
+                        let analysed_typ = AnalysedType::Str;
+                        if s.is_empty() {
+                            Ok(TypeAnnotatedValue::Option(
+                                Box::new(TypedOption {
+                                    value: None,
+                                    typ: Some(Type::from(&analysed_typ)),
+                                })
+                            ))
+                        } else {
+                            let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
+                            let typ = infer_analysed_type(&result);
+                            json::get_typed_value_from_json(&result, &typ)
                         }
-                        _ => Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()]),
                     }
-                } else {
-                    Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()])
+                    _ => Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()]),
                 }
             }
         }
