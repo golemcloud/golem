@@ -28,6 +28,7 @@ use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
 
 pub mod component_compilation_service;
 pub mod component_service;
+mod docker;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;
@@ -37,7 +38,6 @@ pub mod shard_manager;
 pub mod worker_executor;
 pub mod worker_executor_cluster;
 pub mod worker_service;
-mod docker;
 
 const NETWORK: &str = "golem_test_network";
 

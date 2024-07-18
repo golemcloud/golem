@@ -335,6 +335,7 @@ enum Step {
     WaitForInvokeAndAwaitResult,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum EnvCommand {
     StartWorkerExecutors(usize),
@@ -343,7 +344,6 @@ enum EnvCommand {
     StartShardManager,
     StopShardManager,
     RestartShardManager,
-    FlushRedis,
     Stop,
 }
 
@@ -356,7 +356,6 @@ impl EnvCommand {
             EnvCommand::StartShardManager => Some(EnvEvent::StartShardManagerDone),
             EnvCommand::StopShardManager => Some(EnvEvent::StopShardManagerDone),
             EnvCommand::RestartShardManager => Some(EnvEvent::RestartShardManagerDone),
-            EnvCommand::FlushRedis => Some(EnvEvent::FlushRedisDone),
             EnvCommand::Stop => None,
         }
     }
@@ -371,7 +370,6 @@ enum EnvEvent {
     StartShardManagerDone,
     StopShardManagerDone,
     RestartShardManagerDone,
-    FlushRedisDone,
 }
 
 enum WorkerCommand {
@@ -418,9 +416,6 @@ fn coordinated_environment(
             }
             EnvCommand::RestartShardManager => {
                 Deps::restart_shard_manager();
-            }
-            EnvCommand::FlushRedis => {
-                Deps::flush_redis_db();
             }
             EnvCommand::Stop => break,
         }

@@ -31,9 +31,8 @@ fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
 fn main() -> Result<(), Failed> {
     env_logger::init();
 
-    let deps: Arc<dyn TestDependencies + Send + Sync + 'static> = Arc::new(
-        EnvBasedTestDependencies::blocking_new_from_worker_executor_cluster_size(3),
-    );
+    let deps: Arc<dyn TestDependencies + Send + Sync + 'static> =
+        Arc::new(EnvBasedTestDependencies::blocking_new_from_worker_executor_cluster_size(3));
     let cluster = deps.worker_executor_cluster(); // forcing startup by getting it
     info!("Using cluster with {:?} worker executors", cluster.size());
 
