@@ -16,9 +16,10 @@ use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
-use crate::components::worker_executor::WorkerExecutor;
+use crate::components::worker_executor::{WorkerExecutor, WorkerExecutorEnvVars};
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::GolemEnvVars;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,7 @@ pub struct SpawnedWorkerExecutorCluster {
 
 impl SpawnedWorkerExecutorCluster {
     async fn make_worker_executor(
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
         executable: PathBuf,
         working_directory: PathBuf,
         http_port: u16,
@@ -47,6 +49,7 @@ impl SpawnedWorkerExecutorCluster {
     ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
         Arc::new(
             SpawnedWorkerExecutor::new(
+                env_vars,
                 &executable,
                 &working_directory,
                 http_port,
@@ -79,6 +82,41 @@ impl SpawnedWorkerExecutorCluster {
         err_level: Level,
         shared_client: bool,
     ) -> Self {
+        Self::new_base(
+            Arc::new(GolemEnvVars()),
+            size,
+            base_http_port,
+            base_grpc_port,
+            executable,
+            working_directory,
+            redis,
+            component_service,
+            shard_manager,
+            worker_service,
+            verbosity,
+            out_level,
+            err_level,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        size: usize,
+        base_http_port: u16,
+        base_grpc_port: u16,
+        executable: &Path,
+        working_directory: &Path,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        shared_client: bool,
+    ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
 
@@ -87,6 +125,7 @@ impl SpawnedWorkerExecutorCluster {
             let grpc_port = base_grpc_port + i as u16;
 
             let worker_executor_join = tokio::spawn(Self::make_worker_executor(
+                env_vars.clone(),
                 executable.to_path_buf(),
                 working_directory.to_path_buf(),
                 http_port,
