@@ -8,7 +8,7 @@ use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use derive_more::{Display, FromStr};
 use golem_common::model::{AccountId, ComponentId, ScanCursor};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
-use golem_service_base::model::{UpdateRecord, WorkerId};
+use golem_service_base::model::{IndexedWorkerMetadata, ResourceMetadata, UpdateRecord, WorkerId};
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
 use poem_openapi::{NewType, Object};
@@ -136,6 +136,7 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<u64, ResourceMetadata>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -144,6 +145,32 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
     ) -> Result<Self, Self::Error> {
+        fn map_indexed_resource(
+            m: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata,
+        ) -> IndexedWorkerMetadata {
+            let golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+                resource_name,
+                resource_params,
+            } = m;
+
+            IndexedWorkerMetadata {
+                resource_name,
+                resource_params,
+            }
+        }
+
+        fn map_resource(
+            m: golem_api_grpc::proto::golem::worker::ResourceMetadata,
+        ) -> Result<ResourceMetadata, String> {
+            Ok(ResourceMetadata {
+                created_at: m
+                    .created_at
+                    .ok_or("Missed owned_resources created_at")?
+                    .into(),
+                indexed: m.indexed.map(map_indexed_resource),
+            })
+        }
+
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
             account_id: value.account_id.ok_or("Missing account_id")?.into(),
@@ -162,12 +189,35 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources: value
+                .owned_resources
+                .into_iter()
+                .map(|(k, v)| map_resource(v).map(|v| (k, v)))
+                .collect::<Result<HashMap<_, _>, _>>()?,
         })
     }
 }
 
 impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
+        fn map_indexed_resource(
+            m: IndexedWorkerMetadata,
+        ) -> golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+            golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+                resource_name: m.resource_name,
+                resource_params: m.resource_params,
+            }
+        }
+
+        fn map_resource(
+            m: ResourceMetadata,
+        ) -> golem_api_grpc::proto::golem::worker::ResourceMetadata {
+            golem_api_grpc::proto::golem::worker::ResourceMetadata {
+                created_at: Some(m.created_at.into()),
+                indexed: m.indexed.map(map_indexed_resource),
+            }
+        }
+
         Self {
             worker_id: Some(value.worker_id.into()),
             account_id: Some(value.account_id.into()),
@@ -182,6 +232,11 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources: value
+                .owned_resources
+                .into_iter()
+                .map(|(k, v)| (k, map_resource(v)))
+                .collect(),
         }
     }
 }

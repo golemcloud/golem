@@ -2,6 +2,7 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::{AdditionalDeps, HasResourceLimits};
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -304,21 +305,22 @@ impl ExternalOperations<Context> for Context {
     }
 }
 
+#[async_trait]
 impl ResourceStore for Context {
     fn self_uri(&self) -> Uri {
         self.durable_ctx.self_uri()
     }
 
-    fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource)
+    async fn add(&mut self, resource: ResourceAny) -> u64 {
+        self.durable_ctx.add(resource).await
     }
 
-    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.get(resource_id)
+    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.get(resource_id).await
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.borrow(resource_id)
+    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.borrow(resource_id).await
     }
 }
 
@@ -353,20 +355,26 @@ impl UpdateManagement for Context {
     }
 }
 
+#[async_trait]
 impl IndexedResourceStore for Context {
-    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+    fn get_indexed_resource(
+        &self,
+        resource_name: &str,
+        resource_params: &[String],
+    ) -> Option<WorkerResourceId> {
         self.durable_ctx
             .get_indexed_resource(resource_name, resource_params)
     }
 
-    fn store_indexed_resource(
+    async fn store_indexed_resource(
         &mut self,
         resource_name: &str,
         resource_params: &[String],
-        resource: u64,
+        resource: WorkerResourceId,
     ) {
         self.durable_ctx
             .store_indexed_resource(resource_name, resource_params, resource)
+            .await
     }
 
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {

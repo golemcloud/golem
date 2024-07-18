@@ -657,6 +657,7 @@ fn convert_metadata(
         last_error: metadata.last_error,
         component_size: metadata.component_size,
         total_linear_memory_size: metadata.total_linear_memory_size,
+        owned_resources: metadata.owned_resources,
     }
 }
 
@@ -813,6 +814,7 @@ impl WorkerService for WorkerServiceNoop {
             last_error: None,
             component_size: 0,
             total_linear_memory_size: 0,
+            owned_resources: Default::default(),
         })
     }
 
