@@ -628,7 +628,7 @@ fn worker_list(
             format!("name = {}", worker_id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
-            &cfg.arg('p', "precise"),
+            "--precise",
             "true",
         ])?;
 
@@ -723,7 +723,7 @@ fn worker_update(
             &component_id,
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
-            &cfg.arg('p', "precise"),
+            "--precise",
             "true",
         ])
     };
