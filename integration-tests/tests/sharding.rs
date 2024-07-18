@@ -214,17 +214,11 @@ enum Command {
     RestartShardManager,
 }
 
-fn start_worker_executor() {
-    let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
-    if !stopped.is_empty() {
-        let mut rng = thread_rng();
-        stopped.shuffle(&mut rng);
-
-        DEPS.worker_executor_cluster().blocking_start(stopped[0]);
-    }
+fn start_random_worker_executor() {
+    start_random_worker_executors(1);
 }
 
-fn start_worker_executors(n: usize) {
+fn start_random_worker_executors(n: usize) {
     let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
     if !stopped.is_empty() {
         let mut rng = thread_rng();
@@ -238,17 +232,11 @@ fn start_worker_executors(n: usize) {
     }
 }
 
-fn stop_worker_executor() {
-    let mut started = DEPS.worker_executor_cluster().started_indices();
-    if !started.is_empty() {
-        let mut rng = thread_rng();
-        started.shuffle(&mut rng);
-
-        DEPS.worker_executor_cluster().stop(started[0]);
-    }
+fn stop_random_worker_executor() {
+    stop_random_worker_executors(1);
 }
 
-fn stop_worker_executors(n: usize) {
+fn stop_random_worker_executors(n: usize) {
     let mut started = DEPS.worker_executor_cluster().started_indices();
     if !started.is_empty() {
         let mut rng = thread_rng();
@@ -395,10 +383,10 @@ fn coordinated_environment(
         info!("Command: {} - Started", formatted_command);
         match command {
             EnvCommand::StartWorkerExecutors(n) => {
-                start_worker_executors(n);
+                start_random_worker_executors(n);
             }
             EnvCommand::StopWorkerExecutors(n) => {
-                stop_worker_executors(n);
+                stop_random_worker_executors(n);
             }
             EnvCommand::StopAllWorkerExecutor => {
                 stop_all_worker_executors();
@@ -457,12 +445,12 @@ fn unstable_environment(stop_rx: std::sync::mpsc::Receiver<()>) {
         match commands[0] {
             Command::StartShard => {
                 info!("Golem Sharding Tester starting shard");
-                start_worker_executor();
+                start_random_worker_executor();
                 info!("Golem Sharding Tester started shard");
             }
             Command::StopShard => {
                 info!("Golem Sharding Tester stopping shard");
-                stop_worker_executor();
+                stop_random_worker_executor();
                 info!("Golem Sharding Tester stopped shard");
             }
             Command::RestartShardManager => {
