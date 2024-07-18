@@ -14,70 +14,6 @@ use golem_test_framework::config::{
 };
 use golem_test_framework::dsl::TestDslUnsafe;
 
-struct Tracing;
-
-impl Tracing {
-    pub fn init() -> Self {
-        let config = TracingConfig::test("sharding-tests").with_env_overrides();
-        init_tracing_with_default_debug_env_filter(&config);
-        Self
-    }
-}
-
-#[ctor]
-pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::blocking_new_from_config(EnvBasedTestDependenciesConfig {
-        number_of_shards_override: Some(16),
-        ..EnvBasedTestDependenciesConfig::new()
-    });
-
-    deps.redis_monitor().assert_valid();
-    println!(
-        "Started a cluster of {} worker executors",
-        deps.worker_executor_cluster().size()
-    );
-
-    deps
-};
-
-#[dtor]
-unsafe fn drop_deps() {
-    let base_deps_ptr = DEPS.deref() as *const EnvBasedTestDependencies;
-    let base_deps_ptr = base_deps_ptr as *mut EnvBasedTestDependencies;
-    (*base_deps_ptr).kill_all()
-}
-
-#[ctor]
-pub static TRACING: Tracing = Tracing::init();
-
-#[tokio::test]
-async fn service_is_responsive_to_shard_changes() {
-    Deps::reset(16).await;
-    let worker_ids = Deps::create_component_and_start_workers(4).await;
-
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
-    let chaos = std::thread::spawn(|| {
-        unstable_environment(stop_rx);
-    });
-
-    info!("All workers started");
-
-    for c in 0..2 {
-        if c != 0 {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        }
-        info!("Invoking workers ({c})");
-        Deps::invoke_and_await_workers(&worker_ids)
-            .await
-            .expect("Invocations failed");
-        info!("Invoking workers done ({c})");
-    }
-
-    info!("Sharding test completed");
-    stop_tx.send(()).unwrap();
-    chaos.join().unwrap();
-}
-
 #[tokio::test]
 async fn coordinated_scenario1() {
     let case_1 = Step::invoke_and_await(
@@ -117,6 +53,34 @@ async fn coordinated_scenario1() {
     steps.extend(case_3);
 
     coordinated_scenario(8, steps).await;
+}
+
+#[tokio::test]
+async fn service_is_responsive_to_shard_changes() {
+    Deps::reset(16).await;
+    let worker_ids = Deps::create_component_and_start_workers(4).await;
+
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let chaos = std::thread::spawn(|| {
+        unstable_environment(stop_rx);
+    });
+
+    info!("All workers started");
+
+    for c in 0..2 {
+        if c != 0 {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+        info!("Invoking workers ({c})");
+        Deps::invoke_and_await_workers(&worker_ids)
+            .await
+            .expect("Invocations failed");
+        info!("Invoking workers done ({c})");
+    }
+
+    info!("Sharding test completed");
+    stop_tx.send(()).unwrap();
+    chaos.join().unwrap();
 }
 
 async fn coordinated_scenario(number_of_shard: usize, steps: Vec<Step>) {
@@ -531,3 +495,39 @@ fn unstable_environment(stop_rx: std::sync::mpsc::Receiver<()>) {
         worker();
     }
 }
+
+struct Tracing;
+
+impl Tracing {
+    pub fn init() -> Self {
+        let config = TracingConfig::test("sharding-tests").with_env_overrides();
+        init_tracing_with_default_debug_env_filter(&config);
+        Self
+    }
+}
+
+#[ctor]
+pub static DEPS: EnvBasedTestDependencies = {
+    let deps = EnvBasedTestDependencies::blocking_new_from_config(EnvBasedTestDependenciesConfig {
+        number_of_shards_override: Some(16),
+        ..EnvBasedTestDependenciesConfig::new()
+    });
+
+    deps.redis_monitor().assert_valid();
+    println!(
+        "Started a cluster of {} worker executors",
+        deps.worker_executor_cluster().size()
+    );
+
+    deps
+};
+
+#[dtor]
+unsafe fn drop_deps() {
+    let base_deps_ptr = DEPS.deref() as *const EnvBasedTestDependencies;
+    let base_deps_ptr = base_deps_ptr as *mut EnvBasedTestDependencies;
+    (*base_deps_ptr).kill_all()
+}
+
+#[ctor]
+pub static TRACING: Tracing = Tracing::init();
