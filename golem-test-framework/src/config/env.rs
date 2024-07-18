@@ -409,6 +409,12 @@ impl EnvBasedTestDependencies {
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> Self {
         let config = Arc::new(config);
 
+        let redis = Self::make_redis(config.clone()).await;
+        {
+            let mut connection = redis.get_connection(0);
+            redis::cmd("FLUSHALL").execute(&mut connection);
+        }
+        
         let rdb_and_component_service_join = {
             let config = config.clone();
 
@@ -424,12 +430,6 @@ impl EnvBasedTestDependencies {
                 (rdb, component_service, component_compilation_service)
             })
         };
-
-        let redis = Self::make_redis(config.clone()).await;
-        {
-            let mut connection = redis.get_connection(0);
-            redis::cmd("FLUSHALL").execute(&mut connection);
-        }
 
         let redis_monitor_join =
             tokio::spawn(Self::make_redis_monitor(config.clone(), redis.clone()));
