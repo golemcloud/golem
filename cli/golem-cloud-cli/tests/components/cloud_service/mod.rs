@@ -1,7 +1,9 @@
-use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
-use crate::components::{wait_for_startup_grpc, ROOT_TOKEN};
+use crate::components::rdb::CloudDbInfo;
+use crate::components::ROOT_TOKEN;
 use async_trait::async_trait;
+use golem_test_framework::components::rdb::Rdb;
+use golem_test_framework::components::redis::Redis;
+use golem_test_framework::components::wait_for_startup_grpc;
 use indoc::formatdoc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,7 +33,7 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "cloud-service", timeout).await
 }
 
-fn env_vars(
+async fn env_vars(
     http_port: u16,
     grpc_port: u16,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -76,6 +78,6 @@ fn env_vars(
     ];
 
     let mut vars = HashMap::from_iter(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    vars.extend(rdb.info().env("cloud_service").clone());
+    vars.extend(rdb.info().cloud_env("cloud_service").await.clone());
     vars
 }

@@ -45,7 +45,7 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
     #[command()]
     Account {
         /// The account ID to operate on
-        #[arg(short = 'A', long)]
+        #[arg(short = 'A', long, global = true)]
         account_id: Option<AccountId>,
 
         #[command(subcommand)]

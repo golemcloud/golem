@@ -139,7 +139,7 @@ impl CliLive {
             .arg(self.format.to_string())
             .arg(self.config.arg('T', "auth-token"))
             .arg(ROOT_TOKEN)
-            .arg("-vvvvv")
+            .arg("-v")
             .args(args)
             .output()?;
 

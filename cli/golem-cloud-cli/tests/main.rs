@@ -5,16 +5,30 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
+pub mod account;
+pub mod api_definition;
 pub mod cli;
 pub mod component;
 pub mod components;
 pub mod config;
+pub mod policy;
+pub mod project;
+pub mod share;
+pub mod token;
+pub mod worker;
 
 fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     let args = Arguments::from_args();
 
     let mut tests = Vec::new();
-    tests.extend(component::all(deps));
+    tests.extend(component::all(deps.clone()));
+    tests.extend(worker::all(deps.clone()));
+    tests.extend(api_definition::all(deps.clone()));
+    tests.extend(account::all(deps.clone()));
+    tests.extend(project::all(deps.clone()));
+    tests.extend(token::all(deps.clone()));
+    tests.extend(policy::all(deps.clone()));
+    tests.extend(share::all(deps));
 
     libtest_mimic::run(&args, tests)
 }

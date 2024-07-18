@@ -109,8 +109,20 @@ fn to_oss_method_pattern(p: MethodPattern) -> golem_client::model::MethodPattern
     }
 }
 
-fn to_oss_golem_worker_binding(_b: GolemWorkerBinding) -> golem_client::model::GolemWorkerBinding {
-    todo!("Migrate new bindings to cloud")
+fn to_oss_golem_worker_binding(b: GolemWorkerBinding) -> golem_client::model::GolemWorkerBinding {
+    let GolemWorkerBinding {
+        component_id,
+        worker_name,
+        idempotency_key,
+        response,
+    } = b;
+
+    golem_client::model::GolemWorkerBinding {
+        component_id,
+        worker_name,
+        idempotency_key,
+        response,
+    }
 }
 
 fn to_oss_route(r: Route) -> golem_client::model::Route {

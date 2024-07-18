@@ -1,25 +1,25 @@
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
-use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
-use crate::components::component_compilation_service::ComponentCompilationService;
-use crate::components::component_service::spawned::SpawnedComponentService;
-use crate::components::component_service::ComponentService;
-use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::sqlite::SqliteRdb;
-use crate::components::rdb::Rdb;
-use crate::components::redis::docker::DockerRedis;
-use crate::components::redis::provided::ProvidedRedis;
-use crate::components::redis::spawned::SpawnedRedis;
-use crate::components::redis::Redis;
-use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
-use crate::components::redis_monitor::RedisMonitor;
-use crate::components::shard_manager::spawned::SpawnedShardManager;
-use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
-use crate::components::worker_executor_cluster::WorkerExecutorCluster;
-use crate::components::worker_service::spawned::SpawnedWorkerService;
-use crate::components::worker_service::WorkerService;
-use crate::components::TestDependencies;
+use crate::components::{CloudEnvVars, TestDependencies};
+use golem_test_framework::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
+use golem_test_framework::components::component_service::spawned::SpawnedComponentService;
+use golem_test_framework::components::component_service::ComponentService;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::components::rdb::sqlite::SqliteRdb;
+use golem_test_framework::components::rdb::Rdb;
+use golem_test_framework::components::redis::docker::DockerRedis;
+use golem_test_framework::components::redis::provided::ProvidedRedis;
+use golem_test_framework::components::redis::spawned::SpawnedRedis;
+use golem_test_framework::components::redis::Redis;
+use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use golem_test_framework::components::redis_monitor::RedisMonitor;
+use golem_test_framework::components::shard_manager::spawned::SpawnedShardManager;
+use golem_test_framework::components::shard_manager::ShardManager;
+use golem_test_framework::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
+use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
+use golem_test_framework::components::worker_service::spawned::SpawnedWorkerService;
+use golem_test_framework::components::worker_service::WorkerService;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::Level;
@@ -59,10 +59,10 @@ impl CloudEnvBasedTestDependencies {
         let db_type_str = std::env::var("GOLEM_TEST_DB")
             .unwrap_or("".to_string())
             .to_lowercase();
-        if db_type_str == "postgres" {
-            DbType::Postgres
-        } else {
+        if db_type_str == "sqlite" {
             DbType::Sqlite
+        } else {
+            DbType::Postgres
         }
     }
 
@@ -102,7 +102,7 @@ impl CloudEnvBasedTestDependencies {
             let host = Self::redis_host().unwrap_or("localhost".to_string());
             let port = Self::redis_port().unwrap_or(6379);
 
-            if crate::components::redis::check_if_running(&host, port) {
+            if golem_test_framework::components::redis::check_if_running(&host, port) {
                 Arc::new(ProvidedRedis::new(host, port, prefix))
             } else {
                 Arc::new(SpawnedRedis::new(
@@ -126,13 +126,15 @@ impl CloudEnvBasedTestDependencies {
     }
 
     async fn make_shard_manager(
+        env_vars: CloudEnvVars,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn ShardManager + Send + Sync + 'static> {
         if Self::use_docker() {
             todo!()
         } else {
             Arc::new(
-                SpawnedShardManager::new(
+                SpawnedShardManager::new_base(
+                    Box::new(env_vars),
                     Path::new("../target/debug/cloud-shard-manager"),
                     Path::new("../cloud-shard-manager"),
                     9021,
@@ -148,24 +150,25 @@ impl CloudEnvBasedTestDependencies {
     }
 
     async fn make_component_service(
+        env_vars: CloudEnvVars,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        cloud: Arc<dyn CloudService + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentService + Send + Sync + 'static> {
         if Self::use_docker() {
             todo!()
         } else {
             Arc::new(
-                SpawnedComponentService::new(
+                SpawnedComponentService::new_base(
+                    Box::new(env_vars),
                     Path::new("../target/debug/cloud-component-service"),
                     Path::new("../cloud-component-service"),
                     8081,
                     9091,
                     Some(9094),
                     rdb,
-                    cloud,
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
+                    false,
                 )
                 .await,
             )
@@ -173,13 +176,15 @@ impl CloudEnvBasedTestDependencies {
     }
 
     async fn make_component_compilation_service(
+        env_vars: CloudEnvVars,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
         if Self::use_docker() {
             todo!()
         } else {
             Arc::new(
-                SpawnedComponentCompilationService::new(
+                SpawnedComponentCompilationService::new_base(
+                    Box::new(env_vars),
                     Path::new("../target/debug/cloud-component-compilation-service"),
                     Path::new("../cloud-component-compilation-service"),
                     8083,
@@ -195,17 +200,17 @@ impl CloudEnvBasedTestDependencies {
     }
 
     async fn make_worker_service(
+        env_vars: CloudEnvVars,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        cloud: Arc<dyn CloudService + Send + Sync + 'static>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerService + Send + Sync + 'static> {
         if Self::use_docker() {
             todo!()
         } else {
             Arc::new(
-                SpawnedWorkerService::new(
+                SpawnedWorkerService::new_base(
+                    Box::new(env_vars),
                     Path::new("../target/debug/cloud-worker-service"),
                     Path::new("../cloud-worker-service"),
                     8082,
@@ -213,12 +218,11 @@ impl CloudEnvBasedTestDependencies {
                     9093,
                     component_service,
                     shard_manager,
-                    cloud,
                     rdb,
-                    redis,
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
+                    false,
                 )
                 .await,
             )
@@ -226,18 +230,19 @@ impl CloudEnvBasedTestDependencies {
     }
 
     async fn make_worker_executor_cluster(
+        env_vars: CloudEnvVars,
         worker_executor_cluster_size: usize,
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-        cloud_service: Arc<dyn CloudService + Send + Sync + 'static>,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
     ) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         if Self::use_docker() {
             todo!()
         } else {
             Arc::new(
-                SpawnedWorkerExecutorCluster::new(
+                SpawnedWorkerExecutorCluster::new_base(
+                    Arc::new(env_vars),
                     worker_executor_cluster_size,
                     9000,
                     9100,
@@ -247,10 +252,10 @@ impl CloudEnvBasedTestDependencies {
                     component_service,
                     shard_manager,
                     worker_service,
-                    cloud_service,
                     Self::default_verbosity(),
                     Self::default_stdout_level(),
                     Self::default_stderr_level(),
+                    false,
                 )
                 .await,
             )
@@ -309,26 +314,29 @@ impl CloudEnvBasedTestDependencies {
         let rdb = Self::make_rdb().await;
         let redis = Self::make_redis().await;
         let cloud_service = Self::make_cloud_service(rdb.clone(), redis.clone()).await;
-        let component_service =
-            Self::make_component_service(rdb.clone(), cloud_service.clone()).await;
+        let env_vars = CloudEnvVars {
+            cloud_service: cloud_service.clone(),
+            redis: redis.clone(),
+        };
+        let component_service = Self::make_component_service(env_vars.clone(), rdb.clone()).await;
         let component_compilation_service =
-            Self::make_component_compilation_service(component_service.clone()).await;
+            Self::make_component_compilation_service(env_vars.clone(), component_service.clone())
+                .await;
         let redis_monitor = Self::make_redis_monitor(redis.clone()).await;
-        let shard_manager = Self::make_shard_manager(redis.clone()).await;
+        let shard_manager = Self::make_shard_manager(env_vars.clone(), redis.clone()).await;
         let worker_service = Self::make_worker_service(
+            env_vars.clone(),
             component_service.clone(),
             shard_manager.clone(),
-            cloud_service.clone(),
             rdb.clone(),
-            redis.clone(),
         )
         .await;
         let worker_executor_cluster = Self::make_worker_executor_cluster(
+            env_vars.clone(),
             worker_executor_cluster_size,
             component_service.clone(),
             shard_manager.clone(),
             worker_service.clone(),
-            cloud_service.clone(),
             redis.clone(),
         )
         .await;

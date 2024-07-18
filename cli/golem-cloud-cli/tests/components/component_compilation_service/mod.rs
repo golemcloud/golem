@@ -14,70 +14,45 @@
 
 use std::collections::HashMap;
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_trait::async_trait;
+use golem_test_framework::components::component_compilation_service::ComponentCompilationServiceEnvVars;
+use std::sync::Arc;
+
 use tracing::Level;
 
-use crate::components::component_service::ComponentService;
-use crate::components::{wait_for_startup_grpc, ROOT_TOKEN};
-
-pub mod spawned;
+use crate::components::{CloudEnvVars, ROOT_TOKEN};
 
 #[async_trait]
-pub trait ComponentCompilationService {
-    fn private_host(&self) -> String;
-    fn private_http_port(&self) -> u16;
-    fn private_grpc_port(&self) -> u16;
+impl ComponentCompilationServiceEnvVars for CloudEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_service: Arc<
+            dyn golem_test_framework::components::component_service::ComponentService
+                + Send
+                + Sync
+                + 'static,
+        >,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        let log_level = verbosity.as_str().to_lowercase();
 
-    fn public_host(&self) -> String {
-        self.private_host()
+        let vars: &[(&str, &str)] = &[
+            ("ENVIRONMENT", "dev"),
+            ("RUST_LOG", &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
+            ("WASMTIME_BACKTRACE_DETAILS", "1"),
+            ("RUST_BACKTRACE", "1"),
+            ("GOLEM__COMPONENT_SERVICE__HOST", &component_service.private_host()),
+            ("GOLEM__COMPONENT_SERVICE__PORT", &component_service.private_grpc_port().to_string()),
+            ("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem"),
+            ("GOLEM__BLOB_STORAGE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem-cloud"),
+            ("GOLEM__TRACING__STDOUT__JSON", "true"),
+            ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
+            ("GOLEM__HTTP_PORT", &http_port.to_string()),
+            ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , ROOT_TOKEN),
+        ];
+
+        HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())))
     }
-
-    fn public_http_port(&self) -> u16 {
-        self.private_http_port()
-    }
-
-    fn public_grpc_port(&self) -> u16 {
-        self.private_grpc_port()
-    }
-
-    fn kill(&self);
-}
-
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(
-        host,
-        grpc_port,
-        "cloud-component-compilation-service",
-        timeout,
-    )
-    .await
-}
-
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
-
-    let vars: &[(&str, &str)] = &[
-        ("ENVIRONMENT", "dev"),
-        ("RUST_LOG", &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
-        ("WASMTIME_BACKTRACE_DETAILS", "1"),
-        ("RUST_BACKTRACE", "1"),
-        ("GOLEM__COMPONENT_SERVICE__HOST", &component_service.private_host()),
-        ("GOLEM__COMPONENT_SERVICE__PORT", &component_service.private_grpc_port().to_string()),
-        ("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem"),
-        ("GOLEM__BLOB_STORAGE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem-cloud"),
-        ("GOLEM__TRACING__STDOUT__JSON", "true"),
-        ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT", &http_port.to_string()),
-        ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , ROOT_TOKEN),
-    ];
-
-    HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())))
 }

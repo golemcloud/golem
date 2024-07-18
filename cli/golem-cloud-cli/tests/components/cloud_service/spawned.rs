@@ -1,14 +1,14 @@
 use crate::components::cloud_service::{env_vars, wait_for_startup, CloudService};
-use crate::components::redis::Redis;
-use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
+use golem_test_framework::components::rdb::Rdb;
+use golem_test_framework::components::redis::Redis;
+use golem_test_framework::components::ChildProcessLogger;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::components::rdb::Rdb;
 use tracing::info;
 use tracing::Level;
 
@@ -71,7 +71,7 @@ impl SpawnedCloudService {
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(http_port, grpc_port, redis, rdb, verbosity))
+            .envs(env_vars(http_port, grpc_port, redis, rdb, verbosity).await)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
