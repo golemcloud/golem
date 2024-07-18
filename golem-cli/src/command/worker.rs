@@ -212,7 +212,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         count: Option<u64>,
 
         /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
-        #[arg(short, long)]
+        #[arg(long)]
         precise: Option<bool>,
     },
     /// Updates a worker
