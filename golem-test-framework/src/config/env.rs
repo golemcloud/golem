@@ -154,7 +154,7 @@ pub struct EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    pub fn from_config(config: EnvBasedTestDependenciesConfig) -> Self {
+    pub fn blocking_new_from_config(config: EnvBasedTestDependenciesConfig) -> Self {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -162,8 +162,10 @@ impl EnvBasedTestDependencies {
             .block_on(async move { Self::new(config).await })
     }
 
-    pub fn from_worker_executor_cluster_size(worker_executor_cluster_size: usize) -> Self {
-        Self::from_config(EnvBasedTestDependenciesConfig {
+    pub fn blocking_new_from_worker_executor_cluster_size(
+        worker_executor_cluster_size: usize,
+    ) -> Self {
+        Self::blocking_new_from_config(EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size,
             ..EnvBasedTestDependenciesConfig::new()
         })

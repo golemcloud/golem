@@ -26,7 +26,7 @@ impl Tracing {
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::from_config(EnvBasedTestDependenciesConfig {
+    let deps = EnvBasedTestDependencies::blocking_new_from_config(EnvBasedTestDependenciesConfig {
         number_of_shards_override: Some(16),
         ..EnvBasedTestDependenciesConfig::new()
     });
