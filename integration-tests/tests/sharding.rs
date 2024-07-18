@@ -14,45 +14,184 @@ use golem_test_framework::config::{
 };
 use golem_test_framework::dsl::TestDslUnsafe;
 
+struct Scenario;
+
+impl Scenario {
+    pub fn case_1(sleep_duration: Duration) -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![Step::StopAllWorkerExecutor],
+            vec![
+                Step::RestartShardManager,
+                Step::Sleep(sleep_duration),
+                Step::StartWorkerExecutors(4),
+            ],
+        )
+    }
+
+    pub fn case_2() -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![
+                Step::StopAllWorkerExecutor,
+                Step::RestartShardManager,
+                Step::StartWorkerExecutors(4),
+                Step::RestartShardManager,
+            ],
+            vec![],
+        )
+    }
+
+    pub fn case_3(sleep_duration: Duration) -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![
+                Step::StopAllWorkerExecutor,
+                Step::RestartShardManager,
+                Step::StartWorkerExecutors(4),
+                Step::StopWorkerExecutors(3),
+                Step::Sleep(sleep_duration),
+            ],
+            vec![],
+        )
+    }
+}
+
 #[tokio::test]
-async fn coordinated_scenario1() {
-    let case_1 = Step::invoke_and_await(
-        vec![Step::StopAllWorkerExecutor],
-        vec![
-            Step::RestartShardManager,
-            Step::Sleep(Duration::from_secs(3)),
-            Step::StartWorkerExecutors(4),
-        ],
-    );
+async fn coordinated_scenario_1_1() {
+    coordinated_scenario(5, 4, Scenario::case_1(Duration::from_secs(3))).await;
+}
 
-    let case_2 = Step::invoke_and_await(
-        vec![
-            Step::StopAllWorkerExecutor,
-            Step::RestartShardManager,
-            Step::StartWorkerExecutors(4),
-            Step::RestartShardManager,
-        ],
-        vec![],
-    );
+#[tokio::test]
+async fn coordinated_scenario_1_2() {
+    coordinated_scenario(8, 4, Scenario::case_1(Duration::from_secs(3))).await;
+}
 
-    let case_3 = Step::invoke_and_await(
-        vec![
-            Step::StopAllWorkerExecutor,
-            Step::RestartShardManager,
-            Step::StartWorkerExecutors(4),
-            Step::StopWorkerExecutors(3),
-            Step::Sleep(Duration::from_secs(3)),
-        ],
-        vec![],
-    );
+#[tokio::test]
+async fn coordinated_scenario_1_3() {
+    coordinated_scenario(16, 4, Scenario::case_1(Duration::from_secs(3))).await;
+}
 
-    let mut steps: Vec<Step> = Vec::new();
+#[tokio::test]
+async fn coordinated_scenario_1_4() {
+    coordinated_scenario(16, 4, Scenario::case_1(Duration::from_secs(0))).await;
+}
 
-    steps.extend(case_1);
-    steps.extend(case_2);
-    steps.extend(case_3);
+#[tokio::test]
+async fn coordinated_scenario_1_5() {
+    coordinated_scenario(16, 4, Scenario::case_1(Duration::from_secs(10))).await;
+}
 
-    coordinated_scenario(8, steps).await;
+#[tokio::test]
+async fn coordinated_scenario_1_6() {
+    coordinated_scenario(5, 20, Scenario::case_1(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_1_7() {
+    coordinated_scenario(8, 20, Scenario::case_1(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_1_8() {
+    coordinated_scenario(16, 20, Scenario::case_1(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_1_9() {
+    coordinated_scenario(16, 20, Scenario::case_1(Duration::from_secs(0))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_1_10() {
+    coordinated_scenario(16, 20, Scenario::case_1(Duration::from_secs(10))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_1() {
+    coordinated_scenario(5, 4, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_2() {
+    coordinated_scenario(8, 4, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_3() {
+    coordinated_scenario(16, 4, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_4() {
+    coordinated_scenario(32, 4, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_5() {
+    coordinated_scenario(5, 20, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_6() {
+    coordinated_scenario(8, 20, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_7() {
+    coordinated_scenario(16, 20, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_2_8() {
+    coordinated_scenario(32, 20, Scenario::case_2()).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_1() {
+    coordinated_scenario(5, 4, Scenario::case_3(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_2() {
+    coordinated_scenario(8, 4, Scenario::case_3(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_3() {
+    coordinated_scenario(16, 4, Scenario::case_3(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_4() {
+    coordinated_scenario(16, 4, Scenario::case_3(Duration::from_secs(0))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_5() {
+    coordinated_scenario(16, 4, Scenario::case_3(Duration::from_secs(10))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_6() {
+    coordinated_scenario(5, 20, Scenario::case_3(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_7() {
+    coordinated_scenario(8, 20, Scenario::case_3(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_8() {
+    coordinated_scenario(16, 20, Scenario::case_3(Duration::from_secs(3))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_9() {
+    coordinated_scenario(16, 20, Scenario::case_3(Duration::from_secs(0))).await;
+}
+
+#[tokio::test]
+async fn coordinated_scenario_3_10() {
+    coordinated_scenario(16, 20, Scenario::case_3(Duration::from_secs(10))).await;
 }
 
 #[tokio::test]
@@ -83,9 +222,9 @@ async fn service_is_responsive_to_shard_changes() {
     chaos.join().unwrap();
 }
 
-async fn coordinated_scenario(number_of_shard: usize, steps: Vec<Step>) {
+async fn coordinated_scenario(number_of_shard: usize, number_of_workers: usize, steps: Vec<Step>) {
     Deps::reset(number_of_shard).await;
-    let worker_ids = Deps::create_component_and_start_workers(4).await;
+    let worker_ids = Deps::create_component_and_start_workers(number_of_workers).await;
 
     let (worker_command_tx, worker_command_rx) = tokio::sync::mpsc::channel(128);
     let (worker_event_tx, mut worker_event_rx) = tokio::sync::mpsc::channel(128);
