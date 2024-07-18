@@ -471,7 +471,7 @@ fn text_worker_list(
         &component_id,
         &cfg.arg('f', "filter"),
         &format!("name = {worker_name}"),
-        &cfg.arg('p', "precise"),
+        "--precise",
         "true",
     ])?;
 
