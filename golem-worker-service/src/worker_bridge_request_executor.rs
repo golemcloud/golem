@@ -77,20 +77,13 @@ mod internal {
             "Invocation parameters"
         );
 
-        let mut invoke_parameters_values = vec![];
-
-        for param in invoke_parameters {
-            let value = get_json_from_typed_value(&param);
-            invoke_parameters_values.push(value);
-        }
-
         let type_annotated_value = default_executor
             .worker_service
             .invoke_and_await_function_json_typed(
                 &worker_id,
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name.to_string(),
-                invoke_parameters_values,
+                invoke_parameters,
                 &CallingConvention::Component,
                 None,
                 empty_worker_metadata(),

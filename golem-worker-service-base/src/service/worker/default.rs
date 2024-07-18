@@ -38,6 +38,7 @@ use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
+use golem_common::precise_json::PreciseJson;
 use golem_common::to_json::FromToJson;
 use golem_service_base::model::{
     FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
@@ -89,7 +90,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
@@ -101,7 +102,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
@@ -352,7 +353,7 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
@@ -421,7 +422,7 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,

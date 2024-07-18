@@ -24,7 +24,7 @@ pub enum PreciseJson {
     Tuple(Vec<PreciseJson>),
     Record(Vec<(String, PreciseJson)>),
     Variant {
-        case_name: String,
+        case_idx: u32,
         case_value: Box<PreciseJson>,
     },
     Enum(u32),
@@ -276,6 +276,58 @@ impl TryFrom<JsonValue> for PreciseJson {
             _ => Err(PreciseJsonError::InvalidValue(
                 "Expected object".to_string(),
             )),
+        }
+    }
+}
+
+impl From<PreciseJson> for golem_wasm_rpc::Value {
+    fn from(value: PreciseJson) -> Self {
+        match value {
+            PreciseJson::Bool(b) => golem_wasm_rpc::Value::Bool(b),
+            PreciseJson::S8(i) => golem_wasm_rpc::Value::S8(i),
+            PreciseJson::U8(u) => golem_wasm_rpc::Value::U8(u),
+            PreciseJson::S16(i) => golem_wasm_rpc::Value::S16(i),
+            PreciseJson::U16(u) => golem_wasm_rpc::Value::U16(u),
+            PreciseJson::S32(i) => golem_wasm_rpc::Value::S32(i),
+            PreciseJson::U32(u) => golem_wasm_rpc::Value::U32(u),
+            PreciseJson::S64(i) => golem_wasm_rpc::Value::S64(i),
+            PreciseJson::U64(u) => golem_wasm_rpc::Value::U64(u),
+            PreciseJson::F32(f) => golem_wasm_rpc::Value::F32(f),
+            PreciseJson::F64(f) => golem_wasm_rpc::Value::F64(f),
+            PreciseJson::Chr(c) => golem_wasm_rpc::Value::Char(c),
+            PreciseJson::Str(s) => golem_wasm_rpc::Value::String(s),
+            PreciseJson::List(l) => golem_wasm_rpc::Value::List(
+                l.into_iter().map(golem_wasm_rpc::Value::from).collect(),
+            ),
+            PreciseJson::Tuple(t) => golem_wasm_rpc::Value::Tuple(
+                t.into_iter().map(golem_wasm_rpc::Value::from).collect(),
+            ),
+            PreciseJson::Record(r) => golem_wasm_rpc::Value::Record(
+                r.into_iter()
+                    .map(|(k, v)| golem_wasm_rpc::Value::from(v))
+                    .collect(),
+            ),
+            PreciseJson::Variant {
+                case_idx,
+                case_value,
+            } => golem_wasm_rpc::Value::Variant {
+                case_idx,
+                case_value: Some(Box::new(golem_wasm_rpc::Value::from(*case_value))),
+            },
+            PreciseJson::Enum(e) => golem_wasm_rpc::Value::Enum(e),
+            PreciseJson::Flags(f) => golem_wasm_rpc::Value::Flags(f),
+
+            PreciseJson::Option(option) => golem_wasm_rpc::Value::Option(
+                option.map(|v| Box::new(golem_wasm_rpc::Value::from(*v))),
+            ),
+            PreciseJson::Result(result) => match result {
+                Ok(precise_json) => golem_wasm_rpc::Value::Result(Result::Ok(Some(Box::new(
+                    golem_wasm_rpc::Value::from(*precise_json),
+                )))),
+                Err(precise_json) => golem_wasm_rpc::Value::Result(Result::Err(Some(Box::new(
+                    golem_wasm_rpc::Value::from(*precise_json),
+                )))),
+            },
         }
     }
 }
