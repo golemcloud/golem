@@ -8,6 +8,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
+use golem_common::precise_json::PreciseJson;
 
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
@@ -111,11 +112,24 @@ impl WorkerApi {
 
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
-        let values = params.0.params.as_array().ok_or_else(|| {
+        let json_values = params.0.params.as_array().ok_or_else(|| {
             WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec!["Invalid parameters".to_string()],
             }))
         })?;
+
+        let mut precise_jsons = vec![];
+
+        for json_value in json_values {
+            let precise_json = PreciseJson::try_from(json_value.clone());
+
+            match precise_json {
+                Ok(precise_json) => precise_jsons.push(precise_json),
+                Err(err) => return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                    errors: vec![format!("Invalid function parameters {}", err)],
+                })))
+            }
+        }
 
         let result = self
             .worker_service
@@ -123,7 +137,7 @@ impl WorkerApi {
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                values.clone(),
+                precise_jsons,
                 &calling_convention,
                 None,
                 empty_worker_metadata(),
