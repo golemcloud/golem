@@ -661,20 +661,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let function_input = request.input();
 
-        let params_val = function_input
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&full_function_name, &function_type),
-                CallingConvention::Component,
-            )
-            .map_err(|err| GolemError::ValueMismatch {
-                details: err.join(", "),
-            })?;
-
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
-        let function_input = params_val
+        let function_input = request.input()
             .iter()
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
@@ -1840,12 +1831,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 }
 
 trait GrpcInvokeRequest {
-    type FunctionInput: TypeCheckIn + Clone + Debug + IntoIterator;
-
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
     fn calling_convention(&self) -> CallingConvention;
-    fn input(&self) -> Self::FunctionInput;
+    fn input(&self) -> Vec<Val>,
     fn worker_id(&self) -> Result<WorkerId, GolemError>;
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
     fn name(&self) -> String;
@@ -1855,7 +1844,6 @@ trait GrpcInvokeRequest {
 }
 
 impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
-    type FunctionInput = Vec<Val>;
 
     fn account_id(&self) -> Result<AccountId, GolemError> {
         Ok(self
@@ -1873,7 +1861,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
         CallingConvention::Component
     }
 
-    fn input(&self) -> Self::FunctionInput {
+    fn input(&self) -> Vec<Val> {
         self.input.clone()
     }
 
@@ -1913,8 +1901,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
 }
 
 impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
-    type FunctionInput = Vec<Val>;
-
     fn account_id(&self) -> Result<AccountId, GolemError> {
         Ok(self
             .account_id
@@ -1934,7 +1920,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequest {
         }
     }
 
-    fn input(&self) -> Self::FunctionInput {
+    fn input(&self) -> Vec<Val> {
         self.input.clone()
     }
 
