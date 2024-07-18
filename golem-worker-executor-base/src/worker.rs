@@ -34,6 +34,7 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -423,7 +424,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
-    ) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError> {
+    ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
@@ -450,7 +451,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
-    ) -> Result<Vec<Value>, GolemError> {
+    ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
             .invoke(
                 idempotency_key.clone(),
@@ -1622,7 +1623,7 @@ impl RunningWorker {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<Vec<Value>, TrapType>,
+        result: Result<TypeAnnotatedValue, TrapType>,
         oplog_idx: OplogIndex,
     },
     Lazy {

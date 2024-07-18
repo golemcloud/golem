@@ -553,19 +553,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     {
         let calling_convention = request.calling_convention();
 
-        let (function_type, results) = self.invoke_and_await_worker_internal_proto(request).await?;
+        let results = self.invoke_and_await_worker_internal_proto(request).await?;
 
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
-
-        let output = results
-            .validate_function_result(function_results, calling_convention)
-            .map_err(|err| GolemError::ValueMismatch {
-                details: err.join(", "),
-            })?;
 
         Ok(output)
     }
@@ -573,40 +562,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_and_await_worker_internal_proto<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<(ExportFunction, Vec<Val>), GolemError> {
+    ) -> Result<Vec<Val>, GolemError> {
         let full_function_name = request.name();
 
         let worker = self.get_or_create(request).await?;
 
         let calling_convention = request.calling_convention();
 
-        let component_metadata = worker::get_component_metadata(&worker).await?;
-        let exports = component_metadata.exports;
-
-        let function_type = exports::function_by_name(&exports, &full_function_name)
-            .map_err(|err| {
-                GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
-            })?
-            .ok_or_else(|| {
-                GolemError::invalid_request(format!(
-                    "Failed to find the function {}",
-                    &full_function_name,
-                ))
-            })?;
-
-        let params_val = request
-            .input()
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&full_function_name, &function_type),
-                calling_convention,
-            )
-            .map_err(|err| GolemError::ValueMismatch {
-                details: err.join(", "),
-            })?;
-
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
+
+        let params_val = request.input();
 
         let function_input = params_val
             .into_iter()
@@ -1458,45 +1425,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_request!(
             "invoke_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            function = request.name,
-            account_id = proto_account_id_string(&request.account_id)
-        );
-
-        match self
-            .invoke_worker_internal(&request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::InvokeWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::invoke_worker_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(err) => record.fail(
-                Ok(Response::new(golem::workerexecutor::InvokeWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::invoke_worker_response::Result::Failure(
-                            err.clone().into(),
-                        ),
-                    ),
-                })),
-                &err,
-            ),
-        }
-    }
-
-    async fn invoke_worker_json(
-        &self,
-        request: Request<InvokeWorkerRequestJson>,
-    ) -> Result<Response<InvokeWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_request!(
-            "invoke_worker_json",
             worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id)
