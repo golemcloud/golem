@@ -54,7 +54,7 @@ use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
-use wasmtime::{Store, UpdateDeadline};
+use wasmtime::{AsContext, Store, UpdateDeadline};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -575,7 +575,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: Vec<Value>,
+        result: TypeAnnotatedValue,
         oplog_index: OplogIndex,
     ) {
         let mut map = self.invocation_results.write().unwrap();
@@ -1341,6 +1341,9 @@ impl RunningWorker {
 
                             let mut store_mutex = store.lock().await;
                             let store = store_mutex.deref_mut();
+
+                            let component_metadata =
+                                store.as_context().data().component_metadata().clone();
 
                             match message.invocation {
                                 WorkerInvocation::ExportedFunction {
