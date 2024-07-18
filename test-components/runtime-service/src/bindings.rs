@@ -1373,6 +1373,212 @@ pub mod golem {
                     );
                 }
             }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get current worker metadata
+            pub fn get_self_metadata() -> WorkerMetadata {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 64]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-self-metadata"]
+                        fn wit_import(_: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i64>();
+                    let l3 = *ptr0.add(16).cast::<*mut u8>();
+                    let l4 = *ptr0.add(20).cast::<usize>();
+                    let len5 = l4;
+                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                    let l6 = *ptr0.add(24).cast::<*mut u8>();
+                    let l7 = *ptr0.add(28).cast::<usize>();
+                    let base11 = l6;
+                    let len11 = l7;
+                    let mut result11 = _rt::Vec::with_capacity(len11);
+                    for i in 0..len11 {
+                        let base = base11.add(i * 8);
+                        let e11 = {
+                            let l8 = *base.add(0).cast::<*mut u8>();
+                            let l9 = *base.add(4).cast::<usize>();
+                            let len10 = l9;
+                            let bytes10 = _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                            _rt::string_lift(bytes10)
+                        };
+                        result11.push(e11);
+                    }
+                    _rt::cabi_dealloc(base11, len11 * 8, 4);
+                    let l12 = *ptr0.add(32).cast::<*mut u8>();
+                    let l13 = *ptr0.add(36).cast::<usize>();
+                    let base20 = l12;
+                    let len20 = l13;
+                    let mut result20 = _rt::Vec::with_capacity(len20);
+                    for i in 0..len20 {
+                        let base = base20.add(i * 16);
+                        let e20 = {
+                            let l14 = *base.add(0).cast::<*mut u8>();
+                            let l15 = *base.add(4).cast::<usize>();
+                            let len16 = l15;
+                            let bytes16 = _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+                            let l17 = *base.add(8).cast::<*mut u8>();
+                            let l18 = *base.add(12).cast::<usize>();
+                            let len19 = l18;
+                            let bytes19 = _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                            (_rt::string_lift(bytes16), _rt::string_lift(bytes19))
+                        };
+                        result20.push(e20);
+                    }
+                    _rt::cabi_dealloc(base20, len20 * 16, 4);
+                    let l21 = i32::from(*ptr0.add(40).cast::<u8>());
+                    let l22 = *ptr0.add(48).cast::<i64>();
+                    let l23 = *ptr0.add(56).cast::<i64>();
+                    WorkerMetadata {
+                        worker_id: WorkerId {
+                            component_id: ComponentId {
+                                uuid: Uuid {
+                                    high_bits: l1 as u64,
+                                    low_bits: l2 as u64,
+                                },
+                            },
+                            worker_name: _rt::string_lift(bytes5),
+                        },
+                        args: result11,
+                        env: result20,
+                        status: WorkerStatus::_lift(l21 as u8),
+                        component_version: l22 as u64,
+                        retry_count: l23 as u64,
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get worker metadata
+            pub fn get_worker_metadata(worker_id: &WorkerId) -> Option<WorkerMetadata> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 72]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 72]);
+                    let WorkerId {
+                        component_id: component_id0,
+                        worker_name: worker_name0,
+                    } = worker_id;
+                    let ComponentId { uuid: uuid1 } = component_id0;
+                    let Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
+                    let vec3 = worker_name0;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-worker-metadata"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        _rt::as_i64(high_bits2),
+                        _rt::as_i64(low_bits2),
+                        ptr3.cast_mut(),
+                        len3,
+                        ptr4,
+                    );
+                    let l5 = i32::from(*ptr4.add(0).cast::<u8>());
+                    match l5 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l6 = *ptr4.add(8).cast::<i64>();
+                                let l7 = *ptr4.add(16).cast::<i64>();
+                                let l8 = *ptr4.add(24).cast::<*mut u8>();
+                                let l9 = *ptr4.add(28).cast::<usize>();
+                                let len10 = l9;
+                                let bytes10 = _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+                                let l11 = *ptr4.add(32).cast::<*mut u8>();
+                                let l12 = *ptr4.add(36).cast::<usize>();
+                                let base16 = l11;
+                                let len16 = l12;
+                                let mut result16 = _rt::Vec::with_capacity(len16);
+                                for i in 0..len16 {
+                                    let base = base16.add(i * 8);
+                                    let e16 = {
+                                        let l13 = *base.add(0).cast::<*mut u8>();
+                                        let l14 = *base.add(4).cast::<usize>();
+                                        let len15 = l14;
+                                        let bytes15 =
+                                            _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                        _rt::string_lift(bytes15)
+                                    };
+                                    result16.push(e16);
+                                }
+                                _rt::cabi_dealloc(base16, len16 * 8, 4);
+                                let l17 = *ptr4.add(40).cast::<*mut u8>();
+                                let l18 = *ptr4.add(44).cast::<usize>();
+                                let base25 = l17;
+                                let len25 = l18;
+                                let mut result25 = _rt::Vec::with_capacity(len25);
+                                for i in 0..len25 {
+                                    let base = base25.add(i * 16);
+                                    let e25 = {
+                                        let l19 = *base.add(0).cast::<*mut u8>();
+                                        let l20 = *base.add(4).cast::<usize>();
+                                        let len21 = l20;
+                                        let bytes21 =
+                                            _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+                                        let l22 = *base.add(8).cast::<*mut u8>();
+                                        let l23 = *base.add(12).cast::<usize>();
+                                        let len24 = l23;
+                                        let bytes24 =
+                                            _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                        (_rt::string_lift(bytes21), _rt::string_lift(bytes24))
+                                    };
+                                    result25.push(e25);
+                                }
+                                _rt::cabi_dealloc(base25, len25 * 16, 4);
+                                let l26 = i32::from(*ptr4.add(48).cast::<u8>());
+                                let l27 = *ptr4.add(56).cast::<i64>();
+                                let l28 = *ptr4.add(64).cast::<i64>();
+
+                                WorkerMetadata {
+                                    worker_id: WorkerId {
+                                        component_id: ComponentId {
+                                            uuid: Uuid {
+                                                high_bits: l6 as u64,
+                                                low_bits: l7 as u64,
+                                            },
+                                        },
+                                        worker_name: _rt::string_lift(bytes10),
+                                    },
+                                    args: result16,
+                                    env: result25,
+                                    status: WorkerStatus::_lift(l26 as u8),
+                                    component_version: l27 as u64,
+                                    retry_count: l28 as u64,
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
         }
     }
     #[allow(dead_code)]
@@ -11771,6 +11977,312 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
+                pub unsafe fn _export_get_self_metadata_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let result0 = T::get_self_metadata();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let super::super::super::super::golem::api::host::WorkerMetadata {
+                        worker_id: worker_id2,
+                        args: args2,
+                        env: env2,
+                        status: status2,
+                        component_version: component_version2,
+                        retry_count: retry_count2,
+                    } = result0;
+                    let super::super::super::super::golem::api::host::WorkerId {
+                        component_id: component_id3,
+                        worker_name: worker_name3,
+                    } = worker_id2;
+                    let super::super::super::super::golem::api::host::ComponentId { uuid: uuid4 } =
+                        component_id3;
+                    let super::super::super::super::golem::api::host::Uuid {
+                        high_bits: high_bits5,
+                        low_bits: low_bits5,
+                    } = uuid4;
+                    *ptr1.add(0).cast::<i64>() = _rt::as_i64(high_bits5);
+                    *ptr1.add(8).cast::<i64>() = _rt::as_i64(low_bits5);
+                    let vec6 = (worker_name3.into_bytes()).into_boxed_slice();
+                    let ptr6 = vec6.as_ptr().cast::<u8>();
+                    let len6 = vec6.len();
+                    ::core::mem::forget(vec6);
+                    *ptr1.add(20).cast::<usize>() = len6;
+                    *ptr1.add(16).cast::<*mut u8>() = ptr6.cast_mut();
+                    let vec8 = args2;
+                    let len8 = vec8.len();
+                    let layout8 = _rt::alloc::Layout::from_size_align_unchecked(vec8.len() * 8, 4);
+                    let result8 = if layout8.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout8).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout8);
+                        }
+                        ptr
+                    } else {
+                        {
+                            ::core::ptr::null_mut()
+                        }
+                    };
+                    for (i, e) in vec8.into_iter().enumerate() {
+                        let base = result8.add(i * 8);
+                        {
+                            let vec7 = (e.into_bytes()).into_boxed_slice();
+                            let ptr7 = vec7.as_ptr().cast::<u8>();
+                            let len7 = vec7.len();
+                            ::core::mem::forget(vec7);
+                            *base.add(4).cast::<usize>() = len7;
+                            *base.add(0).cast::<*mut u8>() = ptr7.cast_mut();
+                        }
+                    }
+                    *ptr1.add(28).cast::<usize>() = len8;
+                    *ptr1.add(24).cast::<*mut u8>() = result8;
+                    let vec12 = env2;
+                    let len12 = vec12.len();
+                    let layout12 =
+                        _rt::alloc::Layout::from_size_align_unchecked(vec12.len() * 16, 4);
+                    let result12 = if layout12.size() != 0 {
+                        let ptr = _rt::alloc::alloc(layout12).cast::<u8>();
+                        if ptr.is_null() {
+                            _rt::alloc::handle_alloc_error(layout12);
+                        }
+                        ptr
+                    } else {
+                        {
+                            ::core::ptr::null_mut()
+                        }
+                    };
+                    for (i, e) in vec12.into_iter().enumerate() {
+                        let base = result12.add(i * 16);
+                        {
+                            let (t9_0, t9_1) = e;
+                            let vec10 = (t9_0.into_bytes()).into_boxed_slice();
+                            let ptr10 = vec10.as_ptr().cast::<u8>();
+                            let len10 = vec10.len();
+                            ::core::mem::forget(vec10);
+                            *base.add(4).cast::<usize>() = len10;
+                            *base.add(0).cast::<*mut u8>() = ptr10.cast_mut();
+                            let vec11 = (t9_1.into_bytes()).into_boxed_slice();
+                            let ptr11 = vec11.as_ptr().cast::<u8>();
+                            let len11 = vec11.len();
+                            ::core::mem::forget(vec11);
+                            *base.add(12).cast::<usize>() = len11;
+                            *base.add(8).cast::<*mut u8>() = ptr11.cast_mut();
+                        }
+                    }
+                    *ptr1.add(36).cast::<usize>() = len12;
+                    *ptr1.add(32).cast::<*mut u8>() = result12;
+                    *ptr1.add(40).cast::<u8>() = (status2.clone() as i32) as u8;
+                    *ptr1.add(48).cast::<i64>() = _rt::as_i64(component_version2);
+                    *ptr1.add(56).cast::<i64>() = _rt::as_i64(retry_count2);
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_get_self_metadata<T: Guest>(arg0: *mut u8) {
+                    let l0 = *arg0.add(16).cast::<*mut u8>();
+                    let l1 = *arg0.add(20).cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                    let l4 = *arg0.add(24).cast::<*mut u8>();
+                    let l5 = *arg0.add(28).cast::<usize>();
+                    let base6 = l4;
+                    let len6 = l5;
+                    for i in 0..len6 {
+                        let base = base6.add(i * 8);
+                        {
+                            let l2 = *base.add(0).cast::<*mut u8>();
+                            let l3 = *base.add(4).cast::<usize>();
+                            _rt::cabi_dealloc(l2, l3, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(base6, len6 * 8, 4);
+                    let l11 = *arg0.add(32).cast::<*mut u8>();
+                    let l12 = *arg0.add(36).cast::<usize>();
+                    let base13 = l11;
+                    let len13 = l12;
+                    for i in 0..len13 {
+                        let base = base13.add(i * 16);
+                        {
+                            let l7 = *base.add(0).cast::<*mut u8>();
+                            let l8 = *base.add(4).cast::<usize>();
+                            _rt::cabi_dealloc(l7, l8, 1);
+                            let l9 = *base.add(8).cast::<*mut u8>();
+                            let l10 = *base.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l9, l10, 1);
+                        }
+                    }
+                    _rt::cabi_dealloc(base13, len13 * 16, 4);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_get_worker_metadata_cabi<T: Guest>(
+                    arg0: i64,
+                    arg1: i64,
+                    arg2: *mut u8,
+                    arg3: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let len0 = arg3;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg2.cast(), len0, len0);
+                    let result1 = T::get_worker_metadata(
+                        super::super::super::super::golem::api::host::WorkerId {
+                            component_id:
+                                super::super::super::super::golem::api::host::ComponentId {
+                                    uuid: super::super::super::super::golem::api::host::Uuid {
+                                        high_bits: arg0 as u64,
+                                        low_bits: arg1 as u64,
+                                    },
+                                },
+                            worker_name: _rt::string_lift(bytes0),
+                        },
+                    );
+                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result1 {
+                        Some(e) => {
+                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
+                            let super::super::super::super::golem::api::host::WorkerMetadata {
+                                worker_id: worker_id3,
+                                args: args3,
+                                env: env3,
+                                status: status3,
+                                component_version: component_version3,
+                                retry_count: retry_count3,
+                            } = e;
+                            let super::super::super::super::golem::api::host::WorkerId {
+                                component_id: component_id4,
+                                worker_name: worker_name4,
+                            } = worker_id3;
+                            let super::super::super::super::golem::api::host::ComponentId {
+                                uuid: uuid5,
+                            } = component_id4;
+                            let super::super::super::super::golem::api::host::Uuid {
+                                high_bits: high_bits6,
+                                low_bits: low_bits6,
+                            } = uuid5;
+                            *ptr2.add(8).cast::<i64>() = _rt::as_i64(high_bits6);
+                            *ptr2.add(16).cast::<i64>() = _rt::as_i64(low_bits6);
+                            let vec7 = (worker_name4.into_bytes()).into_boxed_slice();
+                            let ptr7 = vec7.as_ptr().cast::<u8>();
+                            let len7 = vec7.len();
+                            ::core::mem::forget(vec7);
+                            *ptr2.add(28).cast::<usize>() = len7;
+                            *ptr2.add(24).cast::<*mut u8>() = ptr7.cast_mut();
+                            let vec9 = args3;
+                            let len9 = vec9.len();
+                            let layout9 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec9.len() * 8, 4);
+                            let result9 = if layout9.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout9).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout9);
+                                }
+                                ptr
+                            } else {
+                                {
+                                    ::core::ptr::null_mut()
+                                }
+                            };
+                            for (i, e) in vec9.into_iter().enumerate() {
+                                let base = result9.add(i * 8);
+                                {
+                                    let vec8 = (e.into_bytes()).into_boxed_slice();
+                                    let ptr8 = vec8.as_ptr().cast::<u8>();
+                                    let len8 = vec8.len();
+                                    ::core::mem::forget(vec8);
+                                    *base.add(4).cast::<usize>() = len8;
+                                    *base.add(0).cast::<*mut u8>() = ptr8.cast_mut();
+                                }
+                            }
+                            *ptr2.add(36).cast::<usize>() = len9;
+                            *ptr2.add(32).cast::<*mut u8>() = result9;
+                            let vec13 = env3;
+                            let len13 = vec13.len();
+                            let layout13 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec13.len() * 16, 4);
+                            let result13 = if layout13.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout13).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout13);
+                                }
+                                ptr
+                            } else {
+                                {
+                                    ::core::ptr::null_mut()
+                                }
+                            };
+                            for (i, e) in vec13.into_iter().enumerate() {
+                                let base = result13.add(i * 16);
+                                {
+                                    let (t10_0, t10_1) = e;
+                                    let vec11 = (t10_0.into_bytes()).into_boxed_slice();
+                                    let ptr11 = vec11.as_ptr().cast::<u8>();
+                                    let len11 = vec11.len();
+                                    ::core::mem::forget(vec11);
+                                    *base.add(4).cast::<usize>() = len11;
+                                    *base.add(0).cast::<*mut u8>() = ptr11.cast_mut();
+                                    let vec12 = (t10_1.into_bytes()).into_boxed_slice();
+                                    let ptr12 = vec12.as_ptr().cast::<u8>();
+                                    let len12 = vec12.len();
+                                    ::core::mem::forget(vec12);
+                                    *base.add(12).cast::<usize>() = len12;
+                                    *base.add(8).cast::<*mut u8>() = ptr12.cast_mut();
+                                }
+                            }
+                            *ptr2.add(44).cast::<usize>() = len13;
+                            *ptr2.add(40).cast::<*mut u8>() = result13;
+                            *ptr2.add(48).cast::<u8>() = (status3.clone() as i32) as u8;
+                            *ptr2.add(56).cast::<i64>() = _rt::as_i64(component_version3);
+                            *ptr2.add(64).cast::<i64>() = _rt::as_i64(retry_count3);
+                        }
+                        None => {
+                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
+                        }
+                    };
+                    ptr2
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_get_worker_metadata<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => (),
+                        _ => {
+                            let l1 = *arg0.add(24).cast::<*mut u8>();
+                            let l2 = *arg0.add(28).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                            let l5 = *arg0.add(32).cast::<*mut u8>();
+                            let l6 = *arg0.add(36).cast::<usize>();
+                            let base7 = l5;
+                            let len7 = l6;
+                            for i in 0..len7 {
+                                let base = base7.add(i * 8);
+                                {
+                                    let l3 = *base.add(0).cast::<*mut u8>();
+                                    let l4 = *base.add(4).cast::<usize>();
+                                    _rt::cabi_dealloc(l3, l4, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(base7, len7 * 8, 4);
+                            let l12 = *arg0.add(40).cast::<*mut u8>();
+                            let l13 = *arg0.add(44).cast::<usize>();
+                            let base14 = l12;
+                            let len14 = l13;
+                            for i in 0..len14 {
+                                let base = base14.add(i * 16);
+                                {
+                                    let l8 = *base.add(0).cast::<*mut u8>();
+                                    let l9 = *base.add(4).cast::<usize>();
+                                    _rt::cabi_dealloc(l8, l9, 1);
+                                    let l10 = *base.add(8).cast::<*mut u8>();
+                                    let l11 = *base.add(12).cast::<usize>();
+                                    _rt::cabi_dealloc(l10, l11, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(base14, len14 * 16, 4);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
                 pub unsafe fn _export_update_worker_cabi<T: Guest>(
                     arg0: i64,
                     arg1: i64,
@@ -11811,6 +12323,8 @@ pub mod exports {
                         filter: Option<WorkerAnyFilter>,
                         precise: bool,
                     ) -> _rt::Vec<WorkerMetadata>;
+                    fn get_self_metadata() -> WorkerMetadata;
+                    fn get_worker_metadata(worker_id: WorkerId) -> Option<WorkerMetadata>;
                     fn update_worker(
                         worker_id: WorkerId,
                         component_version: ComponentVersion,
@@ -11820,59 +12334,75 @@ pub mod exports {
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-                      ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+                  ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-                        #[export_name = "golem:it/api#get-self-uri"]
-                        unsafe extern "C" fn export_get_self_uri(arg0: *mut u8,arg1: usize,) -> *mut u8 {
-                          $($path_to_types)*::_export_get_self_uri_cabi::<$ty>(arg0, arg1)
-                        }
-                        #[export_name = "cabi_post_golem:it/api#get-self-uri"]
-                        unsafe extern "C" fn _post_return_get_self_uri(arg0: *mut u8,) {
-                          $($path_to_types)*::__post_return_get_self_uri::<$ty>(arg0)
-                        }
-                        #[export_name = "golem:it/api#jump"]
-                        unsafe extern "C" fn export_jump() -> i64 {
-                          $($path_to_types)*::_export_jump_cabi::<$ty>()
-                        }
-                        #[export_name = "golem:it/api#fail-with-custom-max-retries"]
-                        unsafe extern "C" fn export_fail_with_custom_max_retries(arg0: i64,) {
-                          $($path_to_types)*::_export_fail_with_custom_max_retries_cabi::<$ty>(arg0)
-                        }
-                        #[export_name = "golem:it/api#explicit-commit"]
-                        unsafe extern "C" fn export_explicit_commit(arg0: i32,) {
-                          $($path_to_types)*::_export_explicit_commit_cabi::<$ty>(arg0)
-                        }
-                        #[export_name = "golem:it/api#atomic-region"]
-                        unsafe extern "C" fn export_atomic_region() {
-                          $($path_to_types)*::_export_atomic_region_cabi::<$ty>()
-                        }
-                        #[export_name = "golem:it/api#idempotence-flag"]
-                        unsafe extern "C" fn export_idempotence_flag(arg0: i32,) {
-                          $($path_to_types)*::_export_idempotence_flag_cabi::<$ty>(arg0)
-                        }
-                        #[export_name = "golem:it/api#persist-nothing"]
-                        unsafe extern "C" fn export_persist_nothing() {
-                          $($path_to_types)*::_export_persist_nothing_cabi::<$ty>()
-                        }
-                        #[export_name = "golem:it/api#get-workers"]
-                        unsafe extern "C" fn export_get_workers(arg0: i64,arg1: i64,arg2: i32,arg3: *mut u8,arg4: usize,arg5: i32,) -> *mut u8 {
-                          $($path_to_types)*::_export_get_workers_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
-                        }
-                        #[export_name = "cabi_post_golem:it/api#get-workers"]
-                        unsafe extern "C" fn _post_return_get_workers(arg0: *mut u8,) {
-                          $($path_to_types)*::__post_return_get_workers::<$ty>(arg0)
-                        }
-                        #[export_name = "golem:it/api#update-worker"]
-                        unsafe extern "C" fn export_update_worker(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,arg4: i64,arg5: i32,) {
-                          $($path_to_types)*::_export_update_worker_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
-                        }
-                      };);
+                    #[export_name = "golem:it/api#get-self-uri"]
+                    unsafe extern "C" fn export_get_self_uri(arg0: *mut u8,arg1: usize,) -> *mut u8 {
+                      $($path_to_types)*::_export_get_self_uri_cabi::<$ty>(arg0, arg1)
                     }
+                    #[export_name = "cabi_post_golem:it/api#get-self-uri"]
+                    unsafe extern "C" fn _post_return_get_self_uri(arg0: *mut u8,) {
+                      $($path_to_types)*::__post_return_get_self_uri::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#jump"]
+                    unsafe extern "C" fn export_jump() -> i64 {
+                      $($path_to_types)*::_export_jump_cabi::<$ty>()
+                    }
+                    #[export_name = "golem:it/api#fail-with-custom-max-retries"]
+                    unsafe extern "C" fn export_fail_with_custom_max_retries(arg0: i64,) {
+                      $($path_to_types)*::_export_fail_with_custom_max_retries_cabi::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#explicit-commit"]
+                    unsafe extern "C" fn export_explicit_commit(arg0: i32,) {
+                      $($path_to_types)*::_export_explicit_commit_cabi::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#atomic-region"]
+                    unsafe extern "C" fn export_atomic_region() {
+                      $($path_to_types)*::_export_atomic_region_cabi::<$ty>()
+                    }
+                    #[export_name = "golem:it/api#idempotence-flag"]
+                    unsafe extern "C" fn export_idempotence_flag(arg0: i32,) {
+                      $($path_to_types)*::_export_idempotence_flag_cabi::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#persist-nothing"]
+                    unsafe extern "C" fn export_persist_nothing() {
+                      $($path_to_types)*::_export_persist_nothing_cabi::<$ty>()
+                    }
+                    #[export_name = "golem:it/api#get-workers"]
+                    unsafe extern "C" fn export_get_workers(arg0: i64,arg1: i64,arg2: i32,arg3: *mut u8,arg4: usize,arg5: i32,) -> *mut u8 {
+                      $($path_to_types)*::_export_get_workers_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
+                    }
+                    #[export_name = "cabi_post_golem:it/api#get-workers"]
+                    unsafe extern "C" fn _post_return_get_workers(arg0: *mut u8,) {
+                      $($path_to_types)*::__post_return_get_workers::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#get-self-metadata"]
+                    unsafe extern "C" fn export_get_self_metadata() -> *mut u8 {
+                      $($path_to_types)*::_export_get_self_metadata_cabi::<$ty>()
+                    }
+                    #[export_name = "cabi_post_golem:it/api#get-self-metadata"]
+                    unsafe extern "C" fn _post_return_get_self_metadata(arg0: *mut u8,) {
+                      $($path_to_types)*::__post_return_get_self_metadata::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#get-worker-metadata"]
+                    unsafe extern "C" fn export_get_worker_metadata(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+                      $($path_to_types)*::_export_get_worker_metadata_cabi::<$ty>(arg0, arg1, arg2, arg3)
+                    }
+                    #[export_name = "cabi_post_golem:it/api#get-worker-metadata"]
+                    unsafe extern "C" fn _post_return_get_worker_metadata(arg0: *mut u8,) {
+                      $($path_to_types)*::__post_return_get_worker_metadata::<$ty>(arg0)
+                    }
+                    #[export_name = "golem:it/api#update-worker"]
+                    unsafe extern "C" fn export_update_worker(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,arg4: i64,arg5: i32,) {
+                      $($path_to_types)*::_export_update_worker_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
+                    }
+                  };);
+                }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
-                #[repr(align(4))]
-                struct _RetArea([::core::mem::MaybeUninit<u8>; 8]);
-                static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 8]);
+                #[repr(align(8))]
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 72]);
+                static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 72]);
             }
         }
     }
@@ -12183,19 +12713,19 @@ mod _rt {
 #[doc(hidden)]
 
 macro_rules! __export_runtime_service_impl {
-              ($ty:ident) => (self::export!($ty with_types_in self););
-              ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
-              $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
-              )
-            }
+          ($ty:ident) => (self::export!($ty with_types_in self););
+          ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
+          $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
+          )
+        }
 #[doc(inline)]
 pub(crate) use __export_runtime_service_impl as export;
 
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:runtime-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10048] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xbaM\x01A\x02\x01A\"\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10189] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xc7N\x01A\x02\x01A\"\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -12225,7 +12755,7 @@ pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duration\x03\0\x0
 \x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\x07\x01i\
 \x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\x01\x04w\
 hen\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\x01!wasi:clocks/monotonic-\
-clock@0.2.0\x05\x03\x02\x03\0\x01\x03uri\x02\x03\0\x02\x08duration\x01Ba\x02\x03\
+clock@0.2.0\x05\x03\x02\x03\0\x01\x03uri\x02\x03\0\x02\x08duration\x01Bf\x02\x03\
 \x02\x01\x04\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08duration\x03\0\x02\
 \x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\0\x06\x01\
 r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04uuid\x09\x04\
@@ -12265,139 +12795,142 @@ ation\x01A\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operation\x01D\x01@\0\0
 l\x01H\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01I\x01@\x01\x0aidempotent\x7f\
 \x01\0\x04\0\x14set-idempotence-mode\x01J\x01@\0\0\x09\x04\0\x18generate-idempot\
 ency-key\x01K\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mode\x15\x01\0\x04\
-\0\x0dupdate-worker\x01L\x03\x01\x14golem:api/host@0.2.0\x05\x06\x01B\x04\x04\0\x05\
-error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-str\
-ing\x01\x02\x03\x01\x13wasi:io/error@0.2.0\x05\x07\x02\x03\0\x04\x05error\x01B(\x02\
-\x03\x02\x01\x08\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
-\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0c\
-stream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\
-\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19\
-[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\
-\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-str\
-eam.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\
-\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01\
-@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\
-\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.w\
-rite\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\
-\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]ou\
-tput-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]o\
-utput-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method\
-]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-z\
-eroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[\
-method]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\
-\x18\x03\x01\x15wasi:io/streams@0.2.0\x05\x09\x02\x03\0\x05\x0cinput-stream\x02\x03\
-\0\x05\x0doutput-stream\x01B\xc0\x01\x02\x03\x02\x01\x05\x04\0\x08duration\x03\0\
-\0\x02\x03\x02\x01\x0a\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01\x0b\x04\0\
-\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x08\x04\0\x08io-error\x03\0\x06\x02\x03\
-\x02\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\
-\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patc\
-h\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\
-\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09\
-info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\
-\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\
-\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\
-\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-fou\
-nd\0\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\0\x19destin\
-ation-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-terminated\0\0\x12\
-connection-timeout\0\0\x17connection-read-timeout\0\0\x18connection-write-timeou\
-t\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certifica\
-te-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-\
-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-\
-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\
-\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-header-size\x01\
-\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\
-\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-section-size\x01\x15\
-\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"\
-HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\
-\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\
-\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-\
-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\
-\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\
-\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\
-\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\
-\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoi\
-ng-request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\0\x11response-outparam\x03\
-\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\0\x11incoming-response\x03\x01\x04\0\x0d\
-incoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-respons\
-e\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\
-\x01i\"\x01@\0\01\x04\0\x13[constructor]fields\x012\x01o\x02\x1f!\x01p3\x01j\x01\
-1\x01\x1d\x01@\x01\x07entries4\05\x04\0\x18[static]fields.from-list\x016\x01h\"\x01\
-p!\x01@\x02\x04self7\x04name\x1f\08\x04\0\x12[method]fields.get\x019\x01@\x02\x04\
-self7\x04name\x1f\0\x7f\x04\0\x12[method]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\
-\x04self7\x04name\x1f\x05value8\0;\x04\0\x12[method]fields.set\x01<\x01@\x02\x04\
-self7\x04name\x1f\0;\x04\0\x15[method]fields.delete\x01=\x01@\x03\x04self7\x04na\
-me\x1f\x05value!\0;\x04\0\x15[method]fields.append\x01>\x01@\x01\x04self7\04\x04\
-\0\x16[method]fields.entries\x01?\x01@\x01\x04self7\01\x04\0\x14[method]fields.c\
-lone\x01@\x01h%\x01@\x01\x04self\xc1\0\0\x0b\x04\0\x1f[method]incoming-request.m\
-ethod\x01B\x01@\x01\x04self\xc1\0\0\x0e\x04\0([method]incoming-request.path-with\
--query\x01C\x01k\x0d\x01@\x01\x04self\xc1\0\0\xc4\0\x04\0\x1f[method]incoming-re\
-quest.scheme\x01E\x04\0\"[method]incoming-request.authority\x01C\x01i#\x01@\x01\x04\
-self\xc1\0\0\xc6\0\x04\0\x20[method]incoming-request.headers\x01G\x01i,\x01j\x01\
-\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\x04\0\x20[method]incoming-request.consum\
-e\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\xcb\0\x04\0\x1d[constructor]outgoing-re\
-quest\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d\
-[method]outgoing-request.body\x01P\x01@\x01\x04self\xcd\0\0\x0b\x04\0\x1f[method\
-]outgoing-request.method\x01Q\x01j\0\0\x01@\x02\x04self\xcd\0\x06method\x0b\0\xd2\
-\0\x04\0#[method]outgoing-request.set-method\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\
-\0([method]outgoing-request.path-with-query\x01T\x01@\x02\x04self\xcd\0\x0fpath-\
-with-query\x0e\0\xd2\0\x04\0,[method]outgoing-request.set-path-with-query\x01U\x01\
-@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[method]outgoing-request.scheme\x01V\x01@\x02\
-\x04self\xcd\0\x06scheme\xc4\0\0\xd2\0\x04\0#[method]outgoing-request.set-scheme\
-\x01W\x04\0\"[method]outgoing-request.authority\x01T\x01@\x02\x04self\xcd\0\x09a\
-uthority\x0e\0\xd2\0\x04\0&[method]outgoing-request.set-authority\x01X\x01@\x01\x04\
-self\xcd\0\0\xc6\0\x04\0\x20[method]outgoing-request.headers\x01Y\x01i'\x01@\0\0\
-\xda\0\x04\0\x1c[constructor]request-options\x01[\x01h'\x01k\x01\x01@\x01\x04sel\
-f\xdc\0\0\xdd\0\x04\0'[method]request-options.connect-timeout\x01^\x01@\x02\x04s\
-elf\xdc\0\x08duration\xdd\0\0\xd2\0\x04\0+[method]request-options.set-connect-ti\
-meout\x01_\x04\0*[method]request-options.first-byte-timeout\x01^\x04\0.[method]r\
-equest-options.set-first-byte-timeout\x01_\x04\0-[method]request-options.between\
--bytes-timeout\x01^\x04\01[method]request-options.set-between-bytes-timeout\x01_\
-\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\
-\0\x04\0\x1d[static]response-outparam.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\
-\0\x20[method]incoming-response.status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0\
-![method]incoming-response.headers\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![me\
-thod]incoming-response.consume\x01g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04\
-self\xe8\0\0\xea\0\x04\0\x1c[method]incoming-body.stream\x01k\x01i-\x01@\x01\x04\
-this\xc8\0\0\xec\0\x04\0\x1c[static]incoming-body.finish\x01m\x01h-\x01i\x09\x01\
-@\x01\x04self\xee\0\0\xef\0\x04\0![method]future-trailers.subscribe\x01p\x01i$\x01\
-k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\
-\0\xf5\0\x04\0\x1b[method]future-trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\
-\0\x04\0\x1e[constructor]outgoing-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\
-\0%[method]outgoing-response.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-c\
-ode*\0\xd2\0\x04\0)[method]outgoing-response.set-status-code\x01z\x01@\x01\x04se\
-lf\xf8\0\0\xc6\0\x04\0![method]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\
-\0\0\xcf\0\x04\0\x1e[method]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\
-\0\0\x01@\x01\x04self\xfd\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\
-\x01\x01j\0\x01\x1b\x01@\x02\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c\
-[static]outgoing-body.finish\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\
-\0*[method]future-incoming-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\
-\x01\x1b\x01j\x01\x86\x01\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0\
-$[method]future-incoming-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03\
-err\x8a\x01\0\x8b\x01\x04\0\x0fhttp-error-code\x01\x8c\x01\x03\x01\x15wasi:http/\
-types@0.2.0\x05\x0c\x02\x03\0\x06\x10outgoing-request\x02\x03\0\x06\x0frequest-o\
-ptions\x02\x03\0\x06\x18future-incoming-response\x02\x03\0\x06\x0aerror-code\x01\
-B\x0f\x02\x03\x02\x01\x0d\x04\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x0e\x04\
-\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01\x0f\x04\0\x18future-incoming-res\
-ponse\x03\0\x04\x02\x03\x02\x01\x10\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\
-\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\
-\x0c\x04\0\x06handle\x01\x0d\x03\x01\x20wasi:http/outgoing-handler@0.2.0\x05\x11\
-\x02\x03\0\x03\x0ccomponent-id\x02\x03\0\x03\x09worker-id\x02\x03\0\x03\x11compo\
-nent-version\x02\x03\0\x03\x0bupdate-mode\x02\x03\0\x03\x11worker-any-filter\x02\
-\x03\0\x03\x0fworker-metadata\x01B\x1f\x02\x03\x02\x01\x12\x04\0\x0ccomponent-id\
-\x03\0\0\x02\x03\x02\x01\x13\x04\0\x09worker-id\x03\0\x02\x02\x03\x02\x01\x14\x04\
-\0\x11component-version\x03\0\x04\x02\x03\x02\x01\x15\x04\0\x0bupdate-mode\x03\0\
-\x06\x02\x03\x02\x01\x16\x04\0\x11worker-any-filter\x03\0\x08\x02\x03\x02\x01\x17\
-\x04\0\x0fworker-metadata\x03\0\x0a\x01@\x01\x0dfunction-names\0s\x04\0\x0cget-s\
-elf-uri\x01\x0c\x01@\0\0w\x04\0\x04jump\x01\x0d\x01@\x01\x0bmax-retriesw\x01\0\x04\
-\0\x1cfail-with-custom-max-retries\x01\x0e\x01@\x01\x08replicas}\x01\0\x04\0\x0f\
-explicit-commit\x01\x0f\x01@\0\x01\0\x04\0\x0datomic-region\x01\x10\x01@\x01\x07\
-enabled\x7f\x01\0\x04\0\x10idempotence-flag\x01\x11\x04\0\x0fpersist-nothing\x01\
-\x10\x01k\x09\x01p\x0b\x01@\x03\x0ccomponent-id\x01\x06filter\x12\x07precise\x7f\
-\0\x13\x04\0\x0bget-workers\x01\x14\x01@\x03\x09worker-id\x03\x11component-versi\
-on\x05\x0bupdate-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x15\x04\x01\x0cgolem:\
-it/api\x05\x18\x04\x01\x18golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0fruntim\
-e-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.\
-208.1\x10wit-bindgen-rust\x060.25.0";
+\0\x0dupdate-worker\x01L\x01@\0\02\x04\0\x11get-self-metadata\x01M\x01k2\x01@\x01\
+\x09worker-id\x0d\0\xce\0\x04\0\x13get-worker-metadata\x01O\x03\x01\x14golem:api\
+/host@0.2.0\x05\x06\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0\
+s\x04\0\x1d[method]error.to-debug-string\x01\x02\x03\x01\x13wasi:io/error@0.2.0\x05\
+\x07\x02\x03\0\x04\x05error\x01B(\x02\x03\x02\x01\x08\x04\0\x05error\x03\0\0\x02\
+\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation\
+-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-s\
+tream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\
+\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\
+\0\"[method]input-stream.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04sel\
+f\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]in\
+put-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[m\
+ethod]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![\
+method]output-stream.check-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08\
+contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\x01\x14\x04\0.[method]ou\
+tput-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b\
+[method]output-stream.flush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\
+\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\
+\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\
+\x17\x04\05[method]output-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\
+\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\
+\x04\0%[method]output-stream.blocking-splice\x01\x18\x03\x01\x15wasi:io/streams@\
+0.2.0\x05\x09\x02\x03\0\x05\x0cinput-stream\x02\x03\0\x05\x0doutput-stream\x01B\xc0\
+\x01\x02\x03\x02\x01\x05\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x0a\x04\0\x0c\
+input-stream\x03\0\x02\x02\x03\x02\x01\x0b\x04\0\x0doutput-stream\x03\0\x04\x02\x03\
+\x02\x01\x08\x04\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
+\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07c\
+onnect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06met\
+hod\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\
+\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-pay\
+load\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-\
+alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\
+\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09\
+DNS-error\x01\x11\0\x15destination-not-found\0\0\x17destination-unavailable\0\0\x19\
+destination-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\x12connection-ref\
+used\0\0\x15connection-terminated\0\0\x12connection-timeout\0\0\x17connection-re\
+ad-timeout\0\0\x18connection-write-timeout\0\0\x18connection-limit-reached\0\0\x12\
+TLS-protocol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\
+\0\x13HTTP-request-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-reques\
+t-body-size\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-inv\
+alid\0\0\x19HTTP-request-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\
+\x15\0\x18HTTP-request-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\
+\x15\0\x19HTTP-request-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HT\
+TP-response-header-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\
+\x17HTTP-response-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\
+\0\x1aHTTP-response-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\
+\0\x1cHTTP-response-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTT\
+P-upgrade-failed\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configur\
+ation-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\
+\x0einvalid-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\
+\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x01p}\x04\0\x0bfield-value\x03\0\x20\x04\
+\0\x06fields\x03\x01\x04\0\x07headers\x03\0\"\x04\0\x08trailers\x03\0\"\x04\0\x10\
+incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-opti\
+ons\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0)\x04\
+\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-t\
+railers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\
+\x04\0\x18future-incoming-response\x03\x01\x01i\"\x01@\0\01\x04\0\x13[constructo\
+r]fields\x012\x01o\x02\x1f!\x01p3\x01j\x011\x01\x1d\x01@\x01\x07entries4\05\x04\0\
+\x18[static]fields.from-list\x016\x01h\"\x01p!\x01@\x02\x04self7\x04name\x1f\08\x04\
+\0\x12[method]fields.get\x019\x01@\x02\x04self7\x04name\x1f\0\x7f\x04\0\x12[meth\
+od]fields.has\x01:\x01j\0\x01\x1d\x01@\x03\x04self7\x04name\x1f\x05value8\0;\x04\
+\0\x12[method]fields.set\x01<\x01@\x02\x04self7\x04name\x1f\0;\x04\0\x15[method]\
+fields.delete\x01=\x01@\x03\x04self7\x04name\x1f\x05value!\0;\x04\0\x15[method]f\
+ields.append\x01>\x01@\x01\x04self7\04\x04\0\x16[method]fields.entries\x01?\x01@\
+\x01\x04self7\01\x04\0\x14[method]fields.clone\x01@\x01h%\x01@\x01\x04self\xc1\0\
+\0\x0b\x04\0\x1f[method]incoming-request.method\x01B\x01@\x01\x04self\xc1\0\0\x0e\
+\x04\0([method]incoming-request.path-with-query\x01C\x01k\x0d\x01@\x01\x04self\xc1\
+\0\0\xc4\0\x04\0\x1f[method]incoming-request.scheme\x01E\x04\0\"[method]incoming\
+-request.authority\x01C\x01i#\x01@\x01\x04self\xc1\0\0\xc6\0\x04\0\x20[method]in\
+coming-request.headers\x01G\x01i,\x01j\x01\xc8\0\0\x01@\x01\x04self\xc1\0\0\xc9\0\
+\x04\0\x20[method]incoming-request.consume\x01J\x01i&\x01@\x01\x07headers\xc6\0\0\
+\xcb\0\x04\0\x1d[constructor]outgoing-request\x01L\x01h&\x01i/\x01j\x01\xce\0\0\x01\
+@\x01\x04self\xcd\0\0\xcf\0\x04\0\x1d[method]outgoing-request.body\x01P\x01@\x01\
+\x04self\xcd\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01Q\x01j\0\0\x01@\
+\x02\x04self\xcd\0\x06method\x0b\0\xd2\0\x04\0#[method]outgoing-request.set-meth\
+od\x01S\x01@\x01\x04self\xcd\0\0\x0e\x04\0([method]outgoing-request.path-with-qu\
+ery\x01T\x01@\x02\x04self\xcd\0\x0fpath-with-query\x0e\0\xd2\0\x04\0,[method]out\
+going-request.set-path-with-query\x01U\x01@\x01\x04self\xcd\0\0\xc4\0\x04\0\x1f[\
+method]outgoing-request.scheme\x01V\x01@\x02\x04self\xcd\0\x06scheme\xc4\0\0\xd2\
+\0\x04\0#[method]outgoing-request.set-scheme\x01W\x04\0\"[method]outgoing-reques\
+t.authority\x01T\x01@\x02\x04self\xcd\0\x09authority\x0e\0\xd2\0\x04\0&[method]o\
+utgoing-request.set-authority\x01X\x01@\x01\x04self\xcd\0\0\xc6\0\x04\0\x20[meth\
+od]outgoing-request.headers\x01Y\x01i'\x01@\0\0\xda\0\x04\0\x1c[constructor]requ\
+est-options\x01[\x01h'\x01k\x01\x01@\x01\x04self\xdc\0\0\xdd\0\x04\0'[method]req\
+uest-options.connect-timeout\x01^\x01@\x02\x04self\xdc\0\x08duration\xdd\0\0\xd2\
+\0\x04\0+[method]request-options.set-connect-timeout\x01_\x04\0*[method]request-\
+options.first-byte-timeout\x01^\x04\0.[method]request-options.set-first-byte-tim\
+eout\x01_\x04\0-[method]request-options.between-bytes-timeout\x01^\x04\01[method\
+]request-options.set-between-bytes-timeout\x01_\x01i(\x01i.\x01j\x01\xe1\0\x01\x1b\
+\x01@\x02\x05param\xe0\0\x08response\xe2\0\x01\0\x04\0\x1d[static]response-outpa\
+ram.set\x01c\x01h+\x01@\x01\x04self\xe4\0\0*\x04\0\x20[method]incoming-response.\
+status\x01e\x01@\x01\x04self\xe4\0\0\xc6\0\x04\0![method]incoming-response.heade\
+rs\x01f\x01@\x01\x04self\xe4\0\0\xc9\0\x04\0![method]incoming-response.consume\x01\
+g\x01h,\x01i\x03\x01j\x01\xe9\0\0\x01@\x01\x04self\xe8\0\0\xea\0\x04\0\x1c[metho\
+d]incoming-body.stream\x01k\x01i-\x01@\x01\x04this\xc8\0\0\xec\0\x04\0\x1c[stati\
+c]incoming-body.finish\x01m\x01h-\x01i\x09\x01@\x01\x04self\xee\0\0\xef\0\x04\0!\
+[method]future-trailers.subscribe\x01p\x01i$\x01k\xf1\0\x01j\x01\xf2\0\x01\x1b\x01\
+j\x01\xf3\0\0\x01k\xf4\0\x01@\x01\x04self\xee\0\0\xf5\0\x04\0\x1b[method]future-\
+trailers.get\x01v\x01@\x01\x07headers\xc6\0\0\xe1\0\x04\0\x1e[constructor]outgoi\
+ng-response\x01w\x01h.\x01@\x01\x04self\xf8\0\0*\x04\0%[method]outgoing-response\
+.status-code\x01y\x01@\x02\x04self\xf8\0\x0bstatus-code*\0\xd2\0\x04\0)[method]o\
+utgoing-response.set-status-code\x01z\x01@\x01\x04self\xf8\0\0\xc6\0\x04\0![meth\
+od]outgoing-response.headers\x01{\x01@\x01\x04self\xf8\0\0\xcf\0\x04\0\x1e[metho\
+d]outgoing-response.body\x01|\x01h/\x01i\x05\x01j\x01\xfe\0\0\x01@\x01\x04self\xfd\
+\0\0\xff\0\x04\0\x1b[method]outgoing-body.write\x01\x80\x01\x01j\0\x01\x1b\x01@\x02\
+\x04this\xce\0\x08trailers\xf2\0\0\x81\x01\x04\0\x1c[static]outgoing-body.finish\
+\x01\x82\x01\x01h0\x01@\x01\x04self\x83\x01\0\xef\0\x04\0*[method]future-incomin\
+g-response.subscribe\x01\x84\x01\x01i+\x01j\x01\x85\x01\x01\x1b\x01j\x01\x86\x01\
+\0\x01k\x87\x01\x01@\x01\x04self\x83\x01\0\x88\x01\x04\0$[method]future-incoming\
+-response.get\x01\x89\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8a\x01\0\x8b\x01\x04\
+\0\x0fhttp-error-code\x01\x8c\x01\x03\x01\x15wasi:http/types@0.2.0\x05\x0c\x02\x03\
+\0\x06\x10outgoing-request\x02\x03\0\x06\x0frequest-options\x02\x03\0\x06\x18fut\
+ure-incoming-response\x02\x03\0\x06\x0aerror-code\x01B\x0f\x02\x03\x02\x01\x0d\x04\
+\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x0e\x04\0\x0frequest-options\x03\0\
+\x02\x02\x03\x02\x01\x0f\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\
+\x01\x10\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\
+\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\
+\x03\x01\x20wasi:http/outgoing-handler@0.2.0\x05\x11\x02\x03\0\x03\x0ccomponent-\
+id\x02\x03\0\x03\x09worker-id\x02\x03\0\x03\x11component-version\x02\x03\0\x03\x0b\
+update-mode\x02\x03\0\x03\x11worker-any-filter\x02\x03\0\x03\x0fworker-metadata\x01\
+B$\x02\x03\x02\x01\x12\x04\0\x0ccomponent-id\x03\0\0\x02\x03\x02\x01\x13\x04\0\x09\
+worker-id\x03\0\x02\x02\x03\x02\x01\x14\x04\0\x11component-version\x03\0\x04\x02\
+\x03\x02\x01\x15\x04\0\x0bupdate-mode\x03\0\x06\x02\x03\x02\x01\x16\x04\0\x11wor\
+ker-any-filter\x03\0\x08\x02\x03\x02\x01\x17\x04\0\x0fworker-metadata\x03\0\x0a\x01\
+@\x01\x0dfunction-names\0s\x04\0\x0cget-self-uri\x01\x0c\x01@\0\0w\x04\0\x04jump\
+\x01\x0d\x01@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retries\x01\
+\x0e\x01@\x01\x08replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x0f\x01@\0\x01\0\x04\
+\0\x0datomic-region\x01\x10\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempotence-f\
+lag\x01\x11\x04\0\x0fpersist-nothing\x01\x10\x01k\x09\x01p\x0b\x01@\x03\x0ccompo\
+nent-id\x01\x06filter\x12\x07precise\x7f\0\x13\x04\0\x0bget-workers\x01\x14\x01@\
+\0\0\x0b\x04\0\x11get-self-metadata\x01\x15\x01k\x0b\x01@\x01\x09worker-id\x03\0\
+\x16\x04\0\x13get-worker-metadata\x01\x17\x01@\x03\x09worker-id\x03\x11component\
+-version\x05\x0bupdate-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x18\x04\x01\x0c\
+golem:it/api\x05\x18\x04\x01\x18golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0f\
+runtime-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\
+\x070.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

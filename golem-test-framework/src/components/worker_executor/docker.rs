@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{env_vars, new_client, WorkerExecutor};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::worker_executor::{new_client, WorkerExecutor, WorkerExecutorEnvVars};
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use crate::components::component_service::ComponentService;
@@ -49,17 +49,44 @@ impl DockerWorkerExecutor {
         verbosity: Level,
         shared_client: bool,
     ) -> Self {
-        info!("Starting golem-worker-executor container");
-
-        let env_vars = env_vars(
+        Self::new_base(
+            Box::new(GolemEnvVars()),
             http_port,
             grpc_port,
+            redis,
             component_service,
             shard_manager,
             worker_service,
-            redis,
             verbosity,
-        );
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        verbosity: Level,
+        shared_client: bool,
+    ) -> Self {
+        info!("Starting golem-worker-executor container");
+
+        let env_vars = env_vars
+            .env_vars(
+                http_port,
+                grpc_port,
+                component_service,
+                shard_manager,
+                worker_service,
+                redis,
+                verbosity,
+            )
+            .await;
 
         let name = format!("golem-worker-executor-{grpc_port}");
 

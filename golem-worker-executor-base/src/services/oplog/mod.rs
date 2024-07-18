@@ -93,6 +93,13 @@ pub trait OplogService: Debug {
         start_idx: OplogIndex,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
+        assert!(
+            start_idx <= last_idx,
+            "Invalid range passed to OplogService::read_range: start_idx = {}, last_idx = {}",
+            start_idx,
+            last_idx
+        );
+
         self.read(
             owned_worker_id,
             start_idx,

@@ -628,7 +628,7 @@ fn worker_list(
             format!("name = {}", worker_id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
-            &cfg.arg('p', "precise"),
+            "--precise",
             "true",
         ])?;
 
@@ -668,7 +668,7 @@ fn worker_list(
         format!("name like {}_worker", name).as_str(),
         &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
-        &cfg.arg('P', "cursor"),
+        &cfg.arg('S', "cursor"),
         &cursor,
     ])?;
 
@@ -687,7 +687,7 @@ fn worker_list(
             format!("name like {}_worker", name).as_str(),
             &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
-            &cfg.arg('P', "cursor"),
+            &cfg.arg('S', "cursor"),
             &cursor2,
         ])?;
         assert_eq!(result3.workers.len(), 0);
@@ -723,7 +723,7 @@ fn worker_update(
             &component_id,
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
-            &cfg.arg('p', "precise"),
+            "--precise",
             "true",
         ])
     };

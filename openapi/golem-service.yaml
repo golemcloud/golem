@@ -2471,6 +2471,18 @@ components:
       - version
       - routes
       - draft
+    IndexedWorkerMetadata:
+      type: object
+      properties:
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
+      required:
+      - resourceName
+      - resourceParams
     InterruptResponse:
       type: object
     InvokeParameters:
@@ -2531,6 +2543,16 @@ components:
       required:
       - workerId
       - oplogIdx
+    ResourceMetadata:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        indexed:
+          $ref: '#/components/schemas/IndexedWorkerMetadata'
+      required:
+      - createdAt
     ResumeResponse:
       type: object
     Route:
@@ -2920,6 +2942,10 @@ components:
         totalLinearMemorySize:
           type: integer
           format: uint64
+        ownedResources:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ResourceMetadata'
       required:
       - workerId
       - args
@@ -2932,6 +2958,7 @@ components:
       - createdAt
       - componentSize
       - totalLinearMemorySize
+      - ownedResources
     WorkerNameFilter:
       type: object
       properties:

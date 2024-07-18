@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::component::component_service_client::Component
 use golem_common::model::ComponentId;
 
 use crate::components::rdb::Rdb;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 
 pub mod docker;
 pub mod filesystem;
@@ -307,35 +307,51 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    component_compilation_service: Option<(&str, u16)>,
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    let mut builder = EnvVarBuilder::golem_service(verbosity)
-        .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
-        .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
-        .with_str(
-            "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
-            "/tmp/ittest-local-object-store/golem",
-        )
-        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
-        .with_all(rdb.info().env("golem_component"));
+#[async_trait]
+pub trait ComponentServiceEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
 
-    match component_compilation_service {
-        Some((host, port)) => {
-            builder = builder
-                .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
-                .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
-                .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
-        }
-        _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
-    };
+#[async_trait]
+impl ComponentServiceEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        let mut builder = EnvVarBuilder::golem_service(verbosity)
+            .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
+            .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
+            .with_str(
+                "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
+                "/tmp/ittest-local-object-store/golem",
+            )
+            .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+            .with("GOLEM__HTTP_PORT", http_port.to_string())
+            .with_all(rdb.info().env("golem_component"));
 
-    builder.build()
+        match component_compilation_service {
+            Some((host, port)) => {
+                builder = builder
+                    .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
+                    .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
+                    .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
+            }
+            _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
+        };
+
+        builder.build()
+    }
 }
 
 #[derive(Debug)]

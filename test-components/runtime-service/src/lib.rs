@@ -178,6 +178,16 @@ impl Guest for Component {
         workers
     }
 
+    fn get_self_metadata() -> WorkerMetadata {
+        println!("Get self metadata");
+        bindings::golem::api::host::get_self_metadata()
+    }
+
+    fn get_worker_metadata(worker_id: WorkerId) -> Option<WorkerMetadata> {
+        println!("Get worker: {worker_id:?} metadata");
+        bindings::golem::api::host::get_worker_metadata(&worker_id)
+    }
+
     fn update_worker(worker_id: WorkerId, component_version: ComponentVersion, update_mode: UpdateMode) {
         println!(
             "Update worker worker id: {worker_id:?}, component version: {component_version:?}, update mode: {update_mode:?}"

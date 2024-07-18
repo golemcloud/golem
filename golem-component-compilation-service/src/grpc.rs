@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use tracing::Instrument;
 
 use crate::service::CompilationService;
 
@@ -24,7 +26,10 @@ use golem_api_grpc::proto::golem::componentcompilation::{
     component_compilation_error, component_compilation_response, ComponentCompilationError,
     ComponentCompilationRequest, ComponentCompilationResponse,
 };
+use golem_common::grpc::proto_component_id_string;
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::ComponentId;
+use golem_common::recorded_grpc_request;
 use tonic::{Request, Response, Status};
 
 #[derive(Clone)]
@@ -44,9 +49,22 @@ impl GrpcCompilationServer for CompileGrpcService {
         &self,
         request: Request<ComponentCompilationRequest>,
     ) -> Result<tonic::Response<ComponentCompilationResponse>, Status> {
-        let response = match self.enqueue_compilation_impl(request.into_inner()).await {
-            Ok(_) => component_compilation_response::Result::Success(Empty {}),
-            Err(e) => component_compilation_response::Result::Failure(e),
+        let request = request.into_inner();
+        let record = recorded_grpc_request!(
+            "enqueue_compilation",
+            component_id = proto_component_id_string(&request.component_id),
+        );
+
+        let response = match self
+            .enqueue_compilation_impl(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(component_compilation_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                component_compilation_response::Result::Failure(error.clone()),
+                &ComponentCompilationTraceErrorKind(&error),
+            ),
         };
 
         Ok(Response::new(ComponentCompilationResponse {
@@ -106,5 +124,26 @@ fn bad_request_error(error: impl Into<String>) -> ComponentCompilationError {
         error: Some(component_compilation_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.into()],
         })),
+    }
+}
+
+struct ComponentCompilationTraceErrorKind<'a>(&'a ComponentCompilationError);
+
+impl<'a> Debug for ComponentCompilationTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for ComponentCompilationTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                component_compilation_error::Error::BadRequest(_) => "BadRequest",
+                component_compilation_error::Error::NotFound(_) => "NotFound",
+                component_compilation_error::Error::InternalError(_) => "InternalError",
+            },
+        }
     }
 }

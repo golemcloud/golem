@@ -23,7 +23,7 @@ use tracing::Level;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
 
 use crate::components::redis::Redis;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 
 pub mod docker;
 pub mod k8s;
@@ -74,18 +74,33 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    EnvVarBuilder::golem_service(verbosity)
-        .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
-        .with("GOLEM__REDIS__HOST", redis.private_host())
-        .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
-        .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
-        .with("REDIS__HOST", redis.private_host())
-        .build()
+#[async_trait]
+pub trait ShardManagerEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
+
+#[async_trait]
+impl ShardManagerEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        EnvVarBuilder::golem_service(verbosity)
+            .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
+            .with("GOLEM__HTTP_PORT", http_port.to_string())
+            .with("GOLEM__REDIS__HOST", redis.private_host())
+            .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
+            .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
+            .with("REDIS__HOST", redis.private_host())
+            .build()
+    }
 }

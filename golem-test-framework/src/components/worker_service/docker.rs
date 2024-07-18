@@ -15,8 +15,8 @@
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, new_client, WorkerService};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::worker_service::{new_client, WorkerService, WorkerServiceEnvVars};
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use std::collections::HashMap;
@@ -47,17 +47,38 @@ impl DockerWorkerService {
         verbosity: Level,
         shared_client: bool,
     ) -> Self {
-        info!("Starting golem-worker-service container");
-
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            Self::CUSTOM_REQUEST_PORT,
+        Self::new_base(
+            Box::new(GolemEnvVars()),
             component_service,
             shard_manager,
             rdb,
             verbosity,
-        );
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+        shared_client: bool,
+    ) -> Self {
+        info!("Starting golem-worker-service container");
+
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                Self::CUSTOM_REQUEST_PORT,
+                component_service,
+                shard_manager,
+                rdb,
+                verbosity,
+            )
+            .await;
 
         let image = RunnableImage::from(GolemWorkerServiceImage::new(
             Self::GRPC_PORT,

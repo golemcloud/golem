@@ -12,6 +12,9 @@ pub struct FutureGetGlobalValueResult {
 pub struct FutureGetAllDroppedResult {
     pub future_invoke_result: FutureInvokeResult,
 }
+pub struct FutureBugWasmRpcI32Result {
+    pub future_invoke_result: FutureInvokeResult,
+}
 pub struct Counter {
     rpc: WasmRpc,
     id: u64,
@@ -40,6 +43,7 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::Guest for Comp
     type Api = crate::Api;
     type FutureGetGlobalValueResult = crate::FutureGetGlobalValueResult;
     type FutureGetAllDroppedResult = crate::FutureGetAllDroppedResult;
+    type FutureBugWasmRpcI32Result = crate::FutureBugWasmRpcI32Result;
     type Counter = crate::Counter;
     type FutureCounterGetValueResult = crate::FutureCounterGetValueResult;
     type FutureCounterGetArgsResult = crate::FutureCounterGetArgsResult;
@@ -113,6 +117,40 @@ for FutureGetAllDroppedResult {
                         )
                     })
                     .expect("list not found"))
+            })
+    }
+}
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureBugWasmRpcI32Result
+for FutureBugWasmRpcI32Result {
+    fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
+        let pollable = self.future_invoke_result.subscribe();
+        let pollable = unsafe {
+            bindings::wasi::io::poll::Pollable::from_handle(pollable.take_handle())
+        };
+        pollable
+    }
+    fn get(&self) -> Option<crate::bindings::rpc::counters::api::TimelineNode> {
+        self.future_invoke_result
+            .get()
+            .map(|result| {
+                let result = result
+                    .expect(
+                        &format!(
+                            "Failed to invoke remote {}",
+                            "rpc:counters/api.{bug-wasm-rpc-i32}"
+                        ),
+                    );
+                ({
+                    let (case_idx, inner) = result
+                        .tuple_element(0)
+                        .expect("tuple not found")
+                        .variant()
+                        .expect("variant not found");
+                    match case_idx {
+                        0u32 => crate::bindings::rpc::counters::api::TimelineNode::Leaf,
+                        _ => unreachable!("invalid variant case index"),
+                    }
+                })
             })
     }
 }
@@ -214,6 +252,86 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
             .rpc
             .async_invoke_and_await("rpc:counters/api.{get-all-dropped}", &[]);
         crate::bindings::exports::rpc::counters_stub::stub_counters::FutureGetAllDroppedResult::new(FutureGetAllDroppedResult {
+            future_invoke_result: result,
+        })
+    }
+    fn blocking_bug_wasm_rpc_i32(
+        &self,
+        in_: crate::bindings::rpc::counters::api::TimelineNode,
+    ) -> crate::bindings::rpc::counters::api::TimelineNode {
+        let result = self
+            .rpc
+            .invoke_and_await(
+                "rpc:counters/api.{bug-wasm-rpc-i32}",
+                &[
+                    WitValue::builder()
+                        .variant_fn(
+                            match &in_ {
+                                crate::bindings::rpc::counters::api::TimelineNode::Leaf => {
+                                    0u32
+                                }
+                            },
+                            match &in_ {
+                                crate::bindings::rpc::counters::api::TimelineNode::Leaf => {
+                                    true
+                                }
+                            },
+                            |case_builder| match &in_ {
+                                crate::bindings::rpc::counters::api::TimelineNode::Leaf => {
+                                    unreachable!()
+                                }
+                            },
+                        ),
+                ],
+            )
+            .expect(
+                &format!(
+                    "Failed to invoke-and-await remote {}",
+                    "rpc:counters/api.{bug-wasm-rpc-i32}"
+                ),
+            );
+        ({
+            let (case_idx, inner) = result
+                .tuple_element(0)
+                .expect("tuple not found")
+                .variant()
+                .expect("variant not found");
+            match case_idx {
+                0u32 => crate::bindings::rpc::counters::api::TimelineNode::Leaf,
+                _ => unreachable!("invalid variant case index"),
+            }
+        })
+    }
+    fn bug_wasm_rpc_i32(
+        &self,
+        in_: crate::bindings::rpc::counters::api::TimelineNode,
+    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureBugWasmRpcI32Result {
+        let result = self
+            .rpc
+            .async_invoke_and_await(
+                "rpc:counters/api.{bug-wasm-rpc-i32}",
+                &[
+                    WitValue::builder()
+                        .variant_fn(
+                            match &in_ {
+                                crate::bindings::rpc::counters::api::TimelineNode::Leaf => {
+                                    0u32
+                                }
+                            },
+                            match &in_ {
+                                crate::bindings::rpc::counters::api::TimelineNode::Leaf => {
+                                    true
+                                }
+                            },
+                            |case_builder| match &in_ {
+                                crate::bindings::rpc::counters::api::TimelineNode::Leaf => {
+                                    unreachable!()
+                                }
+                            },
+                        ),
+                ],
+            );
+        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureBugWasmRpcI32Result::new(FutureBugWasmRpcI32Result {
             future_invoke_result: result,
         })
     }
