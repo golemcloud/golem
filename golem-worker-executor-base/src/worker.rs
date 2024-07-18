@@ -1628,33 +1628,6 @@ impl RunningWorker {
         }
     }
 
-
-    fn validate_input(metadata: &Vec<Export>, function_name: &str, params: Vec<Value>) -> Result<Vec<golem_wasm_rpc::protobuf::Val>, GolemError> {
-        let function_type = exports::function_by_name(metadata, &function_name)
-            .map_err(|err| {
-                GolemError::invalid_request(format!(
-                    "Failed to parse the function name: {}",
-                    err
-                ))
-            })?
-            .ok_or_else(|| {
-                GolemError::invalid_request(format!(
-                    "Failed to find the function {}",
-                    &function_name,
-                ))
-            })?;
-
-
-        let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                CallingConvention::Component,
-            )
-            .map_err(|err| GolemError::invalid_request(err.join(", ")))?;
-
-        Ok(params_val)
-    }
-
     fn get_expected_function_parameters(
         function_name: &str,
         function_type: &ExportFunction,

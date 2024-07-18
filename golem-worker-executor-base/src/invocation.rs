@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::protobuf::{type_annotated_value, TypeAnnotatedValue, TypedHandle, TypedTuple};
+use golem_wasm_rpc::protobuf::{Type, type_annotated_value, TypeAnnotatedValue, TypedHandle, TypedTuple};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
@@ -287,12 +287,10 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             debug!("Using existing indexed resource with id {resource_id}");
             Ok(InvokeResult::from_success(
                 0,
-                type_annotated_value::TypeAnnotatedValue::Tuple(
-                    TypedTuple {
-                        value: vec![type_annotated_value::TypeAnnotatedValue::Han]
-                    }
-                )
-
+                vec![Value::Handle {
+                    uri: store.data().self_uri(),
+                    resource_id,
+                }],
             ))
         }
         None => {
@@ -322,11 +320,14 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             if let InvokeResult::Succeeded { output, .. } = &constructor_result {
                 if let Some(Value::Handle { resource_id, .. }) = output.first() {
                     debug!("Storing indexed resource with id {resource_id}");
-                    store.data_mut().store_indexed_resource(
-                        resource_name,
-                        raw_constructor_params,
-                        *resource_id,
-                    );
+                    store
+                        .data_mut()
+                        .store_indexed_resource(
+                            resource_name,
+                            raw_constructor_params,
+                            *resource_id,
+                        )
+                        .await;
                 } else {
                     return Err(GolemError::invalid_request(
                         "Resource constructor did not return a resource handle",
@@ -373,32 +374,6 @@ async fn invoke<Ctx: WorkerCtx>(
                 resource.resource_drop_async(&mut store).await?;
             }
 
-            let component_metadata =
-                store.as_context().data().component_metadata().clone();
-
-            let function_type = exports::function_by_name(&component_metadata.exports, &full_function_name)
-                .map_err(|err| {
-                    GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
-                })?
-                .ok_or_else(|| {
-                    GolemError::invalid_request(format!(
-                        "Failed to find the function {}",
-                        &full_function_name,
-                    ))
-                })?;
-
-            let function_results: Vec<AnalysedFunctionResult> = function_type
-                .results
-                .iter()
-                .map(|x| x.clone().into())
-                .collect();
-
-            let output = results
-                .validate_function_result(function_results, calling_convention)
-                .map_err(|err| GolemError::ValueMismatch {
-                    details: err.join(", "),
-                })?;
-
             match results {
                 Ok(results) => {
                     let types = function.results(&store);
@@ -409,11 +384,7 @@ async fn invoke<Ctx: WorkerCtx>(
                         output.push(result_value);
                     }
 
-                    let result =
-                        output.validate_function_result(vec![], CallingConvention::Component)?;
-
-
-                    Ok(InvokeResult::from_success(consumed_fuel, result))
+                    Ok(InvokeResult::from_success(consumed_fuel, output))
                 }
                 Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
             }
@@ -564,7 +535,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: i64,
-        output: type_annotated_value::TypeAnnotatedValue
+        output: Vec<Value>
     },
     /// The function was running but got interrupted
     Interrupted {
@@ -574,7 +545,7 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
-    pub fn from_success(consumed_fuel: i64, output: type_annotated_value::TypeAnnotatedValue) -> Self {
+    pub fn from_success(consumed_fuel: i64, output: Vec<Value>) -> Self {
         InvokeResult::Succeeded {
             consumed_fuel,
             output,
