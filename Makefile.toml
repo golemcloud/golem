@@ -260,6 +260,7 @@ script = '''
 rm -rf logs data
 mkdir -pv logs data
 
+export RUST_LOG=info,golem_test_framework::components=WARN
 export RUST_BACKTRACE=1
 export GOLEM__TRACING__FILE_DIR=../logs
 export GOLEM__TRACING__FILE_TRUNCATE=false
