@@ -35,13 +35,13 @@ use crate::config::WorkerServiceCloudConfig;
 use crate::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
 use crate::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
 use crate::service::api_certificate::{
-    AwsCertificateManager, CertificateManager, CertificateService, CertificateServiceDefault,
-    CertificateServiceNoop,
+    AwsCertificateManager, CertificateManager, CertificateManagerNoop, CertificateService,
+    CertificateServiceDefault, CertificateServiceNoop,
 };
 use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceDefault};
 use crate::service::api_domain::{
     ApiDomainService, ApiDomainServiceDefault, ApiDomainServiceNoop, AwsDomainRoute,
-    RegisterDomainRoute, RegisterDomainRouteNoop,
+    InMemoryRegisterDomain, RegisterDomainRoute, RegisterDomainRouteNoop,
 };
 use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 use crate::service::auth::{
@@ -169,19 +169,21 @@ pub async fn get_api_services(
         ApiDeploymentServiceDefault::new(api_deployment_repo.clone(), api_definition_repo.clone()),
     );
 
-    let (domain_route, domain_service, certificate_service) = if config.is_local_env() {
+    let (domain_route, domain_register_service, certificate_manager) = if config.is_local_env() {
         let domain_route: Arc<dyn RegisterDomainRoute + Sync + Send> =
             Arc::new(RegisterDomainRouteNoop::new(
                 &config.base_config.environment,
                 "golem.cloud.local",
                 &config.cloud_specific_config.domain_records,
             ));
-        let domain_service: Arc<dyn ApiDomainService + Sync + Send> =
-            Arc::new(ApiDomainServiceNoop::default());
-        let certificate_service: Arc<dyn CertificateService + Sync + Send> =
-            Arc::new(CertificateServiceNoop::default());
 
-        (domain_route, domain_service, certificate_service)
+        let certificate_manager: Arc<dyn CertificateManager + Sync + Send> =
+            Arc::new(CertificateManagerNoop::default());
+
+        let domain_register_service: Arc<dyn RegisterDomain + Sync + Send> =
+            Arc::new(InMemoryRegisterDomain::default());
+
+        (domain_route, domain_register_service, certificate_manager)
     } else {
         let aws_config = AwsConfig::from_k8s_env();
 
@@ -247,22 +249,22 @@ pub async fn get_api_services(
             AwsRegisterDomain::new(&aws_config, &config.cloud_specific_config.domain_records),
         );
 
-        let domain_service: Arc<dyn ApiDomainService + Sync + Send> =
-            Arc::new(ApiDomainServiceDefault::new(
-                auth_service.clone(),
-                domain_register_service.clone(),
-                api_domain_repo.clone(),
-            ));
-
-        let certificate_service: Arc<dyn CertificateService + Sync + Send> =
-            Arc::new(CertificateServiceDefault::new(
-                auth_service.clone(),
-                certificate_manager.clone(),
-                api_certificate_repo.clone(),
-            ));
-
-        (domain_route, domain_service, certificate_service)
+        (domain_route, domain_register_service, certificate_manager)
     };
+
+    let domain_service: Arc<dyn ApiDomainService + Sync + Send> =
+        Arc::new(ApiDomainServiceDefault::new(
+            auth_service.clone(),
+            domain_register_service.clone(),
+            api_domain_repo.clone(),
+        ));
+
+    let certificate_service: Arc<dyn CertificateService + Sync + Send> =
+        Arc::new(CertificateServiceDefault::new(
+            auth_service.clone(),
+            certificate_manager.clone(),
+            api_certificate_repo.clone(),
+        ));
 
     let limit_service: Arc<dyn LimitService + Sync + Send> = Arc::new(LimitServiceDefault::new(
         &config.cloud_specific_config.cloud_service,
