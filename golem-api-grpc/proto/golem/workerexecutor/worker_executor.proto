@@ -30,7 +30,6 @@ service WorkerExecutor {
   rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseJson);
   rpc InvokeAndAwaitWorkerJsonTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
-  rpc InvokeWorkerJson(InvokeWorkerRequestJson) returns (InvokeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
   rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
@@ -158,18 +157,6 @@ message InvokeWorkerRequest {
   golem.common.ResourceLimits account_limits = 6;
   optional golem.worker.InvocationContext context = 7;
 }
-
-
-message InvokeWorkerRequestJson {
-  golem.worker.WorkerId worker_id = 1;
-  string name = 2;
-  repeated golem.common.JsonValue input = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
-  golem.common.AccountId account_id = 5;
-  golem.common.ResourceLimits account_limits = 6;
-  optional golem.worker.InvocationContext context = 7;
-}
-
 
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;

@@ -34,13 +34,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerRequestJson, InvokeAndAwaitWorkerResponseJson,
-    InvokeAndAwaitWorkerResponseTyped, InvokeWorkerRequestJson, InvokeWorkerResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse,
-};
+use golem_api_grpc::proto::golem::workerexecutor::{ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseJson, InvokeAndAwaitWorkerResponseTyped, InvokeWorkerRequestJson, InvokeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse};
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_worker_id_string,
@@ -1335,7 +1329,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_and_await_worker(
         &self,
-        request: Request<golem::workerexecutor::InvokeAndAwaitWorkerRequest>,
+        request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeAndAwaitWorkerResponse>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_request!(
@@ -1375,7 +1369,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_and_await_worker_json(
         &self,
-        request: Request<InvokeAndAwaitWorkerRequestJson>,
+        request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<InvokeAndAwaitWorkerResponseJson>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_request!(
@@ -1416,7 +1410,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_and_await_worker_json_typed(
         &self,
-        request: Request<InvokeAndAwaitWorkerRequestJson>,
+        request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_request!(
@@ -1953,63 +1947,6 @@ trait GrpcInvokeRequest {
     fn parent(&self) -> Option<WorkerId>;
 }
 
-impl GrpcInvokeRequest for InvokeWorkerRequestJson {
-    type FunctionInput = Vec<serde_json::Value>;
-    fn account_id(&self) -> Result<AccountId, GolemError> {
-        Ok(self
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits.clone()
-    }
-
-    fn calling_convention(&self) -> CallingConvention {
-        CallingConvention::Component
-    }
-
-    fn input(&self) -> Self::FunctionInput {
-        self.input.iter().map(|v| v.to_serde_json_value()).collect()
-    }
-
-    fn worker_id(&self) -> Result<WorkerId, GolemError> {
-        self.worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)
-    }
-
-    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
-    }
-
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        self.context.as_ref().map(|ctx| ctx.args.clone())
-    }
-
-    fn env(&self) -> Option<Vec<(String, String)>> {
-        self.context
-            .as_ref()
-            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
-    }
-
-    fn parent(&self) -> Option<WorkerId> {
-        self.context.as_ref().and_then(|ctx| {
-            ctx.parent
-                .as_ref()
-                .and_then(|worker_id| worker_id.clone().try_into().ok())
-        })
-    }
-}
-
 impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
     type FunctionInput = Vec<Val>;
 
@@ -2043,67 +1980,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
         Ok(None)
-    }
-
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        self.context.as_ref().map(|ctx| ctx.args.clone())
-    }
-
-    fn env(&self) -> Option<Vec<(String, String)>> {
-        self.context
-            .as_ref()
-            .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
-    }
-
-    fn parent(&self) -> Option<WorkerId> {
-        self.context.as_ref().and_then(|ctx| {
-            ctx.parent
-                .as_ref()
-                .and_then(|worker_id| worker_id.clone().try_into().ok())
-        })
-    }
-}
-
-impl GrpcInvokeRequest for golem::workerexecutor::InvokeAndAwaitWorkerRequestJson {
-    type FunctionInput = Vec<serde_json::Value>;
-
-    fn account_id(&self) -> Result<AccountId, GolemError> {
-        Ok(self
-            .account_id
-            .clone()
-            .ok_or(GolemError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        self.account_limits.clone()
-    }
-
-    fn calling_convention(&self) -> CallingConvention {
-        match self.calling_convention() {
-            golem::worker::CallingConvention::Component => CallingConvention::Component,
-            golem::worker::CallingConvention::Stdio => CallingConvention::Stdio,
-        }
-    }
-
-    fn input(&self) -> Self::FunctionInput {
-        self.input.iter().map(|v| v.to_serde_json_value()).collect()
-    }
-
-    fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
-        self.worker_id
-            .clone()
-            .ok_or(GolemError::invalid_request("worker_id not found"))?
-            .try_into()
-            .map_err(GolemError::invalid_request)
-    }
-
-    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError> {
-        Ok(self.idempotency_key.clone().map(IdempotencyKey::from))
     }
 
     fn name(&self) -> String {
