@@ -372,7 +372,7 @@ where
             move |worker_executor_client| {
                 info!("Invoking function on {}: {}", worker_id_clone, function_name);
                 Box::pin(worker_executor_client.invoke_and_await_worker_json(
-                    InvokeAndAwaitWorkerRequestJson {
+                    InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params_.clone(),
@@ -442,7 +442,7 @@ where
             move |worker_executor_client| {
                 info!("Invoking function on {}: {}", worker_id_clone, function_name);
                 Box::pin(worker_executor_client.invoke_and_await_worker_json_typed(
-                    InvokeAndAwaitWorkerRequestJson {
+                    InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params_.clone(),
