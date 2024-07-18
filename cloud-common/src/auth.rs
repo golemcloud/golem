@@ -43,21 +43,36 @@ pub struct WrappedGolemSecuritySchema(pub GolemSecurityScheme);
 
 impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
     async fn from_request(req: &'a Request, body: &mut poem::RequestBody) -> poem::Result<Self> {
-        tracing::info!("Extracting security scheme");
-        let result = <GolemSecurityScheme as poem_openapi::ApiExtractor<'a>>::from_request(
-            req,
-            body,
-            Default::default(),
-        )
-        .await;
+        use poem::web::cookie::CookieJar;
+        use poem::web::headers::{authorization::Bearer as BearerWeb, Authorization, HeaderMapExt};
 
-        match result {
-            Ok(scheme) => Ok(WrappedGolemSecuritySchema(scheme)),
-            Err(e) => {
-                tracing::info!("Failed to extract security scheme: {e}");
-                Err(e)
-            }
+        fn extract_bearer_token(req: &Request) -> Option<GolemSecurityScheme> {
+            req.headers()
+                .typed_get::<Authorization<BearerWeb>>()
+                .and_then(|Authorization(bearer)| TokenSecret::from_str(bearer.token()).ok())
+                .map(|token| GolemSecurityScheme::Bearer(GolemBearer(token)))
         }
+
+        fn extract_cookie_token(cookie_jar: &CookieJar) -> Option<GolemSecurityScheme> {
+            cookie_jar
+                .get(COOKIE_KEY)
+                .and_then(|cookie| TokenSecret::from_str(cookie.value_str()).ok())
+                .map(|token| GolemSecurityScheme::Cookie(GolemCookie(token)))
+        }
+
+        let cookie_jar = <&CookieJar>::from_request(req, body).await.map_err(|e| {
+            tracing::info!("Failed to extract cookie jar: {e}");
+            e
+        })?;
+
+        let result = extract_bearer_token(req)
+            .or_else(|| extract_cookie_token(cookie_jar))
+            .ok_or_else(|| {
+                tracing::info!("No valid token or cookie present, returning error");
+                poem::Error::from_string(AUTH_ERROR_MESSAGE, http::StatusCode::UNAUTHORIZED)
+            })?;
+
+        Ok(WrappedGolemSecuritySchema(result))
     }
 }
 
@@ -90,15 +105,16 @@ pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
 mod test {
     use http::StatusCode;
     use poem::{
+        middleware::CookieJarManager,
         test::{TestClient, TestResponse},
         web::cookie::Cookie as PoemCookie,
-        Request,
+        EndpointExt, Request,
     };
     use poem_openapi::{payload::PlainText, OpenApi, OpenApiService};
 
     use crate::auth::AUTH_ERROR_MESSAGE;
 
-    use super::{GolemSecurityScheme, COOKIE_KEY};
+    use super::{GolemSecurityScheme, WrappedGolemSecuritySchema, COOKIE_KEY};
 
     struct TestApi;
 
@@ -110,14 +126,23 @@ mod test {
             _request: &Request,
             auth: GolemSecurityScheme,
         ) -> poem::Result<PlainText<String>> {
-            let prefix = match auth {
-                GolemSecurityScheme::Bearer(_) => "bearer",
-                GolemSecurityScheme::Cookie(_) => "cookie",
-            };
-            let value = auth.secret().value;
-
-            Ok(PlainText(format!("{prefix}: {value}")))
+            Ok(handle_security_scheme(auth))
         }
+    }
+
+    #[poem::handler]
+    fn handle(auth: WrappedGolemSecuritySchema) -> impl poem::IntoResponse {
+        handle_security_scheme(auth.0)
+    }
+
+    fn handle_security_scheme(auth: GolemSecurityScheme) -> PlainText<String> {
+        let prefix = match auth {
+            GolemSecurityScheme::Bearer(_) => "bearer",
+            GolemSecurityScheme::Cookie(_) => "cookie",
+        };
+        let value = auth.secret().value;
+
+        PlainText(format!("{prefix}: {value}"))
     }
 
     const VALID_UUID: &str = "0f1983af-993b-40ce-9f52-194c864d6aa3";
@@ -171,78 +196,130 @@ mod test {
         poem::Route::new().nest("/", OpenApiService::new(TestApi, "test", "1.0"))
     }
 
-    #[tokio::test]
-    async fn bearer_valid_auth_openapi() {
-        let api = make_openapi();
+    fn make_non_openapi() -> poem::Route {
+        let route = poem::Route::new()
+            .at("/test", handle)
+            .with(CookieJarManager::new());
+
+        poem::Route::new().nest("/", route)
+    }
+
+    async fn bearer_valid_auth(api: poem::Route) {
         let client = TestClient::new(api);
-
         let response = make_bearer_request(&client, VALID_UUID).await;
-
         response.assert_status_is_ok();
         response.assert_text(format!("bearer: {VALID_UUID}")).await;
     }
 
-    #[tokio::test]
-    async fn cookie_valid_auth_openapi() {
-        let api = make_openapi();
+    async fn cookie_valid_auth(api: poem::Route) {
         let client = TestClient::new(api);
-
         let response = make_cookie_request(&client, VALID_UUID).await;
-
         response.assert_status_is_ok();
         response.assert_text(format!("cookie: {VALID_UUID}")).await;
     }
 
-    #[tokio::test]
-    async fn no_auth_openapi() {
-        let api = make_openapi();
+    async fn no_auth(api: poem::Route) {
         let client = TestClient::new(api);
-
         let response = client.get("/test").send().await;
-
         response.assert_status(StatusCode::UNAUTHORIZED);
         response.assert_text(AUTH_ERROR_MESSAGE).await;
     }
 
+    async fn conflict_bearer_valid(api: poem::Route) {
+        let client = TestClient::new(api);
+        let response = make_both_request(&client, VALID_UUID, "invalid").await;
+        response.assert_status_is_ok();
+    }
+
+    async fn conflict_cookie_valid(api: poem::Route) {
+        let client = TestClient::new(api);
+        let response = make_both_request(&client, "invalid", VALID_UUID).await;
+        response.assert_status_is_ok();
+    }
+
+    async fn conflict_both_uuid_invalid_cookie_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        let other_uuid = uuid::Uuid::new_v4().to_string();
+        let response = make_both_request(&client, VALID_UUID, other_uuid.as_str()).await;
+        response.assert_status_is_ok();
+    }
+
+    async fn conflict_both_uuid_invalid_bearer_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        let other_uuid = uuid::Uuid::new_v4().to_string();
+        let response = make_both_request(&client, other_uuid.as_str(), VALID_UUID).await;
+        response.assert_status_is_ok();
+    }
+
+    // OpenAPI tests
+    #[tokio::test]
+    async fn bearer_valid_auth_openapi() {
+        bearer_valid_auth(make_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn cookie_valid_auth_openapi() {
+        cookie_valid_auth(make_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn no_auth_openapi() {
+        no_auth(make_openapi()).await;
+    }
+
     #[tokio::test]
     async fn conflict_bearer_valid_openapi() {
-        let api = make_openapi();
-        let client = TestClient::new(api);
-
-        let response = make_both_request(&client, VALID_UUID, "invalid").await;
-
-        response.assert_status_is_ok();
+        conflict_bearer_valid(make_openapi()).await;
     }
 
     #[tokio::test]
     async fn conflict_cookie_valid_openapi() {
-        let api = make_openapi();
-        let client = TestClient::new(api);
-
-        let response = make_both_request(&client, "invalid", VALID_UUID).await;
-
-        response.assert_status_is_ok();
+        conflict_cookie_valid(make_openapi()).await;
     }
 
     #[tokio::test]
     async fn conflict_both_uuid_invalid_cookie_auth_openapi() {
-        let api = make_openapi();
-        let client = TestClient::new(api);
-
-        let other_uuid = uuid::Uuid::new_v4().to_string();
-        let response = make_both_request(&client, VALID_UUID, other_uuid.as_str()).await;
-
-        response.assert_status_is_ok();
+        conflict_both_uuid_invalid_cookie_auth(make_openapi()).await;
     }
 
     #[tokio::test]
     async fn conflict_both_uuid_invalid_bearer_auth_openapi() {
-        let api = make_openapi();
-        let client = TestClient::new(api);
+        conflict_both_uuid_invalid_bearer_auth(make_openapi()).await;
+    }
 
-        let other_uuid = uuid::Uuid::new_v4().to_string();
-        let response = make_both_request(&client, other_uuid.as_str(), VALID_UUID).await;
+    // Non-OpenAPI tests
+    #[tokio::test]
+    async fn bearer_valid_auth_non_openapi() {
+        bearer_valid_auth(make_non_openapi()).await;
+    }
 
-        response.assert_status_is_ok();
+    #[tokio::test]
+    async fn cookie_valid_auth_non_openapi() {
+        cookie_valid_auth(make_non_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn no_auth_non_openapi() {
+        no_auth(make_non_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn conflict_bearer_valid_non_openapi() {
+        conflict_bearer_valid(make_non_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn conflict_cookie_valid_non_openapi() {
+        conflict_cookie_valid(make_non_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn conflict_both_uuid_invalid_cookie_auth_non_openapi() {
+        conflict_both_uuid_invalid_cookie_auth(make_non_openapi()).await;
+    }
+
+    #[tokio::test]
+    async fn conflict_both_uuid_invalid_bearer_auth_non_openapi() {
+        conflict_both_uuid_invalid_bearer_auth(make_non_openapi()).await;
     }
 }
