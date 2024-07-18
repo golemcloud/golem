@@ -9,6 +9,7 @@ use golem_cli::model::{
     ApiDeployment, ComponentId, ComponentIdOrName, ComponentName, WorkerMetadata,
     WorkersMetadataResponse,
 };
+use golem_client::model::{IndexedWorkerMetadata, ResourceMetadata};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -427,6 +428,22 @@ impl ToOss<golem_client::model::UpdateRecord> for golem_cloud_client::model::Upd
 
 impl ToCli<WorkerMetadata> for golem_cloud_client::model::WorkerMetadata {
     fn to_cli(self) -> WorkerMetadata {
+        fn to_oss_indexed_resource(
+            m: golem_cloud_client::model::IndexedWorkerMetadata,
+        ) -> IndexedWorkerMetadata {
+            IndexedWorkerMetadata {
+                resource_name: m.resource_name,
+                resource_params: m.resource_params,
+            }
+        }
+
+        fn to_oss_resource(m: golem_cloud_client::model::ResourceMetadata) -> ResourceMetadata {
+            ResourceMetadata {
+                created_at: m.created_at,
+                indexed: m.indexed.map(to_oss_indexed_resource),
+            }
+        }
+
         let golem_cloud_client::model::WorkerMetadata {
             worker_id,
             account_id,
@@ -441,6 +458,7 @@ impl ToCli<WorkerMetadata> for golem_cloud_client::model::WorkerMetadata {
             last_error,
             component_size,
             total_linear_memory_size,
+            owned_resources,
         } = self;
 
         WorkerMetadata {
@@ -457,6 +475,10 @@ impl ToCli<WorkerMetadata> for golem_cloud_client::model::WorkerMetadata {
             last_error,
             component_size,
             total_linear_memory_size,
+            owned_resources: owned_resources
+                .into_iter()
+                .map(|(k, v)| (k, to_oss_resource(v)))
+                .collect(),
         }
     }
 }
