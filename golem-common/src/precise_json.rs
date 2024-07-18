@@ -34,9 +34,7 @@ pub enum PreciseJson {
 }
 
 #[derive(Error, Debug)]
-pub enum PreciseJsonError {
-    #[error("Unexpected JSON type")]
-    UnexpectedJsonType,
+pub enum PreciseJsonConversionError {
     #[error("Missing field `{0}`")]
     MissingField(String),
     #[error("Invalid value: {0}")]
@@ -46,13 +44,13 @@ pub enum PreciseJsonError {
 }
 
 impl TryFrom<JsonValue> for PreciseJson {
-    type Error = PreciseJsonError;
+    type Error = PreciseJsonConversionError;
 
     fn try_from(value: JsonValue) -> Result<Self, Self::Error> {
         match value {
             JsonValue::Object(obj) => {
                 if obj.len() != 1 {
-                    return Err(PreciseJsonError::InvalidTypeAnnotation(format!(
+                    return Err(PreciseJsonConversionError::InvalidTypeAnnotation(format!(
                         "Expected a single key, found {} keys",
                         obj.len()
                     )));
@@ -62,7 +60,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                 match key.as_str() {
                     "bool" => match value {
                         JsonValue::Bool(b) => Ok(PreciseJson::Bool(b)),
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected boolean value".to_string(),
                         )),
                     },
@@ -70,7 +68,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_i64() => {
                             Ok(PreciseJson::S8(n.as_i64().unwrap() as i8))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected s8 value".to_string(),
                         )),
                     },
@@ -78,7 +76,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_u64() => {
                             Ok(PreciseJson::U8(n.as_u64().unwrap() as u8))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected u8 value".to_string(),
                         )),
                     },
@@ -86,7 +84,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_i64() => {
                             Ok(PreciseJson::S16(n.as_i64().unwrap() as i16))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected s16 value".to_string(),
                         )),
                     },
@@ -94,7 +92,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_u64() => {
                             Ok(PreciseJson::U16(n.as_u64().unwrap() as u16))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected u16 value".to_string(),
                         )),
                     },
@@ -102,7 +100,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_i64() => {
                             Ok(PreciseJson::S32(n.as_i64().unwrap() as i32))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected s32 value".to_string(),
                         )),
                     },
@@ -110,7 +108,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_u64() => {
                             Ok(PreciseJson::U32(n.as_u64().unwrap() as u32))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected u32 value".to_string(),
                         )),
                     },
@@ -118,7 +116,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_i64() => {
                             Ok(PreciseJson::S64(n.as_i64().unwrap()))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected s64 value".to_string(),
                         )),
                     },
@@ -126,7 +124,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_u64() => {
                             Ok(PreciseJson::U64(n.as_u64().unwrap()))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected u64 value".to_string(),
                         )),
                     },
@@ -134,7 +132,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_f64() => {
                             Ok(PreciseJson::F32(n.as_f64().unwrap() as f32))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected f32 value".to_string(),
                         )),
                     },
@@ -142,7 +140,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_f64() => {
                             Ok(PreciseJson::F64(n.as_f64().unwrap()))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected f64 value".to_string(),
                         )),
                     },
@@ -150,13 +148,13 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::String(s) if s.chars().count() == 1 => {
                             Ok(PreciseJson::Chr(s.chars().next().unwrap()))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected single character".to_string(),
                         )),
                     },
                     "str" => match value {
                         JsonValue::String(s) => Ok(PreciseJson::Str(s)),
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected string value".to_string(),
                         )),
                     },
@@ -166,7 +164,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                                 arr.into_iter().map(PreciseJson::try_from).collect();
                             elems.map(PreciseJson::List)
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected list value".to_string(),
                         )),
                     },
@@ -176,7 +174,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                                 arr.into_iter().map(PreciseJson::try_from).collect();
                             elems.map(PreciseJson::Tuple)
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected tuple value".to_string(),
                         )),
                     },
@@ -188,27 +186,28 @@ impl TryFrom<JsonValue> for PreciseJson {
                                 .collect();
                             record_elems.map(PreciseJson::Record)
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected record value".to_string(),
                         )),
                     },
                     "variant" => match value {
                         JsonValue::Object(variant) => {
-                            let case_name = variant
-                                .get("case_name")
-                                .and_then(|v| v.as_str())
-                                .ok_or(PreciseJsonError::MissingField("case_name".to_string()))?
-                                .to_string();
+                            let case_idx = variant.get("case_idx")
+                                .and_then(|v| v.as_number().and_then(|n| n.as_i64()))
+                                .ok_or_else(|| PreciseJsonConversionError::MissingField("case_idx".to_string()))
+                                .and_then(|idx| u32::try_from(idx)
+                                    .map_err(|_| PreciseJsonConversionError::InvalidValue("Invalid index for variant".to_string())))?;
+
                             let case_value = variant
                                 .get("case_value")
-                                .ok_or(PreciseJsonError::MissingField("case_value".to_string()))
+                                .ok_or(PreciseJsonConversionError::MissingField("case_value".to_string()))
                                 .and_then(|v| PreciseJson::try_from(v.clone()))?;
                             Ok(PreciseJson::Variant {
-                                case_name,
+                                case_idx,
                                 case_value: Box::new(case_value),
                             })
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected variant value".to_string(),
                         )),
                     },
@@ -216,7 +215,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                         JsonValue::Number(n) if n.is_u64() => {
                             Ok(PreciseJson::Enum(n.as_u64().unwrap() as u32))
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected enum value".to_string(),
                         )),
                     },
@@ -226,14 +225,14 @@ impl TryFrom<JsonValue> for PreciseJson {
                                 .into_iter()
                                 .map(|v| match v {
                                     JsonValue::Bool(b) => Ok(b),
-                                    _ => Err(PreciseJsonError::InvalidValue(
+                                    _ => Err(PreciseJsonConversionError::InvalidValue(
                                         "Expected boolean value in flags".to_string(),
                                     )),
                                 })
                                 .collect();
                             flags.map(PreciseJson::Flags)
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected flags value".to_string(),
                         )),
                     },
@@ -247,7 +246,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                     "result" => match value {
                         JsonValue::Object(result) => {
                             if result.len() != 1 {
-                                return Err(PreciseJsonError::InvalidValue(
+                                return Err(PreciseJsonConversionError::InvalidValue(
                                     "Expected result object with exactly one field".to_string(),
                                 ));
                             }
@@ -259,21 +258,21 @@ impl TryFrom<JsonValue> for PreciseJson {
                                 "err" => Ok(PreciseJson::Result(Err(Box::new(
                                     PreciseJson::try_from(v)?,
                                 )))),
-                                _ => Err(PreciseJsonError::InvalidValue(
+                                _ => Err(PreciseJsonConversionError::InvalidValue(
                                     "Expected result key to be 'Ok' or 'Err'".to_string(),
                                 )),
                             }
                         }
-                        _ => Err(PreciseJsonError::InvalidValue(
+                        _ => Err(PreciseJsonConversionError::InvalidValue(
                             "Expected result key to be 'Ok' or 'Err'".to_string(),
                         )),
                     },
-                    _ => Err(PreciseJsonError::InvalidValue(
+                    _ => Err(PreciseJsonConversionError::InvalidValue(
                         "Expected result object".to_string(),
                     )),
                 }
             }
-            _ => Err(PreciseJsonError::InvalidValue(
+            _ => Err(PreciseJsonConversionError::InvalidValue(
                 "Expected object".to_string(),
             )),
         }
@@ -304,7 +303,7 @@ impl From<PreciseJson> for golem_wasm_rpc::Value {
             ),
             PreciseJson::Record(r) => golem_wasm_rpc::Value::Record(
                 r.into_iter()
-                    .map(|(k, v)| golem_wasm_rpc::Value::from(v))
+                    .map(|(_, v)| golem_wasm_rpc::Value::from(v))
                     .collect(),
             ),
             PreciseJson::Variant {
@@ -321,10 +320,10 @@ impl From<PreciseJson> for golem_wasm_rpc::Value {
                 option.map(|v| Box::new(golem_wasm_rpc::Value::from(*v))),
             ),
             PreciseJson::Result(result) => match result {
-                Ok(precise_json) => golem_wasm_rpc::Value::Result(Result::Ok(Some(Box::new(
+                Ok(precise_json) => golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
                     golem_wasm_rpc::Value::from(*precise_json),
                 )))),
-                Err(precise_json) => golem_wasm_rpc::Value::Result(Result::Err(Some(Box::new(
+                Err(precise_json) => golem_wasm_rpc::Value::Result(Err(Some(Box::new(
                     golem_wasm_rpc::Value::from(*precise_json),
                 )))),
             },
@@ -388,7 +387,7 @@ mod typed_json_tests {
     fn test_precise_json_variant() {
         let json_value = json!({
             "variant": {
-                "case_name": "SomeCase",
+                "case_idx": 1,
                 "case_value": { "u32": 42 }
             }
         });
@@ -396,7 +395,7 @@ mod typed_json_tests {
         assert_eq!(
             precise_json,
             PreciseJson::Variant {
-                case_name: "SomeCase".to_string(),
+                case_idx: 1,
                 case_value: Box::new(PreciseJson::U32(42))
             }
         );
