@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, Up
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerRequestJson,
+    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
     ResumeWorkerRequest, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
@@ -126,7 +126,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<PreciseJson>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
@@ -555,25 +555,27 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<Value>,
+        params: Vec<PreciseJson>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
+
+        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
+            .into_iter()
+            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
+            .collect::<Vec<_>>();
 
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(
-                    worker_executor_client.invoke_worker_json(
-                        workerexecutor::InvokeWorkerRequestJson {
+                    worker_executor_client.invoke_worker(
+                        workerexecutor::InvokeWorkerRequest {
                             worker_id: Some(worker_id.into()),
                             name: function_name.clone(),
-                            input: params
-                                .iter()
-                                .map(JsonValue::from_serde_json_value)
-                                .collect::<Vec<_>>(),
+                            input: params_,
                             idempotency_key: idempotency_key.clone().map(|v| v.into()),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
                             account_limits: metadata.limits.clone().map(|id| id.into()),
