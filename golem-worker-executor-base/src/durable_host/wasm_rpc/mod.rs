@@ -121,10 +121,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await;
 
         match result {
-            Ok(result) => {
-                debug!("RPC result: {result:?}");
-                Ok(Ok(result))
-            }
+            Ok(result) => Ok(Ok(result)),
             Err(err) => {
                 error!("RPC error: {err}");
                 Ok(Err(err.into()))
