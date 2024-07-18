@@ -1,3 +1,5 @@
+CREATE EXTENSION pgcrypto;
+
 CREATE TABLE IF NOT EXISTS plans (
     plan_id UUID,
     project_limit INTEGER NOT NULL,

@@ -8,11 +8,11 @@ use tokio::select;
 
 use crate::config::WorkerServiceCloudConfig;
 use crate::service::ApiServices;
-use crate::service::{get_api_services, get_api_services_local};
+use crate::service::{get_api_services, get_api_services_noop};
 use crate::{api, grpcapi};
 
 pub fn get_openapi_yaml(config: &WorkerServiceCloudConfig) -> String {
-    let services = get_api_services_local(config);
+    let services = get_api_services_noop(config);
     api::make_open_api_service(services).spec_yaml()
 }
 
@@ -30,11 +30,7 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
             .build(),
     );
 
-    let services: ApiServices = if config.is_local_env() {
-        get_api_services_local(config)
-    } else {
-        get_api_services(config).await?
-    };
+    let services: ApiServices = get_api_services(config).await?;
 
     let config = config.base_config.clone();
 

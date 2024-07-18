@@ -169,83 +169,100 @@ pub async fn get_api_services(
         ApiDeploymentServiceDefault::new(api_deployment_repo.clone(), api_definition_repo.clone()),
     );
 
-    let aws_config = AwsConfig::from_k8s_env();
+    let (domain_route, domain_service, certificate_service) = if config.is_local_env() {
+        let domain_route: Arc<dyn RegisterDomainRoute + Sync + Send> =
+            Arc::new(RegisterDomainRouteNoop::new(
+                &config.base_config.environment,
+                "golem.cloud.local",
+                &config.cloud_specific_config.domain_records,
+            ));
+        let domain_service: Arc<dyn ApiDomainService + Sync + Send> =
+            Arc::new(ApiDomainServiceNoop::default());
+        let certificate_service: Arc<dyn CertificateService + Sync + Send> =
+            Arc::new(CertificateServiceNoop::default());
 
-    let aws_domain_route = AwsDomainRoute::new(
-        &config.base_config.environment,
-        &config.cloud_specific_config.workspace,
-        &aws_config,
-        &config.cloud_specific_config.domain_records,
-    )
-    .await
-    .map_err(|e| {
-        error!(
-            "AWS domain for environment: {}, workspace: {}, region: {:?} - init error: {}",
-            config.base_config.environment,
-            config.cloud_specific_config.workspace,
-            aws_config.region,
-            e
-        );
+        (domain_route, domain_service, certificate_service)
+    } else {
+        let aws_config = AwsConfig::from_k8s_env();
 
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Init error (aws domain): {e:?}"),
+        let aws_domain_route = AwsDomainRoute::new(
+            &config.base_config.environment,
+            &config.cloud_specific_config.workspace,
+            &aws_config,
+            &config.cloud_specific_config.domain_records,
         )
-    })?;
-
-    info!(
-        "AWS domain environment: {}, workspace: {}, region: {:?}, DNS name: {}",
-        config.base_config.environment,
-        config.cloud_specific_config.workspace,
-        aws_config.region,
-        aws_domain_route.load_balancer.dns_name
-    );
-
-    let domain_route: Arc<dyn RegisterDomainRoute + Sync + Send> = Arc::new(aws_domain_route);
-
-    let aws_cm = AwsCertificateManager::new(
-        &config.base_config.environment,
-        &config.cloud_specific_config.workspace,
-        &aws_config,
-        &config.cloud_specific_config.domain_records,
-    )
         .await
         .map_err(|e| {
             error!(
+                "AWS domain for environment: {}, workspace: {}, region: {:?} - init error: {}",
+                config.base_config.environment,
+                config.cloud_specific_config.workspace,
+                aws_config.region,
+                e
+            );
+
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Init error (aws domain): {e:?}"),
+            )
+        })?;
+
+        info!(
+            "AWS domain environment: {}, workspace: {}, region: {:?}, DNS name: {}",
+            config.base_config.environment,
+            config.cloud_specific_config.workspace,
+            aws_config.region,
+            aws_domain_route.load_balancer.dns_name
+        );
+
+        let domain_route: Arc<dyn RegisterDomainRoute + Sync + Send> = Arc::new(aws_domain_route);
+
+        let aws_cm = AwsCertificateManager::new(
+            &config.base_config.environment,
+            &config.cloud_specific_config.workspace,
+            &aws_config,
+            &config.cloud_specific_config.domain_records,
+        )
+            .await
+            .map_err(|e| {
+                error!(
                 "AWS Certificate Manager for environment: {}, workspace: {}, region: {:?} - init error: {}",
                 config.base_config.environment, config.cloud_specific_config.workspace, aws_config.region, e
             );
 
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Init error (aws cert): {e:?}"))
-        })?;
+                std::io::Error::new(std::io::ErrorKind::Other, format!("Init error (aws cert): {e:?}"))
+            })?;
 
-    info!(
-        "AWS Certificate Manager environment: {}, workspace: {}, region: {:?}, DNS name: {}",
-        config.base_config.environment,
-        config.cloud_specific_config.workspace,
-        aws_config.region,
-        aws_cm.load_balancer.dns_name
-    );
+        info!(
+            "AWS Certificate Manager environment: {}, workspace: {}, region: {:?}, DNS name: {}",
+            config.base_config.environment,
+            config.cloud_specific_config.workspace,
+            aws_config.region,
+            aws_cm.load_balancer.dns_name
+        );
 
-    let certificate_manager: Arc<dyn CertificateManager + Sync + Send> = Arc::new(aws_cm);
+        let certificate_manager: Arc<dyn CertificateManager + Sync + Send> = Arc::new(aws_cm);
 
-    let domain_register_service: Arc<dyn RegisterDomain + Sync + Send> = Arc::new(
-        AwsRegisterDomain::new(&aws_config, &config.cloud_specific_config.domain_records),
-    );
+        let domain_register_service: Arc<dyn RegisterDomain + Sync + Send> = Arc::new(
+            AwsRegisterDomain::new(&aws_config, &config.cloud_specific_config.domain_records),
+        );
 
-    let domain_service: Arc<dyn ApiDomainService + Sync + Send> =
-        Arc::new(ApiDomainServiceDefault::new(
-            auth_service.clone(),
-            domain_register_service.clone(),
-            api_domain_repo.clone(),
-        ));
+        let domain_service: Arc<dyn ApiDomainService + Sync + Send> =
+            Arc::new(ApiDomainServiceDefault::new(
+                auth_service.clone(),
+                domain_register_service.clone(),
+                api_domain_repo.clone(),
+            ));
 
-    let certificate_service: Arc<dyn CertificateService + Sync + Send> =
-        Arc::new(CertificateServiceDefault::new(
-            auth_service.clone(),
-            certificate_manager.clone(),
-            api_certificate_repo.clone(),
-        ));
+        let certificate_service: Arc<dyn CertificateService + Sync + Send> =
+            Arc::new(CertificateServiceDefault::new(
+                auth_service.clone(),
+                certificate_manager.clone(),
+                api_certificate_repo.clone(),
+            ));
+
+        (domain_route, domain_service, certificate_service)
+    };
 
     let limit_service: Arc<dyn LimitService + Sync + Send> = Arc::new(LimitServiceDefault::new(
         &config.cloud_specific_config.cloud_service,
@@ -317,7 +334,7 @@ pub async fn get_api_services(
     })
 }
 
-pub fn get_api_services_local(config: &WorkerServiceCloudConfig) -> ApiServices {
+pub fn get_api_services_noop(config: &WorkerServiceCloudConfig) -> ApiServices {
     let auth_service: Arc<dyn AuthService + Sync + Send> =
         Arc::new(CloudAuthServiceNoop::default());
     let component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send> =
