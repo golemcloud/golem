@@ -547,32 +547,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_and_await_worker_internal<Req: GrpcInvokeRequest>(
+    async fn invoke_and_await_worker_internal_proto<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
     ) -> Result<Vec<Val>, GolemError> {
-        let result = self.invoke_and_await_worker_internal_proto(request).await?;
+        let result = self.invoke_and_await_worker_internal_typed_value(request).await?;
+        let value = golem_wasm_rpc::Value::try_from(result)?;
 
-        match result.type_annotated_value {
-            Some(typed_value) => {
-               let value = golem_wasm_rpc::Value::try_from(typed_value)?;
-               match value {
-                   golem_wasm_rpc::Value::Tuple(tuple) => Ok(tuple.into_iter().map(|v| v.into()).collect()),
-                   _ => Err(GolemError::Unknown {
-                       details: "Values retrieved after invocation is expected to be a string.".to_string()
-                   })
-               }
-            }
-            None => Err(GolemError::Unknown {
-                details: "Unexpected empty response after invocation".to_string()
+        match value {
+            golem_wasm_rpc::Value::Tuple(tuple) => Ok(tuple.into_iter().map(|v| v.into()).collect()),
+            _ => Err(GolemError::Unknown {
+                details: "Values retrieved after invocation is expected to be a string.".to_string()
             })
         }
     }
 
-    async fn invoke_and_await_worker_internal_proto<Req: GrpcInvokeRequest>(
+    async fn invoke_and_await_worker_internal_typed_value<Req: GrpcInvokeRequest>(
         &self,
         request: &Req,
-    ) -> Result<TypeAnnotatedValue, GolemError> {
+    ) -> Result<type_annotated_value::TypeAnnotatedValue, GolemError> {
         let full_function_name = request.name();
 
         let worker = self.get_or_create(request).await?;
@@ -599,6 +592,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 function_input,
             )
             .await?;
+
 
         Ok(values)
     }
@@ -1316,7 +1310,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             account_id = proto_account_id_string(&request.account_id),
         );
 
-        match self.invoke_and_await_worker_internal(&request).instrument(record.span.clone()).await {
+        match self.invoke_and_await_worker_internal_proto(&request).instrument(record.span.clone()).await {
             Ok(output) => {
                 let result = InvokeAndAwaitWorkerSuccess { output };
 
@@ -1356,7 +1350,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             account_id = proto_account_id_string(&request.account_id),
         );
 
-        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
+        match self.invoke_and_await_worker_internal_typed_value(&request).instrument(record.span.clone()).await {
             Ok(result) => {
                 let json = JsonValue::from_serde_json_value(&get_json_from_typed_value(&result));
                 let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessJson { output: Some(json) };
