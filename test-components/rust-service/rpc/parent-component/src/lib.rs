@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use crate::bindings::exports::golem::itrpc::rpc_api::Guest;
 use crate::bindings::golem::it_stub::stub_child_component::{Api, Data};
 use crate::bindings::golem::rpc::types::Uri;
@@ -7,50 +8,48 @@ mod bindings;
 
 struct Component;
 
+struct State {
+    api: Option<Api>,
+}
+
+thread_local! {
+    static STATE: RefCell<State> = RefCell::new(State { api: None });
+}
+
+fn with_api<T>(f: impl FnOnce(&Api) -> T) -> T {
+    STATE.with_borrow_mut(|state| {
+        match &state.api {
+            None => {
+                let remote_component_id =
+                    env::var("CHILD_COMPONENT_ID").expect("CHILD_COMPONENT_ID not set");
+
+                let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+
+                let uri = Uri {
+                    value: format!("worker://{remote_component_id}/{remote_worker_name}"),
+                };
+
+                let api = Api::new(&uri);
+                let result = f(&api);
+                state.api = Some(api);
+                result
+            }
+            Some(api) => f(api)
+        }
+    })
+}
+
 impl Guest for Component {
     fn echo(input: String) -> String {
-        let remote_component_id =
-            env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
-
-        let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
-
-        let uri = Uri {
-            value: format!("worker://{remote_component_id}/{remote_worker_name}"),
-        };
-
-        let api = Api::new(&uri);
-
-        api.blocking_echo(input.as_str())
+        with_api(|api| api.blocking_echo(input.as_str()))
     }
 
     fn calculate(input: u64) -> u64 {
-        let remote_component_id =
-            env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
-
-        let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
-
-        let uri = Uri {
-            value: format!("worker://{remote_component_id}/{remote_worker_name}"),
-        };
-
-        let api = Api::new(&uri);
-
-        api.blocking_calculate(input)
+        with_api(|api| api.blocking_calculate(input))
     }
 
     fn process(input: Vec<Data>) -> Vec<Data> {
-        let remote_component_id =
-            env::var("CHILD_COMPONENT_ID").expect("PARENT_COMPONENT_ID not set");
-
-        let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
-
-        let uri = Uri {
-            value: format!("worker://{remote_component_id}/{remote_worker_name}"),
-        };
-
-        let api = Api::new(&uri);
-
-        api.blocking_process(&input)
+        with_api(|api| api.blocking_process(&input))
     }
 }
 
