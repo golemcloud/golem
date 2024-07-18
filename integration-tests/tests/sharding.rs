@@ -80,37 +80,43 @@ async fn service_is_responsive_to_shard_changes() {
 
 #[tokio::test]
 async fn coordinated_scenario1() {
-    coordinated_scenario(
-        16,
+    let case_1 = Step::invoke_and_await(
+        vec![Step::StopAllWorkerExecutor],
         vec![
-            Step::StopAllWorkerExecutor,
-            Step::InvokeAndAwaitWorkersAsync(
-                "Invoke, RestartShardManager, StartWorkerExecutors".to_string(),
-            ),
             Step::RestartShardManager,
             Step::Sleep(Duration::from_secs(3)),
             Step::StartWorkerExecutors(4),
-            Step::WaitForInvokeAndAwaitResult,
+        ],
+    );
+
+    let case_2 = Step::invoke_and_await(
+        vec![
             Step::StopAllWorkerExecutor,
             Step::RestartShardManager,
             Step::StartWorkerExecutors(4),
             Step::RestartShardManager,
-            Step::InvokeAndAwaitWorkersAsync(
-                "StartWorkerExecutors, RestartShardManager, Invoke".to_string(),
-            ),
-            Step::WaitForInvokeAndAwaitResult,
+        ],
+        vec![],
+    );
+
+    let case_3 = Step::invoke_and_await(
+        vec![
             Step::StopAllWorkerExecutor,
             Step::RestartShardManager,
             Step::StartWorkerExecutors(4),
             Step::StopWorkerExecutors(3),
             Step::Sleep(Duration::from_secs(3)),
-            Step::InvokeAndAwaitWorkersAsync(
-                "StartWorkerExecutors(4), StopWorkerExecutors(3), Invoke".to_string(),
-            ),
-            Step::WaitForInvokeAndAwaitResult,
         ],
-    )
-    .await;
+        vec![],
+    );
+
+    let mut steps: Vec<Step> = Vec::new();
+
+    steps.extend(case_1);
+    steps.extend(case_2);
+    steps.extend(case_3);
+
+    coordinated_scenario(8, steps).await;
 }
 
 async fn coordinated_scenario(number_of_shard: usize, steps: Vec<Step>) {
@@ -336,6 +342,45 @@ enum Step {
     Sleep(Duration),
     InvokeAndAwaitWorkersAsync(String),
     WaitForInvokeAndAwaitResult,
+}
+
+impl Step {
+    pub fn invoke_and_await(before_invoke: Vec<Step>, before_await: Vec<Step>) -> Vec<Step> {
+        let step_count = before_invoke.len() + 1 + before_await.len();
+        let mut step_descriptions = Vec::with_capacity(step_count);
+        let mut steps = Vec::with_capacity(step_count);
+
+        {
+            for step in &before_invoke {
+                step_descriptions.push(format!("{step:?}"));
+            }
+
+            step_descriptions.push("Invoke".to_string());
+
+            for step in &before_await {
+                step_descriptions.push(format!("{step:?}"));
+            }
+
+            step_descriptions.push("Wait".to_string());
+        }
+        let description = step_descriptions.join(", ");
+
+        {
+            for step in before_invoke {
+                steps.push(step);
+            }
+
+            steps.push(Step::InvokeAndAwaitWorkersAsync(description));
+
+            for step in before_await {
+                steps.push(step);
+            }
+
+            steps.push(Step::WaitForInvokeAndAwaitResult)
+        }
+
+        steps
+    }
 }
 
 #[allow(dead_code)]
