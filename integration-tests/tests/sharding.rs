@@ -93,28 +93,30 @@ async fn coordinated_scenario1() {
     coordinated_scenario(
         1,
         vec![
-            Step::StopAllShards,
+            Step::StopAllWorkerExecutor,
             Step::InvokeAndAwaitWorkersAsync(
-                "Invoke, RestartShardManager, StartShards".to_string(),
+                "Invoke, RestartShardManager, StartWorkerExecutors".to_string(),
             ),
             Step::RestartShardManager,
             Step::Sleep(Duration::from_secs(3)),
-            Step::StartShards(4),
+            Step::StartWorkerExecutors(4),
             Step::WaitForInvokeAndAwaitResult,
-            Step::StopAllShards,
+            Step::StopAllWorkerExecutor,
             Step::RestartShardManager,
-            Step::StartShards(4),
+            Step::StartWorkerExecutors(4),
             Step::RestartShardManager,
             Step::InvokeAndAwaitWorkersAsync(
-                "StartShards, RestartShardManager, Invoke".to_string(),
+                "StartWorkerExecutors, RestartShardManager, Invoke".to_string(),
             ),
             Step::WaitForInvokeAndAwaitResult,
-            Step::StopAllShards,
+            Step::StopAllWorkerExecutor,
             Step::RestartShardManager,
-            Step::StartShards(4),
-            Step::StopShards(3),
+            Step::StartWorkerExecutors(4),
+            Step::StopWorkerExecutors(3),
             Step::Sleep(Duration::from_secs(3)),
-            Step::InvokeAndAwaitWorkersAsync("StartShards(4), StopShards(3), Invoke".to_string()),
+            Step::InvokeAndAwaitWorkersAsync(
+                "StartWorkerExecutors(4), StopWorkerExecutors(3), Invoke".to_string(),
+            ),
             Step::WaitForInvokeAndAwaitResult,
         ],
     )
@@ -143,9 +145,11 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
         worker_invocation(worker_command_rx, worker_event_tx).await;
     });
 
+    send_env_command(EnvCommand::StopAllWorkerExecutor);
     send_env_command(EnvCommand::StopShardManager);
     send_env_command(EnvCommand::FlushRedis);
     send_env_command(EnvCommand::StartShardManager);
+    send_env_command(EnvCommand::StopAllWorkerExecutor);
 
     let component_id = DEPS.store_component("option-service").await;
 
@@ -165,14 +169,14 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
         let formatted_step = format!("{:?}", step);
         info!("Step: {} - Started", formatted_step);
         match step {
-            Step::StartShards(n) => {
-                send_env_command(EnvCommand::StartShards(n));
+            Step::StartWorkerExecutors(n) => {
+                send_env_command(EnvCommand::StartWorkerExecutors(n));
             }
-            Step::StopShards(n) => {
-                send_env_command(EnvCommand::StopShards(n));
+            Step::StopWorkerExecutors(n) => {
+                send_env_command(EnvCommand::StopWorkerExecutors(n));
             }
-            Step::StopAllShards => {
-                send_env_command(EnvCommand::StopAllShards);
+            Step::StopAllWorkerExecutor => {
+                send_env_command(EnvCommand::StopAllWorkerExecutor);
             }
             Step::RestartShardManager => {
                 send_env_command(EnvCommand::RestartShardManager);
@@ -210,7 +214,7 @@ enum Command {
     RestartShardManager,
 }
 
-fn start_shard() {
+fn start_worker_executor() {
     let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
     if !stopped.is_empty() {
         let mut rng = thread_rng();
@@ -220,7 +224,7 @@ fn start_shard() {
     }
 }
 
-fn start_shards(n: usize) {
+fn start_worker_executors(n: usize) {
     let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
     if !stopped.is_empty() {
         let mut rng = thread_rng();
@@ -234,7 +238,7 @@ fn start_shards(n: usize) {
     }
 }
 
-fn stop_shard() {
+fn stop_worker_executor() {
     let mut started = DEPS.worker_executor_cluster().started_indices();
     if !started.is_empty() {
         let mut rng = thread_rng();
@@ -244,7 +248,7 @@ fn stop_shard() {
     }
 }
 
-fn stop_shards(n: usize) {
+fn stop_worker_executors(n: usize) {
     let mut started = DEPS.worker_executor_cluster().started_indices();
     if !started.is_empty() {
         let mut rng = thread_rng();
@@ -258,7 +262,7 @@ fn stop_shards(n: usize) {
     }
 }
 
-fn stop_all_shards() {
+fn stop_all_worker_executors() {
     let started = DEPS.worker_executor_cluster().started_indices();
     for idx in started {
         DEPS.worker_executor_cluster().stop(idx);
@@ -315,9 +319,9 @@ async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::wo
 
 #[derive(Debug, Clone)]
 enum Step {
-    StartShards(usize),
-    StopShards(usize),
-    StopAllShards,
+    StartWorkerExecutors(usize),
+    StopWorkerExecutors(usize),
+    StopAllWorkerExecutor,
     RestartShardManager,
     Sleep(Duration),
     InvokeAndAwaitWorkersAsync(String),
@@ -326,9 +330,9 @@ enum Step {
 
 #[derive(Debug)]
 enum EnvCommand {
-    StartShards(usize),
-    StopShards(usize),
-    StopAllShards,
+    StartWorkerExecutors(usize),
+    StopWorkerExecutors(usize),
+    StopAllWorkerExecutor,
     StartShardManager,
     StopShardManager,
     RestartShardManager,
@@ -339,9 +343,9 @@ enum EnvCommand {
 impl EnvCommand {
     fn response_event(&self) -> Option<EnvEvent> {
         match self {
-            EnvCommand::StartShards(_) => Some(EnvEvent::StartShardsDone),
-            EnvCommand::StopShards(_) => Some(EnvEvent::StopShardsDone),
-            EnvCommand::StopAllShards => Some(EnvEvent::StopAllShardsDone),
+            EnvCommand::StartWorkerExecutors(_) => Some(EnvEvent::StartWorkerExecutorsDone),
+            EnvCommand::StopWorkerExecutors(_) => Some(EnvEvent::StopWorkerExecutorsDone),
+            EnvCommand::StopAllWorkerExecutor => Some(EnvEvent::StopAllWorkerExecutorDone),
             EnvCommand::StartShardManager => Some(EnvEvent::StartShardManagerDone),
             EnvCommand::StopShardManager => Some(EnvEvent::StopShardManagerDone),
             EnvCommand::RestartShardManager => Some(EnvEvent::RestartShardManagerDone),
@@ -354,9 +358,9 @@ impl EnvCommand {
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, PartialEq)]
 enum EnvEvent {
-    StartShardsDone,
-    StopShardsDone,
-    StopAllShardsDone,
+    StartWorkerExecutorsDone,
+    StopWorkerExecutorsDone,
+    StopAllWorkerExecutorDone,
     StartShardManagerDone,
     StopShardManagerDone,
     RestartShardManagerDone,
@@ -390,14 +394,14 @@ fn coordinated_environment(
 
         info!("Command: {} - Started", formatted_command);
         match command {
-            EnvCommand::StartShards(n) => {
-                start_shards(n);
+            EnvCommand::StartWorkerExecutors(n) => {
+                start_worker_executors(n);
             }
-            EnvCommand::StopShards(n) => {
-                stop_shards(n);
+            EnvCommand::StopWorkerExecutors(n) => {
+                stop_worker_executors(n);
             }
-            EnvCommand::StopAllShards => {
-                stop_all_shards();
+            EnvCommand::StopAllWorkerExecutor => {
+                stop_all_worker_executors();
             }
             EnvCommand::StartShardManager => {
                 start_shard_manager();
@@ -453,12 +457,12 @@ fn unstable_environment(stop_rx: std::sync::mpsc::Receiver<()>) {
         match commands[0] {
             Command::StartShard => {
                 info!("Golem Sharding Tester starting shard");
-                start_shard();
+                start_worker_executor();
                 info!("Golem Sharding Tester started shard");
             }
             Command::StopShard => {
                 info!("Golem Sharding Tester stopping shard");
-                stop_shard();
+                stop_worker_executor();
                 info!("Golem Sharding Tester stopped shard");
             }
             Command::RestartShardManager => {
