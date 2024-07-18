@@ -51,24 +51,14 @@ unsafe fn drop_deps() {
 pub static TRACING: Tracing = Tracing::init();
 
 #[tokio::test]
-#[tracing::instrument]
 async fn service_is_responsive_to_shard_changes() {
+    Deps::reset().await;
+    let worker_ids = Deps::create_component_and_start_workers(4).await;
+
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     let chaos = std::thread::spawn(|| {
         unstable_environment(stop_rx);
     });
-
-    let component_id = DEPS.store_component("option-service").await;
-
-    let mut worker_ids = Vec::new();
-
-    for n in 1..=4 {
-        info!("Worker {n} starting");
-        let worker_name = format!("sharding-test-1-{n}");
-        let worker_id = DEPS.start_worker(&component_id, &worker_name).await;
-        info!("Worker {n} started");
-        worker_ids.push(worker_id);
-    }
 
     info!("All workers started");
 
@@ -77,7 +67,7 @@ async fn service_is_responsive_to_shard_changes() {
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
         info!("Invoking workers ({c})");
-        invoke_and_await_workers(&worker_ids)
+        Deps::invoke_and_await_workers(&worker_ids)
             .await
             .expect("Invocations failed");
         info!("Invoking workers done ({c})");
@@ -90,39 +80,40 @@ async fn service_is_responsive_to_shard_changes() {
 
 #[tokio::test]
 async fn coordinated_scenario1() {
-    coordinated_scenario(
-        1,
-        vec![
-            Step::StopAllWorkerExecutor,
-            Step::InvokeAndAwaitWorkersAsync(
-                "Invoke, RestartShardManager, StartWorkerExecutors".to_string(),
-            ),
-            Step::RestartShardManager,
-            Step::Sleep(Duration::from_secs(3)),
-            Step::StartWorkerExecutors(4),
-            Step::WaitForInvokeAndAwaitResult,
-            Step::StopAllWorkerExecutor,
-            Step::RestartShardManager,
-            Step::StartWorkerExecutors(4),
-            Step::RestartShardManager,
-            Step::InvokeAndAwaitWorkersAsync(
-                "StartWorkerExecutors, RestartShardManager, Invoke".to_string(),
-            ),
-            Step::WaitForInvokeAndAwaitResult,
-            Step::StopAllWorkerExecutor,
-            Step::RestartShardManager,
-            Step::StartWorkerExecutors(4),
-            Step::StopWorkerExecutors(3),
-            Step::Sleep(Duration::from_secs(3)),
-            Step::InvokeAndAwaitWorkersAsync(
-                "StartWorkerExecutors(4), StopWorkerExecutors(3), Invoke".to_string(),
-            ),
-            Step::WaitForInvokeAndAwaitResult,
-        ],
-    )
+    coordinated_scenario(vec![
+        Step::StopAllWorkerExecutor,
+        Step::InvokeAndAwaitWorkersAsync(
+            "Invoke, RestartShardManager, StartWorkerExecutors".to_string(),
+        ),
+        Step::RestartShardManager,
+        Step::Sleep(Duration::from_secs(3)),
+        Step::StartWorkerExecutors(4),
+        Step::WaitForInvokeAndAwaitResult,
+        Step::StopAllWorkerExecutor,
+        Step::RestartShardManager,
+        Step::StartWorkerExecutors(4),
+        Step::RestartShardManager,
+        Step::InvokeAndAwaitWorkersAsync(
+            "StartWorkerExecutors, RestartShardManager, Invoke".to_string(),
+        ),
+        Step::WaitForInvokeAndAwaitResult,
+        Step::StopAllWorkerExecutor,
+        Step::RestartShardManager,
+        Step::StartWorkerExecutors(4),
+        Step::StopWorkerExecutors(3),
+        Step::Sleep(Duration::from_secs(3)),
+        Step::InvokeAndAwaitWorkersAsync(
+            "StartWorkerExecutors(4), StopWorkerExecutors(3), Invoke".to_string(),
+        ),
+        Step::WaitForInvokeAndAwaitResult,
+    ])
     .await;
 }
-async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
+
+async fn coordinated_scenario(steps: Vec<Step>) {
+    Deps::reset().await;
+    let worker_ids = Deps::create_component_and_start_workers(4).await;
+
     let (worker_command_tx, worker_command_rx) = tokio::sync::mpsc::channel(128);
     let (worker_event_tx, mut worker_event_rx) = tokio::sync::mpsc::channel(128);
     let (env_command_tx, env_command_rx) = std::sync::mpsc::channel();
@@ -144,26 +135,6 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
     let invoker = tokio::task::spawn(async {
         worker_invocation(worker_command_rx, worker_event_tx).await;
     });
-
-    send_env_command(EnvCommand::StopAllWorkerExecutor);
-    send_env_command(EnvCommand::StopShardManager);
-    send_env_command(EnvCommand::FlushRedis);
-    send_env_command(EnvCommand::StartShardManager);
-    send_env_command(EnvCommand::StopAllWorkerExecutor);
-
-    let component_id = DEPS.store_component("option-service").await;
-
-    let mut worker_ids = Vec::new();
-
-    for n in 1..=4 {
-        info!("Worker {n} starting");
-        let worker_name = format!("sharding-test-{id}-{n}");
-        let worker_id = DEPS.start_worker(&component_id, &worker_name).await;
-        info!("Worker {n} started");
-        worker_ids.push(worker_id);
-    }
-
-    info!("All workers started");
 
     for step in steps {
         let formatted_step = format!("{:?}", step);
@@ -208,101 +179,149 @@ async fn coordinated_scenario(id: usize, steps: Vec<Step>) {
     invoker.await.unwrap();
 }
 
+#[derive(Debug)]
 enum Command {
     StartShard,
     StopShard,
     RestartShardManager,
 }
 
-fn start_random_worker_executor() {
-    start_random_worker_executors(1);
-}
+// Sharding test specific env functions
+struct Deps;
 
-fn start_random_worker_executors(n: usize) {
-    let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
-    if !stopped.is_empty() {
-        let mut rng = thread_rng();
-        stopped.shuffle(&mut rng);
+impl Deps {
+    async fn reset() {
+        info!("Reset started");
+        Deps::stop_all_worker_executors();
+        Deps::stop_shard_manager();
+        Deps::flush_redis_db();
+        Deps::start_shard_manager().await;
+        Deps::start_all_worker_executors().await;
+        info!("Reset done");
+    }
 
-        let to_start = &stopped[0..n];
+    async fn create_component_and_start_workers(n: usize) -> Vec<WorkerId> {
+        info!("Storing component");
+        let component_id = DEPS.store_component("option-service").await;
 
-        for idx in to_start {
-            DEPS.worker_executor_cluster().blocking_start(*idx);
+        let mut worker_ids = Vec::new();
+
+        for i in 1..=n {
+            info!("Worker {i} starting");
+            let worker_name = format!("sharding-test-{i}");
+            let worker_id = DEPS.start_worker(&component_id, &worker_name).await;
+            info!("Worker {i} started");
+            worker_ids.push(worker_id);
+        }
+
+        info!("All workers started");
+
+        worker_ids
+    }
+
+    async fn invoke_and_await_workers(
+        workers: &[WorkerId],
+    ) -> Result<(), worker::worker_error::Error> {
+        let mut tasks = Vec::new();
+
+        for worker_id in workers {
+            let worker_id_clone = worker_id.clone();
+            tasks.push((
+                worker_id,
+                tokio::spawn(async move {
+                    let idempotency_key = IdempotencyKey::fresh();
+                    DEPS.invoke_and_await_with_key(
+                        &worker_id_clone,
+                        &idempotency_key,
+                        "golem:it/api.{echo}",
+                        vec![Value::Option(Some(Box::new(Value::String(
+                            "Hello".to_string(),
+                        ))))],
+                    )
+                    .await
+                }),
+            ));
+        }
+
+        for (worker_id, task) in tasks {
+            info!("Awaiting worker: {}", worker_id);
+            let _ = task.await.unwrap()?;
+            info!("Worker finished: {}", worker_id);
+        }
+
+        Ok(())
+    }
+
+    async fn start_all_worker_executors() {
+        let stopped = DEPS.worker_executor_cluster().stopped_indices();
+        for idx in stopped {
+            DEPS.worker_executor_cluster().start(idx).await;
         }
     }
-}
 
-fn stop_random_worker_executor() {
-    stop_random_worker_executors(1);
-}
+    fn start_random_worker_executor() {
+        Deps::start_random_worker_executors(1);
+    }
 
-fn stop_random_worker_executors(n: usize) {
-    let mut started = DEPS.worker_executor_cluster().started_indices();
-    if !started.is_empty() {
-        let mut rng = thread_rng();
-        started.shuffle(&mut rng);
+    fn start_random_worker_executors(n: usize) {
+        let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
+        if !stopped.is_empty() {
+            let mut rng = thread_rng();
+            stopped.shuffle(&mut rng);
 
-        let to_stop = &started[0..n];
+            let to_start = &stopped[0..n];
 
-        for idx in to_stop {
-            DEPS.worker_executor_cluster().stop(*idx);
+            for idx in to_start {
+                DEPS.worker_executor_cluster().blocking_start(*idx);
+            }
         }
     }
-}
 
-fn stop_all_worker_executors() {
-    let started = DEPS.worker_executor_cluster().started_indices();
-    for idx in started {
-        DEPS.worker_executor_cluster().stop(idx);
-    }
-}
-
-fn start_shard_manager() {
-    DEPS.shard_manager().blocking_restart();
-}
-
-fn stop_shard_manager() {
-    DEPS.shard_manager().kill();
-}
-
-fn reload_shard_manager() {
-    DEPS.shard_manager().kill();
-    DEPS.shard_manager().blocking_restart();
-}
-
-fn flush_redis_db() {
-    DEPS.redis().flush_db(0);
-}
-
-async fn invoke_and_await_workers(workers: &[WorkerId]) -> Result<(), worker::worker_error::Error> {
-    let mut tasks = Vec::new();
-
-    for worker_id in workers {
-        let worker_id_clone = worker_id.clone();
-        tasks.push((
-            worker_id,
-            tokio::spawn(async move {
-                let idempotency_key = IdempotencyKey::fresh();
-                DEPS.invoke_and_await_with_key(
-                    &worker_id_clone,
-                    &idempotency_key,
-                    "golem:it/api.{echo}",
-                    vec![Value::Option(Some(Box::new(Value::String(
-                        "Hello".to_string(),
-                    ))))],
-                )
-                .await
-            }),
-        ));
+    fn stop_random_worker_executor() {
+        Deps::stop_random_worker_executors(1);
     }
 
-    for (worker_id, task) in tasks {
-        info!("Awaiting worker: {}", worker_id);
-        let _ = task.await.unwrap()?;
-        info!("Worker finished: {}", worker_id);
+    fn stop_random_worker_executors(n: usize) {
+        let mut started = DEPS.worker_executor_cluster().started_indices();
+        if !started.is_empty() {
+            let mut rng = thread_rng();
+            started.shuffle(&mut rng);
+
+            let to_stop = &started[0..n];
+
+            for idx in to_stop {
+                DEPS.worker_executor_cluster().stop(*idx);
+            }
+        }
     }
 
-    Ok(())
+    fn stop_all_worker_executors() {
+        let started = DEPS.worker_executor_cluster().started_indices();
+        for idx in started {
+            DEPS.worker_executor_cluster().stop(idx);
+        }
+    }
+
+    fn blocking_start_shard_manager() {
+        DEPS.shard_manager().blocking_restart();
+    }
+
+    async fn start_shard_manager() {
+        DEPS.shard_manager().restart().await;
+    }
+
+    fn stop_shard_manager() {
+        DEPS.shard_manager().kill();
+    }
+
+    fn restart_shard_manager() {
+        DEPS.shard_manager().kill();
+        DEPS.shard_manager().blocking_restart();
+    }
+
+    fn flush_redis_db() {
+        DEPS.redis().flush_db(0);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -383,25 +402,25 @@ fn coordinated_environment(
         info!("Command: {} - Started", formatted_command);
         match command {
             EnvCommand::StartWorkerExecutors(n) => {
-                start_random_worker_executors(n);
+                Deps::start_random_worker_executors(n);
             }
             EnvCommand::StopWorkerExecutors(n) => {
-                stop_random_worker_executors(n);
+                Deps::stop_random_worker_executors(n);
             }
             EnvCommand::StopAllWorkerExecutor => {
-                stop_all_worker_executors();
+                Deps::stop_all_worker_executors();
             }
             EnvCommand::StartShardManager => {
-                start_shard_manager();
+                Deps::blocking_start_shard_manager();
             }
             EnvCommand::StopShardManager => {
-                stop_shard_manager();
+                Deps::stop_shard_manager();
             }
             EnvCommand::RestartShardManager => {
-                reload_shard_manager();
+                Deps::restart_shard_manager();
             }
             EnvCommand::FlushRedis => {
-                flush_redis_db();
+                Deps::flush_redis_db();
             }
             EnvCommand::Stop => break,
         }
@@ -421,7 +440,7 @@ async fn worker_invocation(
     while let WorkerCommand::InvokeAndAwaitWorkers { name, worker_ids } =
         command_rx.recv().await.unwrap()
     {
-        invoke_and_await_workers(&worker_ids)
+        Deps::invoke_and_await_workers(&worker_ids)
             .await
             .expect("Worker invocation failed");
         event_tx
@@ -442,23 +461,21 @@ fn unstable_environment(stop_rx: std::sync::mpsc::Receiver<()>) {
         ];
         let mut rng = thread_rng();
         commands.shuffle(&mut rng);
-        match commands[0] {
+        let command = &commands[0];
+        let formatted_command = format!("{:?}", command);
+        info!("Command: {} - Started", formatted_command);
+        match command {
             Command::StartShard => {
-                info!("Golem Sharding Tester starting shard");
-                start_random_worker_executor();
-                info!("Golem Sharding Tester started shard");
+                Deps::start_random_worker_executor();
             }
             Command::StopShard => {
-                info!("Golem Sharding Tester stopping shard");
-                stop_random_worker_executor();
-                info!("Golem Sharding Tester stopped shard");
+                Deps::stop_random_worker_executor();
             }
             Command::RestartShardManager => {
-                info!("Golem Sharding Tester reloading shard manager");
-                reload_shard_manager();
-                info!("Golem Sharding Tester reloaded shard manager");
+                Deps::restart_shard_manager();
             }
         }
+        info!("Command: {} - Done", formatted_command);
     }
 
     fn random_seconds() -> u64 {
