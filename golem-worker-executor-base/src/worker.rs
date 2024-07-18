@@ -34,7 +34,7 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_wasm_ast::analysis::AnalysedFunctionParameter;
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::val::Val;
 use golem_common::config::RetryConfig;
@@ -60,7 +60,7 @@ use wasmtime::{AsContext, Store, UpdateDeadline};
 use golem_service_base::exports;
 use golem_service_base::model::{Export, ExportFunction};
 use rib::ParsedFunctionName;
-use golem_service_base::typechecker::TypeCheckIn;
+use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -1401,13 +1401,20 @@ impl RunningWorker {
                                                 output,
                                                 consumed_fuel,
                                             }) => {
+
+                                                let function_results: Vec<AnalysedFunctionResult> =
+                                                    exports::function_by_name(&component_metadata.exports, &full_function_name)
+                                                        .unwrap().unwrap().results.into_iter().map(|t| t.into()).collect();
+
+                                                let result = golem_wasm_rpc::json::function_result_typed(output, &function_results)?;
+
                                                 store
                                                     .data_mut()
                                                     .on_invocation_success(
                                                         &full_function_name,
                                                         &function_input,
                                                         consumed_fuel,
-                                                        output,
+                                                        result,
                                                     )
                                                     .await
                                                     .unwrap(); // TODO: handle this error

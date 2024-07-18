@@ -645,22 +645,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(request).await?;
 
-        let component_metadata = worker::get_component_metadata(&worker).await?;
-        let exports = component_metadata.exports;
-
-        let function_type = exports::function_by_name(&exports, &full_function_name)
-            .map_err(|err| {
-                GolemError::invalid_request(format!("Failed to parse the function name: {}", err))
-            })?
-            .ok_or_else(|| {
-                GolemError::invalid_request(format!(
-                    "Failed to find the function {}",
-                    &full_function_name,
-                ))
-            })?;
-
-        let function_input = request.input();
-
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
