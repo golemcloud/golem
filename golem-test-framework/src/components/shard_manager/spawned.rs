@@ -181,14 +181,14 @@ impl ShardManager for SpawnedShardManager {
         let _logger = self.logger.lock().unwrap().take();
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, number_of_shards_override: Option<usize>) {
         info!("Restarting golem-shard-manager");
 
         let (child, logger) = Self::start(
             self.env_vars.as_ref(),
             &self.executable,
             &self.working_directory,
-            self.number_of_shards_override,
+            number_of_shards_override.or(self.number_of_shards_override),
             self.http_port,
             self.grpc_port,
             self.redis.clone(),

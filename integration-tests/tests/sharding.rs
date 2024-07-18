@@ -52,7 +52,7 @@ pub static TRACING: Tracing = Tracing::init();
 
 #[tokio::test]
 async fn service_is_responsive_to_shard_changes() {
-    Deps::reset().await;
+    Deps::reset(16).await;
     let worker_ids = Deps::create_component_and_start_workers(4).await;
 
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
@@ -80,38 +80,41 @@ async fn service_is_responsive_to_shard_changes() {
 
 #[tokio::test]
 async fn coordinated_scenario1() {
-    coordinated_scenario(vec![
-        Step::StopAllWorkerExecutor,
-        Step::InvokeAndAwaitWorkersAsync(
-            "Invoke, RestartShardManager, StartWorkerExecutors".to_string(),
-        ),
-        Step::RestartShardManager,
-        Step::Sleep(Duration::from_secs(3)),
-        Step::StartWorkerExecutors(4),
-        Step::WaitForInvokeAndAwaitResult,
-        Step::StopAllWorkerExecutor,
-        Step::RestartShardManager,
-        Step::StartWorkerExecutors(4),
-        Step::RestartShardManager,
-        Step::InvokeAndAwaitWorkersAsync(
-            "StartWorkerExecutors, RestartShardManager, Invoke".to_string(),
-        ),
-        Step::WaitForInvokeAndAwaitResult,
-        Step::StopAllWorkerExecutor,
-        Step::RestartShardManager,
-        Step::StartWorkerExecutors(4),
-        Step::StopWorkerExecutors(3),
-        Step::Sleep(Duration::from_secs(3)),
-        Step::InvokeAndAwaitWorkersAsync(
-            "StartWorkerExecutors(4), StopWorkerExecutors(3), Invoke".to_string(),
-        ),
-        Step::WaitForInvokeAndAwaitResult,
-    ])
+    coordinated_scenario(
+        16,
+        vec![
+            Step::StopAllWorkerExecutor,
+            Step::InvokeAndAwaitWorkersAsync(
+                "Invoke, RestartShardManager, StartWorkerExecutors".to_string(),
+            ),
+            Step::RestartShardManager,
+            Step::Sleep(Duration::from_secs(3)),
+            Step::StartWorkerExecutors(4),
+            Step::WaitForInvokeAndAwaitResult,
+            Step::StopAllWorkerExecutor,
+            Step::RestartShardManager,
+            Step::StartWorkerExecutors(4),
+            Step::RestartShardManager,
+            Step::InvokeAndAwaitWorkersAsync(
+                "StartWorkerExecutors, RestartShardManager, Invoke".to_string(),
+            ),
+            Step::WaitForInvokeAndAwaitResult,
+            Step::StopAllWorkerExecutor,
+            Step::RestartShardManager,
+            Step::StartWorkerExecutors(4),
+            Step::StopWorkerExecutors(3),
+            Step::Sleep(Duration::from_secs(3)),
+            Step::InvokeAndAwaitWorkersAsync(
+                "StartWorkerExecutors(4), StopWorkerExecutors(3), Invoke".to_string(),
+            ),
+            Step::WaitForInvokeAndAwaitResult,
+        ],
+    )
     .await;
 }
 
-async fn coordinated_scenario(steps: Vec<Step>) {
-    Deps::reset().await;
+async fn coordinated_scenario(number_of_shard: usize, steps: Vec<Step>) {
+    Deps::reset(number_of_shard).await;
     let worker_ids = Deps::create_component_and_start_workers(4).await;
 
     let (worker_command_tx, worker_command_rx) = tokio::sync::mpsc::channel(128);
@@ -190,12 +193,12 @@ enum Command {
 struct Deps;
 
 impl Deps {
-    async fn reset() {
+    async fn reset(number_of_shards: usize) {
         info!("Reset started");
         Deps::stop_all_worker_executors();
         Deps::stop_shard_manager();
         Deps::flush_redis_db();
-        Deps::start_shard_manager().await;
+        Deps::start_shard_manager(number_of_shards).await;
         Deps::start_all_worker_executors().await;
         info!("Reset done");
     }
@@ -303,11 +306,11 @@ impl Deps {
     }
 
     fn blocking_start_shard_manager() {
-        DEPS.shard_manager().blocking_restart();
+        DEPS.shard_manager().blocking_restart(None);
     }
 
-    async fn start_shard_manager() {
-        DEPS.shard_manager().restart().await;
+    async fn start_shard_manager(number_of_shards: usize) {
+        DEPS.shard_manager().restart(Some(number_of_shards)).await;
     }
 
     fn stop_shard_manager() {
@@ -316,7 +319,7 @@ impl Deps {
 
     fn restart_shard_manager() {
         DEPS.shard_manager().kill();
-        DEPS.shard_manager().blocking_restart();
+        DEPS.shard_manager().blocking_restart(None);
     }
 
     fn flush_redis_db() {

@@ -128,7 +128,10 @@ impl ShardManager for DockerShardManager {
         self.container.kill(self.keep_container);
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, number_of_shards_override: Option<usize>) {
+        if number_of_shards_override.is_some() {
+            panic!("number_of_shards_override not supported for docker")
+        }
         self.container.start();
     }
 }

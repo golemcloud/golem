@@ -229,7 +229,7 @@ impl ShardManager for K8sShardManager {
         });
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, _number_of_shards_override: Option<usize>) {
         panic!("Not supported yet");
     }
 }
