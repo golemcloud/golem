@@ -362,9 +362,9 @@ where
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
-        let params_: Vec<JsonValue> = params
-            .iter()
-            .map(JsonValue::from_serde_json_value)
+        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
+            .into_iter()
+            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
             .collect::<Vec<_>>();
 
         let invoke_response = self.call_worker_executor(
@@ -431,9 +431,10 @@ where
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
-        let params_: Vec<JsonValue> = params
-            .iter()
-            .map(JsonValue::from_serde_json_value)
+
+        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
+            .into_iter()
+            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
             .collect::<Vec<_>>();
 
         let invoke_response = self.call_worker_executor(
@@ -1073,7 +1074,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<Value>,
+        _params: Vec<PreciseJson>,
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
@@ -1086,7 +1087,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<Value>,
+        _params: Vec<PreciseJson>,
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
