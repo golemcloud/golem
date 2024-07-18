@@ -24,7 +24,7 @@ use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::benchmarks::{
-    invoke_and_await, run_benchmark, setup_benchmark, SimpleBenchmarkContext, warmup_workers,
+    invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
 };
 
 struct RpcCpuIntensive {

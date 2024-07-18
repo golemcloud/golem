@@ -20,13 +20,13 @@ use reqwest::{Client, Url};
 use tokio::task::JoinSet;
 use tracing::warn;
 
+use crate::benchmarks::data::Data;
 use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{
     BenchmarkApi, BenchmarkRecorder, BenchmarkResult, ResultKey, RunConfig,
 };
 use golem_test_framework::dsl::TestDsl;
-use crate::benchmarks::data::Data;
 
 pub mod data;
 
@@ -283,7 +283,6 @@ pub async fn invoke_and_await(
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct RustServiceClient {
     client: Client,
@@ -358,4 +357,3 @@ impl RustServiceClient {
         }
     }
 }
-

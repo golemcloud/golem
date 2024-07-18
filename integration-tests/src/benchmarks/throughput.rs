@@ -24,7 +24,10 @@ use golem_test_framework::config::{
     CliParams, CliTestDependencies, CliTestService, TestDependencies, TestService,
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use integration_tests::benchmarks::{benchmark_invocations, delete_workers, run_benchmark, RustServiceClient, setup_iteration, warmup_workers};
+use integration_tests::benchmarks::{
+    benchmark_invocations, delete_workers, run_benchmark, setup_iteration, warmup_workers,
+    RustServiceClient,
+};
 
 struct Throughput {
     config: RunConfig,
