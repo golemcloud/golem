@@ -1,5 +1,10 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
+use crate::grpcapi::get_authorisation_token;
+use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
+use crate::service::auth::{AuthService, AuthServiceError};
 use cloud_api_grpc::proto::golem::cloud::grant::cloud_grant_service_server::CloudGrantService;
 use cloud_api_grpc::proto::golem::cloud::grant::{
     delete_grant_response, get_grant_response, get_grants_response, put_grant_response,
@@ -7,16 +12,15 @@ use cloud_api_grpc::proto::golem::cloud::grant::{
     GetGrantsResponse, GetGrantsSuccessResponse, PutGrantRequest, PutGrantResponse,
 };
 use cloud_api_grpc::proto::golem::cloud::grant::{grant_error, GrantError};
+use cloud_common::model::Role;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_common::grpc::proto_account_id_string;
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::AccountId;
+use golem_common::recorded_grpc_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
-
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
-use crate::service::auth::{AuthService, AuthServiceError};
-use cloud_common::model::Role;
+use tracing::Instrument;
 
 impl From<AuthServiceError> for GrantError {
     fn from(value: AuthServiceError) -> Self {
@@ -184,14 +188,27 @@ impl CloudGrantService for GrantGrpcApi {
         request: Request<GetGrantsRequest>,
     ) -> Result<Response<GetGrantsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_by_account(r, m).await {
-            Ok(result) => Ok(Response::new(GetGrantsResponse {
-                result: Some(get_grants_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetGrantsResponse {
-                result: Some(get_grants_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_grants",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .get_by_account(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(get_grants_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_grants_response::Result::Error(error.clone()),
+                &GrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetGrantsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn delete_grant(
@@ -199,14 +216,23 @@ impl CloudGrantService for GrantGrpcApi {
         request: Request<DeleteGrantRequest>,
     ) -> Result<Response<DeleteGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.delete(r, m).await {
-            Ok(_) => Ok(Response::new(DeleteGrantResponse {
-                result: Some(delete_grant_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(DeleteGrantResponse {
-                result: Some(delete_grant_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "delete_grant",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.delete(r, m).instrument(record.span.clone()).await {
+            Ok(_) => record.succeed(delete_grant_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                delete_grant_response::Result::Error(error.clone()),
+                &GrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeleteGrantResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_grant(
@@ -214,14 +240,23 @@ impl CloudGrantService for GrantGrpcApi {
         request: Request<GetGrantRequest>,
     ) -> Result<Response<GetGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetGrantResponse {
-                result: Some(get_grant_response::Result::Role(result)),
-            })),
-            Err(err) => Ok(Response::new(GetGrantResponse {
-                result: Some(get_grant_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_grant",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_grant_response::Result::Role(result)),
+            Err(error) => record.fail(
+                get_grant_response::Result::Error(error.clone()),
+                &GrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetGrantResponse {
+            result: Some(response),
+        }))
     }
 
     async fn put_grant(
@@ -229,13 +264,44 @@ impl CloudGrantService for GrantGrpcApi {
         request: Request<PutGrantRequest>,
     ) -> Result<Response<PutGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.put(r, m).await {
-            Ok(result) => Ok(Response::new(PutGrantResponse {
-                result: Some(put_grant_response::Result::Role(result)),
-            })),
-            Err(err) => Ok(Response::new(PutGrantResponse {
-                result: Some(put_grant_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!(
+            "put_grant",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.put(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(put_grant_response::Result::Role(result)),
+            Err(error) => record.fail(
+                put_grant_response::Result::Error(error.clone()),
+                &GrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(PutGrantResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct GrantTraceErrorKind<'a>(pub &'a GrantError);
+
+impl<'a> Debug for GrantTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for GrantTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                grant_error::Error::BadRequest(_) => "BadRequest",
+                grant_error::Error::Unauthorized(_) => "Unauthorized",
+                grant_error::Error::NotFound(_) => "NotFound",
+                grant_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

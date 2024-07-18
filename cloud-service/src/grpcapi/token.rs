@@ -1,6 +1,11 @@
+use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
+use crate::grpcapi::get_authorisation_token;
+use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::token;
 use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenService;
 use cloud_api_grpc::proto::golem::cloud::token::{
     create_token_response, delete_token_response, get_token_response, get_tokens_response,
@@ -8,16 +13,16 @@ use cloud_api_grpc::proto::golem::cloud::token::{
     GetTokenRequest, GetTokenResponse, GetTokensRequest, GetTokensResponse,
     GetTokensSuccessResponse, Token, TokenError, UnsafeToken,
 };
+use cloud_common::grpc::proto_token_id_string;
 use cloud_common::model::TokenId;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_common::grpc::proto_account_id_string;
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::AccountId;
+use golem_common::recorded_grpc_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
-
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::token;
+use tracing::Instrument;
 
 impl From<AuthServiceError> for TokenError {
     fn from(value: AuthServiceError) -> Self {
@@ -158,16 +163,29 @@ impl CloudTokenService for TokenGrpcApi {
         request: Request<GetTokensRequest>,
     ) -> Result<Response<GetTokensResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_by_account(r, m).await {
-            Ok(data) => Ok(Response::new(GetTokensResponse {
-                result: Some(get_tokens_response::Result::Success(
-                    GetTokensSuccessResponse { data },
-                )),
-            })),
-            Err(err) => Ok(Response::new(GetTokensResponse {
-                result: Some(get_tokens_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_tokens",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .get_by_account(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(data) => record.succeed(get_tokens_response::Result::Success(
+                GetTokensSuccessResponse { data },
+            )),
+            Err(error) => record.fail(
+                get_tokens_response::Result::Error(error.clone()),
+                &TokenTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetTokensResponse {
+            result: Some(response),
+        }))
     }
 
     async fn create_token(
@@ -175,14 +193,23 @@ impl CloudTokenService for TokenGrpcApi {
         request: Request<CreateTokenRequest>,
     ) -> Result<Response<CreateTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.create(r, m).await {
-            Ok(v) => Ok(Response::new(CreateTokenResponse {
-                result: Some(create_token_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(CreateTokenResponse {
-                result: Some(create_token_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "create_token",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.create(r, m).instrument(record.span.clone()).await {
+            Ok(data) => record.succeed(create_token_response::Result::Success(data)),
+            Err(error) => record.fail(
+                create_token_response::Result::Error(error.clone()),
+                &TokenTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CreateTokenResponse {
+            result: Some(response),
+        }))
     }
 
     async fn delete_token(
@@ -190,14 +217,24 @@ impl CloudTokenService for TokenGrpcApi {
         request: Request<DeleteTokenRequest>,
     ) -> Result<Response<DeleteTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.delete(r, m).await {
-            Ok(_) => Ok(Response::new(DeleteTokenResponse {
-                result: Some(delete_token_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(DeleteTokenResponse {
-                result: Some(delete_token_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "delete_token",
+            account_id = proto_account_id_string(&r.account_id),
+            token_Id = proto_token_id_string(&r.token_id)
+        );
+
+        let response = match self.delete(r, m).instrument(record.span.clone()).await {
+            Ok(_) => record.succeed(delete_token_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                delete_token_response::Result::Error(error.clone()),
+                &TokenTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeleteTokenResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_token(
@@ -205,13 +242,45 @@ impl CloudTokenService for TokenGrpcApi {
         request: Request<GetTokenRequest>,
     ) -> Result<Response<GetTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(v) => Ok(Response::new(GetTokenResponse {
-                result: Some(get_token_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(GetTokenResponse {
-                result: Some(get_token_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!(
+            "get_token",
+            account_id = proto_account_id_string(&r.account_id),
+            token_Id = proto_token_id_string(&r.token_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_token_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_token_response::Result::Error(error.clone()),
+                &TokenTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetTokenResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct TokenTraceErrorKind<'a>(pub &'a TokenError);
+
+impl<'a> Debug for TokenTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for TokenTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                token_error::Error::BadRequest(_) => "BadRequest",
+                token_error::Error::Unauthorized(_) => "Unauthorized",
+                token_error::Error::NotFound(_) => "NotFound",
+                token_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

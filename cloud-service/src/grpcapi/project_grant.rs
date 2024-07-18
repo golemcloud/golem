@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use cloud_api_grpc::proto::golem::cloud::projectgrant::cloud_project_grant_service_server::CloudProjectGrantService;
@@ -13,18 +14,21 @@ use cloud_api_grpc::proto::golem::cloud::projectgrant::{
     project_grant_error, ProjectGrant, ProjectGrantDataRequest, ProjectGrantError,
 };
 
-use cloud_common::model::ProjectGrantId;
-use cloud_common::model::ProjectPolicyId;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_common::model::ProjectId;
-use tonic::metadata::MetadataMap;
-use tonic::{Request, Response, Status};
-
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::{project_grant, project_policy};
+use cloud_common::grpc::{proto_project_grant_id_string, proto_project_id_string};
+use cloud_common::model::ProjectGrantId;
+use cloud_common::model::ProjectPolicyId;
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::model::ProjectId;
+use golem_common::recorded_grpc_request;
+use tonic::metadata::MetadataMap;
+use tonic::{Request, Response, Status};
+use tracing::Instrument;
 
 impl From<AuthServiceError> for ProjectGrantError {
     fn from(value: AuthServiceError) -> Self {
@@ -243,14 +247,27 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
         request: Request<GetProjectGrantsRequest>,
     ) -> Result<Response<GetProjectGrantsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_by_project(r, m).await {
-            Ok(result) => Ok(Response::new(GetProjectGrantsResponse {
-                result: Some(get_project_grants_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetProjectGrantsResponse {
-                result: Some(get_project_grants_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_project_grants",
+            project_id = proto_project_id_string(&r.project_id)
+        );
+
+        let response = match self
+            .get_by_project(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(get_project_grants_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_project_grants_response::Result::Error(error.clone()),
+                &ProjectGrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetProjectGrantsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn delete_project_grant(
@@ -258,14 +275,24 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
         request: Request<DeleteProjectGrantRequest>,
     ) -> Result<Response<DeleteProjectGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.delete(r, m).await {
-            Ok(_) => Ok(Response::new(DeleteProjectGrantResponse {
-                result: Some(delete_project_grant_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(DeleteProjectGrantResponse {
-                result: Some(delete_project_grant_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "delete_project_grant",
+            project_id = proto_project_id_string(&r.project_id),
+            project_grant_id = proto_project_grant_id_string(&r.grant_id)
+        );
+
+        let response = match self.delete(r, m).instrument(record.span.clone()).await {
+            Ok(_) => record.succeed(delete_project_grant_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                delete_project_grant_response::Result::Error(error.clone()),
+                &ProjectGrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeleteProjectGrantResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_project_grant(
@@ -273,14 +300,24 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
         request: Request<GetProjectGrantRequest>,
     ) -> Result<Response<GetProjectGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetProjectGrantResponse {
-                result: Some(get_project_grant_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetProjectGrantResponse {
-                result: Some(get_project_grant_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_project_grant",
+            project_id = proto_project_id_string(&r.project_id),
+            project_grant_id = proto_project_grant_id_string(&r.grant_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_project_grant_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_project_grant_response::Result::Error(error.clone()),
+                &ProjectGrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetProjectGrantResponse {
+            result: Some(response),
+        }))
     }
 
     async fn create_project_grant(
@@ -288,13 +325,45 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
         request: Request<CreateProjectGrantRequest>,
     ) -> Result<Response<CreateProjectGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.create(r, m).await {
-            Ok(result) => Ok(Response::new(CreateProjectGrantResponse {
-                result: Some(create_project_grant_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(CreateProjectGrantResponse {
-                result: Some(create_project_grant_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!(
+            "create_project_grant",
+            project_id = proto_project_id_string(&r.project_id)
+        );
+
+        let response = match self.create(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(create_project_grant_response::Result::Success(result)),
+            Err(error) => record.fail(
+                create_project_grant_response::Result::Error(error.clone()),
+                &ProjectGrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CreateProjectGrantResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct ProjectGrantTraceErrorKind<'a>(pub &'a ProjectGrantError);
+
+impl<'a> Debug for ProjectGrantTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for ProjectGrantTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                project_grant_error::Error::BadRequest(_) => "BadRequest",
+                project_grant_error::Error::Unauthorized(_) => "Unauthorized",
+                project_grant_error::Error::NotFound(_) => "NotFound",
+                project_grant_error::Error::LimitExceeded(_) => "LimitExceeded",
+                project_grant_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

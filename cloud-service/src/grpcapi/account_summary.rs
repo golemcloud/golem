@@ -13,9 +13,13 @@ use cloud_api_grpc::proto::golem::cloud::accountsummary::{
     GetAccountsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
+use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::recorded_grpc_request;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
+use tracing::Instrument;
 
 impl From<AuthServiceError> for AccountSummaryError {
     fn from(value: AuthServiceError) -> Self {
@@ -106,14 +110,20 @@ impl CloudAccountSummaryService for AccountSummaryGrpcApi {
         request: Request<GetAccountCountRequest>,
     ) -> Result<Response<GetAccountCountResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.count(r, m).await {
-            Ok(result) => Ok(Response::new(GetAccountCountResponse {
-                result: Some(get_account_count_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetAccountCountResponse {
-                result: Some(get_account_count_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!("get_account_count",);
+
+        let response = match self.count(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_account_count_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_account_count_response::Result::Error(error.clone()),
+                &AccountSummaryTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetAccountCountResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_accounts(
@@ -121,13 +131,39 @@ impl CloudAccountSummaryService for AccountSummaryGrpcApi {
         request: Request<GetAccountsRequest>,
     ) -> Result<Response<GetAccountsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetAccountsResponse {
-                result: Some(get_accounts_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetAccountsResponse {
-                result: Some(get_accounts_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!("get_accounts",);
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_accounts_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_accounts_response::Result::Error(error.clone()),
+                &AccountSummaryTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetAccountsResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct AccountSummaryTraceErrorKind<'a>(pub &'a AccountSummaryError);
+
+impl<'a> Debug for AccountSummaryTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for AccountSummaryTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                account_summary_error::Error::Unauthorized(_) => "Unauthorized",
+                account_summary_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

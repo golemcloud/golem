@@ -1,5 +1,13 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
+use crate::grpcapi::get_authorisation_token;
+use crate::model;
+use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::project;
+use crate::service::project_auth;
+use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_server::CloudProjectService;
 use cloud_api_grpc::proto::golem::cloud::project::{
     create_project_response, delete_project_response, get_default_project_response,
@@ -13,18 +21,14 @@ use cloud_api_grpc::proto::golem::cloud::project::{
 use cloud_api_grpc::proto::golem::cloud::project::{
     project_error, Project, ProjectDataRequest, ProjectError,
 };
+use cloud_common::grpc::proto_project_id_string;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::ProjectId;
+use golem_common::recorded_grpc_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
-
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::model;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::project;
-use crate::service::project_auth;
-use crate::service::project_auth::ProjectAuthorisationService;
+use tracing::Instrument;
 
 impl From<AuthServiceError> for ProjectError {
     fn from(value: AuthServiceError) -> Self {
@@ -234,14 +238,20 @@ impl CloudProjectService for ProjectGrpcApi {
         request: Request<GetDefaultProjectRequest>,
     ) -> Result<Response<GetDefaultProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_default(r, m).await {
-            Ok(result) => Ok(Response::new(GetDefaultProjectResponse {
-                result: Some(get_default_project_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetDefaultProjectResponse {
-                result: Some(get_default_project_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!("get_default_project",);
+
+        let response = match self.get_default(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_default_project_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_default_project_response::Result::Error(error.clone()),
+                &ProjectTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetDefaultProjectResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_projects(
@@ -249,16 +259,22 @@ impl CloudProjectService for ProjectGrpcApi {
         request: Request<GetProjectsRequest>,
     ) -> Result<Response<GetProjectsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_all(r, m).await {
-            Ok(data) => Ok(Response::new(GetProjectsResponse {
-                result: Some(get_projects_response::Result::Success(
-                    GetProjectsSuccessResponse { data },
-                )),
-            })),
-            Err(err) => Ok(Response::new(GetProjectsResponse {
-                result: Some(get_projects_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!("get_projects", project_name = &r.project_name);
+
+        let response = match self.get_all(r, m).instrument(record.span.clone()).await {
+            Ok(data) => record.succeed(get_projects_response::Result::Success(
+                GetProjectsSuccessResponse { data },
+            )),
+            Err(error) => record.fail(
+                get_projects_response::Result::Error(error.clone()),
+                &ProjectTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetProjectsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn create_project(
@@ -266,18 +282,27 @@ impl CloudProjectService for ProjectGrpcApi {
         request: Request<CreateProjectRequest>,
     ) -> Result<Response<CreateProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.create(r, m).await {
-            Ok(result) => Ok(Response::new(CreateProjectResponse {
-                result: Some(create_project_response::Result::Success(
-                    CreateProjectSuccessResponse {
-                        project: Some(result),
-                    },
-                )),
-            })),
-            Err(err) => Ok(Response::new(CreateProjectResponse {
-                result: Some(create_project_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "create_project",
+            project_policy_name = r.project_data_request.as_ref().map(|p| p.name.clone())
+        );
+
+        let response = match self.create(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(create_project_response::Result::Success(
+                CreateProjectSuccessResponse {
+                    project: Some(result),
+                },
+            )),
+            Err(error) => record.fail(
+                create_project_response::Result::Error(error.clone()),
+                &ProjectTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CreateProjectResponse {
+            result: Some(response),
+        }))
     }
 
     async fn delete_project(
@@ -285,14 +310,23 @@ impl CloudProjectService for ProjectGrpcApi {
         request: Request<DeleteProjectRequest>,
     ) -> Result<Response<DeleteProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.delete(r, m).await {
-            Ok(_) => Ok(Response::new(DeleteProjectResponse {
-                result: Some(delete_project_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(DeleteProjectResponse {
-                result: Some(delete_project_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "create_project",
+            project_id = proto_project_id_string(&r.project_id)
+        );
+
+        let response = match self.delete(r, m).instrument(record.span.clone()).await {
+            Ok(_) => record.succeed(delete_project_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                delete_project_response::Result::Error(error.clone()),
+                &ProjectTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeleteProjectResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_project(
@@ -300,14 +334,23 @@ impl CloudProjectService for ProjectGrpcApi {
         request: Request<GetProjectRequest>,
     ) -> Result<Response<GetProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetProjectResponse {
-                result: Some(get_project_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetProjectResponse {
-                result: Some(get_project_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_project",
+            project_id = proto_project_id_string(&r.project_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_project_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_project_response::Result::Error(error.clone()),
+                &ProjectTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetProjectResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_project_actions(
@@ -315,13 +358,45 @@ impl CloudProjectService for ProjectGrpcApi {
         request: Request<GetProjectActionsRequest>,
     ) -> Result<Response<GetProjectActionsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_actions(r, m).await {
-            Ok(response) => Ok(Response::new(GetProjectActionsResponse {
-                result: Some(get_project_actions_response::Result::Success(response)),
-            })),
-            Err(err) => Ok(Response::new(GetProjectActionsResponse {
-                result: Some(get_project_actions_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!(
+            "get_project",
+            project_id = proto_project_id_string(&r.project_id)
+        );
+
+        let response = match self.get_actions(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_project_actions_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_project_actions_response::Result::Error(error.clone()),
+                &ProjectTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetProjectActionsResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct ProjectTraceErrorKind<'a>(pub &'a ProjectError);
+
+impl<'a> Debug for ProjectTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for ProjectTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                project_error::Error::BadRequest(_) => "BadRequest",
+                project_error::Error::Unauthorized(_) => "Unauthorized",
+                project_error::Error::LimitExceeded(_) => "LimitExceeded",
+                project_error::Error::NotFound(_) => "NotFound",
+                project_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

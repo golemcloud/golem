@@ -1,5 +1,11 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
+use crate::grpcapi::get_authorisation_token;
+use crate::model;
+use crate::service::account;
+use crate::service::auth::{AuthService, AuthServiceError};
 use cloud_api_grpc::proto::golem::cloud::account::cloud_account_service_server::CloudAccountService;
 use cloud_api_grpc::proto::golem::cloud::account::{
     account_create_response, account_delete_response, account_get_plan_response,
@@ -10,15 +16,13 @@ use cloud_api_grpc::proto::golem::cloud::account::{
 use cloud_api_grpc::proto::golem::cloud::account::{account_error, Account, AccountError};
 use cloud_api_grpc::proto::golem::cloud::plan::Plan;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_common::grpc::proto_account_id_string;
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::AccountId;
+use golem_common::recorded_grpc_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
-
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::model;
-use crate::service::account;
-use crate::service::auth::{AuthService, AuthServiceError};
+use tracing::Instrument;
 
 impl From<AuthServiceError> for AccountError {
     fn from(value: AuthServiceError) -> Self {
@@ -171,14 +175,22 @@ impl CloudAccountService for AccountGrpcApi {
         request: Request<AccountDeleteRequest>,
     ) -> Result<Response<AccountDeleteResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.delete(r, m).await {
-            Ok(_) => Ok(Response::new(AccountDeleteResponse {
-                result: Some(account_delete_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(AccountDeleteResponse {
-                result: Some(account_delete_response::Result::Error(err)),
-            })),
-        }
+        let record = recorded_grpc_request!(
+            "delete_account",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.delete(r, m).instrument(record.span.clone()).await {
+            Ok(_) => record.succeed(account_delete_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                account_delete_response::Result::Error(error.clone()),
+                &AccountTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(AccountDeleteResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_account(
@@ -186,14 +198,23 @@ impl CloudAccountService for AccountGrpcApi {
         request: Request<AccountGetRequest>,
     ) -> Result<Response<AccountGetResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(v) => Ok(Response::new(AccountGetResponse {
-                result: Some(account_get_response::Result::Account(v)),
-            })),
-            Err(err) => Ok(Response::new(AccountGetResponse {
-                result: Some(account_get_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_account",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(account_get_response::Result::Account(result)),
+            Err(error) => record.fail(
+                account_get_response::Result::Error(error.clone()),
+                &AccountTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(AccountGetResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_plan(
@@ -201,14 +222,27 @@ impl CloudAccountService for AccountGrpcApi {
         request: Request<AccountGetPlanRequest>,
     ) -> Result<Response<AccountGetPlanResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_account_plan(r, m).await {
-            Ok(v) => Ok(Response::new(AccountGetPlanResponse {
-                result: Some(account_get_plan_response::Result::Plan(v)),
-            })),
-            Err(err) => Ok(Response::new(AccountGetPlanResponse {
-                result: Some(account_get_plan_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_plan",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .get_account_plan(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(account_get_plan_response::Result::Plan(result)),
+            Err(error) => record.fail(
+                account_get_plan_response::Result::Error(error.clone()),
+                &AccountTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(AccountGetPlanResponse {
+            result: Some(response),
+        }))
     }
 
     async fn update_account(
@@ -216,14 +250,23 @@ impl CloudAccountService for AccountGrpcApi {
         request: Request<AccountUpdateRequest>,
     ) -> Result<Response<AccountUpdateResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.update(r, m).await {
-            Ok(v) => Ok(Response::new(AccountUpdateResponse {
-                result: Some(account_update_response::Result::Account(v)),
-            })),
-            Err(err) => Ok(Response::new(AccountUpdateResponse {
-                result: Some(account_update_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "update_account",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.update(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(account_update_response::Result::Account(result)),
+            Err(error) => record.fail(
+                account_update_response::Result::Error(error.clone()),
+                &AccountTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(AccountUpdateResponse {
+            result: Some(response),
+        }))
     }
 
     async fn create_account(
@@ -231,13 +274,44 @@ impl CloudAccountService for AccountGrpcApi {
         request: Request<AccountCreateRequest>,
     ) -> Result<Response<AccountCreateResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.create(r, m).await {
-            Ok(v) => Ok(Response::new(AccountCreateResponse {
-                result: Some(account_create_response::Result::Account(v)),
-            })),
-            Err(err) => Ok(Response::new(AccountCreateResponse {
-                result: Some(account_create_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!(
+            "create_account",
+            account_name = r.account_data.as_ref().map(|data| data.name.clone())
+        );
+
+        let response = match self.create(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(account_create_response::Result::Account(result)),
+            Err(error) => record.fail(
+                account_create_response::Result::Error(error.clone()),
+                &AccountTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(AccountCreateResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct AccountTraceErrorKind<'a>(pub &'a AccountError);
+
+impl<'a> Debug for AccountTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for AccountTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                account_error::Error::BadRequest(_) => "BadRequest",
+                account_error::Error::Unauthorized(_) => "Unauthorized",
+                account_error::Error::NotFound(_) => "NotFound",
+                account_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

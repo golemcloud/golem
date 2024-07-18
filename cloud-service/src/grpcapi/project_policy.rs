@@ -1,5 +1,6 @@
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
+
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project_policy;
@@ -11,11 +12,16 @@ use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
 use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
     project_policy_error, ProjectPolicy, ProjectPolicyError,
 };
+use cloud_common::grpc::proto_project_policy_id_string;
 use cloud_common::model::ProjectPolicyId;
 use golem_api_grpc::proto::golem::common::ErrorBody;
+use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::recorded_grpc_request;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
+use tracing::Instrument;
 
 impl From<AuthServiceError> for ProjectPolicyError {
     fn from(value: AuthServiceError) -> Self {
@@ -132,14 +138,23 @@ impl CloudProjectPolicyService for ProjectPolicyGrpcApi {
         request: Request<CreateProjectPolicyRequest>,
     ) -> Result<Response<CreateProjectPolicyResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.create(r, m).await {
-            Ok(result) => Ok(Response::new(CreateProjectPolicyResponse {
-                result: Some(create_project_policy_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(CreateProjectPolicyResponse {
-                result: Some(create_project_policy_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "create_project_policy",
+            project_policy_name = r.project_policy_data.as_ref().map(|p| p.name.clone())
+        );
+
+        let response = match self.create(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(create_project_policy_response::Result::Success(result)),
+            Err(error) => record.fail(
+                create_project_policy_response::Result::Error(error.clone()),
+                &ProjectPolicyTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CreateProjectPolicyResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_project_policy(
@@ -147,13 +162,45 @@ impl CloudProjectPolicyService for ProjectPolicyGrpcApi {
         request: Request<GetProjectPolicyRequest>,
     ) -> Result<Response<GetProjectPolicyResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetProjectPolicyResponse {
-                result: Some(get_project_policy_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetProjectPolicyResponse {
-                result: Some(get_project_policy_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!(
+            "get_project_policy",
+            project_policy_id = proto_project_policy_id_string(&r.project_policy_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_project_policy_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_project_policy_response::Result::Error(error.clone()),
+                &ProjectPolicyTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetProjectPolicyResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct ProjectPolicyTraceErrorKind<'a>(pub &'a ProjectPolicyError);
+
+impl<'a> Debug for ProjectPolicyTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for ProjectPolicyTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                project_policy_error::Error::BadRequest(_) => "BadRequest",
+                project_policy_error::Error::Unauthorized(_) => "Unauthorized",
+                project_policy_error::Error::NotFound(_) => "NotFound",
+                project_policy_error::Error::LimitExceeded(_) => "LimitExceeded",
+                project_policy_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

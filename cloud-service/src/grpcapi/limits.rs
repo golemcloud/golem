@@ -1,6 +1,11 @@
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
+use crate::grpcapi::get_authorisation_token;
+use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_server::CloudLimitsService;
 use cloud_api_grpc::proto::golem::cloud::limit::{
     batch_update_resource_limits_response, get_resource_limits_response,
@@ -11,14 +16,15 @@ use cloud_api_grpc::proto::golem::cloud::limit::{
 };
 use cloud_api_grpc::proto::golem::cloud::limit::{limits_error, LimitsError};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
+use golem_common::grpc::{
+    proto_account_id_string, proto_component_id_string, proto_worker_id_string,
+};
+use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::AccountId;
+use golem_common::recorded_grpc_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
-
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
+use tracing::Instrument;
 
 impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
@@ -199,14 +205,28 @@ impl CloudLimitsService for LimitsGrpcApi {
         request: Request<UpdateComponentLimitRequest>,
     ) -> Result<Response<UpdateComponentLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.update_component_limit(r, m).await {
-            Ok(_) => Ok(Response::new(UpdateComponentLimitResponse {
-                result: Some(update_component_limit_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(UpdateComponentLimitResponse {
-                result: Some(update_component_limit_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "update_component_limit",
+            component_id = proto_component_id_string(&r.component_id),
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .update_component_limit(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(update_component_limit_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_component_limit_response::Result::Error(error.clone()),
+                &LimitsTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateComponentLimitResponse {
+            result: Some(response),
+        }))
     }
 
     async fn update_worker_limit(
@@ -214,14 +234,28 @@ impl CloudLimitsService for LimitsGrpcApi {
         request: Request<UpdateWorkerLimitRequest>,
     ) -> Result<Response<UpdateWorkerLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.update_worker_limit(r, m).await {
-            Ok(_) => Ok(Response::new(UpdateWorkerLimitResponse {
-                result: Some(update_worker_limit_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(UpdateWorkerLimitResponse {
-                result: Some(update_worker_limit_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "update_worker_limit",
+            component_id = proto_worker_id_string(&r.worker_id),
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .update_worker_limit(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(update_worker_limit_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_worker_limit_response::Result::Error(error.clone()),
+                &LimitsTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateWorkerLimitResponse {
+            result: Some(response),
+        }))
     }
 
     async fn update_worker_connection_limit(
@@ -229,14 +263,28 @@ impl CloudLimitsService for LimitsGrpcApi {
         request: Request<UpdateWorkerLimitRequest>,
     ) -> Result<Response<UpdateWorkerLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.update_worker_connection_limit(r, m).await {
-            Ok(_) => Ok(Response::new(UpdateWorkerLimitResponse {
-                result: Some(update_worker_limit_response::Result::Success(Empty {})),
-            })),
-            Err(err) => Ok(Response::new(UpdateWorkerLimitResponse {
-                result: Some(update_worker_limit_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "update_worker_connection_limit",
+            component_id = proto_worker_id_string(&r.worker_id),
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .update_worker_connection_limit(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(update_worker_limit_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_worker_limit_response::Result::Error(error.clone()),
+                &LimitsTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateWorkerLimitResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_resource_limits(
@@ -244,14 +292,23 @@ impl CloudLimitsService for LimitsGrpcApi {
         request: Request<GetResourceLimitsRequest>,
     ) -> Result<Response<GetResourceLimitsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get(r, m).await {
-            Ok(result) => Ok(Response::new(GetResourceLimitsResponse {
-                result: Some(get_resource_limits_response::Result::Success(result)),
-            })),
-            Err(err) => Ok(Response::new(GetResourceLimitsResponse {
-                result: Some(get_resource_limits_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!(
+            "get_resource_limits",
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self.get(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_resource_limits_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_resource_limits_response::Result::Error(error.clone()),
+                &LimitsTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetResourceLimitsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn batch_update_resource_limits(
@@ -259,15 +316,43 @@ impl CloudLimitsService for LimitsGrpcApi {
         request: Request<BatchUpdateResourceLimitsRequest>,
     ) -> Result<Response<BatchUpdateResourceLimitsResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.update(r, m).await {
-            Ok(_) => Ok(Response::new(BatchUpdateResourceLimitsResponse {
-                result: Some(batch_update_resource_limits_response::Result::Success(
-                    Empty {},
-                )),
-            })),
-            Err(err) => Ok(Response::new(BatchUpdateResourceLimitsResponse {
-                result: Some(batch_update_resource_limits_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!("batch_update_resource_limits",);
+
+        let response = match self.update(r, m).instrument(record.span.clone()).await {
+            Ok(_) => record.succeed(batch_update_resource_limits_response::Result::Success(
+                Empty {},
+            )),
+            Err(error) => record.fail(
+                batch_update_resource_limits_response::Result::Error(error.clone()),
+                &LimitsTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(BatchUpdateResourceLimitsResponse {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct LimitsTraceErrorKind<'a>(pub &'a LimitsError);
+
+impl<'a> Debug for LimitsTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for LimitsTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                limits_error::Error::BadRequest(_) => "BadRequest",
+                limits_error::Error::Unauthorized(_) => "Unauthorized",
+                limits_error::Error::LimitExceeded(_) => "LimitExceeded",
+                limits_error::Error::InternalError(_) => "InternalError",
+            },
         }
     }
 }

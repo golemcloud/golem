@@ -1,6 +1,13 @@
+use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
+use crate::grpcapi::get_authorisation_token;
+use crate::model;
+use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::login;
+use crate::service::oauth2::{OAuth2Error, OAuth2Service};
 use cloud_api_grpc::proto::golem::cloud::login::cloud_login_service_server::CloudLoginService;
 use cloud_api_grpc::proto::golem::cloud::login::{
     complete_o_auth2_response, current_token_response, o_auth2_response, start_o_auth2_response,
@@ -10,15 +17,11 @@ use cloud_api_grpc::proto::golem::cloud::login::{
 use cloud_api_grpc::proto::golem::cloud::login::{login_error, LoginError, OAuth2Data};
 use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::recorded_grpc_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
-
-use crate::auth::AccountAuthorisation;
-use crate::grpcapi::get_authorisation_token;
-use crate::model;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::login;
-use crate::service::oauth2::{OAuth2Error, OAuth2Service};
+use tracing::Instrument;
 
 impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
@@ -140,28 +143,42 @@ impl CloudLoginService for LoginGrpcApi {
         request: Request<CompleteOAuth2Request>,
     ) -> Result<Response<CompleteOAuth2Response>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.complete_oauth2(r, m).await {
-            Ok(v) => Ok(Response::new(CompleteOAuth2Response {
-                result: Some(complete_o_auth2_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(CompleteOAuth2Response {
-                result: Some(complete_o_auth2_response::Result::Error(err)),
-            })),
-        }
+        let record = recorded_grpc_request!("complete_o_auth2",);
+
+        let response = match self
+            .complete_oauth2(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(complete_o_auth2_response::Result::Success(result)),
+            Err(error) => record.fail(
+                complete_o_auth2_response::Result::Error(error.clone()),
+                &LoginTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CompleteOAuth2Response {
+            result: Some(response),
+        }))
     }
 
     async fn start_o_auth2(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<StartOAuth2Response>, Status> {
-        match self.start_oauth2().await {
-            Ok(v) => Ok(Response::new(StartOAuth2Response {
-                result: Some(start_o_auth2_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(StartOAuth2Response {
-                result: Some(start_o_auth2_response::Result::Error(err)),
-            })),
-        }
+        let record = recorded_grpc_request!("start_o_auth2",);
+
+        let response = match self.start_oauth2().instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(start_o_auth2_response::Result::Success(result)),
+            Err(error) => record.fail(
+                start_o_auth2_response::Result::Error(error.clone()),
+                &LoginTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(StartOAuth2Response {
+            result: Some(response),
+        }))
     }
 
     async fn current_token(
@@ -169,14 +186,24 @@ impl CloudLoginService for LoginGrpcApi {
         request: Request<CurrentTokenRequest>,
     ) -> Result<Response<CurrentTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.get_current_token(r, m).await {
-            Ok(v) => Ok(Response::new(CurrentTokenResponse {
-                result: Some(current_token_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(CurrentTokenResponse {
-                result: Some(current_token_response::Result::Error(err)),
-            })),
-        }
+
+        let record = recorded_grpc_request!("current_token",);
+
+        let response = match self
+            .get_current_token(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(current_token_response::Result::Success(result)),
+            Err(error) => record.fail(
+                current_token_response::Result::Error(error.clone()),
+                &LoginTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CurrentTokenResponse {
+            result: Some(response),
+        }))
     }
 
     async fn o_auth2(
@@ -184,13 +211,40 @@ impl CloudLoginService for LoginGrpcApi {
         request: Request<OAuth2Request>,
     ) -> Result<Response<OAuth2Response>, Status> {
         let (m, _, r) = request.into_parts();
-        match self.oauth2(r, m).await {
-            Ok(v) => Ok(Response::new(OAuth2Response {
-                result: Some(o_auth2_response::Result::Success(v)),
-            })),
-            Err(err) => Ok(Response::new(OAuth2Response {
-                result: Some(o_auth2_response::Result::Error(err)),
-            })),
+
+        let record = recorded_grpc_request!("o_auth2",);
+
+        let response = match self.oauth2(r, m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(o_auth2_response::Result::Success(result)),
+            Err(error) => record.fail(
+                o_auth2_response::Result::Error(error.clone()),
+                &LoginTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(OAuth2Response {
+            result: Some(response),
+        }))
+    }
+}
+
+pub struct LoginTraceErrorKind<'a>(pub &'a LoginError);
+
+impl<'a> Debug for LoginTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for LoginTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                login_error::Error::BadRequest(_) => "BadRequest",
+                login_error::Error::Internal(_) => "Internal",
+                login_error::Error::External(_) => "External",
+            },
         }
     }
 }
