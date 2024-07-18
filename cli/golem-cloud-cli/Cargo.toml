@@ -91,7 +91,7 @@ tonic-health = { workspace = true }
 regex = "1.10.3"
 strip-ansi-escapes = "0.2.0"
 once_cell = "1.19.0"
-golem-api-grpc = "0.0.109"
+golem-api-grpc = "0.0.121"
 cloud-api-grpc = { path = "../cloud-api-grpc", version = "0.0.0" }
 golem-common = { workspace = true }
 
