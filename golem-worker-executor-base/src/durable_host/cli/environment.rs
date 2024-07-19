@@ -24,6 +24,7 @@ use wasmtime_wasi::bindings::cli::environment::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("cli::environment", "get_environment");
         Durability::<Ctx, Vec<(String, String)>, SerializableError>::wrap(
             self,
@@ -35,6 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("cli::environment", "get_arguments");
         Durability::<Ctx, Vec<String>, SerializableError>::wrap(
             self,
@@ -46,6 +48,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("cli::environment", "initial_cwd");
         Durability::<Ctx, Option<String>, SerializableError>::wrap(
             self,

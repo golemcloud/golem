@@ -12,29 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
-use async_trait::async_trait;
-
-use http::{HeaderName, HeaderValue};
-
 use std::collections::HashMap;
 use std::str::FromStr;
-use tracing::warn;
 
+use anyhow::anyhow;
+use async_trait::async_trait;
+use http::{HeaderName, HeaderValue};
 use wasmtime::component::Resource;
-
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::metrics::wasm::record_host_function_call;
-
-use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
-};
-use crate::durable_host::serialized::SerializableError;
-use crate::get_oplog_entry;
-use crate::model::PersistenceLevel;
-use crate::services::oplog::OplogOps;
-use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 use wasmtime_wasi_http::bindings::wasi::http::types::{
     Duration, ErrorCode, FieldKey, FieldValue, Fields, FutureIncomingResponse, FutureTrailers,
     HeaderError, Headers, Host, HostFields, HostFutureIncomingResponse, HostFutureTrailers,
@@ -47,6 +31,20 @@ use wasmtime_wasi_http::bindings::wasi::http::types::{
 use wasmtime_wasi_http::get_fields;
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::{HttpError, HttpResult};
+
+use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
+
+use crate::durable_host::http::serialized::{
+    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
+};
+use crate::durable_host::http::{continue_http_request, end_http_request_sync};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::get_oplog_entry;
+use crate::metrics::wasm::record_host_function_call;
+use crate::model::PersistenceLevel;
+use crate::services::oplog::OplogOps;
+use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<Fields>> {
@@ -349,11 +347,32 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
         self_: Resource<IncomingResponse>,
     ) -> anyhow::Result<Result<Resource<IncomingBody>, ()>> {
         record_host_function_call("http::types::incoming_response", "consume");
-        HostIncomingResponse::consume(&mut self.as_wasi_http_view(), self_)
+        let handle = self_.rep();
+        let result = HostIncomingResponse::consume(&mut self.as_wasi_http_view(), self_);
+
+        if let Ok(Ok(resource)) = &result {
+            let incoming_body_handle = resource.rep();
+            continue_http_request(
+                self,
+                handle,
+                incoming_body_handle,
+                HttpRequestCloseOwner::IncomingBodyDropOrFinish,
+            );
+        }
+
+        result
     }
 
     fn drop(&mut self, rep: Resource<IncomingResponse>) -> anyhow::Result<()> {
         record_host_function_call("http::types::incoming_response", "drop");
+
+        let handle = rep.rep();
+        if let Some(state) = self.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
+                end_http_request_sync(self, handle)?;
+            }
+        }
+
         HostIncomingResponse::drop(&mut self.as_wasi_http_view(), rep)
     }
 }
@@ -365,16 +384,46 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         self_: Resource<IncomingBody>,
     ) -> anyhow::Result<Result<Resource<InputStream>, ()>> {
         record_host_function_call("http::types::incoming_body", "stream");
-        HostIncomingBody::stream(&mut self.as_wasi_http_view(), self_)
+
+        let handle = self_.rep();
+        let result = HostIncomingBody::stream(&mut self.as_wasi_http_view(), self_);
+
+        if let Ok(Ok(resource)) = &result {
+            let stream_handle = resource.rep();
+            continue_http_request(
+                self,
+                handle,
+                stream_handle,
+                HttpRequestCloseOwner::InputStreamClosed,
+            );
+        }
+
+        result
     }
 
     fn finish(&mut self, this: Resource<IncomingBody>) -> anyhow::Result<Resource<FutureTrailers>> {
         record_host_function_call("http::types::incoming_body", "finish");
+
+        let handle = this.rep();
+        if let Some(state) = self.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
+                end_http_request_sync(self, handle)?;
+            }
+        }
+
         HostIncomingBody::finish(&mut self.as_wasi_http_view(), this)
     }
 
     fn drop(&mut self, rep: Resource<IncomingBody>) -> anyhow::Result<()> {
         record_host_function_call("http::types::incoming_body", "drop");
+
+        let handle = rep.rep();
+        if let Some(state) = self.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
+                end_http_request_sync(self, handle)?;
+            }
+        }
+
         HostIncomingBody::drop(&mut self.as_wasi_http_view(), rep)
     }
 }
@@ -390,6 +439,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<FutureTrailers>,
     ) -> anyhow::Result<Option<Result<Result<Option<Resource<Trailers>>, ErrorCode>, ()>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("http::types::future_trailers", "get");
         Durability::<
             Ctx,
@@ -536,6 +586,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<FutureIncomingResponse>,
     ) -> anyhow::Result<Option<Result<Result<Resource<IncomingResponse>, ErrorCode>, ()>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("http::types::future_incoming_response", "get");
         // Each get call is stored in the oplog. If the result was Error or None (future is pending), we just
         // continue the replay. If the result was Ok, we return register the stored response to the table as a new
@@ -547,7 +598,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
         let handle = self_.rep();
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
+        if self.state.is_live()
+            || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
@@ -579,19 +631,14 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
 
                 if !matches!(serializable_response, SerializableResponse::Pending) {
-                    match self.state.open_function_table.get(&handle) {
-                        Some(begin_index) => {
-                            self.state
-                                .end_function(
-                                    &WrappedFunctionType::WriteRemoteBatched,
-                                    *begin_index,
-                                )
-                                .await?;
-                            self.state.open_function_table.remove(&handle);
-                        }
-                        None => {
-                            warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
-                        }
+                    if let Ok(Some(Ok(Ok(resource)))) = &response {
+                        let incoming_response_handle = resource.rep();
+                        continue_http_request(
+                            self,
+                            handle,
+                            incoming_response_handle,
+                            HttpRequestCloseOwner::IncomingResponseDrop,
+                        );
                     }
                 }
                 self.state.oplog.commit().await;
@@ -599,7 +646,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             response
         } else {
-            let (_, oplog_entry) = get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
             let serialized_response = self
                 .state
@@ -614,21 +661,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 })
                 .unwrap();
 
-            if !matches!(serialized_response, SerializableResponse::Pending) {
-                match self.state.open_function_table.get(&handle) {
-                    Some(begin_index) => {
-                        warn!("CALLING END_FUNCTION");
-                        self.state
-                            .end_function(&WrappedFunctionType::WriteRemoteBatched, *begin_index)
-                            .await?;
-                        self.state.open_function_table.remove(&handle);
-                    }
-                    None => {
-                        warn!("No matching BeginRemoteWrite index was found when HTTP response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
-                    }
-                }
-            }
-
             match serialized_response {
                 SerializableResponse::Pending => Ok(None),
                 SerializableResponse::HeadersReceived(serializable_response_headers) => {
@@ -636,6 +668,15 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         serializable_response_headers.try_into()?;
 
                     let rep = self.table().push(incoming_response)?;
+                    let incoming_response_handle = rep.rep();
+
+                    continue_http_request(
+                        self,
+                        handle,
+                        incoming_response_handle,
+                        HttpRequestCloseOwner::IncomingResponseDrop,
+                    );
+
                     Ok(Some(Ok(Ok(rep))))
                 }
                 SerializableResponse::InternalError(None) => Ok(Some(Err(()))),
@@ -649,6 +690,14 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<FutureIncomingResponse>) -> anyhow::Result<()> {
         record_host_function_call("http::types::future_incoming_response", "drop");
+
+        let handle = rep.rep();
+        if let Some(state) = self.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
+                end_http_request_sync(self, handle)?;
+            }
+        }
+
         HostFutureIncomingResponse::drop(&mut self.as_wasi_http_view(), rep)
     }
 }
@@ -856,6 +905,13 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for &mut DurableWorkerCtx<Ctx> {
     }
 
     fn drop(&mut self, rep: Resource<IncomingResponse>) -> anyhow::Result<()> {
+        let handle = rep.rep();
+        if let Some(state) = self.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
+                end_http_request_sync(self, handle)?;
+            }
+        }
+
         HostIncomingResponse::drop(*self, rep)
     }
 }

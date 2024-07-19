@@ -44,6 +44,7 @@ use wasmtime_wasi::subscribe;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, location: Uri) -> anyhow::Result<Resource<WasmRpcEntry>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "new");
 
         match location.parse_as_golem_uri() {
@@ -72,6 +73,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
 
         let entry = self.table().get(&self_)?;
@@ -135,6 +137,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "invoke");
 
         let entry = self.table().get(&self_)?;
@@ -198,6 +201,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "async-invoke-and-await");
         let begin_index = self
             .state
@@ -347,6 +351,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::future-invoke-result", "subscribe");
         subscribe(self.table(), this, None)
     }
@@ -355,11 +360,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Option<Result<WitValue, golem_wasm_rpc::RpcError>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
 
         let handle = this.rep();
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
+        if self.state.is_live()
+            || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let entry = self.table().get_mut(&this)?;
             let entry = entry
@@ -472,13 +479,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             result
         } else {
             let (_, oplog_entry) =
-                get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked).map_err(
-                    |golem_err| {
+                get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
+                    .map_err(|golem_err| {
                         anyhow!(
                     "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
                 )
-                    },
-                )?;
+                    })?;
 
             let serialized_invoke_result = self
                 .state

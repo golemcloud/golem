@@ -30,6 +30,7 @@ impl<Ctx: WorkerCtx> HostFutureGetResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureGetResult>,
     ) -> anyhow::Result<Option<Result<Option<Resource<IncomingValue>>, Resource<Error>>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache::future_get", "future_get_result_get");
         unimplemented!("future_get_result_get")
     }
@@ -38,6 +39,7 @@ impl<Ctx: WorkerCtx> HostFutureGetResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureGetResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache::future_get", "listen_to_future_get_result");
         unimplemented!("listen_to_future_get_result")
     }
@@ -54,6 +56,7 @@ impl<Ctx: WorkerCtx> HostFutureExistsResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureExistsResult>,
     ) -> anyhow::Result<Option<Result<bool, Resource<Error>>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache::future_exists", "future_exists_result_get");
         unimplemented!("future_exists_result_get")
     }
@@ -62,6 +65,7 @@ impl<Ctx: WorkerCtx> HostFutureExistsResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureExistsResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "keyvalue::cache::future_exists",
             "listen_to_future_exists_result",
@@ -81,6 +85,7 @@ impl<Ctx: WorkerCtx> HostFutureResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureResult>,
     ) -> anyhow::Result<Option<Result<(), Resource<Error>>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache::future_result", "future_result_get");
         unimplemented!("future_result_get")
     }
@@ -89,6 +94,7 @@ impl<Ctx: WorkerCtx> HostFutureResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache::future_result", "listen_to_future_result");
         unimplemented!("listen_to_future_result")
     }
@@ -105,6 +111,7 @@ impl<Ctx: WorkerCtx> HostFutureGetOrSetResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureGetOrSetResult>,
     ) -> anyhow::Result<Option<Result<GetOrSetEntry, Resource<Error>>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "keyvalue::cache::future_get_or_set",
             "future_get_or_set_result_get",
@@ -116,6 +123,7 @@ impl<Ctx: WorkerCtx> HostFutureGetOrSetResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<FutureGetOrSetResult>,
     ) -> anyhow::Result<Resource<Pollable>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "keyvalue::cache::future_get_or_set",
             "listen_to_future_get_or_set_result",
@@ -136,6 +144,7 @@ impl<Ctx: WorkerCtx> HostVacancy for DurableWorkerCtx<Ctx> {
         _self_: Resource<Vacancy>,
         _ttl_ms: Option<u32>,
     ) -> anyhow::Result<Resource<OutgoingValue>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache::vacancy", "vacancy_fill");
         unimplemented!("vacancy_fill")
     }
@@ -149,11 +158,13 @@ impl<Ctx: WorkerCtx> HostVacancy for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get(&mut self, _k: Key) -> anyhow::Result<Resource<FutureGetResult>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache", "get");
         unimplemented!("get")
     }
 
     async fn exists(&mut self, _k: Key) -> anyhow::Result<Resource<FutureExistsResult>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache", "exists");
         unimplemented!("exists")
     }
@@ -164,16 +175,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         _v: Resource<OutgoingValue>,
         _ttl_ms: Option<u32>,
     ) -> anyhow::Result<Resource<FutureResult>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache", "set");
         unimplemented!("set")
     }
 
     async fn get_or_set(&mut self, _k: Key) -> anyhow::Result<Resource<FutureGetOrSetResult>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache", "get_or_set");
         unimplemented!("get_or_set")
     }
 
     async fn delete(&mut self, _k: Key) -> anyhow::Result<Resource<FutureResult>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::cache", "delete");
         unimplemented!("delete")
     }

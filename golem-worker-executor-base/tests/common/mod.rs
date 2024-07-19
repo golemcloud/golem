@@ -514,8 +514,8 @@ impl StatusManagement for TestWorkerCtx {
         self.durable_ctx.check_interrupt()
     }
 
-    fn set_suspended(&self) {
-        self.durable_ctx.set_suspended()
+    async fn set_suspended(&self) -> Result<(), GolemError> {
+        self.durable_ctx.set_suspended().await
     }
 
     fn set_running(&self) {

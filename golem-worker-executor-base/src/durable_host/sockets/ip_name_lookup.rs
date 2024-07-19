@@ -64,6 +64,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("sockets::ip_name_lookup", "resolve_addresses");
 
         let addresses: Result<Vec<IpAddress>, SocketError> =

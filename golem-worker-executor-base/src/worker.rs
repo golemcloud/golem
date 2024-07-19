@@ -51,7 +51,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level};
+use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
 
@@ -1289,7 +1289,11 @@ impl RunningWorker {
             let mut final_decision = {
                 let mut store = store.lock().await;
 
-                store.data_mut().set_suspended();
+                store
+                    .data_mut()
+                    .set_suspended()
+                    .await
+                    .expect("Initial set_suspended should never fail");
                 let span = span!(
                     Level::INFO,
                     "invocation",
@@ -1307,8 +1311,11 @@ impl RunningWorker {
                     }
                     Err(err) => {
                         warn!("Failed to start the worker: {err}");
+                        if let Err(err2) = store.data_mut().set_suspended().await {
+                            warn!("Additional error during startup of the worker: {err2}");
+                        }
+
                         parent.stop_internal(true, Some(err)).await;
-                        store.data_mut().set_suspended();
                         break; // early return, we can't retry this
                     }
                 }
@@ -1548,7 +1555,9 @@ impl RunningWorker {
             }
 
             {
-                store.lock().await.data_mut().set_suspended();
+                if let Err(err) = store.lock().await.data_mut().set_suspended().await {
+                    error!("Failed to set the worker to suspended state at the end of the invocation loop: {err}");
+                }
             }
 
             match final_decision {

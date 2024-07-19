@@ -17,9 +17,10 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{ResourceTable, StreamError};
 
+use crate::durable_host::http::{end_http_request, end_http_request_sync};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
@@ -37,9 +38,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "read");
         if is_incoming_http_body_stream(self.table(), &self_) {
-            Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
+            let handle = self_.rep();
+            let result = Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::read",
@@ -49,7 +52,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::read(&mut self.as_wasi_view(), self_, len).await
         }
@@ -60,9 +65,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "blocking_read");
         if is_incoming_http_body_stream(self.table(), &self_) {
-            Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
+            let handle = self_.rep();
+            let result = Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::blocking_read",
@@ -72,16 +79,20 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::blocking_read(&mut self.as_wasi_view(), self_, len).await
         }
     }
 
     async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "skip");
         if is_incoming_http_body_stream(self.table(), &self_) {
-            Durability::<Ctx, u64, SerializableStreamError>::wrap(
+            let handle = self_.rep();
+            let result = Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::skip",
@@ -91,7 +102,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::skip(&mut self.as_wasi_view(), self_, len).await
         }
@@ -102,9 +115,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "blocking_skip");
         if is_incoming_http_body_stream(self.table(), &self_) {
-            Durability::<Ctx, u64, SerializableStreamError>::wrap(
+            let handle = self_.rep();
+            let result = Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
                 WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::blocking_skip",
@@ -114,7 +129,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::blocking_skip(&mut self.as_wasi_view(), self_, len).await
         }
@@ -127,6 +144,16 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<InputStream>) -> anyhow::Result<()> {
         record_host_function_call("io::streams::input_stream", "drop");
+
+        if is_incoming_http_body_stream(self.table(), &rep) {
+            let handle = rep.rep();
+            if let Some(state) = self.state.open_http_requests.get(&handle) {
+                if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
+                    end_http_request_sync(self, handle)?;
+                }
+            }
+        }
+
         HostInputStream::drop(&mut self.as_wasi_view(), rep)
     }
 }
@@ -175,6 +202,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "blocking_write_and_flush");
 
         let event_service = self.public_state.event_service.clone();
@@ -209,6 +237,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     }
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "blocking_flush");
         HostOutputStream::blocking_flush(&mut self.as_wasi_view(), self_).await
     }
@@ -228,6 +257,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         len: u64,
     ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "io::streams::output_stream",
             "blocking_write_zeroes_and_flush",
@@ -242,6 +272,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         src: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "splice");
         HostOutputStream::splice(&mut self.as_wasi_view(), self_, src, len).await
     }
@@ -252,6 +283,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         src: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "blocking_splice");
         HostOutputStream::blocking_splice(&mut self.as_wasi_view(), self_, src, len).await
     }
@@ -411,4 +443,19 @@ impl From<GolemError> for StreamError {
     fn from(value: GolemError) -> Self {
         StreamError::Trap(anyhow!(value))
     }
+}
+
+async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+    result: &Result<T, StreamError>,
+) -> Result<(), GolemError> {
+    if matches!(result, Err(StreamError::Closed)) {
+        if let Some(state) = ctx.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
+                end_http_request(ctx, handle).await?;
+            }
+        }
+    }
+    Ok(())
 }

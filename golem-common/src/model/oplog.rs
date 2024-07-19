@@ -1,5 +1,3 @@
-use std::fmt::{Display, Formatter};
-
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -7,6 +5,9 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
@@ -67,6 +68,62 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
+    }
+}
+
+#[derive(Clone)]
+pub struct AtomicOplogIndex(Arc<AtomicU64>);
+
+impl AtomicOplogIndex {
+    pub fn from_u64(value: u64) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value)))
+    }
+
+    pub fn get(&self) -> OplogIndex {
+        OplogIndex(self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    pub fn set(&self, value: OplogIndex) {
+        self.0.store(value.0, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn from_oplog_index(value: OplogIndex) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value.0)))
+    }
+
+    /// Gets the previous oplog index
+    pub fn previous(&self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the next oplog index
+    pub fn next(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
+    /// having `count` elements.
+    pub fn range_end(&self, count: u64) {
+        self.0
+            .fetch_sub(count - 1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl Display for AtomicOplogIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+impl From<AtomicOplogIndex> for u64 {
+    fn from(value: AtomicOplogIndex) -> Self {
+        value.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl From<AtomicOplogIndex> for OplogIndex {
+    fn from(value: AtomicOplogIndex) -> Self {
+        OplogIndex::from_u64(value.0.load(std::sync::atomic::Ordering::Acquire))
     }
 }
 

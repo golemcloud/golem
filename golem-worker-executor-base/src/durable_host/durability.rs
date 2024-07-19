@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::model::PersistenceLevel;
@@ -169,8 +183,10 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             .await?;
             result
         } else {
-            let (_, oplog_entry) =
-                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
+            let (_, oplog_entry) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::ImportedFunctionInvoked
+            )?;
             DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
                 .state
@@ -262,8 +278,10 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             }
             result
         } else {
-            let (_, oplog_entry) =
-                crate::get_oplog_entry!(self.state, OplogEntry::ImportedFunctionInvoked)?;
+            let (_, oplog_entry) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::ImportedFunctionInvoked
+            )?;
             DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
                 .state

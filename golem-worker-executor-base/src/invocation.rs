@@ -233,7 +233,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         r.add_fuel(extra_fuel);
     }
 
-    store.data().set_suspended();
+    store.data().set_suspended().await?;
 
     call_result
 }
