@@ -358,15 +358,15 @@ impl Deps {
             });
         }
 
-        info!("Awaiting workers");
+        info!("Workers invoked");
         while let Some(result) = tasks.join_next().await {
             let (worker_id, result) = result.unwrap();
             match result {
                 Ok(_) => {
-                    info!("Worker invoke success ({worker_id})")
+                    info!("Worker invoke success: {worker_id}")
                 }
                 Err(err) => {
-                    panic!("Worker invoke error ({worker_id}): {err:?}");
+                    panic!("Worker invoke error: {worker_id}, {err:?}");
                 }
             }
         }
