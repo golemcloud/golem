@@ -4,6 +4,7 @@ use std::time::Duration;
 use ctor::{ctor, dtor};
 use golem_wasm_rpc::Value;
 use rand::prelude::*;
+use tokio::task::JoinSet;
 use tracing::info;
 
 use golem_api_grpc::proto::golem::worker;
@@ -335,31 +336,39 @@ impl Deps {
     async fn invoke_and_await_workers(
         workers: &[WorkerId],
     ) -> Result<(), worker::worker_error::Error> {
-        let mut tasks = Vec::new();
-
+        let mut tasks = JoinSet::new();
         for worker_id in workers {
-            let worker_id_clone = worker_id.clone();
-            tasks.push((
-                worker_id,
-                tokio::spawn(async move {
+            tasks.spawn({
+                let worker_id = worker_id.clone();
+                async move {
                     let idempotency_key = IdempotencyKey::fresh();
-                    DEPS.invoke_and_await_with_key(
-                        &worker_id_clone,
-                        &idempotency_key,
-                        "golem:it/api.{echo}",
-                        vec![Value::Option(Some(Box::new(Value::String(
-                            "Hello".to_string(),
-                        ))))],
+                    (
+                        worker_id.clone(),
+                        DEPS.invoke_and_await_with_key(
+                            &worker_id,
+                            &idempotency_key,
+                            "golem:it/api.{echo}",
+                            vec![Value::Option(Some(Box::new(Value::String(
+                                "Hello".to_string(),
+                            ))))],
+                        )
+                        .await,
                     )
-                    .await
-                }),
-            ));
+                }
+            });
         }
 
-        for (worker_id, task) in tasks {
-            info!("Awaiting worker: {}", worker_id);
-            let _ = task.await.unwrap()?;
-            info!("Worker finished: {}", worker_id);
+        info!("Awaiting workers");
+        while let Some(result) = tasks.join_next().await {
+            let (worker_id, result) = result.unwrap();
+            match result {
+                Ok(_) => {
+                    info!("Worker invoke success ({worker_id})")
+                }
+                Err(err) => {
+                    panic!("Worker invoke error ({worker_id}): {err:?}");
+                }
+            }
         }
 
         Ok(())
