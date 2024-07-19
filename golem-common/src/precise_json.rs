@@ -1,3 +1,5 @@
+use golem_wasm_rpc::protobuf::type_annotated_value;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -192,15 +194,25 @@ impl TryFrom<JsonValue> for PreciseJson {
                     },
                     "variant" => match value {
                         JsonValue::Object(variant) => {
-                            let case_idx = variant.get("case_idx")
+                            let case_idx = variant
+                                .get("case_idx")
                                 .and_then(|v| v.as_number().and_then(|n| n.as_i64()))
-                                .ok_or_else(|| PreciseJsonConversionError::MissingField("case_idx".to_string()))
-                                .and_then(|idx| u32::try_from(idx)
-                                    .map_err(|_| PreciseJsonConversionError::InvalidValue("Invalid index for variant".to_string())))?;
+                                .ok_or_else(|| {
+                                    PreciseJsonConversionError::MissingField("case_idx".to_string())
+                                })
+                                .and_then(|idx| {
+                                    u32::try_from(idx).map_err(|_| {
+                                        PreciseJsonConversionError::InvalidValue(
+                                            "Invalid index for variant".to_string(),
+                                        )
+                                    })
+                                })?;
 
                             let case_value = variant
                                 .get("case_value")
-                                .ok_or(PreciseJsonConversionError::MissingField("case_value".to_string()))
+                                .ok_or(PreciseJsonConversionError::MissingField(
+                                    "case_value".to_string(),
+                                ))
                                 .and_then(|v| PreciseJson::try_from(v.clone()))?;
                             Ok(PreciseJson::Variant {
                                 case_idx,
@@ -327,6 +339,61 @@ impl From<PreciseJson> for golem_wasm_rpc::Value {
                     golem_wasm_rpc::Value::from(*precise_json),
                 )))),
             },
+        }
+    }
+}
+
+impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
+    fn from(value: TypeAnnotatedValue) -> Self {
+        match value {
+            TypeAnnotatedValue::Bool(bool) => PreciseJson::Bool(bool),
+            TypeAnnotatedValue::S8(s8) => PreciseJson::S8(s8 as i8),
+            TypeAnnotatedValue::U8(u8) => PreciseJson::U8(u8 as u8),
+            TypeAnnotatedValue::S16(s16) => PreciseJson::S16(s16 as i16),
+            TypeAnnotatedValue::U16(u16) => PreciseJson::U16(u16 as u16),
+            TypeAnnotatedValue::S32(s32) => PreciseJson::S32(s32),
+            TypeAnnotatedValue::U32(u32) => PreciseJson::U32(u32),
+            TypeAnnotatedValue::S64(s64) => PreciseJson::S64(s64),
+            TypeAnnotatedValue::U64(u64) => PreciseJson::U64(u64),
+            TypeAnnotatedValue::F32(f32) => PreciseJson::F32(f32),
+            TypeAnnotatedValue::F64(f64) => PreciseJson::F64(f64),
+            TypeAnnotatedValue::Char(chr) => {
+                char::from_u32(chr as u32).map(PreciseJson::Chr).unwrap()
+            }
+            TypeAnnotatedValue::Str(str) => PreciseJson::Str(str),
+            TypeAnnotatedValue::List(list) => {
+                PreciseJson::List(list.into_iter().map(PreciseJson::from).collect())
+            }
+            TypeAnnotatedValue::Tuple(tuple) => {
+                PreciseJson::Tuple(tuple.into_iter().map(PreciseJson::from).collect())
+            }
+            TypeAnnotatedValue::Record(record) => PreciseJson::Record(
+                record.value
+                    .into_iter()
+                    .map(|typed_record| {
+                        (
+                            typed_record.name,
+                            PreciseJson::from(*typed_record.value.unwrap()),
+                        )
+                    })
+                    .collect(),
+            ),
+            TypeAnnotatedValue::Variant(variant) => {
+                let index = variant.typ.unwrap().cases.iter().enumerate()
+                    .find(|(i, c)| (c.name.clone() == variant.case_name)).map(|(i, c)| i);
+
+                let type_annotated_value = variant.case_value.unwrap().type_annotated_value.unwrap();
+
+                PreciseJson::Variant {
+                    case_idx: index.unwrap() as u32,
+                    case_value: Box::new(PreciseJson::from(type_annotated_value)),
+                }
+            },
+            TypeAnnotatedValue::Enum(e) => PreciseJson::Enum(e),
+            TypeAnnotatedValue::Flags(flags) => PreciseJson::Flags(flags),
+            TypeAnnotatedValue::Option(option) => {
+                PreciseJson::Option(option.map(|v| Box::new(PreciseJson::from(*v))))
+            }
         }
     }
 }

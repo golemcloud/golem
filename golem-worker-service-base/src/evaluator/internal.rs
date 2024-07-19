@@ -16,6 +16,7 @@ use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult}
 use rib::ParsedFunctionName;
 use std::str::FromStr;
 use std::sync::Arc;
+use golem_common::precise_json::PreciseJson;
 
 pub(crate) fn create_tuple(
     value: Vec<TypeAnnotatedValue>,
@@ -205,11 +206,13 @@ pub(crate) async fn call_worker_function(
     let component_id = ComponentId::from_str(component_id_string.as_str())
         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
+    let precise_jsons =  json_params.into_iter().map(|v| PreciseJson::from(v)).collect::<Vec<_>>();
+    
     let worker_request = WorkerRequest {
         component_id,
         worker_name,
         function_name: function_name.clone(),
-        function_params: json_params,
+        function_params: precise_jsons,
         idempotency_key,
     };
 

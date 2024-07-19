@@ -1118,7 +1118,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<Value>,
+        _params: TypeAnnotatedValue,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
