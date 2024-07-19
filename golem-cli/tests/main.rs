@@ -36,7 +36,7 @@ fn main() -> Result<(), Failed> {
     let deps: Arc<dyn TestDependencies + Send + Sync + 'static> = Arc::new(
         EnvBasedTestDependencies::blocking_new_from_config(EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size: 3,
-            keep_docker_containers: false, // will be dropped by testcontainers (current version does not support double rm)
+            keep_docker_containers: true, // will be dropped by testcontainers (current version does not support double rm)
             ..EnvBasedTestDependenciesConfig::new()
         }),
     );
