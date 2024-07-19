@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::string::FromUtf8Error;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock, Weak};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 
@@ -554,7 +555,7 @@ impl InvocationHooks for TestWorkerCtx {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)

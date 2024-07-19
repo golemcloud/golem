@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::protobuf::{Type, type_annotated_value, TypeAnnotatedValue, TypedHandle, TypedTuple};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
@@ -21,9 +19,7 @@ use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
-use wasmtime::{AsContext, AsContextMut, StoreContextMut};
-use golem_service_base::exports;
-use golem_service_base::typechecker::TypeCheckOut;
+use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};

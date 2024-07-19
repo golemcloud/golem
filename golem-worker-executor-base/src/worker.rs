@@ -34,9 +34,8 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
+use golem_wasm_ast::analysis::{AnalysedFunctionResult};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::val::Val;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -58,9 +57,7 @@ use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
 use golem_service_base::exports;
-use golem_service_base::model::{Export, ExportFunction};
-use rib::ParsedFunctionName;
-use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
+use golem_service_base::typechecker::{TypeCheckOut};
 
 /// Represents worker that may be running or suspended.
 ///

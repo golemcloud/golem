@@ -19,6 +19,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
@@ -216,7 +217,7 @@ impl InvocationHooks for Context {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)

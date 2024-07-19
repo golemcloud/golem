@@ -18,11 +18,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
-use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -36,7 +34,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::{ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseJson, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, InvokeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse};
+use golem_api_grpc::proto::golem::workerexecutor::{ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseJson, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse};
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_worker_id_string,
@@ -52,7 +50,6 @@ use golem_common::model::{
 };
 use golem_common::to_json::FromToJson;
 use golem_common::{model as common_model, recorded_grpc_request};
-use golem_service_base::exports;
 
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
@@ -63,12 +60,8 @@ use crate::services::{
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_service_base::model::ExportFunction;
-use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
-use rib::ParsedFunctionName;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),

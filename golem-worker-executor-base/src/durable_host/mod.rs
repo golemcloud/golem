@@ -57,7 +57,6 @@ use golem_common::model::{
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use golem_wasm_rpc::protobuf::{type_annotated_value};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
