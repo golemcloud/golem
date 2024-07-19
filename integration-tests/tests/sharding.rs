@@ -53,85 +53,22 @@ impl Scenario {
             vec![],
         )
     }
+
+    pub fn case_4() -> Vec<Step> {
+        Step::invoke_and_await(
+            vec![Step::StopAllWorkerExecutor, Step::RestartShardManager],
+            vec![
+                Step::StopWorkerExecutors(4),
+                Step::StartWorkerExecutors(3),
+                Step::Sleep(Duration::from_secs(1)),
+                Step::StopWorkerExecutors(2),
+            ],
+        )
+    }
 }
 
 #[tokio::test]
 async fn coordinated_scenario_01_01() {
-    coordinated_scenario(5, 4, Scenario::case_1(Duration::from_secs(3))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_01_02() {
-    coordinated_scenario(16, 4, Scenario::case_1(Duration::from_secs(3))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_01_04() {
-    coordinated_scenario(5, 4, Scenario::case_1(Duration::from_secs(0))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_01_05() {
-    coordinated_scenario(5, 4, Scenario::case_1(Duration::from_secs(10))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_01_06() {
-    coordinated_scenario(5, 30, Scenario::case_1(Duration::from_secs(3))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_02_01() {
-    coordinated_scenario(5, 4, Scenario::case_2()).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_02_02() {
-    coordinated_scenario(16, 4, Scenario::case_2()).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_02_04() {
-    coordinated_scenario(5, 4, Scenario::case_2()).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_02_05() {
-    coordinated_scenario(5, 4, Scenario::case_2()).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_02_06() {
-    coordinated_scenario(5, 30, Scenario::case_2()).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_03_01() {
-    coordinated_scenario(5, 4, Scenario::case_3(Duration::from_secs(3))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_03_02() {
-    coordinated_scenario(16, 4, Scenario::case_3(Duration::from_secs(3))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_03_04() {
-    coordinated_scenario(5, 4, Scenario::case_3(Duration::from_secs(0))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_03_05() {
-    coordinated_scenario(5, 4, Scenario::case_3(Duration::from_secs(10))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_03_06() {
-    coordinated_scenario(5, 30, Scenario::case_3(Duration::from_secs(3))).await;
-}
-
-#[tokio::test]
-async fn coordinated_scenario_04_01() {
     for _ in 0..3 {
         coordinated_scenario(
             5,
@@ -150,13 +87,13 @@ async fn coordinated_scenario_04_01() {
 }
 
 #[tokio::test]
-async fn coordinated_scenario_04_02() {
+async fn coordinated_scenario_01_02() {
     for _ in 0..3 {
         coordinated_scenario(
             5,
             30,
             vec![
-                Scenario::case_1(Duration::from_secs(3)),
+                Scenario::case_1(Duration::from_secs(5)),
                 Scenario::case_2(),
                 Scenario::case_3(Duration::from_secs(3)),
             ]
@@ -169,15 +106,34 @@ async fn coordinated_scenario_04_02() {
 }
 
 #[tokio::test]
-async fn coordinated_scenario_04_03() {
+async fn coordinated_scenario_02_01() {
     for _ in 0..3 {
         coordinated_scenario(
             5,
-            30,
+            10,
             vec![
                 Scenario::case_2(),
                 Scenario::case_3(Duration::from_secs(3)),
                 Scenario::case_1(Duration::from_secs(3)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn coordinated_scenario_03_01() {
+    for _ in 0..3 {
+        coordinated_scenario(
+            5,
+            10,
+            vec![
+                Scenario::case_3(Duration::from_secs(3)),
+                Scenario::case_4(),
+                Scenario::case_3(Duration::from_secs(3)),
             ]
             .into_iter()
             .flatten()
@@ -199,7 +155,7 @@ async fn service_is_responsive_to_shard_changes() {
 
     info!("All workers started");
 
-    for c in 0..2 {
+    for c in 0..5 {
         if c != 0 {
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
