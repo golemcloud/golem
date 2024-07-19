@@ -16,7 +16,7 @@ use crate::components::redis::Redis;
 use crate::components::worker_executor::{
     new_client, wait_for_startup, WorkerExecutor, WorkerExecutorEnvVars,
 };
-use crate::components::{ChildProcessLogger, GolemEnvVars};
+use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
 use crate::components::component_service::ComponentService;
@@ -42,7 +42,7 @@ pub struct SpawnedWorkerExecutor {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-    env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+    env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
     verbosity: Level,
     out_level: Level,
     err_level: Level,
@@ -51,39 +51,7 @@ pub struct SpawnedWorkerExecutor {
 
 impl SpawnedWorkerExecutor {
     pub async fn new(
-        executable: &Path,
-        working_directory: &Path,
-        http_port: u16,
-        grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        shared_client: bool,
-    ) -> Self {
-        Self::new_base(
-            Box::new(GolemEnvVars()),
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            redis,
-            component_service,
-            shard_manager,
-            worker_service,
-            verbosity,
-            out_level,
-            err_level,
-            shared_client,
-        )
-        .await
-    }
-
-    pub async fn new_base(
-        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,

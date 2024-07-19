@@ -124,7 +124,7 @@ impl CliParams {
         if self.verbose {
             Level::DEBUG
         } else {
-            Level::ERROR
+            Level::WARN
         }
     }
 

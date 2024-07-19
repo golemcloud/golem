@@ -24,12 +24,13 @@ use golem_test_framework::config::{
     CliParams, CliTestDependencies, CliTestService, TestDependencies, TestService,
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use integration_tests::benchmarks::data::Data;
 use integration_tests::benchmarks::{
     benchmark_invocations, delete_workers, run_benchmark, setup_iteration, warmup_workers,
     RustServiceClient,
 };
 
-struct Throughput {
+struct ThroughputLargeInput {
     config: RunConfig,
 }
 
@@ -46,7 +47,7 @@ pub struct IterationContext {
 }
 
 #[async_trait]
-impl Benchmark for Throughput {
+impl Benchmark for ThroughputLargeInput {
     type BenchmarkContext = BenchmarkContext;
     type IterationContext = IterationContext;
 
@@ -123,14 +124,21 @@ impl Benchmark for Throughput {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
+        let data = Data::generate_list(2000);
+        let values = data
+            .clone()
+            .into_iter()
+            .map(|d| d.into())
+            .collect::<Vec<Value>>();
+
         benchmark_invocations(
             &benchmark_context.deps,
             recorder.clone(),
             self.config.length,
             &context.worker_ids,
-            "golem:it/api.{echo}",
-            vec![Value::String("hello".to_string())],
-            "worker-echo-",
+            "golem:it/api.{process}",
+            vec![Value::List(values.clone())],
+            "worker-process-",
         )
         .await;
 
@@ -139,18 +147,15 @@ impl Benchmark for Throughput {
             let context_clone = benchmark_context.clone();
             let recorder_clone = recorder.clone();
             let length = self.config.length;
+            let data_clone = data.clone();
             let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let start = SystemTime::now();
-                    context_clone.rust_client.echo("hello").await;
+                    context_clone.rust_client.process(data_clone.clone()).await;
                     let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"rust-http-echo-invocation".into(), elapsed);
+                    recorder_clone.duration(&"rust-http-process-invocation".into(), elapsed);
                 }
             });
-        }
-
-        while let Some(res) = fibers.join_next().await {
-            res.expect("fiber failed");
         }
 
         while let Some(res) = fibers.join_next().await {
@@ -169,5 +174,5 @@ impl Benchmark for Throughput {
 
 #[tokio::main]
 async fn main() {
-    run_benchmark::<Throughput>().await;
+    run_benchmark::<ThroughputLargeInput>().await;
 }

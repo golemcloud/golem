@@ -27,7 +27,7 @@ use integration_tests::benchmarks::{
     invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
 };
 
-struct Rpc {
+struct RpcCpuIntensive {
     config: RunConfig,
     _params: CliParams,
 }
@@ -56,7 +56,7 @@ struct RpcBenchmarkIteratorContext {
 }
 
 #[async_trait]
-impl Benchmark for Rpc {
+impl Benchmark for RpcCpuIntensive {
     type BenchmarkContext = SimpleBenchmarkContext;
     type IterationContext = RpcBenchmarkIteratorContext;
 
@@ -165,6 +165,8 @@ impl Benchmark for Rpc {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
+        let calculate_iter: u64 = 200000;
+
         let shard_manager = benchmark_context.deps.shard_manager();
 
         let mut shard_manager_client = shard_manager.client().await;
@@ -187,9 +189,9 @@ impl Benchmark for Rpc {
             context,
             &recorder,
             &shard_manager_routing_table,
-            "golem:itrpc/rpc-api.{echo}",
-            vec![Value::String("hello".to_string())],
-            "worker-echo-invocation",
+            "golem:itrpc/rpc-api.{calculate}",
+            vec![Value::U64(calculate_iter)],
+            "worker-calculate-invocation",
         )
         .await;
     }
@@ -214,7 +216,7 @@ impl Benchmark for Rpc {
     }
 }
 
-impl Rpc {
+impl RpcCpuIntensive {
     async fn benchmark_rpc_invocation(
         &self,
         benchmark_context: &SimpleBenchmarkContext,
@@ -271,5 +273,5 @@ impl Rpc {
 
 #[tokio::main]
 async fn main() {
-    run_benchmark::<Rpc>().await;
+    run_benchmark::<RpcCpuIntensive>().await;
 }

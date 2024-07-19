@@ -41,7 +41,7 @@ pub mod worker_service;
 
 const NETWORK: &str = "golem_test_network";
 
-struct ChildProcessLogger {
+pub struct ChildProcessLogger {
     _out_handle: JoinHandle<()>,
     _err_handle: JoinHandle<()>,
 }
