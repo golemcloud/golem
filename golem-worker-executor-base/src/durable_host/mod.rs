@@ -1391,16 +1391,21 @@ impl PrivateDurableWorkerState {
                 Ok(begin_index)
             } else {
                 let (begin_index, _) = crate::get_oplog_entry!(self, OplogEntry::BeginRemoteWrite)?;
-                let end_index = self
-                    .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
-                    .await;
-                if end_index.is_none() {
-                    // Must switch to live mode before failing to be able to commit an Error entry
-                    self.last_replayed_index = self.replay_target;
-                    Err(GolemError::runtime(
-                        "Non-idempotent remote write operation was not completed, cannot retry",
-                    ))
+                if !self.assume_idempotence {
+                    let end_index = self
+                        .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
+                        .await;
+                    if end_index.is_none() {
+                        // Must switch to live mode before failing to be able to commit an Error entry
+                        self.last_replayed_index = self.replay_target;
+                        Err(GolemError::runtime(
+                            "Non-idempotent remote write operation was not completed, cannot retry",
+                        ))
+                    } else {
+                        Ok(begin_index)
+                    }
                 } else {
+                    // TODO: if idempotency is on, and there is no end_function, also have to check if all the in-between entries are tagged to belong to this function. If not, it works as today. If all are tagged, we insert a deleted region and retry (like with atomic regions)
                     Ok(begin_index)
                 }
             }
