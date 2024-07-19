@@ -269,7 +269,7 @@ export GOLEM__TRACING__FILE__ENABLED=true
 cargo test \
 --package integration-tests \
 --test sharding ${@} \
--- --exact --nocapture --test-threads=1
+-- --nocapture --test-threads=1
 '''
 
 [tasks.cli-tests]
