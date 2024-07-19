@@ -55,13 +55,11 @@ impl Scenario {
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_01_01() {
     coordinated_scenario(5, 4, Scenario::case_1(Duration::from_secs(3))).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_01_02() {
     coordinated_scenario(8, 4, Scenario::case_1(Duration::from_secs(3))).await;
 }
@@ -82,13 +80,11 @@ async fn coordinated_scenario_01_05() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_01_06() {
     coordinated_scenario(5, 20, Scenario::case_1(Duration::from_secs(3))).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_01_07() {
     coordinated_scenario(8, 20, Scenario::case_1(Duration::from_secs(3))).await;
 }
@@ -109,13 +105,11 @@ async fn coordinated_scenario_01_10() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_02_01() {
     coordinated_scenario(5, 4, Scenario::case_2()).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_02_02() {
     coordinated_scenario(8, 4, Scenario::case_2()).await;
 }
@@ -126,19 +120,16 @@ async fn coordinated_scenario_02_03() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_02_04() {
     coordinated_scenario(32, 4, Scenario::case_2()).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_02_05() {
     coordinated_scenario(5, 20, Scenario::case_2()).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_02_06() {
     coordinated_scenario(8, 20, Scenario::case_2()).await;
 }
@@ -149,19 +140,16 @@ async fn coordinated_scenario_02_07() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_02_08() {
     coordinated_scenario(32, 20, Scenario::case_2()).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_03_01() {
     coordinated_scenario(5, 4, Scenario::case_3(Duration::from_secs(3))).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_03_02() {
     coordinated_scenario(8, 4, Scenario::case_3(Duration::from_secs(3))).await;
 }
@@ -182,13 +170,11 @@ async fn coordinated_scenario_03_05() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_03_06() {
     coordinated_scenario(5, 20, Scenario::case_3(Duration::from_secs(3))).await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn coordinated_scenario_03_07() {
     coordinated_scenario(8, 20, Scenario::case_3(Duration::from_secs(3))).await;
 }

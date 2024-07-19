@@ -28,7 +28,7 @@ use crate::components::{ChildProcessLogger, GolemEnvVars};
 pub struct SpawnedShardManager {
     http_port: u16,
     grpc_port: u16,
-    number_of_shards_override: Option<usize>,
+    number_of_shards_override: std::sync::RwLock<Option<usize>>,
     child: Arc<Mutex<Option<Child>>>,
     logger: Arc<Mutex<Option<ChildProcessLogger>>>,
     executable: PathBuf,
@@ -102,7 +102,7 @@ impl SpawnedShardManager {
         Self {
             http_port,
             grpc_port,
-            number_of_shards_override,
+            number_of_shards_override: std::sync::RwLock::new(number_of_shards_override),
             child: Arc::new(Mutex::new(Some(child))),
             logger: Arc::new(Mutex::new(Some(logger))),
             executable: executable.to_path_buf(),
@@ -184,11 +184,17 @@ impl ShardManager for SpawnedShardManager {
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         info!("Restarting golem-shard-manager");
 
+        if let Some(number_of_shards) = number_of_shards_override {
+            *self.number_of_shards_override.write().unwrap() = Some(number_of_shards);
+        }
+        let number_of_shards_override: Option<usize> =
+            *self.number_of_shards_override.read().unwrap();
+
         let (child, logger) = Self::start(
             self.env_vars.as_ref(),
             &self.executable,
             &self.working_directory,
-            number_of_shards_override.or(self.number_of_shards_override),
+            number_of_shards_override,
             self.http_port,
             self.grpc_port,
             self.redis.clone(),
