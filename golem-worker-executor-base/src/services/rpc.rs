@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_wasm_rpc::{WitValue};
+use golem_wasm_rpc::WitValue;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::debug;

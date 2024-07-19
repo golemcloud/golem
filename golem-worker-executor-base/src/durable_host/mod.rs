@@ -44,7 +44,6 @@ use crate::workerctx::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, UpdateDescription, WorkerError, WrappedFunctionType,
@@ -55,9 +54,10 @@ use golem_common::model::{
     IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
@@ -800,7 +800,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
@@ -1053,17 +1053,28 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 output,
                                 consumed_fuel,
                             }) => {
-
                                 let component_metadata =
                                     store.as_context().data().component_metadata().clone();
 
                                 let function_results: Vec<AnalysedFunctionResult> =
-                                    exports::function_by_name(&component_metadata.exports, &full_function_name)
-                                        .unwrap().unwrap().results.into_iter().map(|t| t.into()).collect();
+                                    exports::function_by_name(
+                                        &component_metadata.exports,
+                                        &full_function_name,
+                                    )
+                                    .unwrap()
+                                    .unwrap()
+                                    .results
+                                    .into_iter()
+                                    .map(|t| t.into())
+                                    .collect();
 
-                                let result =
-                                    output.validate_function_result(function_results, calling_convention.unwrap_or(CallingConvention::Component),).map_err(|e| GolemError::ValueMismatch {
-                                        details: e.join(", ")
+                                let result = output
+                                    .validate_function_result(
+                                        function_results,
+                                        calling_convention.unwrap_or(CallingConvention::Component),
+                                    )
+                                    .map_err(|e| GolemError::ValueMismatch {
+                                        details: e.join(", "),
                                     })?;
 
                                 if let Err(err) = store

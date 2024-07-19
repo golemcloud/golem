@@ -34,7 +34,13 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::{ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseJson, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse};
+use golem_api_grpc::proto::golem::workerexecutor::{
+    ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseJson,
+    InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest,
+    UpdateWorkerResponse,
+};
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_worker_id_string,
@@ -546,13 +552,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &Req,
     ) -> Result<Vec<Val>, GolemError> {
         let result = self.invoke_and_await_worker_internal_typed(request).await?;
-        let value = golem_wasm_rpc::Value::try_from(result).map_err(|e| GolemError::unknown(e.to_string()))?;
+        let value = golem_wasm_rpc::Value::try_from(result)
+            .map_err(|e| GolemError::unknown(e.to_string()))?;
 
         match value {
-            golem_wasm_rpc::Value::Tuple(tuple) => Ok(tuple.into_iter().map(|v| v.into()).collect()),
+            golem_wasm_rpc::Value::Tuple(tuple) => {
+                Ok(tuple.into_iter().map(|v| v.into()).collect())
+            }
             _ => Err(GolemError::Unknown {
-                details: "Values retrieved after invocation is expected to be a string.".to_string()
-            })
+                details: "Values retrieved after invocation is expected to be a string."
+                    .to_string(),
+            }),
         }
     }
 
@@ -586,7 +596,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 function_input,
             )
             .await?;
-
 
         Ok(values)
     }
@@ -643,7 +652,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
-        let function_input = request.input()
+        let function_input = request
+            .input()
             .iter()
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
@@ -1822,7 +1832,6 @@ trait GrpcInvokeRequest {
 }
 
 impl GrpcInvokeRequest for golem::workerexecutor::InvokeWorkerRequest {
-
     fn account_id(&self) -> Result<AccountId, GolemError> {
         Ok(self
             .account_id

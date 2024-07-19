@@ -6,11 +6,11 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
 
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::path::{Path, PathBuf};
 use std::string::FromUtf8Error;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock, Weak};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 

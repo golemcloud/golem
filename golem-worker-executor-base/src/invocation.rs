@@ -316,13 +316,11 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
             if let InvokeResult::Succeeded { output, .. } = &constructor_result {
                 if let Some(Value::Handle { resource_id, .. }) = output.first() {
                     debug!("Storing indexed resource with id {resource_id}");
-                    store
-                        .data_mut()
-                        .store_indexed_resource(
-                            resource_name,
-                            raw_constructor_params,
-                            *resource_id,
-                        );
+                    store.data_mut().store_indexed_resource(
+                        resource_name,
+                        raw_constructor_params,
+                        *resource_id,
+                    );
                 } else {
                     return Err(GolemError::invalid_request(
                         "Resource constructor did not return a resource handle",
@@ -530,7 +528,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: i64,
-        output: Vec<Value>
+        output: Vec<Value>,
     },
     /// The function was running but got interrupted
     Interrupted {

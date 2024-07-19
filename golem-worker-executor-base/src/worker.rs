@@ -34,8 +34,6 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_wasm_ast::analysis::{AnalysedFunctionResult};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -47,6 +45,10 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
+use golem_service_base::exports;
+use golem_service_base::typechecker::TypeCheckOut;
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
@@ -56,8 +58,6 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store, UpdateDeadline};
-use golem_service_base::exports;
-use golem_service_base::typechecker::{TypeCheckOut};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -1398,15 +1398,27 @@ impl RunningWorker {
                                                 output,
                                                 consumed_fuel,
                                             }) => {
-
                                                 let function_results: Vec<AnalysedFunctionResult> =
-                                                    exports::function_by_name(&component_metadata.exports, &full_function_name)
-                                                        .unwrap().unwrap().results.into_iter().map(|t| t.into()).collect();
+                                                    exports::function_by_name(
+                                                        &component_metadata.exports,
+                                                        &full_function_name,
+                                                    )
+                                                    .unwrap()
+                                                    .unwrap()
+                                                    .results
+                                                    .into_iter()
+                                                    .map(|t| t.into())
+                                                    .collect();
 
-                                                let result =
-                                                    output.validate_function_result(function_results, calling_convention).map_err(|e| GolemError::ValueMismatch {
-                                                        details: e.join(", ")
-                                                    }).unwrap();
+                                                let result = output
+                                                    .validate_function_result(
+                                                        function_results,
+                                                        calling_convention,
+                                                    )
+                                                    .map_err(|e| GolemError::ValueMismatch {
+                                                        details: e.join(", "),
+                                                    })
+                                                    .unwrap();
 
                                                 store
                                                     .data_mut()

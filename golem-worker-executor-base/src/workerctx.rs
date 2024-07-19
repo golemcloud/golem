@@ -271,7 +271,7 @@ pub trait InvocationHooks {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError>;
 }
 
