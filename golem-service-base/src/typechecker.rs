@@ -60,12 +60,6 @@ impl TypeCheckIn for Vec<Value> {
     }
 }
 
-impl TypeCheckIn for Vec<golem_wasm_rpc::Value> {
-    fn validate_function_parameters(self, expected_parameters: Vec<AnalysedFunctionParameter>, calling_convention: CallingConvention) -> Result<Vec<Val>, Vec<String>> {
-        let values: Vec<Value> = self.into_iter().map(|v| v.into()).collect();
-        values.validate_function_parameters(expected_parameters, calling_convention)
-    }
-}
 impl TypeCheckIn for Vec<Val> {
     fn validate_function_parameters(
         self,

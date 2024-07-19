@@ -1409,7 +1409,7 @@ impl RunningWorker {
                                                 let result =
                                                     output.validate_function_result(function_results, calling_convention).map_err(|e| GolemError::ValueMismatch {
                                                         details: e.join(", ")
-                                                    })?;
+                                                    }).unwrap();
 
                                                 store
                                                     .data_mut()
@@ -1688,14 +1688,9 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
-                    let values: Vec<golem_wasm_rpc::protobuf::Val> = oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
-                    let values = values
-                        .into_iter()
-                        .map(|val| {
-                            val.try_into()
-                                .expect("failed to decode serialized protobuf value")
-                        })
-                        .collect();
+                    let values: TypeAnnotatedValue =
+                        oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+
                     Ok(values)
                 }
                 OplogEntry::Error { error, .. } => Err(TrapType::Error(error)),

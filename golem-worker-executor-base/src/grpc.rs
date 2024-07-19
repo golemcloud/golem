@@ -553,7 +553,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &Req,
     ) -> Result<Vec<Val>, GolemError> {
         let result = self.invoke_and_await_worker_internal_typed(request).await?;
-        let value = golem_wasm_rpc::Value::try_from(result)?;
+        let value = golem_wasm_rpc::Value::try_from(result).map_err(|e| GolemError::unknown(e.to_string()))?;
 
         match value {
             golem_wasm_rpc::Value::Tuple(tuple) => Ok(tuple.into_iter().map(|v| v.into()).collect()),

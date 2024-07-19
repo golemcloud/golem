@@ -506,7 +506,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     input_values,
                 )
                 .await?;
-            Ok(Value::Tuple(result_values).into())
+
+            let result_value = golem_wasm_rpc::Value::try_from(result_values).unwrap();
+
+            Ok(result_value.into())
         } else {
             self.remote_rpc
                 .invoke_and_await(

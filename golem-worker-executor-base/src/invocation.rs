@@ -326,8 +326,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                             resource_name,
                             raw_constructor_params,
                             *resource_id,
-                        )
-                        .await;
+                        );
                 } else {
                     return Err(GolemError::invalid_request(
                         "Resource constructor did not return a resource handle",
