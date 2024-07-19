@@ -1346,9 +1346,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
             Ok(type_annotated_value) => {
 
-                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessTyped { output: Some(TypeAnnotatedValue {
+                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessTyped { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                     type_annotated_value: Some(type_annotated_value),
-                }) };
+                })};
 
                 record.succeed(Ok(Response::new(
                     golem::workerexecutor::InvokeAndAwaitWorkerResponseTyped {
