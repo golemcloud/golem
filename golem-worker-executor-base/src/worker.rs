@@ -1045,15 +1045,6 @@ struct RunningWorker {
     waiting_for_command: Arc<AtomicBool>,
 }
 
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        debug!(
-            "DROPPING RUNNING WORKER WITH PERMITS {}",
-            self.permit.num_permits()
-        );
-    }
-}
-
 impl RunningWorker {
     pub fn new<Ctx: WorkerCtx>(
         owned_worker_id: OwnedWorkerId,

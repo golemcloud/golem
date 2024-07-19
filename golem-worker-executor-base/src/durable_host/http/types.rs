@@ -578,7 +578,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
 
-                if matches!(serializable_response, SerializableResponse::Pending) {
+                if !matches!(serializable_response, SerializableResponse::Pending) {
                     match self.state.open_function_table.get(&handle) {
                         Some(begin_index) => {
                             self.state
@@ -617,6 +617,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             if !matches!(serialized_response, SerializableResponse::Pending) {
                 match self.state.open_function_table.get(&handle) {
                     Some(begin_index) => {
+                        warn!("CALLING END_FUNCTION");
                         self.state
                             .end_function(&WrappedFunctionType::WriteRemoteBatched, *begin_index)
                             .await?;
