@@ -17,7 +17,7 @@ use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -486,7 +486,6 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
 ) -> Result<(anyhow::Result<Vec<Val>>, i64), GolemError> {
     let mut store = store.as_context_mut();
 
-    let t0 = std::time::Instant::now();
     store.data_mut().borrow_fuel().await?;
 
     let mut results: Vec<Val> = function
@@ -518,13 +517,6 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
         );
     }
     record_invocation_consumption(consumed_fuel_for_call);
-
-    let t1 = std::time::Instant::now();
-    warn!(
-        "Function {context} took {duration:?} to execute",
-        duration = t1.duration_since(t0)
-    );
-
     Ok((result.map(|_| results), consumed_fuel_for_call))
 }
 

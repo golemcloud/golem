@@ -536,10 +536,18 @@ pub enum OplogPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WrappedFunctionType {
+    /// The side-effect reads from the worker's local state (for example local file system,
+    /// random generator, etc.)
     ReadLocal,
+    /// The side-effect writes to the worker's local state (for example local file system)
     WriteLocal,
+    /// The side-effect reads from external state (for example a key-value store)
     ReadRemote,
+    /// The side-effect manipulates external state (for example an RPC call)
     WriteRemote,
+    /// The side-effect manipulates external state through multiple invoked functions (for example
+    /// a HTTP request where reading the response involves multiple host function calls)
+    WriteRemoteBatched,
 }
 
 /// Describes the error that occurred in the worker

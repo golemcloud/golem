@@ -1378,9 +1378,10 @@ impl PrivateDurableWorkerState {
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
     ) -> Result<OplogIndex, GolemError> {
-        if !self.assume_idempotence
-            && *wrapped_function_type == WrappedFunctionType::WriteRemote
-            && self.persistence_level != PersistenceLevel::PersistNothing
+        if self.persistence_level != PersistenceLevel::PersistNothing
+            && ((*wrapped_function_type == WrappedFunctionType::WriteRemote
+                && !self.assume_idempotence)
+                || *wrapped_function_type == WrappedFunctionType::WriteRemoteBatched)
         {
             if self.is_live() {
                 self.oplog
@@ -1396,7 +1397,6 @@ impl PrivateDurableWorkerState {
                 if end_index.is_none() {
                     // Must switch to live mode before failing to be able to commit an Error entry
                     self.last_replayed_index = self.replay_target;
-                    debug!("[4] REPLAY_IDX = {}", self.last_replayed_index);
                     Err(GolemError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))
@@ -1415,9 +1415,10 @@ impl PrivateDurableWorkerState {
         wrapped_function_type: &WrappedFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), GolemError> {
-        if !self.assume_idempotence
-            && *wrapped_function_type == WrappedFunctionType::WriteRemote
-            && self.persistence_level != PersistenceLevel::PersistNothing
+        if self.persistence_level != PersistenceLevel::PersistNothing
+            && ((*wrapped_function_type == WrappedFunctionType::WriteRemote
+                && !self.assume_idempotence)
+                || *wrapped_function_type == WrappedFunctionType::WriteRemoteBatched)
         {
             if self.is_live() {
                 self.oplog

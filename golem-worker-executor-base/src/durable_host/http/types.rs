@@ -397,7 +397,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
             SerializableError,
         >::custom_wrap(
             self,
-            WrappedFunctionType::ReadRemote,
+            WrappedFunctionType::WriteRemoteBatched,
             "golem http::types::future_trailers::get",
             |ctx| {
                 Box::pin(async move {
@@ -573,7 +573,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .add_imported_function_invoked(
                         "http::types::future_incoming_response::get".to_string(),
                         &serializable_response,
-                        WrappedFunctionType::WriteRemote,
+                        WrappedFunctionType::WriteRemoteBatched,
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
@@ -582,7 +582,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     match self.state.open_function_table.get(&handle) {
                         Some(begin_index) => {
                             self.state
-                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .end_function(
+                                    &WrappedFunctionType::WriteRemoteBatched,
+                                    *begin_index,
+                                )
                                 .await?;
                             self.state.open_function_table.remove(&handle);
                         }
@@ -615,7 +618,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 match self.state.open_function_table.get(&handle) {
                     Some(begin_index) => {
                         self.state
-                            .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                            .end_function(&WrappedFunctionType::WriteRemoteBatched, *begin_index)
                             .await?;
                         self.state.open_function_table.remove(&handle);
                     }

@@ -318,7 +318,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .end_function(wrapped_function_type, begin_index)
                 .await
                 .map_err(|err| Into::<SerializedErr>::into(err).into())?;
-            if *wrapped_function_type == WrappedFunctionType::WriteRemote {
+            if *wrapped_function_type == WrappedFunctionType::WriteRemote
+                || *wrapped_function_type == WrappedFunctionType::WriteRemoteBatched
+            {
                 self.state.oplog.commit().await;
             }
         }
