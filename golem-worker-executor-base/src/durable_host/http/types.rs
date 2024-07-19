@@ -397,7 +397,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
             SerializableError,
         >::custom_wrap(
             self,
-            WrappedFunctionType::WriteRemoteBatched,
+            WrappedFunctionType::WriteRemote, // TODO: tag
             "golem http::types::future_trailers::get",
             |ctx| {
                 Box::pin(async move {
@@ -573,7 +573,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .add_imported_function_invoked(
                         "http::types::future_incoming_response::get".to_string(),
                         &serializable_response,
-                        WrappedFunctionType::WriteRemoteBatched,
+                        WrappedFunctionType::WriteRemote, // TODO: tag
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));

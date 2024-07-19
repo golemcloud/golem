@@ -41,7 +41,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::read",
                 |ctx| {
                     Box::pin(async move {
@@ -64,7 +64,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::blocking_read",
                 |ctx| {
                     Box::pin(async move {
@@ -83,7 +83,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::skip",
                 |ctx| {
                     Box::pin(async move {
@@ -106,7 +106,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self.table(), &self_) {
             Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemote, // TODO: tag
                 "http::types::incoming_body_stream::blocking_skip",
                 |ctx| {
                     Box::pin(async move {
