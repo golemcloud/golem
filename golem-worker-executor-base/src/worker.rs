@@ -1406,7 +1406,10 @@ impl RunningWorker {
                                                     exports::function_by_name(&component_metadata.exports, &full_function_name)
                                                         .unwrap().unwrap().results.into_iter().map(|t| t.into()).collect();
 
-                                                let result = golem_wasm_rpc::json::function_result_typed(output, &function_results)?;
+                                                let result =
+                                                    output.validate_function_result(function_results, calling_convention).map_err(|e| GolemError::ValueMismatch {
+                                                        details: e.join(", ")
+                                                    })?;
 
                                                 store
                                                     .data_mut()

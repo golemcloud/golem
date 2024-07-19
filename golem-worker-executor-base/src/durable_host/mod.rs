@@ -44,6 +44,7 @@ use crate::workerctx::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, UpdateDescription, WorkerError, WrappedFunctionType,
@@ -56,6 +57,8 @@ use golem_common::model::{
 };
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
+use golem_wasm_rpc::protobuf::{type_annotated_value};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
@@ -97,6 +100,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
 use golem_common::retries::get_delay;
+use golem_service_base::exports;
+use golem_service_base::typechecker::TypeCheckOut;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -796,18 +801,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
             if self.state.snapshotting_mode.is_none() {
-                let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
-                    output.iter().map(|value| value.clone().into()).collect();
-
                 self.state
                     .oplog
-                    .add_exported_function_completed(&proto_output, consumed_fuel)
+                    .add_exported_function_completed(&output, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1052,6 +1054,19 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 output,
                                 consumed_fuel,
                             }) => {
+
+                                let component_metadata =
+                                    store.as_context().data().component_metadata().clone();
+
+                                let function_results: Vec<AnalysedFunctionResult> =
+                                    exports::function_by_name(&component_metadata.exports, &full_function_name)
+                                        .unwrap().unwrap().results.into_iter().map(|t| t.into()).collect();
+
+                                let result =
+                                    output.validate_function_result(function_results, calling_convention.unwrap_or(CallingConvention::Component),).map_err(|e| GolemError::ValueMismatch {
+                                        details: e.join(", ")
+                                    })?;
+
                                 if let Err(err) = store
                                     .as_context_mut()
                                     .data_mut()
@@ -1059,7 +1074,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         &full_function_name,
                                         &function_input,
                                         consumed_fuel,
-                                        output,
+                                        result,
                                     )
                                     .await
                                 {
@@ -1567,25 +1582,19 @@ impl PrivateDurableWorkerState {
 
     async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<Vec<Value>>, GolemError> {
+    ) -> Result<Option<TypeAnnotatedValue>, GolemError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
-                        let response: Vec<golem_wasm_rpc::protobuf::Val> = self
+                        let response: TypeAnnotatedValue = self
                             .oplog
                             .get_payload_of_entry(&oplog_entry)
                             .await
                             .expect("failed to deserialize function response payload")
                             .unwrap();
-                        let response = response
-                            .into_iter()
-                            .map(|val| {
-                                val.try_into()
-                                    .expect("failed to decode serialized protobuf value")
-                            })
-                            .collect();
+
                         break Ok(Some(response));
                     }
                     entry if entry.is_hint() => {}

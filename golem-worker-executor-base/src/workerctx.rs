@@ -16,7 +16,7 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
-use golem_wasm_rpc::protobuf::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
