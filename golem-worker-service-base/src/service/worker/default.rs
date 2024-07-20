@@ -30,8 +30,7 @@ use golem_api_grpc::proto::golem::worker::{InvokeResult as ProtoInvokeResult, Up
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest,
-    ResumeWorkerRequest, UpdateWorkerRequest,
+    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::{
@@ -570,19 +569,17 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                Box::pin(
-                    worker_executor_client.invoke_worker(
-                        workerexecutor::InvokeWorkerRequest {
-                            worker_id: Some(worker_id.into()),
-                            name: function_name.clone(),
-                            input: params_,
-                            idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            context: invocation_context.clone(),
-                        },
-                    ),
-                )
+                Box::pin(worker_executor_client.invoke_worker(
+                    workerexecutor::InvokeWorkerRequest {
+                        worker_id: Some(worker_id.into()),
+                        name: function_name.clone(),
+                        input: params_,
+                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    },
+                ))
             },
             |response| match response.into_inner() {
                 workerexecutor::InvokeWorkerResponse {

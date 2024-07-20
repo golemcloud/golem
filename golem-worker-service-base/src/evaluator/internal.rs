@@ -5,6 +5,7 @@ use crate::evaluator::EvaluationError;
 use crate::primitive::GetPrimitive;
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor};
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_common::precise_json::PreciseJson;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
@@ -16,7 +17,6 @@ use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedResult}
 use rib::ParsedFunctionName;
 use std::str::FromStr;
 use std::sync::Arc;
-use golem_common::precise_json::PreciseJson;
 
 pub(crate) fn create_tuple(
     value: Vec<TypeAnnotatedValue>,
@@ -206,8 +206,11 @@ pub(crate) async fn call_worker_function(
     let component_id = ComponentId::from_str(component_id_string.as_str())
         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-    let precise_jsons =  json_params.into_iter().map(|v| PreciseJson::from(v)).collect::<Vec<_>>();
-    
+    let precise_jsons = json_params
+        .into_iter()
+        .map(|v| PreciseJson::from(v))
+        .collect::<Vec<_>>();
+
     let worker_request = WorkerRequest {
         component_id,
         worker_name,

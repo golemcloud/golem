@@ -1056,22 +1056,51 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 let component_metadata =
                                     store.as_context().data().component_metadata();
 
-                                match exports::function_by_name(&component_metadata.exports, &full_function_name) {
+                                match exports::function_by_name(
+                                    &component_metadata.exports,
+                                    &full_function_name,
+                                ) {
                                     Ok(value) => {
                                         if let Some(value) = value {
-                                            let function_results: Vec<AnalysedFunctionResult> = value.results.into_iter().map(|t| t.into()).collect();
-                                            let result = output.validate_function_result(function_results, calling_convention.unwrap_or(CallingConvention::Component)).map_err(|e| GolemError::ValueMismatch { details: e.join(", ") })?;
-                                            if let Err(err) = store.as_context_mut().data_mut().on_invocation_success(&full_function_name, &function_input, consumed_fuel, result).await {
+                                            let function_results: Vec<AnalysedFunctionResult> =
+                                                value
+                                                    .results
+                                                    .into_iter()
+                                                    .map(|t| t.into())
+                                                    .collect();
+                                            let result = output
+                                                .validate_function_result(
+                                                    function_results,
+                                                    calling_convention
+                                                        .unwrap_or(CallingConvention::Component),
+                                                )
+                                                .map_err(|e| GolemError::ValueMismatch {
+                                                    details: e.join(", "),
+                                                })?;
+                                            if let Err(err) = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_success(
+                                                    &full_function_name,
+                                                    &function_input,
+                                                    consumed_fuel,
+                                                    result,
+                                                )
+                                                .await
+                                            {
                                                 break Err(err);
                                             }
                                         } else {
-                                            break Err(GolemError::invalid_request(format!("Function {full_function_name} not found"));
+                                            break Err(GolemError::invalid_request(format!(
+                                                "Function {full_function_name} not found"
+                                            )));
                                         }
                                     }
                                     Err(err) => {
-                                        break Err(GolemError::invalid_request(format!("Function {full_function_name} not found: {err}"));
+                                        break Err(GolemError::invalid_request(format!(
+                                            "Function {full_function_name} not found: {err}"
+                                        )));
                                     }
-
                                 }
                                 count += 1;
                                 continue;
