@@ -365,7 +365,7 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
                 PreciseJson::List(list.into_iter().map(PreciseJson::from).collect())
             }
             TypeAnnotatedValue::Tuple(tuple) => {
-                PreciseJson::Tuple(tuple.into_iter().map(PreciseJson::from).collect())
+                PreciseJson::Tuple(tuple.value.into_iter().map(PreciseJson::from).collect())
             }
             TypeAnnotatedValue::Record(record) => PreciseJson::Record(
                 record.value
