@@ -25,7 +25,7 @@ use tonic::transport::Channel;
 use tracing::Level;
 
 use crate::components::component_service::ComponentService;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 use golem_api_grpc::proto::golem::componentcompilation::component_compilation_service_client::ComponentCompilationServiceClient;
 use golem_common::model::ComponentId;
 
@@ -97,32 +97,47 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     .await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    EnvVarBuilder::golem_service(verbosity)
-        .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
-        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
-        .with_str(
-            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-            "/tmp/ittest-local-object-store/golem",
-        )
-        .with_str(
-            "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
-            "2A354594-7A63-4091-A46B-CC58D379F677",
-        )
-        .with(
-            "GOLEM__COMPONENT_SERVICE__HOST",
-            component_service.private_host(),
-        )
-        .with(
-            "GOLEM__COMPONENT_SERVICE__PORT",
-            component_service.private_grpc_port().to_string(),
-        )
-        .with("GOLEM__GRPC_PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
-        .build()
+#[async_trait]
+pub trait ComponentCompilationServiceEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
+
+#[async_trait]
+impl ComponentCompilationServiceEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        EnvVarBuilder::golem_service(verbosity)
+            .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
+            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+            .with_str(
+                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+                "/tmp/ittest-local-object-store/golem",
+            )
+            .with_str(
+                "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
+                "2A354594-7A63-4091-A46B-CC58D379F677",
+            )
+            .with(
+                "GOLEM__COMPONENT_SERVICE__HOST",
+                component_service.private_host(),
+            )
+            .with(
+                "GOLEM__COMPONENT_SERVICE__PORT",
+                component_service.private_grpc_port().to_string(),
+            )
+            .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+            .with("GOLEM__HTTP_PORT", http_port.to_string())
+            .build()
+    }
 }

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{env_vars, new_client, wait_for_startup, WorkerExecutor};
+use crate::components::worker_executor::{
+    new_client, wait_for_startup, WorkerExecutor, WorkerExecutorEnvVars,
+};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 
@@ -40,6 +42,7 @@ pub struct SpawnedWorkerExecutor {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
     verbosity: Level,
     out_level: Level,
     err_level: Level,
@@ -48,6 +51,7 @@ pub struct SpawnedWorkerExecutor {
 
 impl SpawnedWorkerExecutor {
     pub async fn new(
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -68,6 +72,7 @@ impl SpawnedWorkerExecutor {
         }
 
         let (child, logger) = Self::start(
+            env_vars.as_ref(),
             executable,
             working_directory,
             http_port,
@@ -93,6 +98,7 @@ impl SpawnedWorkerExecutor {
             component_service,
             shard_manager,
             worker_service,
+            env_vars,
             verbosity,
             out_level,
             err_level,
@@ -109,6 +115,7 @@ impl SpawnedWorkerExecutor {
     }
 
     async fn start(
+        env_vars: &(dyn WorkerExecutorEnvVars + Send + Sync + 'static),
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -123,15 +130,19 @@ impl SpawnedWorkerExecutor {
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(
-                http_port,
-                grpc_port,
-                component_service,
-                shard_manager,
-                worker_service,
-                redis,
-                verbosity,
-            ))
+            .envs(
+                env_vars
+                    .env_vars(
+                        http_port,
+                        grpc_port,
+                        component_service,
+                        shard_manager,
+                        worker_service,
+                        redis,
+                        verbosity,
+                    )
+                    .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -184,6 +195,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         info!("Restarting golem-worker-executor {}", self.grpc_port);
 
         let (child, logger) = Self::start(
+            self.env_vars.as_ref(),
             &self.executable,
             &self.working_directory,
             self.http_port,

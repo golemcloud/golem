@@ -191,6 +191,23 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             timestamp: rounded_ts(timestamp),
             delta,
         },
+        OplogEntry::CreateResource { timestamp, id } => OplogEntry::CreateResource {
+            timestamp: rounded_ts(timestamp),
+            id,
+        },
+        OplogEntry::DropResource { timestamp, id } => OplogEntry::DropResource {
+            timestamp: rounded_ts(timestamp),
+            id,
+        },
+        OplogEntry::DescribeResource {
+            timestamp,
+            id,
+            indexed_resource,
+        } => OplogEntry::DescribeResource {
+            timestamp: rounded_ts(timestamp),
+            id,
+            indexed_resource,
+        },
     }
 }
 

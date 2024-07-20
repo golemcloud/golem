@@ -15,8 +15,10 @@
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, new_client, wait_for_startup, WorkerService};
-use crate::components::ChildProcessLogger;
+use crate::components::worker_service::{
+    new_client, wait_for_startup, WorkerService, WorkerServiceEnvVars,
+};
+use crate::components::{ChildProcessLogger, GolemEnvVars};
 use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
@@ -52,6 +54,39 @@ impl SpawnedWorkerService {
         err_level: Level,
         shared_client: bool,
     ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            executable,
+            working_directory,
+            http_port,
+            grpc_port,
+            custom_request_port,
+            component_service,
+            shard_manager,
+            rdb,
+            verbosity,
+            out_level,
+            err_level,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
+        executable: &Path,
+        working_directory: &Path,
+        http_port: u16,
+        grpc_port: u16,
+        custom_request_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        shared_client: bool,
+    ) -> Self {
         info!("Starting golem-worker-service process");
 
         if !executable.exists() {
@@ -60,15 +95,19 @@ impl SpawnedWorkerService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(
-                http_port,
-                grpc_port,
-                custom_request_port,
-                component_service,
-                shard_manager,
-                rdb,
-                verbosity,
-            ))
+            .envs(
+                env_vars
+                    .env_vars(
+                        http_port,
+                        grpc_port,
+                        custom_request_port,
+                        component_service,
+                        shard_manager,
+                        rdb,
+                        verbosity,
+                    )
+                    .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

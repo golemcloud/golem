@@ -2837,6 +2837,7 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<u64, ResourceMetadata>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -2862,6 +2863,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources: value
+                .owned_resources
+                .into_iter()
+                .map(|(k, v)| v.try_into().map(|v| (k, v)))
+                .collect::<Result<HashMap<_, _>, _>>()?,
         })
     }
 }
@@ -2884,6 +2890,11 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources: value
+                .owned_resources
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
         }
     }
 }
@@ -2992,6 +3003,62 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                     ),
                 ),
             },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ResourceMetadata {
+    pub created_at: Timestamp,
+    pub indexed: Option<IndexedWorkerMetadata>,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::ResourceMetadata> for ResourceMetadata {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::ResourceMetadata,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            created_at: value.created_at.ok_or("Missing created_at")?.into(),
+            indexed: value.indexed.map(|i| i.into()),
+        })
+    }
+}
+
+impl From<ResourceMetadata> for golem_api_grpc::proto::golem::worker::ResourceMetadata {
+    fn from(value: ResourceMetadata) -> Self {
+        Self {
+            created_at: Some(value.created_at.into()),
+            indexed: value.indexed.map(|i| i.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct IndexedWorkerMetadata {
+    pub resource_name: String,
+    pub resource_params: Vec<String>,
+}
+
+impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedWorkerMetadata {
+    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+        Self {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+    fn from(value: IndexedWorkerMetadata) -> Self {
+        Self {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
         }
     }
 }

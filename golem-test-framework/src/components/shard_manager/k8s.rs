@@ -17,7 +17,8 @@ use crate::components::k8s::{
     Routing,
 };
 use crate::components::redis::Redis;
-use crate::components::shard_manager::{env_vars, wait_for_startup, ShardManager};
+use crate::components::shard_manager::{wait_for_startup, ShardManager, ShardManagerEnvVars};
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use async_trait::async_trait;
@@ -52,9 +53,32 @@ impl K8sShardManager {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            verbosity,
+            redis,
+            timeout,
+            service_annotations,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        verbosity: Level,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Self {
         info!("Starting Golem Shard Manager pod");
 
-        let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
+        let env_vars = env_vars
+            .env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity)
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

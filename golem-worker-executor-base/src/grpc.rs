@@ -31,8 +31,8 @@ use wasmtime::Error;
 
 use crate::error::*;
 use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
-use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
@@ -1177,6 +1177,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 + record.timestamp.as_ref().unwrap().nanos as i64
         });
 
+        let mut owned_resources = HashMap::new();
+        for (resource_id, resource) in metadata.last_known_status.owned_resources {
+            owned_resources.insert(
+                resource_id.0,
+                ResourceMetadata {
+                    created_at: Some(resource.created_at.into()),
+                    indexed: resource.indexed_resource_key.map(|t| t.into()),
+                },
+            );
+        }
+
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             args: metadata.args.clone(),
@@ -1195,6 +1206,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             last_error: last_error_and_retry_count.map(|last_error| last_error.error.to_string()),
             component_size: metadata.last_known_status.component_size,
             total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
+            owned_resources,
         }
     }
 }

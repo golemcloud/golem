@@ -1174,6 +1174,7 @@ where
             last_error: None,
             component_size: 0,
             total_linear_memory_size: 0,
+            owned_resources: HashMap::new(),
         })
     }
 

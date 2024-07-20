@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Formatter};
-
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc::proto::golem::worker::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::{
     complete_promise_response, delete_worker_response, get_worker_metadata_response,
@@ -41,10 +38,10 @@ use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
     proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
 };
-use golem_common::metrics::grpc::TraceErrorKind;
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_request;
 use golem_service_base::auth::EmptyAuthCtx;
+use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 
 use crate::empty_worker_metadata;
@@ -91,7 +88,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             ),
             Err(error) => record.fail(
                 launch_new_worker_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -118,7 +115,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(complete_promise_response::Result::Success(result)),
             Err(error) => record.fail(
                 complete_promise_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -145,7 +142,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(delete_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 delete_worker_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -172,7 +169,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(metadata) => record.succeed(get_worker_metadata_response::Result::Success(metadata)),
             Err(error) => record.fail(
                 get_worker_metadata_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -200,7 +197,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(interrupt_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 interrupt_worker_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -231,7 +228,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(invoke_and_await_response::Result::Success(result)),
             Err(error) => record.fail(
                 invoke_and_await_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -258,7 +255,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -285,7 +282,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(resume_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 resume_worker_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -339,7 +336,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             ),
             Err(error) => record.fail(
                 get_workers_metadata_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -366,7 +363,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(update_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 update_worker_response::Result::Error(error.clone()),
-                &WorkerErrorKind(&error),
+                &WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -758,29 +755,5 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
             Status::internal(message)
         }
         None => Status::unknown("Unknown error"),
-    }
-}
-
-struct WorkerErrorKind<'a>(&'a GrpcWorkerError);
-
-impl<'a> Debug for WorkerErrorKind<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<'a> TraceErrorKind for WorkerErrorKind<'a> {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self.0.error {
-            None => "None",
-            Some(error) => match error {
-                Error::BadRequest(_) => "BadRequest",
-                Error::Unauthorized(_) => "Unauthorized",
-                Error::LimitExceeded(_) => "LimitExceeded",
-                Error::NotFound(_) => "NotFound",
-                Error::AlreadyExists(_) => "AlreadyExists",
-                Error::InternalError(_) => "InternalError",
-            },
-        }
     }
 }

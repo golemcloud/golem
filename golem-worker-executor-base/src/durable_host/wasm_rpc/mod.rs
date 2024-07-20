@@ -34,7 +34,7 @@ use golem_wasm_rpc::golem::rpc::types::{
 use golem_wasm_rpc::{FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, WasmRpcEntry, WitValue};
 use std::any::Any;
 use std::str::FromStr;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::bindings::cli::environment::Host;
@@ -121,10 +121,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await;
 
         match result {
-            Ok(result) => {
-                debug!("RPC result: {result:?}");
-                Ok(Ok(result))
-            }
+            Ok(result) => Ok(Ok(result)),
             Err(err) => {
                 error!("RPC error: {err}");
                 Ok(Err(err.into()))

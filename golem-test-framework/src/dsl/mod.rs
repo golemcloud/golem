@@ -30,11 +30,14 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeWorkerRequest, StdErrLog, StdOutLog, UpdateMode, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
-use golem_common::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::{
+    OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
+};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, ScanCursor,
-    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -1011,6 +1014,24 @@ pub fn to_worker_metadata(
             component_version: metadata.component_version,
             component_size: metadata.component_size,
             total_linear_memory_size: metadata.total_linear_memory_size,
+            owned_resources: metadata
+                .owned_resources
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        WorkerResourceId(*k),
+                        WorkerResourceDescription {
+                            created_at: v
+                                .created_at
+                                .as_ref()
+                                .expect("no timestamp on resource metadata")
+                                .clone()
+                                .into(),
+                            indexed_resource_key: v.indexed.clone().map(|i| i.into()),
+                        },
+                    )
+                })
+                .collect(),
         },
         parent: None,
     }

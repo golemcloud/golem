@@ -113,6 +113,47 @@ impl<'de> BorrowDecode<'de> for PayloadId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct WorkerResourceId(pub u64);
+
+impl WorkerResourceId {
+    pub const INITIAL: WorkerResourceId = WorkerResourceId(0);
+
+    pub fn next(&self) -> WorkerResourceId {
+        WorkerResourceId(self.0 + 1)
+    }
+}
+
+impl Display for WorkerResourceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct IndexedResourceKey {
+    pub resource_name: String,
+    pub resource_params: Vec<String>,
+}
+
+impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+    fn from(value: IndexedResourceKey) -> Self {
+        golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+        IndexedResourceKey {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     Create {
@@ -218,6 +259,22 @@ pub enum OplogEntry {
     },
     /// Increased total linear memory size
     GrowMemory { timestamp: Timestamp, delta: u64 },
+    /// Created a resource instance
+    CreateResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+    },
+    /// Dropped a resource instance
+    DropResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+    },
+    /// Adds additional information for a created resource instance
+    DescribeResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+        indexed_resource: IndexedResourceKey,
+    },
 }
 
 impl OplogEntry {
@@ -355,6 +412,31 @@ impl OplogEntry {
         }
     }
 
+    pub fn create_resource(id: WorkerResourceId) -> OplogEntry {
+        OplogEntry::CreateResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+        }
+    }
+
+    pub fn drop_resource(id: WorkerResourceId) -> OplogEntry {
+        OplogEntry::DropResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+        }
+    }
+
+    pub fn describe_resource(
+        id: WorkerResourceId,
+        indexed_resource: IndexedResourceKey,
+    ) -> OplogEntry {
+        OplogEntry::DescribeResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+            indexed_resource,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -376,6 +458,9 @@ impl OplogEntry {
                 | OplogEntry::SuccessfulUpdate { .. }
                 | OplogEntry::FailedUpdate { .. }
                 | OplogEntry::GrowMemory { .. }
+                | OplogEntry::CreateResource { .. }
+                | OplogEntry::DropResource { .. }
+                | OplogEntry::DescribeResource { .. }
         )
     }
 
@@ -400,7 +485,10 @@ impl OplogEntry {
             | OplogEntry::PendingUpdate { timestamp, .. }
             | OplogEntry::SuccessfulUpdate { timestamp, .. }
             | OplogEntry::FailedUpdate { timestamp, .. }
-            | OplogEntry::GrowMemory { timestamp, .. } => *timestamp,
+            | OplogEntry::GrowMemory { timestamp, .. }
+            | OplogEntry::CreateResource { timestamp, .. }
+            | OplogEntry::DropResource { timestamp, .. }
+            | OplogEntry::DescribeResource { timestamp, .. } => *timestamp,
         }
     }
 }

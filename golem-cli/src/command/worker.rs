@@ -204,7 +204,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         ///
         /// It is used to get the next page of results. To get next page, use the cursor returned in the response.
         /// The cursor has the format 'layer/position' where both layer and position are numbers.
-        #[arg(short = 'P', long, value_parser = parse_cursor)]
+        #[arg(short = 'S', long, value_parser = parse_cursor)]
         cursor: Option<ScanCursor>,
 
         /// Count of listed values, if count is not provided, returns all values
@@ -212,7 +212,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
         count: Option<u64>,
 
         /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
-        #[arg(short, long)]
+        #[arg(long)]
         precise: Option<bool>,
     },
     /// Updates a worker
