@@ -1054,7 +1054,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 consumed_fuel,
                             }) => {
                                 let component_metadata =
-                                    store.as_context().data().component_metadata().clone();
+                                    store.as_context().data().component_metadata();
 
                                 let function_results: Vec<AnalysedFunctionResult> =
                                     exports::function_by_name(
