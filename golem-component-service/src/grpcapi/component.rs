@@ -223,7 +223,7 @@ impl ComponentService for ComponentGrpcApi {
 
         let record = recorded_grpc_request!(
             "create_component",
-            component_name = header.clone().map(|r| r.component_name)
+            component_name = header.as_ref().map(|r| r.component_name.clone())
         );
 
         let result = match header {
@@ -380,7 +380,8 @@ impl ComponentService for ComponentGrpcApi {
 
         let record = recorded_grpc_request!(
             "update_component",
-            component_id = proto_component_id_string(&header.clone().and_then(|r| r.component_id))
+            component_id =
+                proto_component_id_string(&header.as_ref().and_then(|r| r.component_id.clone()))
         );
 
         let result = match header {

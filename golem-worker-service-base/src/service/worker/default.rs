@@ -22,7 +22,7 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tonic::transport::Channel;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
@@ -372,6 +372,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function(
         &self,
         worker_id: &WorkerId,
@@ -399,6 +400,7 @@ where
         Ok(get_json_from_typed_value(&typed_value.result))
     }
 
+    #[instrument(skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function_typed_value(
         &self,
         worker_id: &WorkerId,
@@ -466,6 +468,7 @@ where
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
+    #[instrument(skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -557,6 +560,7 @@ where
         Ok(invoke_response)
     }
 
+    #[instrument(skip(self, params, metadata, auth_ctx))]
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
@@ -606,6 +610,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self, params, metadata, auth_ctx))]
     async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,

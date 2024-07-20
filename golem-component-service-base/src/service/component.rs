@@ -20,7 +20,7 @@ use crate::service::component_processor::{process_component, ComponentProcessing
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use tap::TapFallible;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
@@ -198,9 +198,10 @@ impl ComponentServiceDefault {
 #[async_trait]
 impl<Namespace> ComponentService<Namespace> for ComponentServiceDefault
 where
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    Namespace: Display + Debug + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
+    #[instrument(fields(%component_id, %namespace), skip(self, data))]
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -244,6 +245,7 @@ where
         Ok(component)
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self, data))]
     async fn update(
         &self,
         component_id: &ComponentId,
@@ -306,6 +308,7 @@ where
         Ok(component)
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn download(
         &self,
         component_id: &ComponentId,
@@ -341,6 +344,7 @@ where
             .map_err(|e| ComponentError::internal(e.to_string(), "Error downloading component"))
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn download_stream(
         &self,
         component_id: &ComponentId,
@@ -368,6 +372,7 @@ where
         Ok(stream)
     }
 
+    #[instrument(fields(%component_id, ?version), skip(self))]
     async fn get_protected_data(
         &self,
         component_id: &ComponentId,
@@ -411,6 +416,7 @@ where
         }
     }
 
+    #[instrument(fields(%component_name, %namespace), skip(self))]
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
@@ -423,6 +429,7 @@ where
         Ok(records.map(ComponentId))
     }
 
+    #[instrument(fields(?component_name, %namespace), skip(self))]
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
@@ -456,6 +463,7 @@ where
         Ok(values)
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn get(
         &self,
         component_id: &ComponentId,
@@ -477,6 +485,7 @@ where
         Ok(values)
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
@@ -503,6 +512,7 @@ where
         }
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
@@ -528,6 +538,7 @@ where
         }
     }
 
+    #[instrument(fields(%component_id), skip(self))]
     async fn get_namespace(
         &self,
         component_id: &ComponentId,
@@ -544,6 +555,7 @@ where
         }
     }
 
+    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn delete(
         &self,
         component_id: &ComponentId,
