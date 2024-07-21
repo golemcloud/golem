@@ -315,15 +315,7 @@ where
         self.object_store
             .get(&self.get_protected_object_store_key(&id))
             .await
-            .tap_err(|e| {
-                error!(
-                    "Error downloading component - namespace: {}, id: {}, version: {}, error: {}",
-                    namespace,
-                    versioned_component_id.component_id,
-                    versioned_component_id.version,
-                    e
-                )
-            })
+            .tap_err(|e| error!("Error downloading component - error: {}", e))
             .map_err(|e| ComponentError::internal(e.to_string(), "Error downloading component"))
     }
 
@@ -374,14 +366,7 @@ where
                     .object_store
                     .get(&self.get_protected_object_store_key(&id))
                     .await
-                    .tap_err(|e| {
-                        error!("Error getting component data - namespace: {}, id: {}, version: {}, error: {}",
-                            namespace,
-                            versioned_component_id.component_id,
-                            versioned_component_id.version,
-                            e
-                        )
-                    })
+                    .tap_err(|e| error!("Error getting component data - error: {}", e))
                     .map_err(|e| {
                         ComponentError::internal(e.to_string(), "Error retrieving component")
                     })?;
@@ -483,10 +468,7 @@ where
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Option<Component<Namespace>>, ComponentError> {
-        info!(
-            "Getting component - namespace: {}, id: {}, version: latest",
-            namespace, component_id
-        );
+        info!("Getting component");
         let result = self
             .component_repo
             .get_latest_version(&component_id.0)
@@ -508,7 +490,7 @@ where
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<Namespace>, ComponentError> {
-        info!("Getting component namespace - id: {}", component_id);
+        info!("Getting component namespace");
         let result = self.component_repo.get_namespace(&component_id.0).await?;
         if let Some(result) = result {
             let value = result.clone().try_into().map_err(|e| {
