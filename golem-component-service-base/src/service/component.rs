@@ -209,12 +209,7 @@ where
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
-        info!(
-            "Creating component - namespace: {}, id: {}, name: {}",
-            namespace,
-            component_id,
-            component_name.0.clone()
-        );
+        info!("Creating component");
 
         self.find_id_by_name(component_name, namespace)
             .await?
@@ -223,8 +218,8 @@ where
         let component = create_new_component(component_id, component_name, &data, namespace)?;
 
         info!(
-            "Uploaded component - namespace: {}, id: {}, version: 0, exports {:?}",
-            namespace, component_id, component.metadata.exports
+            "Uploaded component - exports {:?}",
+            component.metadata.exports
         );
         tokio::try_join!(
             self.upload_user_component(&component.user_component_id, data.clone()),
@@ -252,10 +247,7 @@ where
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
-        info!(
-            "Updating component - namespace: {}, id: {}",
-            namespace, component_id
-        );
+        info!("Updating component");
 
         let metadata = process_component(&data)?;
 
@@ -271,13 +263,7 @@ where
             })
             .map(Component::next_version)?;
 
-        info!(
-            "Uploaded component - namespace: {}, id: {}, version: {}, exports {:?}",
-            namespace,
-            component_id,
-            next_component.versioned_component_id.version,
-            metadata.exports
-        );
+        info!("Uploaded component - exports {:?}", metadata.exports);
 
         let component_size: u64 = data
             .len()
@@ -320,10 +306,7 @@ where
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
 
-        info!(
-            "Downloading component - namespace: {}, id: {}, version: {}",
-            namespace, component_id, versioned_component_id.version
-        );
+        info!("Downloading component");
 
         let id = ProtectedComponentId {
             versioned_component_id: versioned_component_id.clone(),
@@ -356,10 +339,7 @@ where
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
 
-        info!(
-            "Downloading component - namespace: {}, id: {}, version: {}",
-            namespace, component_id, versioned_component_id.version
-        );
+        info!("Downloading component as stream");
 
         let id = ProtectedComponentId {
             versioned_component_id,
@@ -379,12 +359,7 @@ where
         version: Option<u64>,
         namespace: &Namespace,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
-        info!(
-            "Getting component data - namespace: {}, id: {}, version: {}",
-            namespace,
-            component_id,
-            version.map_or("N/A".to_string(), |v| v.to_string())
-        );
+        info!("Getting component protected data");
 
         let versioned_component_id = self
             .get_versioned_component_id(component_id, version, namespace)
@@ -435,11 +410,7 @@ where
         component_name: Option<ComponentName>,
         namespace: &Namespace,
     ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        let cn = component_name.clone().map_or("N/A".to_string(), |n| n.0);
-        info!(
-            "Find component by name - namespace: {}, name: {}",
-            namespace, cn
-        );
+        info!("Find component by name");
 
         let records = match component_name {
             Some(name) => {
@@ -469,10 +440,7 @@ where
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        info!(
-            "Getting component - namespace: {}, id: {}",
-            namespace, component_id
-        );
+        info!("Getting component");
         let records = self.component_repo.get(&component_id.0).await?;
 
         let values: Vec<Component<Namespace>> = records
@@ -491,10 +459,7 @@ where
         component_id: &VersionedComponentId,
         namespace: &Namespace,
     ) -> Result<Option<Component<Namespace>>, ComponentError> {
-        info!(
-            "Getting component - namespace: {}, id: {}, version: {}",
-            namespace, component_id.component_id, component_id.version
-        );
+        info!("Getting component by version");
 
         let result = self
             .component_repo
@@ -561,10 +526,7 @@ where
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<(), ComponentError> {
-        info!(
-            "Deleting component - namespace: {}, id: {}",
-            namespace, component_id
-        );
+        info!("Deleting component");
 
         let records = self.component_repo.get(&component_id.0).await?;
 
@@ -617,11 +579,6 @@ impl ComponentServiceDefault {
         user_component_id: &UserComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
-        info!(
-            "Uploading user component - id: {}",
-            user_component_id.slug()
-        );
-
         self.object_store
             .put(&self.get_user_object_store_key(user_component_id), data)
             .await
@@ -633,11 +590,6 @@ impl ComponentServiceDefault {
         protected_component_id: &ProtectedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
-        info!(
-            "Uploading protected component - id: {}",
-            protected_component_id.slug()
-        );
-
         self.object_store
             .put(
                 &self.get_protected_object_store_key(protected_component_id),

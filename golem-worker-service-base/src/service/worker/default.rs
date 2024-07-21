@@ -275,6 +275,7 @@ impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceDefault<AuthCtx>
 where
     AuthCtx: Send + Sync,
 {
+    #[instrument(fields(%worker_id, %component_version), skip(self, arguments, environment_variables, metadata, _auth_ctx))]
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -313,6 +314,7 @@ where
         Ok(worker_id.clone())
     }
 
+    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn connect(
         &self,
         worker_id: &WorkerId,
@@ -337,6 +339,7 @@ where
         Ok(stream)
     }
 
+    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn delete(
         &self,
         worker_id: &WorkerId,
@@ -372,7 +375,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self, params, metadata, auth_ctx))]
+    #[instrument(fields(%worker_id, ?idempotency_key, %function_name, ?calling_convention, ?invocation_context), skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function(
         &self,
         worker_id: &WorkerId,
@@ -400,7 +403,7 @@ where
         Ok(get_json_from_typed_value(&typed_value.result))
     }
 
-    #[instrument(skip(self, params, metadata, auth_ctx))]
+    #[instrument(fields(%worker_id, ?idempotency_key, %function_name), skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function_typed_value(
         &self,
         worker_id: &WorkerId,
@@ -468,7 +471,7 @@ where
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
-    #[instrument(skip(self, params, metadata, auth_ctx))]
+    #[instrument(fields(%worker_id, ?idempotency_key, %function_name), skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -508,13 +511,12 @@ where
 
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
-        let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
-                info!("Invoking function on {}: {}", worker_id_clone, function_name);
+                info!("Invoking function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
                         InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
@@ -539,18 +541,17 @@ where
                                  },
                              )),
                     } => {
-                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         Ok(ProtoInvokeResult { result: output })
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse {
                         result:
                         Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
-                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
+                        error!("Invoked function error: {err:?}");
                         Err(err.into())
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
-                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
+                        error!("Invoked function failed with empty response");
                         Err("Empty response".into())
                     }
                 }
@@ -560,7 +561,7 @@ where
         Ok(invoke_response)
     }
 
-    #[instrument(skip(self, params, metadata, auth_ctx))]
+    #[instrument(fields(%worker_id, ?idempotency_key, %function_name, ?invocation_context), skip(self, params, metadata, auth_ctx))]
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
@@ -610,7 +611,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self, params, metadata, auth_ctx))]
+    #[instrument(fields(%worker_id, ?idempotency_key, %function_name, ?invocation_context), skip(self, params, metadata, auth_ctx))]
     async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -651,6 +652,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Invoking function");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
                     workerexecutor::InvokeWorkerRequest {
@@ -670,7 +672,10 @@ where
                 } => Ok(()),
                 workerexecutor::InvokeWorkerResponse {
                     result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
+                } => {
+                    error!("Invoked function error: {err:?}");
+                    Err(err.into())
+                }
                 workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
@@ -678,6 +683,7 @@ where
         Ok(())
     }
 
+    #[instrument(fields(%worker_id, ?oplog_id), skip(self, metadata, _auth_ctx))]
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
@@ -730,6 +736,7 @@ where
         Ok(result)
     }
 
+    #[instrument(fields(%worker_id, %recover_immediately), skip(self, metadata, _auth_ctx))]
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
@@ -765,6 +772,7 @@ where
         Ok(())
     }
 
+    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
@@ -772,12 +780,11 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
         let metadata = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                info!("Getting metadata for {}", worker_id);
+                info!("Getting metadata");
                 Box::pin(worker_executor_client.get_worker_metadata(
                         workerexecutor::GetWorkerMetadataRequest {
                             worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
@@ -791,14 +798,13 @@ where
                         result:
                         Some(workerexecutor::get_worker_metadata_response::Result::Success(metadata)),
                     } => {
-                        info!("Got metadata for {}", worker_id_clone);
                         Ok(metadata.try_into().unwrap())
                     },
                     workerexecutor::GetWorkerMetadataResponse {
                         result:
                         Some(workerexecutor::get_worker_metadata_response::Result::Failure(err)),
                     } => {
-                        error!("Failed to get metadata for {}: {err:?}", worker_id_clone);
+                        error!("Get metadata error: {err:?}");
                         Err(err.into())
                     },
                     workerexecutor::GetWorkerMetadataResponse { .. } => {
@@ -811,6 +817,7 @@ where
         Ok(metadata)
     }
 
+    #[instrument(fields(%component_id, %cursor, %count, %precise), skip(self, filter, metadata, auth_ctx))]
     async fn find_metadata(
         &self,
         component_id: &ComponentId,
@@ -821,6 +828,7 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
+        info!("Find metadata");
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
@@ -841,6 +849,7 @@ where
         }
     }
 
+    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn resume(
         &self,
         worker_id: &WorkerId,
@@ -871,6 +880,7 @@ where
         Ok(())
     }
 
+    #[instrument(fields(%worker_id, ?update_mode, %target_version), skip(self, metadata, _auth_ctx))]
     async fn update(
         &self,
         worker_id: &WorkerId,
@@ -905,6 +915,7 @@ where
         Ok(())
     }
 
+    #[instrument(fields(%worker_id), skip(self, metadata, auth_ctx))]
     async fn get_component_for_worker(
         &self,
         worker_id: &WorkerId,
