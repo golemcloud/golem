@@ -198,7 +198,7 @@ impl ComponentServiceDefault {
 #[async_trait]
 impl<Namespace> ComponentService<Namespace> for ComponentServiceDefault
 where
-    Namespace: Display + Debug + TryFrom<String> + Eq + Clone + Send + Sync,
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
     #[instrument(fields(%component_id, %namespace), skip(self, data))]
@@ -352,7 +352,7 @@ where
         Ok(stream)
     }
 
-    #[instrument(fields(%component_id, ?version), skip(self))]
+    #[instrument(fields(%component_id, ?version, %namespace), skip(self))]
     async fn get_protected_data(
         &self,
         component_id: &ComponentId,
