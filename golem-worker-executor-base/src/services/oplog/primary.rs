@@ -631,7 +631,7 @@ impl Oplog for PrimaryOplog {
                             account_id: owned_worker_id.account_id(),
                             worker_id: owned_worker_id.worker_id(),
                         },
-                        Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
+                        Path::new(&format!("{}/{}", hex::encode(md5_hash), payload_id.0)),
                     )
                     .await?
                     .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
