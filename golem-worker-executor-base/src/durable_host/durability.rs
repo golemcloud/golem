@@ -337,7 +337,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(|err| Into::<SerializedErr>::into(err).into())?;
             if *wrapped_function_type == WrappedFunctionType::WriteRemote
-                || *wrapped_function_type == WrappedFunctionType::WriteRemoteBatched
+                || matches!(
+                    *wrapped_function_type,
+                    WrappedFunctionType::WriteRemoteBatched(_)
+                )
             {
                 self.state.oplog.commit().await;
             }

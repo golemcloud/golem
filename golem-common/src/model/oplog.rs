@@ -604,7 +604,12 @@ pub enum WrappedFunctionType {
     WriteRemote,
     /// The side-effect manipulates external state through multiple invoked functions (for example
     /// a HTTP request where reading the response involves multiple host function calls)
-    WriteRemoteBatched,
+    ///
+    /// On the first invocation of the batch, the parameter should be `None` - this triggers
+    /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
+    /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
+    /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+    WriteRemoteBatched(Option<OplogIndex>),
 }
 
 /// Describes the error that occurred in the worker

@@ -130,9 +130,9 @@ impl GetWorkersEntry {
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn golem_create_promise(&mut self) -> Result<golem::api::host::PromiseId, anyhow::Error> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api", "golem_create_promise");
         let oplog_idx = self.get_oplog_index().await?;
+        let _permit = self.begin_async_host_function().await?;
         Ok(self
             .public_state
             .promise_service

@@ -441,13 +441,29 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<Result<Result<Option<Resource<Trailers>>, ErrorCode>, ()>>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("http::types::future_trailers", "get");
+
+        let request_state = self
+            .state
+            .open_http_requests
+            .get(&self_.rep())
+            .ok_or_else(|| {
+                anyhow!("No matching HTTP request is associated with resource handle")
+            })?;
+        let begin_idx = self
+            .state
+            .open_function_table
+            .get(&request_state.root_handle)
+            .ok_or_else(|| {
+                anyhow!("No matching BeginRemoteWrite index was found for the open HTTP request")
+            })?;
+
         Durability::<
             Ctx,
             Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
             SerializableError,
         >::custom_wrap(
             self,
-            WrappedFunctionType::WriteRemote, // TODO: tag
+            WrappedFunctionType::WriteRemoteBatched(Some(*begin_idx)),
             "golem http::types::future_trailers::get",
             |ctx| {
                 Box::pin(async move {
@@ -600,6 +616,19 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         let handle = self_.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
+            let request_state = self.state.open_http_requests.get(&handle).ok_or_else(|| {
+                anyhow!("No matching HTTP request is associated with resource handle")
+            })?;
+            let begin_idx = *self
+                .state
+                .open_function_table
+                .get(&request_state.root_handle)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "No matching BeginRemoteWrite index was found for the open HTTP request"
+                    )
+                })?;
+
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
@@ -624,7 +653,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .add_imported_function_invoked(
                         "http::types::future_incoming_response::get".to_string(),
                         &serializable_response,
-                        WrappedFunctionType::WriteRemote, // TODO: tag
+                        WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));

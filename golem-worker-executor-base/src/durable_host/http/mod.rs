@@ -37,7 +37,7 @@ pub(crate) fn end_http_request_sync<Ctx: WorkerCtx>(
                     state.root_handle,
                     state.close_owner);
                 ctx.state
-                    .end_function_sync(&WrappedFunctionType::WriteRemoteBatched, *begin_index)?;
+                    .end_function_sync(&WrappedFunctionType::WriteRemote, *begin_index)?;
                 ctx.state.open_function_table.remove(&state.root_handle);
             }
             None => {
@@ -63,7 +63,7 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
                     state.root_handle,
                     state.close_owner);
                 ctx.state
-                    .end_function(&WrappedFunctionType::WriteRemoteBatched, *begin_index)
+                    .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
                     .await?;
                 ctx.state.open_function_table.remove(&state.root_handle);
             }

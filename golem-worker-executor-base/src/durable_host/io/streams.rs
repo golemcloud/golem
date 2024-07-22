@@ -25,7 +25,7 @@ use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::oplog::{OplogIndex, WrappedFunctionType};
 use wasmtime_wasi::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
@@ -42,9 +42,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::streams::input_stream", "read");
         if is_incoming_http_body_stream(self.table(), &self_) {
             let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
             let result = Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::WriteRemote, // TODO: tag
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::read",
                 |ctx| {
                     Box::pin(async move {
@@ -69,9 +71,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::streams::input_stream", "blocking_read");
         if is_incoming_http_body_stream(self.table(), &self_) {
             let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
             let result = Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::WriteRemote, // TODO: tag
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::blocking_read",
                 |ctx| {
                     Box::pin(async move {
@@ -92,9 +96,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::streams::input_stream", "skip");
         if is_incoming_http_body_stream(self.table(), &self_) {
             let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
             let result = Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::WriteRemote, // TODO: tag
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::skip",
                 |ctx| {
                     Box::pin(async move {
@@ -119,9 +125,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::streams::input_stream", "blocking_skip");
         if is_incoming_http_body_stream(self.table(), &self_) {
             let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
             let result = Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::WriteRemote, // TODO: tag
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::blocking_skip",
                 |ctx| {
                     Box::pin(async move {
@@ -458,4 +466,25 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
         }
     }
     Ok(())
+}
+
+fn get_http_request_begin_idx<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> Result<OplogIndex, StreamError> {
+    let request_state = ctx.state.open_http_requests.get(&handle).ok_or_else(|| {
+        StreamError::Trap(anyhow!(
+            "No matching HTTP request is associated with resource handle"
+        ))
+    })?;
+    let begin_idx = *ctx
+        .state
+        .open_function_table
+        .get(&request_state.root_handle)
+        .ok_or_else(|| {
+            StreamError::Trap(anyhow!(
+                "No matching BeginRemoteWrite index was found for the open HTTP request"
+            ))
+        })?;
+    Ok(begin_idx)
 }

@@ -73,8 +73,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "invoke-and-await");
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
+
+        let _permit = self.begin_async_host_function().await?;
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -98,8 +101,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
         let result = Durability::<Ctx, WitValue, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -137,8 +138,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "invoke");
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
+
+        let _permit = self.begin_async_host_function().await?;
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -162,8 +166,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
         let result = Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
@@ -201,8 +203,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "async-invoke-and-await");
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
+
+        let _permit = self.begin_async_host_function().await?;
         let begin_index = self
             .state
             .begin_function(&WrappedFunctionType::WriteRemote)
@@ -229,8 +234,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
-        let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
         let worker_id = self.worker_id().clone();
         let result = if self.state.is_live() {
             let rpc = self.rpc();

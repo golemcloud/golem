@@ -41,7 +41,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
             .state
-            .begin_function(&WrappedFunctionType::WriteRemoteBatched)
+            .begin_function(&WrappedFunctionType::WriteRemoteBatched(None))
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
@@ -62,7 +62,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
             Err(_) => {
                 self.state
-                    .end_function(&WrappedFunctionType::WriteRemoteBatched, begin_index)
+                    .end_function(&WrappedFunctionType::WriteRemote, begin_index)
                     .await
                     .map_err(|err| HttpError::trap(anyhow!(err)))?;
             }
