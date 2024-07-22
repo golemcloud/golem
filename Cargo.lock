@@ -3864,6 +3864,7 @@ dependencies = [
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-wit",
+ "hex",
  "http 0.2.12",
  "http 1.1.0",
  "http-body 1.0.1",
