@@ -66,7 +66,8 @@ pub fn make_definition(
     id: &str,
 ) -> Result<HttpApiDefinition, Failed> {
     let component = make_shopping_cart_component(deps, id, cli)?;
-    let def = golem_def(id, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(id, &component_id);
     let path = make_golem_file(&def)?;
 
     cli.run(&["api-definition", "add", path.to_str().unwrap()])

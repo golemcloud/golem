@@ -17,12 +17,15 @@ use crate::config::{OssProfile, ProfileName};
 use crate::examples;
 use crate::factory::ServiceFactory;
 use crate::init::{CliKind, DummyProfileAuth};
-use crate::model::GolemResult;
+use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use colored::Colorize;
+use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
+use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl};
+use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn};
 use std::path::PathBuf;
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
@@ -117,6 +120,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
                 .map(|_| GolemResult::Str("Profile created".to_string()))
         }
+        OssCommand::Get { uri } => get_resource_by_uri(uri, &factory).await,
     };
 
     match res {
@@ -125,5 +129,101 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             Ok(())
         }
         Err(err) => Err(Box::new(err)),
+    }
+}
+
+async fn get_resource_by_urn(
+    urn: ResourceUrn,
+    factory: &OssServiceFactory,
+) -> Result<GolemResult, GolemError> {
+    let ctx = &OssContext::EMPTY;
+
+    match urn {
+        ResourceUrn::Component(c) => {
+            factory
+                .component_service(ctx)?
+                .get(ComponentUri::URN(c), None, None)
+                .await
+        }
+        ResourceUrn::ComponentVersion(c) => {
+            factory
+                .component_service(ctx)?
+                .get(
+                    ComponentUri::URN(ComponentUrn { id: c.id }),
+                    Some(c.version),
+                    None,
+                )
+                .await
+        }
+        ResourceUrn::Worker(w) => {
+            factory
+                .worker_service(ctx)?
+                .get(WorkerUri::URN(w), None)
+                .await
+        }
+        ResourceUrn::ApiDefinition(ad) => {
+            factory
+                .api_definition_service(ctx)?
+                .get(
+                    ApiDefinitionId(ad.id),
+                    ApiDefinitionVersion(ad.version),
+                    ctx,
+                )
+                .await
+        }
+        ResourceUrn::ApiDeployment(ad) => factory.api_deployment_service(ctx)?.get(ad.site).await,
+    }
+}
+
+async fn get_resource_by_url(
+    url: ResourceUrl,
+    factory: &OssServiceFactory,
+) -> Result<GolemResult, GolemError> {
+    let ctx = &OssContext::EMPTY;
+
+    match url {
+        ResourceUrl::Component(c) => {
+            factory
+                .component_service(ctx)?
+                .get(ComponentUri::URL(c), None, None)
+                .await
+        }
+        ResourceUrl::ComponentVersion(c) => {
+            factory
+                .component_service(ctx)?
+                .get(
+                    ComponentUri::URL(ComponentUrl { name: c.name }),
+                    Some(c.version),
+                    None,
+                )
+                .await
+        }
+        ResourceUrl::Worker(w) => {
+            factory
+                .worker_service(ctx)?
+                .get(WorkerUri::URL(w), None)
+                .await
+        }
+        ResourceUrl::ApiDefinition(ad) => {
+            factory
+                .api_definition_service(ctx)?
+                .get(
+                    ApiDefinitionId(ad.name),
+                    ApiDefinitionVersion(ad.version),
+                    ctx,
+                )
+                .await
+        }
+        ResourceUrl::ApiDeployment(ad) => factory.api_deployment_service(ctx)?.get(ad.site).await,
+    }
+}
+
+async fn get_resource_by_uri(
+    uri: ResourceUri,
+    factory: &OssServiceFactory,
+) -> Result<GolemResult, GolemError> {
+    match uri {
+        ResourceUri::URN(urn) => get_resource_by_urn(urn, factory).await,
+        ResourceUri::URL(url) => get_resource_by_url(url, factory).await,
     }
 }
