@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::oplog::OplogEntry;
 use std::fmt::Debug;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio::task::{yield_now, JoinHandle};
-use tracing::debug;
+
+use golem_common::model::oplog::OplogEntry;
 
 use crate::durable_host::replay_state::ReplayState;
 use crate::error::GolemError;
@@ -66,7 +67,6 @@ impl SyncHelper {
     }
 
     pub fn write_oplog_entry(&self, entry: OplogEntry) {
-        debug!("enqueue write oplog entry: {:?}", entry);
         self.queue_size
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.tx
@@ -79,7 +79,6 @@ impl SyncHelper {
         check: Box<dyn (Fn(&OplogEntry) -> bool) + Send + Sync>,
         expectation: &str,
     ) {
-        debug!("enqueue skip oplog entry: {}", expectation);
         self.queue_size
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.tx
@@ -123,7 +122,6 @@ impl SyncHelper {
                     queue_size.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
                 }
             }
-            debug!("received command {last:?}, acquiring lock");
             let mut permit = Some(mutex.lock().await);
             let retry = loop {
                 match last.take().map(Ok).unwrap_or({
@@ -133,30 +131,26 @@ impl SyncHelper {
                     }
                     cmd
                 }) {
-                    Ok(command) => {
-                        debug!("processing command {command:?}");
-                        match command {
-                            SyncHelperCommand::WriteOplogEntry { entry } => {
-                                oplog.add(entry).await;
-                            }
-                            SyncHelperCommand::SkipOplogEntry { check, expectation } => loop {
-                                let (_, oplog_entry) = replay_state.get_oplog_entry().await;
-                                if check(&oplog_entry) {
-                                    break;
-                                } else if oplog_entry.is_hint() {
-                                } else {
-                                    let mut error = error.lock().await;
-                                    *error = Some(GolemError::unexpected_oplog_entry(
-                                        expectation,
-                                        format!("{:?}", oplog_entry),
-                                    ));
-                                    break;
-                                }
-                            },
+                    Ok(command) => match command {
+                        SyncHelperCommand::WriteOplogEntry { entry } => {
+                            oplog.add(entry).await;
                         }
-                    }
+                        SyncHelperCommand::SkipOplogEntry { check, expectation } => loop {
+                            let (_, oplog_entry) = replay_state.get_oplog_entry().await;
+                            if check(&oplog_entry) {
+                                break;
+                            } else if oplog_entry.is_hint() {
+                            } else {
+                                let mut error = error.lock().await;
+                                *error = Some(GolemError::unexpected_oplog_entry(
+                                    expectation,
+                                    format!("{:?}", oplog_entry),
+                                ));
+                                break;
+                            }
+                        },
+                    },
                     Err(TryRecvError::Empty) => {
-                        debug!("no more commands enqueued, releasing lock");
                         let _ = permit.take();
                         break true;
                     }

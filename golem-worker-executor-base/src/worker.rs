@@ -610,8 +610,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .concat();
         let mut map = self.invocation_results.write().unwrap();
         for key in keys_to_fail {
-            debug!("store_invocation_failure for {key}");
-
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
@@ -775,7 +773,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             } if *worker_id == self.owned_worker_id.worker_id
                                 && idempotency_key == key =>
                             {
-                                debug!("wait_for_invocation_result: accepting event {:?}", event);
                                 Some(LookupResult::Complete(result.clone()))
                             }
                             _ => None,
@@ -784,7 +781,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     match wait_result {
                         Ok(result) => break Ok(result),
                         Err(RecvError::Lagged(_)) => {
-                            debug!("invocation event queue is full, retrying with backoff");
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             continue;
                         }

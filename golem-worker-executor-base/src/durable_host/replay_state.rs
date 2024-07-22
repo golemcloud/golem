@@ -167,10 +167,6 @@ impl ReplayState {
                 .read(&self.owned_worker_id, start, CHUNK_SIZE)
                 .await;
             for (idx, entry) in &entries {
-                debug!(
-                    "lookup_oplog_entry[{begin_idx}] processing [{idx}] entry {:?}",
-                    entry
-                );
                 // TODO: handle deleted regions
                 if end_check(entry, begin_idx) {
                     return Some(*idx);

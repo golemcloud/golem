@@ -16,7 +16,7 @@ use crate::durable_host::{DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use tracing::{debug, warn};
+use tracing::warn;
 
 pub mod outgoing_http;
 
@@ -32,10 +32,6 @@ pub(crate) fn end_http_request_sync<Ctx: WorkerCtx>(
     if let Some(state) = ctx.state.open_http_requests.remove(&current_handle) {
         match ctx.state.open_function_table.get(&state.root_handle) {
             Some(begin_index) => {
-                debug!("END_FUNCTION (SYNC) FOR HTTP REQUEST CURRENT HANDLE: {}, ROOT HANDLE: {}, CLOSE_OWNER: {:?}",
-                    current_handle,
-                    state.root_handle,
-                    state.close_owner);
                 ctx.state.end_function_sync(
                     &WrappedFunctionType::WriteRemoteBatched(None),
                     *begin_index,
@@ -60,10 +56,6 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
     if let Some(state) = ctx.state.open_http_requests.remove(&current_handle) {
         match ctx.state.open_function_table.get(&state.root_handle) {
             Some(begin_index) => {
-                debug!("END_FUNCTION FOR HTTP REQUEST CURRENT HANDLE: {}, ROOT HANDLE: {}, CLOSE_OWNER: {:?}",
-                    current_handle,
-                    state.root_handle,
-                    state.close_owner);
                 ctx.state
                     .end_function(&WrappedFunctionType::WriteRemoteBatched(None), *begin_index)
                     .await?;
@@ -87,10 +79,6 @@ pub(crate) fn continue_http_request<Ctx: WorkerCtx>(
     new_close_owner: HttpRequestCloseOwner,
 ) {
     if let Some(mut state) = ctx.state.open_http_requests.remove(&current_handle) {
-        debug!("CONTINUE_FUNCTION FOR HTTP REQUEST CURRENT HANDLE: {}, NEW HANDLE: {}, NEW CLOSE OWNER: {:?}",
-            current_handle,
-            new_handle,
-            new_close_owner);
         state.close_owner = new_close_owner;
         ctx.state.open_http_requests.insert(new_handle, state);
     } else {
