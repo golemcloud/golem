@@ -3,14 +3,14 @@ use golem_common::model::{
 };
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::model::*;
+use golem_worker_service_base::api::WorkerApiBaseError;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
-
-use golem_service_base::model::*;
-use golem_worker_service_base::api::WorkerApiBaseError;
+use tracing::instrument;
 
 use crate::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
@@ -98,6 +98,8 @@ impl WorkerApi {
         method = "post",
         operation_id = "invoke_and_await_function"
     )]
+    #[instrument(name = "http_request", fields(api="invoke_and_await_function", component_id = %component_id.0, worker_name = %worker_name.0, idempotency_key = ?idempotency_key.0, calling_convention = ?calling_convention.0
+    ), skip(self, params, function))]
     async fn invoke_and_await_function(
         &self,
         component_id: Path<ComponentId>,
@@ -133,6 +135,7 @@ impl WorkerApi {
         method = "post",
         operation_id = "invoke_function"
     )]
+    #[instrument(name = "http_request", fields(api="invoke_function", component_id = %component_id.0, worker_name = %worker_name.0, idempotency_key = ?idempotency_key.0), skip(self, params, function))]
     async fn invoke_function(
         &self,
         component_id: Path<ComponentId>,
@@ -239,6 +242,7 @@ impl WorkerApi {
         method = "get",
         operation_id = "get_workers_metadata"
     )]
+    #[instrument(name = "http_request", fields(api="get_workers_metadata", component_id = %component_id.0), skip(self, filter, cursor, count, precise))]
     async fn get_workers_metadata(
         &self,
         component_id: Path<ComponentId>,

@@ -28,6 +28,7 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::*;
+use tracing::instrument;
 
 #[derive(ApiResponse)]
 pub enum ComponentError {
@@ -177,6 +178,7 @@ impl ComponentApi {
         method = "get",
         operation_id = "get_component_metadata"
     )]
+    #[instrument(name = "http_request", fields(api="get_component_metadata", component_id = %component_id.0, version = %version.0), skip(self))]
     async fn get_component_metadata(
         &self,
         #[oai(name = "component_id")] component_id: Path<ComponentId>,
@@ -214,6 +216,7 @@ impl ComponentApi {
         method = "get",
         operation_id = "get_latest_component_metadata"
     )]
+    #[instrument(name = "http_request", fields(api="get_latest_component_metadata", component_id = %component_id.0), skip(self))]
     async fn get_latest_component_metadata(
         &self,
         component_id: Path<ComponentId>,
@@ -232,6 +235,7 @@ impl ComponentApi {
     }
 
     #[oai(path = "/", method = "get", operation_id = "get_components")]
+    #[instrument(name = "http_request", fields(api="get_components", component_name = ?component_name.0), skip(self))]
     async fn get_components(
         &self,
         #[oai(name = "component-name")] component_name: Query<Option<ComponentName>>,
