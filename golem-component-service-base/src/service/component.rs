@@ -20,7 +20,7 @@ use crate::service::component_processor::{process_component, ComponentProcessing
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use tap::TapFallible;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
@@ -201,7 +201,6 @@ where
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
-    #[instrument(fields(%component_id, %namespace), skip(self, data))]
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -209,7 +208,7 @@ where
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
-        info!("Creating component");
+        info!(namespace = %namespace, "Create component");
 
         self.find_id_by_name(component_name, namespace)
             .await?
@@ -217,9 +216,7 @@ where
 
         let component = create_new_component(component_id, component_name, &data, namespace)?;
 
-        info!(
-            "Uploaded component - exports {:?}",
-            component.metadata.exports
+        info!(namespace = %namespace,"Uploaded component - exports {:?}",component.metadata.exports
         );
         tokio::try_join!(
             self.upload_user_component(&component.user_component_id, data.clone()),
@@ -240,14 +237,13 @@ where
         Ok(component)
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self, data))]
     async fn update(
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
-        info!("Updating component");
+        info!(namespace = %namespace, "Update component");
 
         let metadata = process_component(&data)?;
 
@@ -263,7 +259,7 @@ where
             })
             .map(Component::next_version)?;
 
-        info!("Uploaded component - exports {:?}", metadata.exports);
+        info!(namespace = %namespace, "Uploaded component - exports {:?}", metadata.exports);
 
         let component_size: u64 = data
             .len()
@@ -294,7 +290,6 @@ where
         Ok(component)
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn download(
         &self,
         component_id: &ComponentId,
@@ -306,7 +301,7 @@ where
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
 
-        info!("Downloading component");
+        info!(namespace = %namespace, "Download component");
 
         let id = ProtectedComponentId {
             versioned_component_id: versioned_component_id.clone(),
@@ -315,11 +310,12 @@ where
         self.object_store
             .get(&self.get_protected_object_store_key(&id))
             .await
-            .tap_err(|e| error!("Error downloading component - error: {}", e))
+            .tap_err(
+                |e| error!(namespace = %namespace, "Error downloading component - error: {}", e),
+            )
             .map_err(|e| ComponentError::internal(e.to_string(), "Error downloading component"))
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn download_stream(
         &self,
         component_id: &ComponentId,
@@ -331,7 +327,7 @@ where
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
 
-        info!("Downloading component as stream");
+        info!(namespace = %namespace, "Download component as stream");
 
         let id = ProtectedComponentId {
             versioned_component_id,
@@ -344,14 +340,13 @@ where
         Ok(stream)
     }
 
-    #[instrument(fields(%component_id, ?version, %namespace), skip(self))]
     async fn get_protected_data(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
         namespace: &Namespace,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
-        info!("Getting component protected data");
+        info!(namespace = %namespace, "Get component protected data");
 
         let versioned_component_id = self
             .get_versioned_component_id(component_id, version, namespace)
@@ -366,7 +361,7 @@ where
                     .object_store
                     .get(&self.get_protected_object_store_key(&id))
                     .await
-                    .tap_err(|e| error!("Error getting component data - error: {}", e))
+                    .tap_err(|e| error!(namespace = %namespace, "Error getting component data - error: {}", e))
                     .map_err(|e| {
                         ComponentError::internal(e.to_string(), "Error retrieving component")
                     })?;
@@ -376,12 +371,12 @@ where
         }
     }
 
-    #[instrument(fields(%component_name, %namespace), skip(self))]
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
         namespace: &Namespace,
     ) -> Result<Option<ComponentId>, ComponentError> {
+        info!(namespace = %namespace, "Find component id by name");
         let records = self
             .component_repo
             .get_id_by_name(namespace.to_string().as_str(), &component_name.0)
@@ -389,13 +384,12 @@ where
         Ok(records.map(ComponentId))
     }
 
-    #[instrument(fields(?component_name, %namespace), skip(self))]
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
         namespace: &Namespace,
     ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        info!("Find component by name");
+        info!(namespace = %namespace, "Find component by name");
 
         let records = match component_name {
             Some(name) => {
@@ -419,13 +413,12 @@ where
         Ok(values)
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn get(
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        info!("Getting component");
+        info!(namespace = %namespace, "Get component");
         let records = self.component_repo.get(&component_id.0).await?;
 
         let values: Vec<Component<Namespace>> = records
@@ -438,13 +431,12 @@ where
         Ok(values)
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
         namespace: &Namespace,
     ) -> Result<Option<Component<Namespace>>, ComponentError> {
-        info!("Getting component by version");
+        info!(namespace = %namespace, "Get component by version");
 
         let result = self
             .component_repo
@@ -462,13 +454,12 @@ where
         }
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<Option<Component<Namespace>>, ComponentError> {
-        info!("Getting component");
+        info!(namespace = %namespace, "Get latest component");
         let result = self
             .component_repo
             .get_latest_version(&component_id.0)
@@ -485,12 +476,11 @@ where
         }
     }
 
-    #[instrument(fields(%component_id), skip(self))]
     async fn get_namespace(
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<Namespace>, ComponentError> {
-        info!("Getting component namespace");
+        info!("Get component namespace");
         let result = self.component_repo.get_namespace(&component_id.0).await?;
         if let Some(result) = result {
             let value = result.clone().try_into().map_err(|e| {
@@ -502,13 +492,12 @@ where
         }
     }
 
-    #[instrument(fields(%component_id, %namespace), skip(self))]
     async fn delete(
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<(), ComponentError> {
-        info!("Deleting component");
+        info!(namespace = %namespace, "Delete component");
 
         let records = self.component_repo.get(&component_id.0).await?;
 

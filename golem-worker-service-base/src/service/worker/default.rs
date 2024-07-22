@@ -22,7 +22,7 @@ use golem_wasm_rpc::TypeAnnotatedValue;
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tonic::transport::Channel;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
@@ -275,7 +275,6 @@ impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceDefault<AuthCtx>
 where
     AuthCtx: Send + Sync,
 {
-    #[instrument(fields(%worker_id, %component_version), skip(self, arguments, environment_variables, metadata, _auth_ctx))]
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -289,6 +288,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Create worker");
                 let worker_id = worker_id_clone.clone();
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
@@ -314,7 +314,6 @@ where
         Ok(worker_id.clone())
     }
 
-    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn connect(
         &self,
         worker_id: &WorkerId,
@@ -326,6 +325,7 @@ where
             .call_worker_executor(
                 worker_id.clone(),
                 move |worker_executor_client| {
+                    info!("Connect worker");
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -339,7 +339,6 @@ where
         Ok(stream)
     }
 
-    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn delete(
         &self,
         worker_id: &WorkerId,
@@ -350,6 +349,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Delete worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.delete_worker(
                     workerexecutor::DeleteWorkerRequest {
@@ -375,7 +375,6 @@ where
         Ok(())
     }
 
-    #[instrument(fields(%worker_id, ?idempotency_key, %function_name, ?calling_convention, ?invocation_context), skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function(
         &self,
         worker_id: &WorkerId,
@@ -403,7 +402,6 @@ where
         Ok(get_json_from_typed_value(&typed_value.result))
     }
 
-    #[instrument(fields(%worker_id, ?idempotency_key, %function_name), skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function_typed_value(
         &self,
         worker_id: &WorkerId,
@@ -471,7 +469,6 @@ where
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
     }
 
-    #[instrument(fields(%worker_id, ?idempotency_key, %function_name), skip(self, params, metadata, auth_ctx))]
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -516,7 +513,7 @@ where
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
-                info!("Invoking function");
+                info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
                         InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
@@ -561,7 +558,6 @@ where
         Ok(invoke_response)
     }
 
-    #[instrument(fields(%worker_id, ?idempotency_key, %function_name, ?invocation_context), skip(self, params, metadata, auth_ctx))]
     async fn invoke_function(
         &self,
         worker_id: &WorkerId,
@@ -611,7 +607,6 @@ where
         Ok(())
     }
 
-    #[instrument(fields(%worker_id, ?idempotency_key, %function_name, ?invocation_context), skip(self, params, metadata, auth_ctx))]
     async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -652,7 +647,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
-                info!("Invoking function");
+                info!("Invoke function");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
                     workerexecutor::InvokeWorkerRequest {
@@ -683,7 +678,6 @@ where
         Ok(())
     }
 
-    #[instrument(fields(%worker_id, ?oplog_id), skip(self, metadata, _auth_ctx))]
     async fn complete_promise(
         &self,
         worker_id: &WorkerId,
@@ -701,6 +695,7 @@ where
             .call_worker_executor(
                 worker_id.clone(),
                 move |worker_executor_client| {
+                    info!("Complete promise");
                     let promise_id = promise_id.clone();
                     let data = data.clone();
                     Box::pin(
@@ -736,7 +731,6 @@ where
         Ok(result)
     }
 
-    #[instrument(fields(%worker_id, %recover_immediately), skip(self, metadata, _auth_ctx))]
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
@@ -748,6 +742,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Interrupt");
                 let worker_id = worker_id.clone();
                 Box::pin(
                     worker_executor_client.interrupt_worker(InterruptWorkerRequest {
@@ -772,7 +767,6 @@ where
         Ok(())
     }
 
-    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
@@ -784,7 +778,7 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                info!("Getting metadata");
+                info!("Get metadata");
                 Box::pin(worker_executor_client.get_worker_metadata(
                         workerexecutor::GetWorkerMetadataRequest {
                             worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
@@ -817,7 +811,6 @@ where
         Ok(metadata)
     }
 
-    #[instrument(fields(%component_id, %cursor, %count, %precise), skip(self, filter, metadata, auth_ctx))]
     async fn find_metadata(
         &self,
         component_id: &ComponentId,
@@ -849,7 +842,6 @@ where
         }
     }
 
-    #[instrument(fields(%worker_id), skip(self, metadata, _auth_ctx))]
     async fn resume(
         &self,
         worker_id: &WorkerId,
@@ -880,7 +872,6 @@ where
         Ok(())
     }
 
-    #[instrument(fields(%worker_id, ?update_mode, %target_version), skip(self, metadata, _auth_ctx))]
     async fn update(
         &self,
         worker_id: &WorkerId,
@@ -893,6 +884,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Update worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
@@ -915,7 +907,6 @@ where
         Ok(())
     }
 
-    #[instrument(fields(%worker_id), skip(self, metadata, auth_ctx))]
     async fn get_component_for_worker(
         &self,
         worker_id: &WorkerId,

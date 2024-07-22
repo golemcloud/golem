@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 
 use std::sync::Arc;
-use tracing::{debug, error, info, instrument};
+use tracing::{error, info};
 
 use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, Route};
 
@@ -151,12 +151,11 @@ impl ApiDeploymentServiceDefault {
 impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault
 {
-    #[instrument(fields(site = %deployment.site, namespace = %deployment.namespace), skip(self, deployment))]
     async fn deploy(
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-        info!("Deploying API definitions");
+        info!(namespace = %deployment.namespace, "Deploy API definitions");
 
         // Existing deployment
         let existing_deployment_records = self
@@ -171,7 +170,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 || deployment_record.subdomain != deployment.site.subdomain
                 || deployment_record.host != deployment.site.host
             {
-                error!(
+                info!(namespace = %deployment.namespace,
                     "Deploying API definition - failed, site used by another API (under another namespace/API)",
                 );
                 return Err(ApiDeploymentError::ApiDeploymentConflict(
@@ -248,8 +247,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            error!(
-                "Deploying API definition - failed, conflicting definitions: {}",
+            info!(namespace = %deployment.namespace,
+                "Deploy API definition - failed, conflicting definitions: {}",
                 conflicting_definitions
             );
             Err(ApiDeploymentError::ApiDefinitionsConflict(
@@ -257,9 +256,9 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
             ))
         } else if !new_deployment_records.is_empty() {
             for api_definition_key in set_not_draft {
-                debug!(
-                    "Set API definition as not draft - namespace: {}, definition id: {}, definition version: {}",
-                    deployment.namespace, api_definition_key.id, api_definition_key.version
+                info!(namespace = %deployment.namespace,
+                    "Set API definition as not draft - definition id: {}, definition version: {}",
+                    api_definition_key.id, api_definition_key.version
                 );
 
                 self.definition_repo
@@ -278,12 +277,11 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         }
     }
 
-    #[instrument(fields(site = %deployment.site, namespace = %deployment.namespace), skip(self, deployment))]
     async fn undeploy(
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-        info!("Undeploying API definitions");
+        info!(namespace = %deployment.namespace, "Undeploying API definitions");
 
         // Existing deployment
         let existing_deployment_records = self
@@ -329,13 +327,12 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         Ok(())
     }
 
-    #[instrument(fields(%definition_id, %namespace), skip(self))]
     async fn get_by_id(
         &self,
         namespace: &Namespace,
         definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        info!("Get API deployment");
+        info!(namespace = %namespace, "Get API deployment");
 
         let existing_deployment_records = self
             .deployment_repo
@@ -379,7 +376,6 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         Ok(values)
     }
 
-    #[instrument(fields(%site), skip(self))]
     async fn get_by_site(
         &self,
         site: &ApiSiteString,
@@ -426,7 +422,6 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         }
     }
 
-    #[instrument(fields(%site), skip(self))]
     async fn get_definitions_by_site(
         &self,
         site: &ApiSiteString,
@@ -448,13 +443,12 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         Ok(values)
     }
 
-    #[instrument(fields(%site, %namespace), skip(self))]
     async fn delete(
         &self,
         namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
-        info!("Get API deployment");
+        info!(namespace = %namespace, "Get API deployment");
         let existing_deployment_records = self
             .deployment_repo
             .get_by_site(site.to_string().as_str())

@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use crate::api_definition::http::HttpApiDefinition;
 use golem_common::model::ComponentId;
 use golem_service_base::model::Component;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::repo::api_definition::ApiDefinitionRecord;
@@ -193,14 +193,13 @@ where
     AuthCtx: Send + Sync,
     Namespace: Display + Clone + Send + Sync,
 {
-    #[instrument(fields(id = %definition.id, version = %definition.version, %namespace), skip(self, definition, auth_ctx))]
     async fn create(
         &self,
         definition: &HttpApiDefinition,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        info!("Creating API definition");
+        info!(namespace = %namespace, "Create API definition");
 
         let exists = self
             .definition_repo
@@ -232,14 +231,13 @@ where
         Ok(definition.id.clone())
     }
 
-    #[instrument(fields(id = %definition.id, version = %definition.version, %namespace), skip(self, definition, auth_ctx))]
     async fn update(
         &self,
         definition: &HttpApiDefinition,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        info!("Updating API definition");
+        info!(namespace = %namespace, "Update API definition");
         let draft = self
             .definition_repo
             .get_draft(
@@ -278,7 +276,6 @@ where
         Ok(definition.id.clone())
     }
 
-    #[instrument(fields(%id, %version, %namespace), skip(self, _auth_ctx))]
     async fn get(
         &self,
         id: &ApiDefinitionId,
@@ -286,7 +283,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
-        info!("Get API definition");
+        info!(namespace = %namespace, "Get API definition");
         let value = self
             .definition_repo
             .get(&namespace.to_string(), id.0.as_str(), version.0.as_str())
@@ -303,7 +300,6 @@ where
         }
     }
 
-    #[instrument(fields(%id, %version, %namespace), skip(self, _auth_ctx))]
     async fn delete(
         &self,
         id: &ApiDefinitionId,
@@ -311,7 +307,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
-        info!("Delete API definition");
+        info!(namespace = %namespace, "Delete API definition");
 
         let deployments = self
             .deployment_repo
@@ -338,13 +334,12 @@ where
         }
     }
 
-    #[instrument(fields(%namespace), skip(self, _auth_ctx))]
     async fn get_all(
         &self,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        info!("Get all API definitions");
+        info!(namespace = %namespace, "Get all API definitions");
         let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
         let values: Vec<HttpApiDefinition> = records
@@ -358,14 +353,13 @@ where
         Ok(values)
     }
 
-    #[instrument(fields(%id, %namespace), skip(self, _auth_ctx))]
     async fn get_all_versions(
         &self,
         id: &ApiDefinitionId,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        info!("Get all API definitions versions");
+        info!(namespace = %namespace, "Get all API definitions versions");
 
         let records = self
             .definition_repo
