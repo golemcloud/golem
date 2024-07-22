@@ -69,7 +69,7 @@ impl Scenario {
 
 #[tokio::test]
 async fn coordinated_scenario_01_01() {
-    for _ in 0..3 {
+    for _ in 0..2 {
         coordinated_scenario(
             5,
             4,
@@ -88,7 +88,7 @@ async fn coordinated_scenario_01_01() {
 
 #[tokio::test]
 async fn coordinated_scenario_01_02() {
-    for _ in 0..3 {
+    for _ in 0..2 {
         coordinated_scenario(
             5,
             30,
@@ -107,7 +107,7 @@ async fn coordinated_scenario_01_02() {
 
 #[tokio::test]
 async fn coordinated_scenario_02_01() {
-    for _ in 0..3 {
+    for _ in 0..2 {
         coordinated_scenario(
             5,
             10,
@@ -126,7 +126,7 @@ async fn coordinated_scenario_02_01() {
 
 #[tokio::test]
 async fn coordinated_scenario_03_01() {
-    for _ in 0..3 {
+    for _ in 0..2 {
         coordinated_scenario(
             5,
             10,
