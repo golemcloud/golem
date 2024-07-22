@@ -502,6 +502,29 @@ impl OplogEntry {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
     }
 
+    /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
+    /// is not a RemoteWrite entry which does not belong to the batched remote write started at `idx`.
+    pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
+        match self {
+            OplogEntry::ImportedFunctionInvoked {
+                wrapped_function_type,
+                ..
+            } => match wrapped_function_type {
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
+                    if *begin_index == idx =>
+                {
+                    true
+                }
+                WrappedFunctionType::ReadLocal => true,
+                WrappedFunctionType::WriteLocal => true,
+                WrappedFunctionType::ReadRemote => true,
+                _ => false,
+            },
+            OplogEntry::ExportedFunctionCompleted { .. } => false,
+            _ => true,
+        }
+    }
+
     /// True if the oplog entry is a "hint" that should be skipped during replay
     pub fn is_hint(&self) -> bool {
         matches!(

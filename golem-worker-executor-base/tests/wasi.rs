@@ -657,7 +657,7 @@ async fn http_client_interrupting_response_stream() {
 
     http_server.abort();
 
-    check!(result == Ok(vec![Value::U64(0)]));
+    check!(result == Ok(vec![Value::U64(100 * 1024)]));
 }
 
 #[tokio::test]

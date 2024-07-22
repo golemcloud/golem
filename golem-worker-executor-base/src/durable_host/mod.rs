@@ -49,7 +49,7 @@ use golem_common::model::oplog::{
     IndexedResourceKey, OplogEntry, OplogIndex, UpdateDescription, WorkerError, WorkerResourceId,
     WrappedFunctionType,
 };
-use golem_common::model::regions::DeletedRegions;
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp,
@@ -1454,8 +1454,39 @@ impl PrivateDurableWorkerState {
                     } else {
                         Ok(begin_index)
                     }
+                } else if matches!(
+                    *wrapped_function_type,
+                    WrappedFunctionType::WriteRemoteBatched(None)
+                ) {
+                    let end_index = self
+                        .replay_state
+                        .lookup_oplog_entry_with_condition(
+                            begin_index,
+                            OplogEntry::is_end_remote_write,
+                            OplogEntry::no_concurrent_side_effect,
+                        )
+                        .await;
+                    if end_index.is_none() {
+                        // We need to jump to the end of the oplog
+                        self.replay_state.switch_to_live();
+
+                        // But this is not enough, because if the retried batched write operation succeeds,
+                        // and later we replay it, we need to skip the first attempt and only replay the second.
+                        // Se we add a Jump entry to the oplog that registers a deleted region.
+                        let deleted_region = OplogRegion {
+                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                            end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                        };
+                        self.replay_state
+                            .add_deleted_region(deleted_region.clone())
+                            .await;
+                        self.oplog
+                            .add_and_commit(OplogEntry::jump(deleted_region))
+                            .await;
+                    }
+
+                    Ok(begin_index)
                 } else {
-                    // TODO: if idempotency is on, and there is no end_function, also have to check if all the in-between entries are tagged to belong to this function. If not, it works as today. If all are tagged, we insert a deleted region and retry (like with atomic regions)
                     Ok(begin_index)
                 }
             }
