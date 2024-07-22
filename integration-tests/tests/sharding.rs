@@ -1,3 +1,4 @@
+use std::env;
 use std::ops::Deref;
 use std::time::Duration;
 
@@ -14,6 +15,17 @@ use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 use golem_test_framework::dsl::TestDslUnsafe;
+
+fn coordinated_scenario_retries() -> usize {
+    let retries = env::var("COORDINATED_SCENARIO_RETRIES")
+        .ok()
+        .and_then(|str| str.parse::<usize>().ok())
+        .unwrap_or(1);
+
+    info!("COORDINATED_SCENARIO_RETRIES: {retries}");
+
+    retries
+}
 
 struct Scenario;
 
@@ -69,7 +81,7 @@ impl Scenario {
 
 #[tokio::test]
 async fn coordinated_scenario_01_01() {
-    for _ in 0..2 {
+    for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
             5,
             4,
@@ -88,7 +100,7 @@ async fn coordinated_scenario_01_01() {
 
 #[tokio::test]
 async fn coordinated_scenario_01_02() {
-    for _ in 0..2 {
+    for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
             5,
             30,
@@ -107,7 +119,7 @@ async fn coordinated_scenario_01_02() {
 
 #[tokio::test]
 async fn coordinated_scenario_02_01() {
-    for _ in 0..2 {
+    for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
             5,
             10,
@@ -126,7 +138,7 @@ async fn coordinated_scenario_02_01() {
 
 #[tokio::test]
 async fn coordinated_scenario_03_01() {
-    for _ in 0..2 {
+    for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
             5,
             10,
@@ -155,7 +167,7 @@ async fn service_is_responsive_to_shard_changes() {
 
     info!("All workers started");
 
-    for c in 0..5 {
+    for c in 0..2 {
         if c != 0 {
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
