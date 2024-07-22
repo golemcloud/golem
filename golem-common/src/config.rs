@@ -81,7 +81,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         Figment::new()
             .merge(Serialized::defaults(T::default()))
             .merge(Toml::file_exact(self.config_file_name.clone()))
-            .merge(Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR))
+            .merge(env_config_provider())
     }
 
     pub fn load(&self) -> figment::Result<T> {
@@ -412,4 +412,8 @@ impl RetryConfig {
             multiplier: 2,
         }
     }
+}
+
+pub fn env_config_provider() -> Env {
+    Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR)
 }

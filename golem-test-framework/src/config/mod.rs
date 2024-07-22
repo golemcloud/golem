@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crate::components::component_compilation_service::ComponentCompilationService;
 pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
+pub use env::EnvBasedTestDependenciesConfig;
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;

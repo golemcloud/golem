@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::stdout;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::config::env_config_provider;
+use crate::tracing::format::JsonFlattenSpanFormatter;
+use figment::providers::Serialized;
+use figment::Figment;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -25,8 +29,6 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
-
-use crate::tracing::format::JsonFlattenSpanFormatter;
 
 pub enum Output {
     Stdout,
@@ -135,12 +137,13 @@ pub struct TracingConfig {
     pub file: OutputConfig,
     pub file_dir: Option<String>,
     pub file_name: Option<String>,
+    pub file_truncate: bool,
     pub console: bool,
     pub dtor_friendly: bool,
 }
 
 impl TracingConfig {
-    pub fn local_dev(service_name: &str) -> Self {
+    pub fn local_dev(name: &str) -> Self {
         Self {
             stdout: OutputConfig::text_ansi(),
             file: OutputConfig {
@@ -148,36 +151,51 @@ impl TracingConfig {
                 ..OutputConfig::json_flatten_span()
             },
             file_dir: None,
-            file_name: Some(format!("{}.log", service_name)),
+            file_name: Some(format!("{}.log", name)),
+            file_truncate: true,
             console: false,
             dtor_friendly: false,
         }
     }
 
-    pub fn test(service_name: &str) -> Self {
+    pub fn test(name: &str) -> Self {
         Self {
             dtor_friendly: true,
-            ..Self::local_dev(service_name)
+            ..Self::local_dev(name)
         }
     }
 
-    pub fn test_pretty(service_name: &str) -> Self {
-        let mut config = Self::test(service_name);
+    pub fn test_pretty(name: &str) -> Self {
+        let mut config = Self::test(name);
         config.stdout.pretty = true;
         config
     }
 
-    pub fn test_pretty_without_time(service_name: &str) -> Self {
-        let mut config = Self::test(service_name);
+    pub fn test_pretty_without_time(name: &str) -> Self {
+        let mut config = Self::test(name);
         config.stdout.pretty = true;
         config.stdout.without_time = true;
         config
     }
 
-    pub fn test_compact(service_name: &str) -> Self {
-        let mut config = Self::test(service_name);
+    pub fn test_compact(name: &str) -> Self {
+        let mut config = Self::test(name);
         config.stdout.compact = true;
         config
+    }
+
+    pub fn with_env_overrides(self) -> Self {
+        #[derive(Serialize, Deserialize)]
+        struct Config {
+            tracing: TracingConfig,
+        }
+
+        Figment::new()
+            .merge(Serialized::defaults(Config { tracing: self }))
+            .merge(env_config_provider())
+            .extract::<Config>()
+            .expect("Failed to load tracing config env overrides")
+            .tracing
     }
 }
 
@@ -191,6 +209,7 @@ impl Default for TracingConfig {
             },
             file_dir: None,
             file_name: None,
+            file_truncate: true,
             console: false,
             dtor_friendly: false,
         }
@@ -341,9 +360,18 @@ where
     match &config.file_name {
         Some(file_name) if config.file.enabled => {
             let file_path = Path::new(config.file_dir.as_deref().unwrap_or(".")).join(file_name);
-            let file = File::create(file_path.clone()).unwrap_or_else(|err| {
-                panic!("cannot create log file: {:?}, error: {}", file_path, err)
+
+            let mut open_options = OpenOptions::new();
+            if config.file_truncate {
+                open_options.write(true).create(true).truncate(true);
+            } else {
+                open_options.append(true).create(true).truncate(false);
+            }
+
+            let file = open_options.open(&file_path).unwrap_or_else(|err| {
+                panic!("cannot create log file: {:?}, error: {}", &file_path, err)
             });
+
             layers.push(make_layer(
                 &config.file,
                 make_filter(Output::File),

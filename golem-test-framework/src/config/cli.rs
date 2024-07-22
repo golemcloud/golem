@@ -104,6 +104,9 @@ pub struct CliParams {
     /// Only display the primary benchmark results (no per-worker measurements, for example)
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
+
+    #[arg(long, default_value = "false")]
+    pub keep_containers: bool,
 }
 
 impl CliParams {
@@ -338,7 +341,7 @@ impl CliTestDependencies {
 
         let rdb_and_component_service_join = tokio::spawn(async move {
             let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                Arc::new(DockerPostgresRdb::new(true).await);
+                Arc::new(DockerPostgresRdb::new(true, params.keep_containers).await);
 
             let component_compilation_service = if !compilation_service_disabled {
                 Some((
@@ -355,6 +358,7 @@ impl CliTestDependencies {
                     rdb.clone(),
                     params_clone.service_verbosity(),
                     true,
+                    params.keep_containers,
                 )
                 .await,
             );
@@ -364,6 +368,7 @@ impl CliTestDependencies {
             > = Arc::new(
                 DockerComponentCompilationService::new(
                     component_service.clone(),
+                    params.keep_containers,
                     params_clone.service_verbosity(),
                 )
                 .await,
@@ -373,12 +378,19 @@ impl CliTestDependencies {
         });
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> =
-            Arc::new(DockerRedis::new(redis_prefix.to_string()).await);
+            Arc::new(DockerRedis::new(redis_prefix.to_string(), params.keep_containers).await);
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
-        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> =
-            Arc::new(DockerShardManager::new(redis.clone(), params.service_verbosity()).await);
+        let shard_manager: Arc<dyn ShardManager + Send + Sync + 'static> = Arc::new(
+            DockerShardManager::new(
+                redis.clone(),
+                None,
+                params.service_verbosity(),
+                params.keep_containers,
+            )
+            .await,
+        );
 
         let (rdb, component_service, component_compilation_service) =
             rdb_and_component_service_join
@@ -392,6 +404,7 @@ impl CliTestDependencies {
                 rdb.clone(),
                 params.service_verbosity(),
                 true,
+                params.keep_containers,
             )
             .await,
         );
@@ -407,6 +420,7 @@ impl CliTestDependencies {
                     worker_service.clone(),
                     params.service_verbosity(),
                     true,
+                    params.keep_containers,
                 )
                 .await,
             );
@@ -461,7 +475,7 @@ impl CliTestDependencies {
 
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true).await);
+                    Arc::new(DockerPostgresRdb::new(true, params.keep_containers).await);
 
                 let component_compilation_service_port = if !compilation_service_disabled {
                     Some(component_compilation_service_grpc_port)
@@ -516,6 +530,7 @@ impl CliTestDependencies {
             SpawnedShardManager::new(
                 &build_root.join("golem-shard-manager"),
                 &workspace_root.join("golem-shard-manager"),
+                None,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
                 redis.clone(),

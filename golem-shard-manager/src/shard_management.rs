@@ -58,6 +58,18 @@ impl ShardManagement {
                 .expect("Failed to persist routing table");
         }
 
+        // Resending the full routing table, as we do not know whether workers are up-to-date
+        // TODO: quickfix only for now, let's optimize between pending rebalance and full sync,
+        //       (maybe make this whole startup process part of the main worker loop?)
+        {
+            let mut rebalance = Rebalance::empty();
+            let routing_table = routing_table.read().await;
+            for (pod, shards) in &routing_table.shard_assignments {
+                rebalance.add_assignments(pod, shards.clone());
+            }
+            Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await?;
+        }
+
         let change = Arc::new(Notify::new());
         let updates = Arc::new(Mutex::new(ShardManagementChanges::new()));
 

@@ -18,16 +18,20 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde::Serialize;
 use tonic::transport::Channel;
+use tonic::Status;
 
 use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
+use golem_api_grpc::proto::golem::shardmanager::ShardManagerError;
 use golem_common::cache::*;
 use golem_common::client::GrpcClient;
 use golem_common::model::RoutingTable;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
-    Unexpected(String),
+    GrpcError(Status),
+    ShardManagerError(ShardManagerError),
+    NoResult,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,12 +54,6 @@ impl Default for RoutingTableConfig {
             host: "localhost".to_string(),
             port: 9002,
         }
-    }
-}
-
-impl RoutingTableError {
-    pub fn unexpected(details: impl Into<String>) -> Self {
-        RoutingTableError::Unexpected(details.into())
     }
 }
 
@@ -105,10 +103,7 @@ impl RoutingTableService for RoutingTableServiceDefault {
                         .get_routing_table(shardmanager::GetRoutingTableRequest {})))
                         .await
                         .map_err(|err| {
-                            RoutingTableError::unexpected(format!(
-                                "Getting routing table from shard manager failed with {}",
-                                err
-                            ))
+                            RoutingTableError::GrpcError(err)
                         })?;
                     match response.into_inner() {
                         shardmanager::GetRoutingTableResponse {
@@ -117,15 +112,10 @@ impl RoutingTableService for RoutingTableServiceDefault {
                         } => Ok(routing_table.into()),
                         shardmanager::GetRoutingTableResponse {
                             result: Some(shardmanager::get_routing_table_response::Result::Failure(failure)),
-                        } => Err(RoutingTableError::unexpected(format!(
-                            "Getting routing table from shard manager failed with shard manager error {:?}",
-                            failure
-                        ))),
+                        } => Err(RoutingTableError::ShardManagerError(failure)),
                         shardmanager::GetRoutingTableResponse { result: None } => {
-                            Err(RoutingTableError::unexpected(
-                                "Getting routing table from shard manager failed with unknown error",
-                            ))
-                        }
+                            Err(RoutingTableError::NoResult)
+                        },
                     }
                 })
             })
@@ -142,9 +132,7 @@ pub struct RoutingTableServiceNoop {}
 #[async_trait]
 impl RoutingTableService for RoutingTableServiceNoop {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError> {
-        Err(RoutingTableError::unexpected(
-            "Routing table service is not configured",
-        ))
+        Err(RoutingTableError::NoResult)
     }
 
     async fn invalidate_routing_table(&self) {}
