@@ -411,10 +411,18 @@ pub enum GetWorkerExecutorClientError {
 }
 
 fn is_connection_failure(message: &str) -> bool {
-    message.contains("UNAVAILABLE")
-        || message.contains("CHANNEL CLOSED")
-        || message.contains("transport error")
-        || message.contains("Connection refused")
+    static CONNECTION_FAILURE_ERRORS: &[&str] = &[
+        "CHANNEL CLOSED",
+        "Connection refused",
+        "UNAVAILABLE",
+        "channel closed",
+        "error trying to connect",
+        "transport error",
+    ];
+
+    CONNECTION_FAILURE_ERRORS
+        .iter()
+        .any(|e| message.contains(e))
 }
 
 fn logged_non_retryable_error<T>(
