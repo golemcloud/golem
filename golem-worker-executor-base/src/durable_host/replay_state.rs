@@ -59,9 +59,7 @@ impl ReplayState {
                 next_deleted_region,
             })),
         };
-        debug!("NEW BEFORE MOVE");
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial deleted regions applied by manual updates correctly
-        debug!("NEW AFTER MOVE");
         result
     }
 
@@ -78,23 +76,17 @@ impl ReplayState {
     }
 
     pub async fn deleted_regions(&self) -> DeletedRegions {
-        debug!("deleted_regions 1");
         let internal = self.internal.read().await;
-        debug!("deleted_regions 2");
         internal.deleted_regions.clone()
     }
 
     pub async fn add_deleted_region(&mut self, region: OplogRegion) {
-        debug!("add_deleted_region 1");
         let mut internal = self.internal.write().await;
-        debug!("add_deleted_region 2");
         internal.deleted_regions.add(region);
     }
 
     pub async fn is_in_deleted_region(&self, oplog_index: OplogIndex) -> bool {
-        debug!("is_in_deleted_region 1");
         let internal = self.internal.read().await;
-        debug!("is_in_deleted_region 2");
         internal.deleted_regions.is_in_deleted_region(oplog_index)
     }
 
@@ -118,17 +110,13 @@ impl ReplayState {
         // Skipping hint entries
         while self.is_replay() {
             let saved_replay_idx = self.last_replayed_index.get();
-            debug!("get_oplog_entry 3");
             let internal = self.internal.read().await;
-            debug!("get_oplog_entry 4");
             let saved_next_deleted_region = internal.next_deleted_region.clone();
             drop(internal);
             let entry = self.internal_get_next_oplog_entry().await;
             if !entry.is_hint() {
                 self.last_replayed_index.set(saved_replay_idx);
-                debug!("get_oplog_entry 5");
                 let mut internal = self.internal.write().await;
-                debug!("get_oplog_entry 6");
                 // TODO: cache the last hint entry to avoid reading it again
                 internal.next_deleted_region = saved_next_deleted_region;
                 break;
@@ -179,10 +167,14 @@ impl ReplayState {
                 .read(&self.owned_worker_id, start, CHUNK_SIZE)
                 .await;
             for (idx, entry) in &entries {
+                debug!(
+                    "lookup_oplog_entry[{begin_idx}] processing [{idx}] entry {:?}",
+                    entry
+                );
                 // TODO: handle deleted regions
                 if end_check(entry, begin_idx) {
                     return Some(*idx);
-                } else if !for_all_intermediate(entry, *idx) {
+                } else if !for_all_intermediate(entry, begin_idx) {
                     return None;
                 }
             }
@@ -286,9 +278,7 @@ impl ReplayState {
 
     pub(crate) async fn get_out_of_deleted_region(&mut self) {
         if self.is_replay() {
-            debug!("get_out_of_deleted_region 1");
             let mut internal = self.internal.write().await;
-            debug!("get_out_of_deleted_region 2");
             let update_next_deleted_region = match &internal.next_deleted_region {
                 Some(region) if region.start == (self.last_replayed_index.get().next()) => {
                     let target = region.end.next(); // we want to continue reading _after_ the region

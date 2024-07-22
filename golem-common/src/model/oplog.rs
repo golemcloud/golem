@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
@@ -513,15 +514,31 @@ impl OplogEntry {
                 WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
                     if *begin_index == idx =>
                 {
+                    debug!("writeremotebatched matching idx");
                     true
                 }
-                WrappedFunctionType::ReadLocal => true,
-                WrappedFunctionType::WriteLocal => true,
-                WrappedFunctionType::ReadRemote => true,
-                _ => false,
+                WrappedFunctionType::ReadLocal => {
+                    debug!("readlocal");
+                    true
+                }
+                WrappedFunctionType::WriteLocal => {
+                    debug!("writelocal");
+                    true
+                }
+                WrappedFunctionType::ReadRemote => {
+                    debug!("readremote");
+                    true
+                }
+                _ => {
+                    debug!("writeremote or a different batched write remote ({wrapped_function_type:?} vs {idx})");
+                    false
+                }
             },
             OplogEntry::ExportedFunctionCompleted { .. } => false,
-            _ => true,
+            _ => {
+                debug!("non side-effecting entry");
+                true
+            }
         }
     }
 

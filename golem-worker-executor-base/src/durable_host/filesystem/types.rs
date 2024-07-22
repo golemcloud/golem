@@ -491,14 +491,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<Descriptor>,
     ) -> Result<MetadataHashValue, FsError> {
-        let _permit = self
-            .begin_async_host_function()
-            .await
-            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "metadata_hash");
 
         // Using the WASI stat function as it guarantees the file times are preserved
         let metadata = self.stat(self_).await?;
+
+        let _permit = self
+            .begin_async_host_function()
+            .await
+            .map_err(FsError::trap)?;
         Ok(calculate_metadata_hash(&metadata))
     }
 
@@ -508,13 +509,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<MetadataHashValue, FsError> {
+        record_host_function_call("filesystem::types::descriptor", "metadata_hash_at");
+        // Using the WASI stat_at function as it guarantees the file times are preserved
+        let metadata = self.stat_at(self_, path_flags, path).await?;
+
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
-        record_host_function_call("filesystem::types::descriptor", "metadata_hash_at");
-        // Using the WASI stat_at function as it guarantees the file times are preserved
-        let metadata = self.stat_at(self_, path_flags, path).await?;
         Ok(calculate_metadata_hash(&metadata))
     }
 

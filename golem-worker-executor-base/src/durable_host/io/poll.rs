@@ -33,10 +33,10 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
-        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll:pollable", "block");
         let in_ = vec![self_];
         let _ = self.poll(in_).await?;
+        let _permit = self.begin_async_host_function().await?;
         Ok(())
     }
 

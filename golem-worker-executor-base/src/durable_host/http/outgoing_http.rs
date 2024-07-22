@@ -62,7 +62,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
             Err(_) => {
                 self.state
-                    .end_function(&WrappedFunctionType::WriteRemote, begin_index)
+                    .end_function(&WrappedFunctionType::WriteRemoteBatched(None), begin_index)
                     .await
                     .map_err(|err| HttpError::trap(anyhow!(err)))?;
             }

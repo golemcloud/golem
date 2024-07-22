@@ -657,19 +657,19 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-
-                if !matches!(serializable_response, SerializableResponse::Pending) {
-                    if let Ok(Some(Ok(Ok(resource)))) = &response {
-                        let incoming_response_handle = resource.rep();
-                        continue_http_request(
-                            self,
-                            handle,
-                            incoming_response_handle,
-                            HttpRequestCloseOwner::IncomingResponseDrop,
-                        );
-                    }
-                }
                 self.state.oplog.commit().await;
+            }
+
+            if !matches!(serializable_response, SerializableResponse::Pending) {
+                if let Ok(Some(Ok(Ok(resource)))) = &response {
+                    let incoming_response_handle = resource.rep();
+                    continue_http_request(
+                        self,
+                        handle,
+                        incoming_response_handle,
+                        HttpRequestCloseOwner::IncomingResponseDrop,
+                    );
+                }
             }
 
             response

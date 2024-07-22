@@ -1531,8 +1531,12 @@ impl PrivateDurableWorkerState {
         begin_index: OplogIndex,
     ) -> Result<(), GolemError> {
         if self.persistence_level != PersistenceLevel::PersistNothing
-            && (*wrapped_function_type == WrappedFunctionType::WriteRemote
+            && ((*wrapped_function_type == WrappedFunctionType::WriteRemote
                 && !self.assume_idempotence)
+                || matches!(
+                    *wrapped_function_type,
+                    WrappedFunctionType::WriteRemoteBatched(None)
+                ))
         {
             if self.is_live() {
                 self.oplog
