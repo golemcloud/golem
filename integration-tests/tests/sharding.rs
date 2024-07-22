@@ -5,7 +5,7 @@ use ctor::{ctor, dtor};
 use golem_wasm_rpc::Value;
 use rand::prelude::*;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{error, info};
 
 use golem_api_grpc::proto::golem::worker;
 use golem_common::model::{IdempotencyKey, WorkerId};
@@ -314,6 +314,7 @@ impl Deps {
                     info!("Worker invoke success: {worker_id}")
                 }
                 Err(err) => {
+                    error!("Worker invoke error: {worker_id}, {err:?}");
                     panic!("Worker invoke error: {worker_id}, {err:?}");
                 }
             }
