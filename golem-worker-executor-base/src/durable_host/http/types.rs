@@ -598,8 +598,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
         let handle = self_.rep();
-        if self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;

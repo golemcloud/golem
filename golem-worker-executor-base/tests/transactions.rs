@@ -15,7 +15,9 @@
 use crate::common::{start, TestContext};
 use assert2::check;
 use bytes::Bytes;
-use golem_test_framework::dsl::{drain_connection, stdout_event, stdout_event_starting_with, worker_error_message, TestDslUnsafe};
+use golem_test_framework::dsl::{
+    drain_connection, stdout_event, stdout_event_starting_with, worker_error_message, TestDslUnsafe,
+};
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use std::collections::HashMap;

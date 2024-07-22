@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| HttpError::trap(err))?;
+            .map_err(HttpError::trap)?;
         record_host_function_call("http::outgoing_handler", "handle");
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self

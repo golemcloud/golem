@@ -26,8 +26,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("logging::handler", "log");
-        if self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let event_service = &self.public_state.event_service;
             let log_level = match level {

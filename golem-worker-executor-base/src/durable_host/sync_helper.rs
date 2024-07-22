@@ -112,7 +112,7 @@ impl SyncHelper {
             );
             let mut permit = Some(semaphore.acquire().await.unwrap());
             let retry = loop {
-                match last.take().map(|cmd| Ok(cmd)).unwrap_or(rx.try_recv()) {
+                match last.take().map(Ok).unwrap_or(rx.try_recv()) {
                     Ok(command) => match command {
                         SyncHelperCommand::WriteOplogEntry { entry } => {
                             debug!("SYNC WRITING OPLOG ENTRY");

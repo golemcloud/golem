@@ -365,8 +365,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let rpc = self.rpc();
 
         let handle = this.rep();
-        if self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing
+        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let entry = self.table().get_mut(&this)?;
             let entry = entry

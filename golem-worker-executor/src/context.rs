@@ -19,7 +19,6 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use tokio::runtime::Handle;
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
@@ -171,7 +170,7 @@ impl StatusManagement for Context {
         self.durable_ctx.check_interrupt()
     }
 
-    async fn set_suspended(&self) {
+    async fn set_suspended(&self) -> Result<(), GolemError> {
         self.durable_ctx.set_suspended().await
     }
 
@@ -327,7 +326,6 @@ impl WorkerCtx for Context {
             scheduler_service,
             rpc,
             worker_proxy,
-            handle,
             config,
             worker_config,
             execution_status,

@@ -77,7 +77,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "advise");
         HostDescriptor::advise(&mut self.as_wasi_view(), self_, offset, length, advice).await
     }
@@ -86,7 +86,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "sync_data");
         HostDescriptor::sync_data(&mut self.as_wasi_view(), self_).await
     }
@@ -95,7 +95,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "get_flags");
         HostDescriptor::get_flags(&mut self.as_wasi_view(), self_).await
     }
@@ -104,7 +104,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "get_type");
         HostDescriptor::get_type(&mut self.as_wasi_view(), self_).await
     }
@@ -117,7 +117,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "set_size");
         HostDescriptor::set_size(&mut self.as_wasi_view(), self_, size).await
     }
@@ -131,7 +131,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "set_times");
         HostDescriptor::set_times(
             &mut self.as_wasi_view(),
@@ -151,7 +151,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "read");
         HostDescriptor::read(&mut self.as_wasi_view(), self_, length, offset).await
     }
@@ -165,7 +165,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "write");
         HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await
     }
@@ -177,7 +177,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "read_directory");
         let stream = HostDescriptor::read_directory(&mut self.as_wasi_view(), self_).await?;
         // Iterating through the whole stream to make sure we have a stable order
@@ -197,7 +197,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "sync");
         HostDescriptor::sync(&mut self.as_wasi_view(), self_).await
     }
@@ -210,7 +210,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "create_directory_at");
         HostDescriptor::create_directory_at(&mut self.as_wasi_view(), self_, path).await
     }
@@ -219,7 +219,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "stat");
 
         let path = match self.table().get(&self_)? {
@@ -277,7 +277,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "stat_at");
         let full_path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.join(path.clone()),
@@ -337,7 +337,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "set_times_at");
         HostDescriptor::set_times_at(
             &mut self.as_wasi_view(),
@@ -361,7 +361,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "link_at");
         HostDescriptor::link_at(
             &mut self.as_wasi_view(),
@@ -385,7 +385,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "open_at");
         HostDescriptor::open_at(
             &mut self.as_wasi_view(),
@@ -406,7 +406,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "readlink_at");
         HostDescriptor::readlink_at(&mut self.as_wasi_view(), self_, path).await
     }
@@ -419,7 +419,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "remove_directory_at");
         HostDescriptor::remove_directory_at(&mut self.as_wasi_view(), self_, path.clone()).await
     }
@@ -434,7 +434,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "rename_at");
         HostDescriptor::rename_at(
             &mut self.as_wasi_view(),
@@ -455,7 +455,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "symlink_at");
         HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
             .await
@@ -469,7 +469,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "unlink_file_at");
         HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), self_, path.clone()).await
     }
@@ -482,7 +482,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "is_same_object");
         HostDescriptor::is_same_object(&mut self.as_wasi_view(), self_, other).await
     }
@@ -494,7 +494,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "metadata_hash");
 
         // Using the WASI stat function as it guarantees the file times are preserved
@@ -511,7 +511,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "metadata_hash_at");
         // Using the WASI stat_at function as it guarantees the file times are preserved
         let metadata = self.stat_at(self_, path_flags, path).await?;
@@ -533,7 +533,7 @@ impl<Ctx: WorkerCtx> HostDirectoryEntryStream for DurableWorkerCtx<Ctx> {
         let _permit = self
             .begin_async_host_function()
             .await
-            .map_err(|err| FsError::trap(err))?;
+            .map_err(FsError::trap)?;
         record_host_function_call(
             "filesystem::types::directory_entry_stream",
             "read_directory_entry",
