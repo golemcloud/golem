@@ -549,7 +549,7 @@ async fn invalidate_routing_table<T: HasRoutingTableService>(
 
     context
         .routing_table_service()
-        .invalidate_routing_table()
+        .try_invalidate_routing_table()
         .await;
 
     if should_sleep {

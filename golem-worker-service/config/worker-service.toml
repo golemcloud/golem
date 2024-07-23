@@ -24,6 +24,7 @@ max_connections = 10
 
 [routing_table]
 host = "localhost"
+invalidation_min_delay = "500ms"
 port = 9002
 
 [tracing]
@@ -87,6 +88,7 @@ without_time = false
 # 
 # [routing_table]
 # host = "localhost"
+# invalidation_min_delay = "500ms"
 # port = 9002
 # 
 # [tracing]

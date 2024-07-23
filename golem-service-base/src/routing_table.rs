@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::RwLock;
+use tokio::time::Instant;
 use tonic::transport::Channel;
 use tonic::Status;
 
@@ -38,6 +42,8 @@ pub enum RoutingTableError {
 pub struct RoutingTableConfig {
     host: String,
     port: u16,
+    #[serde(with = "humantime_serde")]
+    invalidation_min_delay: Duration,
 }
 
 impl RoutingTableConfig {
@@ -53,6 +59,7 @@ impl Default for RoutingTableConfig {
         Self {
             host: "localhost".to_string(),
             port: 9002,
+            invalidation_min_delay: Duration::from_millis(500),
         }
     }
 }
@@ -60,7 +67,8 @@ impl Default for RoutingTableConfig {
 #[async_trait]
 pub trait RoutingTableService {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError>;
-    async fn invalidate_routing_table(&self);
+    // Returns false in case of skipped (throttled) invalidation
+    async fn try_invalidate_routing_table(&self) -> bool;
 }
 
 pub trait HasRoutingTableService {
@@ -68,24 +76,28 @@ pub trait HasRoutingTableService {
 }
 
 pub struct RoutingTableServiceDefault {
+    config: RoutingTableConfig,
     cache: Cache<(), (), RoutingTable, RoutingTableError>,
+    last_invalidated_at: RwLock<Option<Instant>>,
     client: GrpcClient<ShardManagerServiceClient<Channel>>,
 }
 
 impl RoutingTableServiceDefault {
-    pub fn new(routing_table_config: RoutingTableConfig) -> Self {
+    pub fn new(config: RoutingTableConfig) -> Self {
         let client = GrpcClient::new(
             ShardManagerServiceClient::new,
-            routing_table_config.url(),
+            config.url(),
             Default::default(), // TODO
         );
         Self {
+            config,
             cache: Cache::new(
                 Some(1),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "routing_table",
             ),
+            last_invalidated_at: RwLock::new(None),
             client,
         }
     }
@@ -122,8 +134,28 @@ impl RoutingTableService for RoutingTableServiceDefault {
             .await
     }
 
-    async fn invalidate_routing_table(&self) {
+    async fn try_invalidate_routing_table(&self) -> bool {
+        let now = Instant::now();
+
+        let skip_invalidate = |last_invalidated_at: &Option<Instant>| {
+            matches!(
+                last_invalidated_at,
+                Some(last_invalidated_at)
+                    if now.saturating_duration_since(last_invalidated_at.to_owned()) < self.config.invalidation_min_delay
+            )
+        };
+
+        if skip_invalidate(self.last_invalidated_at.read().await.deref()) {
+            return false;
+        }
+
+        let mut last_invalidated_at = self.last_invalidated_at.write().await;
+        if skip_invalidate(last_invalidated_at.deref()) {
+            return false;
+        }
         self.cache.remove(&());
+        *last_invalidated_at = Some(Instant::now());
+        true
     }
 }
 
@@ -135,5 +167,7 @@ impl RoutingTableService for RoutingTableServiceNoop {
         Err(RoutingTableError::NoResult)
     }
 
-    async fn invalidate_routing_table(&self) {}
+    async fn try_invalidate_routing_table(&self) -> bool {
+        return false;
+    }
 }
