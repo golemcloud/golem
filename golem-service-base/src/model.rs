@@ -3292,7 +3292,7 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
     }
 }
 
-#[derive(Object)]
+#[derive(Object, Clone, Debug)]
 #[oai(rename_all = "camelCase")]
 pub struct GolemErrorBody {
     pub golem_error: GolemError,

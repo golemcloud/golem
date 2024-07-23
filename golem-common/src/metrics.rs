@@ -314,6 +314,12 @@ pub mod api {
         fn trace_error_kind(&self) -> &'static str;
     }
 
+    impl TraceErrorKind for &'static str {
+        fn trace_error_kind(&self) -> &'static str {
+            self
+        }
+    }
+
     impl RecordedApiRequest {
         pub fn new(api_name: &'static str, api_type: &'static str, span: Span) -> Self {
             Self {

@@ -43,6 +43,19 @@ pub enum ApiEndpointError {
     InternalError(Json<ErrorBody>),
 }
 
+impl TraceErrorKind for ApiEndpointError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            ApiEndpointError::BadRequest(_) => "BadRequest",
+            ApiEndpointError::NotFound(_) => "NotFound",
+            ApiEndpointError::AlreadyExists(_) => "AlreadyExists",
+            ApiEndpointError::Forbidden(_) => "Forbidden",
+            ApiEndpointError::Unauthorized(_) => "Unauthorized",
+            ApiEndpointError::InternalError(_) => "InternalError",
+        }
+    }
+}
+
 impl ApiEndpointError {
     pub fn unauthorized<T: Display>(error: T) -> Self {
         Self::Unauthorized(Json(ErrorBody {

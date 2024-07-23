@@ -1,8 +1,8 @@
+use golem_common::metrics::api::TraceErrorKind;
+use golem_service_base::model::*;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tonic::Status;
-
-use golem_service_base::model::*;
 
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::WorkerServiceError;
@@ -13,7 +13,7 @@ use crate::service::worker::WorkerServiceError;
 // If there are deviations from this (such as extra terms)
 // it should be wrapping WorkerApiBaseError instead of repeating
 // error types all over the place
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Clone, Debug)]
 pub enum WorkerApiBaseError {
     #[oai(status = 400)]
     BadRequest(Json<ErrorsBody>),
@@ -27,6 +27,19 @@ pub enum WorkerApiBaseError {
     AlreadyExists(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<GolemErrorBody>),
+}
+
+impl TraceErrorKind for WorkerApiBaseError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            WorkerApiBaseError::BadRequest(_) => "BadRequest",
+            WorkerApiBaseError::NotFound(_) => "NotFound",
+            WorkerApiBaseError::AlreadyExists(_) => "AlreadyExists",
+            WorkerApiBaseError::Forbidden(_) => "Forbidden",
+            WorkerApiBaseError::Unauthorized(_) => "Unauthorized",
+            WorkerApiBaseError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 impl From<tonic::transport::Error> for WorkerApiBaseError {
