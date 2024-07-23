@@ -29,7 +29,7 @@ use golem_common::model::RoutingTable;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
-    GrpcError(Status),
+    ShardManagerGrpcError(Status),
     ShardManagerError(ShardManagerError),
     NoResult,
 }
@@ -103,7 +103,7 @@ impl RoutingTableService for RoutingTableServiceDefault {
                         .get_routing_table(shardmanager::GetRoutingTableRequest {})))
                         .await
                         .map_err(|err| {
-                            RoutingTableError::GrpcError(err)
+                            RoutingTableError::ShardManagerGrpcError(err)
                         })?;
                     match response.into_inner() {
                         shardmanager::GetRoutingTableResponse {

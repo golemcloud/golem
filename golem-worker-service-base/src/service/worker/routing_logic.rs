@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::shardmanager::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::ShardId;
+use golem_common::model::{Pod, ShardId};
 use golem_service_base::model::{
     GolemError, GolemErrorInvalidShardId, GolemErrorUnknown, WorkerId,
 };
@@ -69,7 +69,7 @@ pub trait CallOnExecutor<Out: Send + 'static> {
         &self,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
-    ) -> Result<Option<Self::ResultOut>, GetWorkerExecutorClientError>
+    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<Channel>,
@@ -92,7 +92,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
         &self,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
-    ) -> Result<Option<Self::ResultOut>, GetWorkerExecutorClientError>
+    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<Channel>,
@@ -123,7 +123,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for golem_common::model::WorkerId 
         &self,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
-    ) -> Result<Option<Self::ResultOut>, GetWorkerExecutorClientError>
+    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<Channel>,
@@ -138,16 +138,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for golem_common::model::WorkerId 
             .routing_table_service()
             .get_routing_table()
             .await
-            .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
+            .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
         match routing_table.lookup(self) {
-            None => Ok(None),
-            Some(pod) => Ok(Some(
-                context
-                    .worker_executor_clients()
-                    .call(pod.uri_02(), f)
-                    .await
-                    .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?,
+            None => Ok((None, None)),
+            Some(pod) => Ok((
+                Some(
+                    context
+                        .worker_executor_clients()
+                        .call(pod.uri_02(), f)
+                        .await
+                        .map_err(|err| {
+                            CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
+                                err,
+                                pod.clone(),
+                            )
+                        })?,
+                ),
+                Some(pod.clone()),
             )),
         }
     }
@@ -167,7 +175,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
         &self,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
-    ) -> Result<Option<Self::ResultOut>, GetWorkerExecutorClientError>
+    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<Channel>,
@@ -182,16 +190,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
             .routing_table_service()
             .get_routing_table()
             .await
-            .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
+            .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
         match routing_table.random() {
-            None => Ok(None),
-            Some(pod) => Ok(Some(
-                context
-                    .worker_executor_clients()
-                    .call(pod.uri_02(), f)
-                    .await
-                    .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?,
+            None => Ok((None, None)),
+            Some(pod) => Ok((
+                Some(
+                    context
+                        .worker_executor_clients()
+                        .call(pod.uri_02(), f)
+                        .await
+                        .map_err(|status| {
+                            CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
+                                status,
+                                pod.clone(),
+                            )
+                        })?,
+                ),
+                Some(pod.clone()),
             )),
         }
     }
@@ -211,7 +227,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
         &self,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
-    ) -> Result<Option<Self::ResultOut>, GetWorkerExecutorClientError>
+    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<Channel>,
@@ -226,19 +242,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
             .routing_table_service()
             .get_routing_table()
             .await
-            .map_err(GetWorkerExecutorClientError::FailedToGetRoutingTable)?;
+            .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
         let pods = routing_table.all();
         if pods.is_empty() {
-            Ok(None)
+            Ok((None, None))
         } else {
             let mut fibers = JoinSet::new();
             for pod in pods {
-                let pod = pod.clone();
-                let f_clone = f.clone();
                 let worker_executor_clients = context.worker_executor_clients().clone();
-                let _ = fibers.spawn(async move {
-                    worker_executor_clients.call(pod.uri_02(), f_clone).await
+                let _ = fibers.spawn({
+                    let pod = pod.clone();
+                    let f = f.clone();
+                    async move {
+                        worker_executor_clients
+                            .call(pod.uri_02(), f)
+                            .await
+                            .map_err(|err| (err, pod))
+                    }
                 });
             }
             let mut results = Vec::new();
@@ -248,9 +269,11 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
             let results = results
                 .into_iter()
                 .collect::<Result<Vec<Out>, _>>()
-                .map_err(GetWorkerExecutorClientError::FailedToConnectToPod)?;
+                .map_err(|(err, pod)| {
+                    CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(err, pod)
+                })?;
 
-            Ok(Some(results))
+            Ok((Some(results), None))
         }
     }
 
@@ -344,37 +367,41 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
 
             let result = async {
                 match worker_result {
-                    Ok(None) => invalidate_routing_table_sleep(self, &"NoActiveShards").await,
-                    Ok(Some(out)) => match response_map(out) {
-                        Ok(result) => Ok(Some(result)),
-                        Err(ResponseMapResult::InvalidShardId {
-                            shard_id,
-                            shard_ids,
-                        }) => {
-                            debug!(
-                                shard_id = shard_id.to_string(),
-                                available_shard_ids = format!("{:?}", shard_ids),
-                                "Invalid shard_id"
-                            );
-                            invalidate_routing_table_sleep(self, &"InvalidShardID").await
+                    Ok((result, pod)) => match result {
+                        None => invalidate_routing_table_sleep(self, &"NoActiveShards", &pod).await,
+                        Some(out) => match response_map(out) {
+                            Ok(result) => Ok(Some(result)),
+                            Err(ResponseMapResult::InvalidShardId {
+                                shard_id,
+                                shard_ids,
+                            }) => {
+                                debug!(
+                                    shard_id = shard_id.to_string(),
+                                    available_shard_ids = format!("{:?}", shard_ids),
+                                    "Invalid shard_id"
+                                );
+                                invalidate_routing_table_sleep(self, &"InvalidShardId", &pod).await
+                            }
+                            Err(ResponseMapResult::Other(error)) => {
+                                logged_non_retryable_error("WorkerExecutor", error)
+                            }
+                        },
+                    },
+                    Err(CallWorkerExecutorErrorWithContext { error, pod }) => match error {
+                        err @ CallWorkerExecutorError::FailedToGetRoutingTable(_)
+                            if err.is_retriable() =>
+                        {
+                            invalidate_routing_table_sleep(self, &err, &pod).await
                         }
-                        Err(ResponseMapResult::Other(error)) => {
-                            logged_non_retryable_error("WorkerExecutor", error)
+                        err @ CallWorkerExecutorError::FailedToConnectToPod(_)
+                            if err.is_retriable() =>
+                        {
+                            invalidate_routing_table_no_sleep(self, &err, &pod).await
+                        }
+                        err => {
+                            logged_non_retryable_error("Routing", WorkerServiceError::internal(err))
                         }
                     },
-                    Err(err @ GetWorkerExecutorClientError::FailedToGetRoutingTable(_))
-                        if err.is_retriable() =>
-                    {
-                        invalidate_routing_table_sleep(self, &err).await
-                    }
-                    Err(err @ GetWorkerExecutorClientError::FailedToConnectToPod(_))
-                        if err.is_retriable() =>
-                    {
-                        invalidate_routing_table_no_sleep(self, &err).await
-                    }
-                    Err(error) => {
-                        logged_non_retryable_error("Routing", WorkerServiceError::internal(error))
-                    }
                 }
             };
 
@@ -394,12 +421,33 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum GetWorkerExecutorClientError {
+pub enum CallWorkerExecutorError {
     // TODO: Change to display
     #[error("Failed to get routing table: {0:?}")]
     FailedToGetRoutingTable(RoutingTableError),
-    #[error("Failed to connect to pod {0}")]
+    #[error("Failed to connect to pod: {0}")]
     FailedToConnectToPod(Status),
+}
+
+pub struct CallWorkerExecutorErrorWithContext {
+    error: CallWorkerExecutorError,
+    pod: Option<Pod>,
+}
+
+impl CallWorkerExecutorErrorWithContext {
+    fn failed_to_get_routing_table(error: RoutingTableError) -> Self {
+        CallWorkerExecutorErrorWithContext {
+            error: CallWorkerExecutorError::FailedToGetRoutingTable(error),
+            pod: None,
+        }
+    }
+
+    fn failed_to_connect_to_pod(status: Status, pod: Pod) -> Self {
+        CallWorkerExecutorErrorWithContext {
+            error: CallWorkerExecutorError::FailedToConnectToPod(status),
+            pod: Some(pod),
+        }
+    }
 }
 
 trait IsRetriableError {
@@ -433,7 +481,7 @@ impl IsRetriableError for Status {
 impl IsRetriableError for RoutingTableError {
     fn is_retriable(&self) -> bool {
         match &self {
-            RoutingTableError::GrpcError(status) => status.is_retriable(),
+            RoutingTableError::ShardManagerGrpcError(status) => status.is_retriable(),
             RoutingTableError::ShardManagerError(error) => match &error.error {
                 Some(error) => match error {
                     Error::InvalidRequest(_) => false,
@@ -447,11 +495,11 @@ impl IsRetriableError for RoutingTableError {
     }
 }
 
-impl IsRetriableError for GetWorkerExecutorClientError {
+impl IsRetriableError for CallWorkerExecutorError {
     fn is_retriable(&self) -> bool {
         match self {
-            GetWorkerExecutorClientError::FailedToGetRoutingTable(error) => error.is_retriable(),
-            GetWorkerExecutorClientError::FailedToConnectToPod(status) => status.is_retriable(),
+            CallWorkerExecutorError::FailedToGetRoutingTable(error) => error.is_retriable(),
+            CallWorkerExecutorError::FailedToConnectToPod(status) => status.is_retriable(),
         }
     }
 }
@@ -471,26 +519,30 @@ fn logged_non_retryable_error<T>(
 async fn invalidate_routing_table_no_sleep<T: HasRoutingTableService, U>(
     context: &T,
     error: &impl Debug,
+    pod: &Option<Pod>,
 ) -> Result<Option<U>, WorkerServiceError> {
-    invalidate_routing_table(context, error, false).await;
+    invalidate_routing_table(context, error, pod, false).await;
     Ok(None)
 }
 
 async fn invalidate_routing_table_sleep<T: HasRoutingTableService, U>(
     context: &T,
     error: &impl Debug,
+    pod: &Option<Pod>,
 ) -> Result<Option<U>, WorkerServiceError> {
-    invalidate_routing_table(context, error, true).await;
+    invalidate_routing_table(context, error, pod, true).await;
     Ok(None)
 }
 
 async fn invalidate_routing_table<T: HasRoutingTableService>(
     context: &T,
     error: &impl Debug,
+    pod: &Option<Pod>,
     should_sleep: bool,
 ) {
     info!(
         error = format!("{error:?}"),
+        pod = format!("{:?}", pod.as_ref().map(|p| p.uri_02())),
         sleep_after_invalidation = should_sleep,
         "Invalidating routing table"
     );
