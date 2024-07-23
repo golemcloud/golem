@@ -199,7 +199,7 @@ pub mod wasm {
     use prometheus::*;
     use tracing::debug;
 
-    use golem_common::metrics::grpc::TraceErrorKind;
+    use golem_common::metrics::api::TraceErrorKind;
 
     use crate::error::GolemError;
 

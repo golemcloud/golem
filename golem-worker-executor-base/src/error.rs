@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tonic::Status;
 
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 
 use crate::model::InterruptKind;

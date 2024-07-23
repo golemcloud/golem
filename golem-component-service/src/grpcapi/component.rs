@@ -34,7 +34,7 @@ use golem_api_grpc::proto::golem::component::{
 };
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::ComponentId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
@@ -191,7 +191,7 @@ impl ComponentService for ComponentGrpcApi {
         request: Request<GetComponentsRequest>,
     ) -> Result<Response<GetComponentsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!("get_components",);
+        let record = recorded_grpc_api_request!("get_components",);
 
         let response = match self.get_all(request).instrument(record.span.clone()).await {
             Ok(components) => record.succeed(get_components_response::Result::Success(
@@ -221,7 +221,7 @@ impl ComponentService for ComponentGrpcApi {
             })
         });
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_component",
             component_name = header.as_ref().map(|r| r.component_name.clone())
         );
@@ -267,7 +267,7 @@ impl ComponentService for ComponentGrpcApi {
         request: Request<DownloadComponentRequest>,
     ) -> Result<Response<Self::DownloadComponentStream>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "download_component",
             component_id = proto_component_id_string(&request.component_id)
         );
@@ -311,7 +311,7 @@ impl ComponentService for ComponentGrpcApi {
         request: Request<GetComponentRequest>,
     ) -> Result<Response<GetComponentMetadataAllVersionsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_component_metadata_all_versions",
             component_id = proto_component_id_string(&request.component_id)
         );
@@ -338,7 +338,7 @@ impl ComponentService for ComponentGrpcApi {
         request: Request<GetLatestComponentRequest>,
     ) -> Result<Response<GetComponentMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_latest_component_metadata",
             component_id = proto_component_id_string(&request.component_id)
         );
@@ -378,7 +378,7 @@ impl ComponentService for ComponentGrpcApi {
             })
         });
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_component",
             component_id =
                 proto_component_id_string(&header.as_ref().and_then(|r| r.component_id.clone()))
@@ -423,7 +423,7 @@ impl ComponentService for ComponentGrpcApi {
         request: Request<GetVersionedComponentRequest>,
     ) -> Result<Response<GetComponentMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_component_metadata",
             component_id = proto_component_id_string(&request.component_id)
         );

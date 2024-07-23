@@ -27,9 +27,9 @@ use golem_api_grpc::proto::golem::componentcompilation::{
     ComponentCompilationRequest, ComponentCompilationResponse,
 };
 use golem_common::grpc::proto_component_id_string;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ComponentId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::{Request, Response, Status};
 
 #[derive(Clone)]
@@ -50,7 +50,7 @@ impl GrpcCompilationServer for CompileGrpcService {
         request: Request<ComponentCompilationRequest>,
     ) -> Result<tonic::Response<ComponentCompilationResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "enqueue_compilation",
             component_id = proto_component_id_string(&request.component_id),
         );
