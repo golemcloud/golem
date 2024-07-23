@@ -51,7 +51,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level};
+use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
 
@@ -610,8 +610,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .concat();
         let mut map = self.invocation_results.write().unwrap();
         for key in keys_to_fail {
-            debug!("store_invocation_failure for {key}");
-
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
@@ -775,7 +773,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             } if *worker_id == self.owned_worker_id.worker_id
                                 && idempotency_key == key =>
                             {
-                                debug!("wait_for_invocation_result: accepting event {:?}", event);
                                 Some(LookupResult::Complete(result.clone()))
                             }
                             _ => None,
@@ -784,7 +781,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     match wait_result {
                         Ok(result) => break Ok(result),
                         Err(RecvError::Lagged(_)) => {
-                            debug!("invocation event queue is full, retrying with backoff");
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             continue;
                         }
@@ -1045,15 +1041,6 @@ struct RunningWorker {
     waiting_for_command: Arc<AtomicBool>,
 }
 
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        debug!(
-            "DROPPING RUNNING WORKER WITH PERMITS {}",
-            self.permit.num_permits()
-        );
-    }
-}
-
 impl RunningWorker {
     pub fn new<Ctx: WorkerCtx>(
         owned_worker_id: OwnedWorkerId,
@@ -1298,7 +1285,11 @@ impl RunningWorker {
             let mut final_decision = {
                 let mut store = store.lock().await;
 
-                store.data_mut().set_suspended();
+                store
+                    .data_mut()
+                    .set_suspended()
+                    .await
+                    .expect("Initial set_suspended should never fail");
                 let span = span!(
                     Level::INFO,
                     "invocation",
@@ -1316,8 +1307,11 @@ impl RunningWorker {
                     }
                     Err(err) => {
                         warn!("Failed to start the worker: {err}");
+                        if let Err(err2) = store.data_mut().set_suspended().await {
+                            warn!("Additional error during startup of the worker: {err2}");
+                        }
+
                         parent.stop_internal(true, Some(err)).await;
-                        store.data_mut().set_suspended();
                         break; // early return, we can't retry this
                     }
                 }
@@ -1557,7 +1551,9 @@ impl RunningWorker {
             }
 
             {
-                store.lock().await.data_mut().set_suspended();
+                if let Err(err) = store.lock().await.data_mut().set_suspended().await {
+                    error!("Failed to set the worker to suspended state at the end of the invocation loop: {err}");
+                }
             }
 
             match final_decision {

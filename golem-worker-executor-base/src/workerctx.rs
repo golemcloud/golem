@@ -15,6 +15,17 @@
 use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
+use async_trait::async_trait;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::Value;
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
+
+use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::{
+    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
+
 use crate::error::GolemError;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
@@ -35,15 +46,6 @@ use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
 };
 use crate::worker::{RetryDecision, Worker};
-use async_trait::async_trait;
-use golem_common::model::oplog::WorkerResourceId;
-use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-};
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::Value;
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -218,7 +220,7 @@ pub trait StatusManagement {
     fn check_interrupt(&self) -> Option<InterruptKind>;
 
     /// Sets the worker status to suspended
-    fn set_suspended(&self);
+    async fn set_suspended(&self) -> Result<(), GolemError>;
 
     /// Sets the worker status to running
     fn set_running(&self);

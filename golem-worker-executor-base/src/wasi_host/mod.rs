@@ -85,7 +85,7 @@ where
     Ok(linker)
 }
 
-pub fn create_context<T, F>(
+pub fn create_context(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
     root_dir: PathBuf,
@@ -94,11 +94,7 @@ pub fn create_context<T, F>(
     stderr: impl StdoutStream + Sized + 'static,
     suspend_signal: impl Fn(Duration) -> anyhow::Error + Send + Sync + 'static,
     suspend_threshold: Duration,
-    f: F,
-) -> Result<T, anyhow::Error>
-where
-    F: FnOnce(WasiCtx, ResourceTable) -> T,
-{
+) -> Result<(WasiCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
     let wasi = WasiCtxBuilder::new()
         .args(args)
@@ -113,5 +109,5 @@ where
         .allow_ip_name_lookup(true)
         .build();
 
-    Ok(f(wasi, table))
+    Ok((wasi, table))
 }

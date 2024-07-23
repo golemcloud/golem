@@ -27,6 +27,7 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll:pollable", "ready");
         HostPollable::ready(&mut self.as_wasi_view(), self_).await
     }
@@ -35,6 +36,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::poll:pollable", "block");
         let in_ = vec![self_];
         let _ = self.poll(in_).await?;
+        let _permit = self.begin_async_host_function().await?;
         Ok(())
     }
 
@@ -47,6 +49,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll", "poll");
 
         let result = Durability::<Ctx, Vec<u32>, SerializableError>::wrap_conditionally(

@@ -34,6 +34,7 @@ use crate::workerctx::WorkerCtx;
 #[async_trait]
 impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
     async fn new_outgoing_value(&mut self) -> anyhow::Result<Resource<OutgoingValueEntry>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::types::outgoing_value", "new_outgoing_value");
         let outgoing_value = self
             .as_wasi_view()
@@ -46,6 +47,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<OutgoingValueEntry>,
     ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "blobstore::types::outgoing_value",
             "outgoing_value_write_body",
@@ -76,6 +78,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "blobstore::types::incoming_value",
             "incoming_value_consume_sync",
@@ -94,6 +97,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "blobstore::types::incoming_value",
             "incoming_value_consume_async",
@@ -110,6 +114,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 
     async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::types::incoming_value", "size");
         let body = self
             .as_wasi_view()
