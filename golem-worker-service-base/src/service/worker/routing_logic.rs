@@ -383,16 +383,8 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                                 retry.success(&pod);
                                 Ok(Some(result))
                             }
-                            Err(ResponseMapResult::InvalidShardId {
-                                shard_id,
-                                shard_ids,
-                            }) => {
-                                debug!(
-                                    shard_id = shard_id.to_string(),
-                                    available_shard_ids = format!("{:?}", shard_ids),
-                                    "Invalid shard_id"
-                                );
-                                retry.retry(self, &"InvalidShardId", &pod).await
+                            Err(error @ ResponseMapResult::InvalidShardId { .. }) => {
+                                retry.retry(self, &error, &pod).await
                             }
                             Err(ResponseMapResult::Other(error)) => {
                                 retry.non_retryable_error(error, &pod)
