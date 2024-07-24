@@ -5,6 +5,7 @@ use std::time::Duration;
 use ctor::{ctor, dtor};
 use golem_wasm_rpc::Value;
 use rand::prelude::*;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{error, info};
 
@@ -160,9 +161,9 @@ async fn service_is_responsive_to_shard_changes() {
     Deps::reset(16).await;
     let worker_ids = Deps::create_component_and_start_workers(4).await;
 
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
-    let chaos = std::thread::spawn(|| {
-        unstable_environment(stop_rx);
+    let (stop_tx, stop_rx) = mpsc::channel(128);
+    let chaos = tokio::spawn(async move {
+        unstable_environment(stop_rx).await;
     });
 
     info!("All workers started");
@@ -179,31 +180,24 @@ async fn service_is_responsive_to_shard_changes() {
     }
 
     info!("Sharding test completed");
-    stop_tx.send(()).unwrap();
-    chaos.join().unwrap();
+    stop_tx.send(()).await.unwrap();
+    chaos.await.unwrap();
 }
 
 async fn coordinated_scenario(number_of_shard: usize, number_of_workers: usize, steps: Vec<Step>) {
     Deps::reset(number_of_shard).await;
     let worker_ids = Deps::create_component_and_start_workers(number_of_workers).await;
 
-    let (worker_command_tx, worker_command_rx) = tokio::sync::mpsc::channel(128);
-    let (worker_event_tx, mut worker_event_rx) = tokio::sync::mpsc::channel(128);
-    let (env_command_tx, env_command_rx) = std::sync::mpsc::channel();
-    let (env_event_tx, env_event_rx) = std::sync::mpsc::channel();
+    let (worker_command_tx, worker_command_rx) = mpsc::channel(128);
+    let (worker_event_tx, mut worker_event_rx) = mpsc::channel(128);
+    let (env_command_tx, env_command_rx) = mpsc::channel(128);
+    let (env_event_tx, env_event_rx) = mpsc::channel(128);
 
-    let chaos = std::thread::spawn(|| {
-        coordinated_environment(env_command_rx, env_event_tx);
+    let chaos = tokio::spawn(async move {
+        coordinated_environment(env_command_rx, env_event_tx).await;
     });
 
-    let send_env_command = |command: EnvCommand| {
-        let response_event = command.response_event();
-        env_command_tx.send(command).unwrap();
-        if let Some(response_event) = response_event {
-            let event = env_event_rx.recv().unwrap();
-            assert_eq!(event, response_event);
-        }
-    };
+    let mut checked_command_sender = CheckedCommandSender::new(env_command_tx, env_event_rx);
 
     let invoker = tokio::task::spawn(async {
         worker_invocation(worker_command_rx, worker_event_tx).await;
@@ -214,16 +208,24 @@ async fn coordinated_scenario(number_of_shard: usize, number_of_workers: usize, 
         info!("Step: {} - Started", formatted_step);
         match step {
             Step::StartWorkerExecutors(n) => {
-                send_env_command(EnvCommand::StartWorkerExecutors(n));
+                checked_command_sender
+                    .send(EnvCommand::StartWorkerExecutors(n))
+                    .await;
             }
             Step::StopWorkerExecutors(n) => {
-                send_env_command(EnvCommand::StopWorkerExecutors(n));
+                checked_command_sender
+                    .send(EnvCommand::StopWorkerExecutors(n))
+                    .await;
             }
             Step::StopAllWorkerExecutor => {
-                send_env_command(EnvCommand::StopAllWorkerExecutor);
+                checked_command_sender
+                    .send(EnvCommand::StopAllWorkerExecutor)
+                    .await;
             }
             Step::RestartShardManager => {
-                send_env_command(EnvCommand::RestartShardManager);
+                checked_command_sender
+                    .send(EnvCommand::RestartShardManager)
+                    .await;
             }
             Step::Sleep(duration) => {
                 tokio::time::sleep(duration).await;
@@ -247,8 +249,8 @@ async fn coordinated_scenario(number_of_shard: usize, number_of_workers: usize, 
 
     info!("Sharding test completed");
     worker_command_tx.send(WorkerCommand::Stop).await.unwrap();
-    send_env_command(EnvCommand::Stop);
-    chaos.join().unwrap();
+    checked_command_sender.send(EnvCommand::Stop).await;
+    chaos.await.unwrap();
     invoker.await.unwrap();
 }
 
@@ -337,25 +339,42 @@ impl Deps {
 
     async fn start_all_worker_executors() {
         let stopped = DEPS.worker_executor_cluster().stopped_indices();
+        let mut tasks = JoinSet::new();
         for idx in stopped {
-            DEPS.worker_executor_cluster().start(idx).await;
+            tasks.spawn(async move {
+                DEPS.worker_executor_cluster().start(idx).await;
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap()
         }
     }
 
-    fn start_random_worker_executor() {
-        Deps::start_random_worker_executors(1);
+    async fn start_random_worker_executor() {
+        Deps::start_random_worker_executors(1).await;
     }
 
-    fn start_random_worker_executors(n: usize) {
+    async fn start_random_worker_executors(n: usize) {
         let mut stopped = DEPS.worker_executor_cluster().stopped_indices();
         if !stopped.is_empty() {
-            let mut rng = thread_rng();
-            stopped.shuffle(&mut rng);
+            {
+                let mut rng = thread_rng();
+                stopped.shuffle(&mut rng);
+            }
 
             let to_start = &stopped[0..n];
 
+            let mut tasks = JoinSet::new();
             for idx in to_start {
-                DEPS.worker_executor_cluster().blocking_start(*idx);
+                tasks.spawn({
+                    let idx = idx.to_owned();
+                    async move {
+                        DEPS.worker_executor_cluster().start(idx).await;
+                    }
+                });
+            }
+            while let Some(result) = tasks.join_next().await {
+                result.unwrap()
             }
         }
     }
@@ -397,9 +416,9 @@ impl Deps {
         DEPS.shard_manager().kill();
     }
 
-    fn restart_shard_manager() {
+    async fn restart_shard_manager() {
         DEPS.shard_manager().kill();
-        DEPS.shard_manager().blocking_restart(None);
+        DEPS.shard_manager().restart(None).await;
     }
 
     fn flush_redis_db() {
@@ -494,6 +513,32 @@ enum EnvEvent {
     RestartShardManagerDone,
 }
 
+struct CheckedCommandSender {
+    env_command_tx: mpsc::Sender<EnvCommand>,
+    env_event_rx: mpsc::Receiver<EnvEvent>,
+}
+
+impl CheckedCommandSender {
+    fn new(
+        env_command_tx: mpsc::Sender<EnvCommand>,
+        env_event_rx: mpsc::Receiver<EnvEvent>,
+    ) -> Self {
+        Self {
+            env_command_tx,
+            env_event_rx,
+        }
+    }
+
+    async fn send(&mut self, command: EnvCommand) {
+        let response_event = command.response_event();
+        self.env_command_tx.send(command).await.unwrap();
+        if let Some(response_event) = response_event {
+            let event = self.env_event_rx.recv().await.unwrap();
+            assert_eq!(event, response_event);
+        };
+    }
+}
+
 enum WorkerCommand {
     InvokeAndAwaitWorkers {
         name: String,
@@ -508,21 +553,21 @@ enum WorkerEvent {
     InvokeAndAwaitWorkersCompleted(String),
 }
 
-fn coordinated_environment(
-    command_rx: std::sync::mpsc::Receiver<EnvCommand>,
-    event_tx: std::sync::mpsc::Sender<EnvEvent>,
+async fn coordinated_environment(
+    mut command_rx: mpsc::Receiver<EnvCommand>,
+    event_tx: mpsc::Sender<EnvEvent>,
 ) {
     info!("Starting Golem Sharding Tester");
 
     loop {
-        let command = command_rx.recv().unwrap();
+        let command = command_rx.recv().await.unwrap();
         let formatted_command = format!("{:?}", command);
         let response_event = command.response_event();
 
         info!("Command: {} - Started", formatted_command);
         match command {
             EnvCommand::StartWorkerExecutors(n) => {
-                Deps::start_random_worker_executors(n);
+                Deps::start_random_worker_executors(n).await;
             }
             EnvCommand::StopWorkerExecutors(n) => {
                 Deps::stop_random_worker_executors(n);
@@ -537,13 +582,13 @@ fn coordinated_environment(
                 Deps::stop_shard_manager();
             }
             EnvCommand::RestartShardManager => {
-                Deps::restart_shard_manager();
+                Deps::restart_shard_manager().await;
             }
             EnvCommand::Stop => break,
         }
 
         if let Some(response_event) = response_event {
-            event_tx.send(response_event).unwrap();
+            event_tx.send(response_event).await.unwrap();
         }
 
         info!("Command: {} - Done", formatted_command);
@@ -551,8 +596,8 @@ fn coordinated_environment(
 }
 
 async fn worker_invocation(
-    mut command_rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
-    event_tx: tokio::sync::mpsc::Sender<WorkerEvent>,
+    mut command_rx: mpsc::Receiver<WorkerCommand>,
+    event_tx: mpsc::Sender<WorkerEvent>,
 ) {
     while let WorkerCommand::InvokeAndAwaitWorkers { name, worker_ids } =
         command_rx.recv().await.unwrap()
@@ -567,29 +612,31 @@ async fn worker_invocation(
     }
 }
 
-fn unstable_environment(stop_rx: std::sync::mpsc::Receiver<()>) {
+async fn unstable_environment(mut stop_rx: mpsc::Receiver<()>) {
     info!("Starting Golem Sharding Tester");
 
-    fn worker() {
+    async fn worker() {
         let mut commands = [
             Command::StartShard,
             Command::StopShard,
             Command::RestartShardManager,
         ];
-        let mut rng = thread_rng();
-        commands.shuffle(&mut rng);
+        {
+            let mut rng = thread_rng();
+            commands.shuffle(&mut rng);
+        }
         let command = &commands[0];
         let formatted_command = format!("{:?}", command);
         info!("Command: {} - Started", formatted_command);
         match command {
             Command::StartShard => {
-                Deps::start_random_worker_executor();
+                Deps::start_random_worker_executor().await;
             }
             Command::StopShard => {
                 Deps::stop_random_worker_executor();
             }
             Command::RestartShardManager => {
-                Deps::restart_shard_manager();
+                Deps::restart_shard_manager().await;
             }
         }
         info!("Command: {} - Done", formatted_command);
@@ -602,7 +649,7 @@ fn unstable_environment(stop_rx: std::sync::mpsc::Receiver<()>) {
 
     while stop_rx.try_recv().is_err() {
         std::thread::sleep(Duration::from_secs(random_seconds()));
-        worker();
+        worker().await;
     }
 }
 
