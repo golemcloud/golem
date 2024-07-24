@@ -569,6 +569,7 @@ impl Default for MemoryConfig {
                 min_delay: Duration::from_millis(100),
                 max_delay: Duration::from_secs(5),
                 multiplier: 2,
+                max_jitter_factor: None, // TODO: should we add jitter here?
             },
         }
     }

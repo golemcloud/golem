@@ -81,6 +81,7 @@ impl Services {
                     min_delay: Duration::from_millis(100),
                     max_delay: Duration::from_secs(2),
                     multiplier: 2,
+                    max_jitter_factor: Some(0.15),
                 },
                 connect_timeout: Duration::from_secs(10),
             },

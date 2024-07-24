@@ -746,6 +746,7 @@ impl From<RetryPolicy> for RetryConfig {
             min_delay: Duration::from_nanos(value.min_delay),
             max_delay: Duration::from_nanos(value.max_delay),
             multiplier: value.multiplier,
+            max_jitter_factor: None, // TODO: should we add this to RetryPolicy or use a default jitter?
         }
     }
 }

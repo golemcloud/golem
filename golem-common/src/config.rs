@@ -378,7 +378,7 @@ impl Default for RedisConfig {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct RetryConfig {
     pub max_attempts: u32,
     #[serde(with = "humantime_serde")]
@@ -386,6 +386,7 @@ pub struct RetryConfig {
     #[serde(with = "humantime_serde")]
     pub max_delay: Duration,
     pub multiplier: u32,
+    pub max_jitter_factor: Option<f64>,
 }
 
 impl Default for RetryConfig {
@@ -401,6 +402,7 @@ impl RetryConfig {
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(1),
             multiplier: 3,
+            max_jitter_factor: Some(0.15)
         }
     }
 
@@ -410,6 +412,7 @@ impl RetryConfig {
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(2),
             multiplier: 2,
+            max_jitter_factor: Some(0.15)
         }
     }
 }

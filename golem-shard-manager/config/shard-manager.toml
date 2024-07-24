@@ -22,6 +22,7 @@ tracing = false
 [redis.retries]
 max_attempts = 5
 max_delay = "2s"
+max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2
 
@@ -63,6 +64,7 @@ revoke_shards_timeout = "5s"
 [worker_executors.retries]
 max_attempts = 5
 max_delay = "2s"
+max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2
 
@@ -92,6 +94,7 @@ multiplier = 2
 # [redis.retries]
 # max_attempts = 5
 # max_delay = "2s"
+# max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2
 # 
@@ -133,5 +136,6 @@ multiplier = 2
 # [worker_executors.retries]
 # max_attempts = 5
 # max_delay = "2s"
+# max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2

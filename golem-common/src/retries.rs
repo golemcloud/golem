@@ -16,6 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use rand::{thread_rng, Rng};
 use tracing::{error, info, warn, Level};
 
 use crate::config::RetryConfig;
@@ -32,13 +33,23 @@ pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
         return None;
     }
 
-    let base_delay = (config.multiplier as u64)
-        .saturating_pow(attempts.saturating_sub(1).try_into().unwrap_or(0))
-        .saturating_mul(config.min_delay.as_millis() as u64);
+    let delay_with_opt_jitter = {
+        let base_delay = (config.multiplier as u64)
+            .saturating_pow(attempts.saturating_sub(1).try_into().unwrap_or(0))
+            .saturating_mul(config.min_delay.as_millis() as u64);
+
+        match config.max_jitter_factor {
+            Some(max_jitter_factor) => {
+                let jitter_factor = thread_rng().gen_range(0.0f64..max_jitter_factor);
+                base_delay + (base_delay as f64 * jitter_factor) as u64
+            }
+            None => base_delay,
+        }
+    };
 
     let delay = Duration::from_millis(std::cmp::min(
         config.max_delay.as_millis() as u64,
-        base_delay,
+        delay_with_opt_jitter,
     ));
     Some(delay)
 }
@@ -155,12 +166,13 @@ mod tests {
     use crate::config::RetryConfig;
 
     #[test]
-    pub fn get_delay_example1() {
+    pub fn get_delay_example_without_jitter() {
         let config = RetryConfig {
             max_attempts: 5,
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(2),
             multiplier: 2,
+            max_jitter_factor: None,
         };
 
         let mut delays: Vec<Duration> = Vec::new();
@@ -178,6 +190,44 @@ mod tests {
                 Duration::from_millis(800), // after 4th attempt
             ]
         )
+    }
+
+    #[test]
+    pub fn get_delay_example_with_jitter() {
+        let config = RetryConfig {
+            max_attempts: 5,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(2),
+            multiplier: 2,
+            max_jitter_factor: Some(0.1),
+        };
+
+        let mut delays: Vec<Duration> = Vec::new();
+        let mut attempts = 0;
+
+        capture_delays(&config, &mut attempts, &mut delays);
+        assert_eq!(attempts, 5);
+
+        let expected_base_delays = vec![
+            Duration::from_millis(100), // after 1st attempt
+            Duration::from_millis(200), // after 2nd attempt
+            Duration::from_millis(400), // after 3rd attempt
+            Duration::from_millis(800), // after 4th attempt
+        ];
+        assert_eq!(delays.len(), expected_base_delays.len());
+
+        for (expected_base_delay, actual_delay) in expected_base_delays.into_iter().zip(delays) {
+            assert!(
+                expected_base_delay <= actual_delay,
+                "{expected_base_delay:?} <= {actual_delay:?}"
+            );
+            let upper_bound_delay = expected_base_delay
+                + Duration::from_millis((expected_base_delay.as_millis() as f64 * 0.15) as u64);
+            assert!(
+                actual_delay <= upper_bound_delay,
+                "{actual_delay:?} <= {upper_bound_delay:?}"
+            );
+        }
     }
 
     fn capture_delays(config: &RetryConfig, attempts: &mut u64, delays: &mut Vec<Duration>) {

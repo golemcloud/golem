@@ -12,6 +12,7 @@ port = 9090
 [component_service.retries]
 max_attempts = 3
 max_delay = "1s"
+max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3
 
@@ -72,6 +73,7 @@ without_time = false
 # [component_service.retries]
 # max_attempts = 3
 # max_delay = "1s"
+# max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3
 # 
