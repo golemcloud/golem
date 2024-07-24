@@ -114,6 +114,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             pod_shard_assignments_to_string(pod, shard_ids.iter())
         );
 
+        // TODO: jitter (and let's use the common retry)
         let retry_max_attempts = self.config.retries.max_attempts;
         let retry_min_delay = self.config.retries.min_delay;
         let retry_max_delay = self.config.retries.max_delay;
