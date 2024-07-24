@@ -24,13 +24,15 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use tonic::transport::Channel;
 use tonic::{Code, Status};
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
+use golem_common::config::RetryConfig;
 use golem_common::model::{Pod, ShardId};
+use golem_common::retries::get_delay;
 use golem_service_base::model::{
     GolemError, GolemErrorInvalidShardId, GolemErrorUnknown, WorkerId,
 };
@@ -356,11 +358,17 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             + 'static,
         G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
     {
-        let start = Instant::now();
-        let mut attempt = 0;
+        let retry_config = &RetryConfig {
+            max_attempts: 5,
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_secs(3),
+            multiplier: 10,
+            max_jitter_factor: Some(0.15),
+        };
+
+        let mut retry = RetryState::new(retry_config);
         loop {
-            attempt += 1;
-            let span = RetrySpan::new(Target::tracing_kind(), attempt);
+            let span = retry.start_attempt(Target::tracing_kind());
 
             let worker_result = target
                 .call_on_worker_executor(self, remote_call.clone())
@@ -369,13 +377,10 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             let result = async {
                 match worker_result {
                     Ok((result, pod)) => match result {
-                        None => invalidate_routing_table_sleep(self, &"NoActiveShards", &pod).await,
+                        None => retry.retry(self, &"NoActiveShards", &pod).await,
                         Some(out) => match response_map(out) {
                             Ok(result) => {
-                                info!(
-                                    duration_ms = start.elapsed().as_millis(),
-                                    "call_worker_executor success"
-                                );
+                                retry.success(&pod);
                                 Ok(Some(result))
                             }
                             Err(ResponseMapResult::InvalidShardId {
@@ -387,28 +392,20 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                                     available_shard_ids = format!("{:?}", shard_ids),
                                     "Invalid shard_id"
                                 );
-                                invalidate_routing_table_sleep(self, &"InvalidShardId", &pod).await
+                                retry.retry(self, &"InvalidShardId", &pod).await
                             }
                             Err(ResponseMapResult::Other(error)) => {
-                                logged_non_retryable_error("WorkerExecutor", error)
+                                retry.non_retryable_error(error, &pod)
                             }
                         },
                     },
-                    Err(CallWorkerExecutorErrorWithContext { error, pod }) => match error {
-                        err @ CallWorkerExecutorError::FailedToGetRoutingTable(_)
-                            if err.is_retriable() =>
-                        {
-                            invalidate_routing_table_sleep(self, &err, &pod).await
+                    Err(CallWorkerExecutorErrorWithContext { error, pod }) => {
+                        if error.is_retriable() {
+                            retry.retry(self, &error, &pod).await
+                        } else {
+                            retry.non_retryable_error(WorkerServiceError::internal(error), &pod)
                         }
-                        err @ CallWorkerExecutorError::FailedToConnectToPod(_)
-                            if err.is_retriable() =>
-                        {
-                            invalidate_routing_table_no_sleep(self, &err, &pod).await
-                        }
-                        err => {
-                            logged_non_retryable_error("Routing", WorkerServiceError::internal(err))
-                        }
-                    },
+                    }
                 }
             };
 
@@ -511,57 +508,91 @@ impl IsRetriableError for CallWorkerExecutorError {
     }
 }
 
-fn logged_non_retryable_error<T>(
-    error_kind: &'static str,
-    error: WorkerServiceError,
-) -> Result<Option<T>, WorkerServiceError> {
-    error!(
-        error = error.to_string(),
-        error_kind = error_kind,
-        "Non retryable error"
-    );
-    Err(error)
+struct RetryState<'a> {
+    started_at: Instant,
+    attempt: u64,
+    retry_attempt: u64,
+    retry_config: &'a RetryConfig,
 }
 
-async fn invalidate_routing_table_no_sleep<T: HasRoutingTableService, U>(
-    context: &T,
-    error: &impl Debug,
-    pod: &Option<Pod>,
-) -> Result<Option<U>, WorkerServiceError> {
-    invalidate_routing_table(context, error, pod, false).await;
-    Ok(None)
-}
-
-async fn invalidate_routing_table_sleep<T: HasRoutingTableService, U>(
-    context: &T,
-    error: &impl Debug,
-    pod: &Option<Pod>,
-) -> Result<Option<U>, WorkerServiceError> {
-    invalidate_routing_table(context, error, pod, true).await;
-    Ok(None)
-}
-
-async fn invalidate_routing_table<T: HasRoutingTableService>(
-    context: &T,
-    error: &impl Debug,
-    pod: &Option<Pod>,
-    should_sleep: bool,
-) {
-    info!(
-        error = format!("{error:?}"),
-        pod = format!("{:?}", pod.as_ref().map(|p| p.uri_02())),
-        sleep_after_invalidation = should_sleep,
-        "Invalidating routing table"
-    );
-
-    context
-        .routing_table_service()
-        .try_invalidate_routing_table()
-        .await;
-
-    if should_sleep {
-        sleep(Duration::from_secs(1)).await;
+impl<'a> RetryState<'a> {
+    fn new(retry_config: &'a RetryConfig) -> Self {
+        RetryState {
+            started_at: Instant::now(),
+            attempt: 0,
+            retry_attempt: 0,
+            retry_config,
+        }
     }
+
+    fn start_attempt(&mut self, executor_kind: &'static str) -> RetrySpan {
+        self.attempt += 1;
+        self.retry_attempt += 1;
+        RetrySpan::new(executor_kind, self.attempt)
+    }
+
+    async fn retry<T: HasRoutingTableService, U>(
+        &mut self,
+        context: &T,
+        error: &impl Debug,
+        pod: &Option<Pod>,
+    ) -> Result<Option<U>, WorkerServiceError> {
+        let invalidated = context
+            .routing_table_service()
+            .try_invalidate_routing_table()
+            .await;
+
+        match get_delay(self.retry_config, self.retry_attempt) {
+            Some(delay) => {
+                info!(
+                    invalidated,
+                    error = format!("{error:?}"),
+                    pod = format!("{:?}", pod.as_ref().map(|p| p.uri_02())),
+                    delay_ms = delay.as_millis(),
+                    "Call on executor - retry"
+                );
+                sleep(delay).await;
+                Ok(None)
+            }
+            None => {
+                let delay = self.retry_config.max_delay;
+                self.retry_attempt = 0;
+                warn!(
+                    invalidated,
+                    error = format!("{error:?}"),
+                    pod = format_pod(pod),
+                    delay_ms = delay.as_millis(),
+                    "Call on executor - retry - resetting retry attempts"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    fn non_retryable_error<T>(
+        &self,
+        error: WorkerServiceError,
+        pod: &Option<Pod>,
+    ) -> Result<Option<T>, WorkerServiceError> {
+        error!(
+            error = error.to_string(),
+            pod = format_pod(pod),
+            "Call on executor - non retriable error"
+        );
+        Err(error)
+    }
+
+    fn success(&self, pod: &Option<Pod>) {
+        info!(
+            duration_ms = self.started_at.elapsed().as_millis(),
+            pod = format_pod(pod),
+            "Call on executor - success"
+        );
+    }
+}
+
+fn format_pod(pod: &Option<Pod>) -> String {
+    format!("{:?}", pod.as_ref().map(|p| p.uri_02()))
 }
 
 struct RetrySpan {
@@ -569,7 +600,7 @@ struct RetrySpan {
 }
 
 impl RetrySpan {
-    fn new(call_on_executor_kind: &'static str, attempt: usize) -> Self {
+    fn new(call_on_executor_kind: &'static str, attempt: u64) -> Self {
         Self {
             span: tracing::span!(
                 tracing::Level::INFO,
