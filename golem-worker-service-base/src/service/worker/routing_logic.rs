@@ -21,7 +21,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio::task::JoinSet;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 use tonic::transport::Channel;
 use tonic::{Code, Status};
 use tracing::{debug, error, info, Instrument};
@@ -356,6 +356,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             + 'static,
         G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
     {
+        let start = Instant::now();
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -370,7 +371,13 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                     Ok((result, pod)) => match result {
                         None => invalidate_routing_table_sleep(self, &"NoActiveShards", &pod).await,
                         Some(out) => match response_map(out) {
-                            Ok(result) => Ok(Some(result)),
+                            Ok(result) => {
+                                info!(
+                                    duration_ms = start.elapsed().as_millis(),
+                                    "call_worker_executor success"
+                                );
+                                Ok(Some(result))
+                            }
                             Err(ResponseMapResult::InvalidShardId {
                                 shard_id,
                                 shard_ids,
