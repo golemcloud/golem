@@ -57,6 +57,7 @@ impl RedisPool {
         redis_config.username.clone_from(&config.username);
         redis_config.password.clone_from(&config.password);
 
+        // NOTE: jitter setting is not converted, using the default fred jitter settings
         let policy = ReconnectPolicy::new_exponential(
             config.retries.max_attempts,
             config.retries.min_delay.as_millis() as u32,

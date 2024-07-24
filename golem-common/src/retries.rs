@@ -41,7 +41,7 @@ pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
         match config.max_jitter_factor {
             Some(max_jitter_factor) => {
                 let jitter_factor = thread_rng().gen_range(0.0f64..max_jitter_factor);
-                base_delay + (base_delay as f64 * jitter_factor) as u64
+                base_delay.saturating_add((base_delay as f64 * jitter_factor) as u64)
             }
             None => base_delay,
         }

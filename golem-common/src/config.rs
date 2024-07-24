@@ -402,7 +402,7 @@ impl RetryConfig {
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(1),
             multiplier: 3,
-            max_jitter_factor: Some(0.15)
+            max_jitter_factor: Some(0.15),
         }
     }
 
@@ -412,7 +412,7 @@ impl RetryConfig {
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(2),
             multiplier: 2,
-            max_jitter_factor: Some(0.15)
+            max_jitter_factor: Some(0.15),
         }
     }
 }
