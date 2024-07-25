@@ -1308,7 +1308,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<InvokeAndAwaitWorkerResponseJson>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_and_await_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -1318,8 +1318,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
             Ok(result) => {
-                let json = JsonValue::from_serde_json_value(&get_json_from_typed_value(&result));
-                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessJson { output: Some(json) };
+                let result_json = get_json_from_typed_value(&result).to_string();
+                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessJson { result_json };
 
                 record.succeed(Ok(Response::new(
                     golem::workerexecutor::InvokeAndAwaitWorkerResponseJson {
@@ -1349,7 +1349,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_and_await_worker_json_typed",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),

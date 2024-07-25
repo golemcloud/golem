@@ -145,7 +145,7 @@ message InvokeAndAwaitWorkerSuccessTyped {
 }
 
 message InvokeAndAwaitWorkerSuccessJson {
-  golem.common.JsonValue output = 1;
+  string resultJson = 1;
 }
 
 message InvokeWorkerRequest {

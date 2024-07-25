@@ -819,7 +819,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: TypeAnnotatedValue,
+        output: TypeAnnotatedValue
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
@@ -1129,6 +1129,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     .into_iter()
                                                     .map(|t| t.into())
                                                     .collect();
+
                                             let result = output
                                                 .validate_function_result(
                                                     function_results,
