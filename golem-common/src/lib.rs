@@ -24,5 +24,4 @@ pub mod precise_json;
 pub mod redis;
 pub mod retries;
 pub mod serialization;
-pub mod to_json;
 pub mod tracing;

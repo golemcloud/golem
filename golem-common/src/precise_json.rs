@@ -1,5 +1,6 @@
 use golem_wasm_rpc::protobuf::type_annotated_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -343,6 +344,8 @@ impl From<PreciseJson> for golem_wasm_rpc::Value {
     }
 }
 
+// There is no reason to fail when going from TypeAnnotatedValue To PreciseJson
+// Any unwraps are almost "never-possible" cases, or else bugs in wasm-rpc
 impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
     fn from(value: TypeAnnotatedValue) -> Self {
         match value {
@@ -362,10 +365,10 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
             }
             TypeAnnotatedValue::Str(str) => PreciseJson::Str(str),
             TypeAnnotatedValue::List(list) => {
-                PreciseJson::List(list.into_iter().map(PreciseJson::from).collect())
+                PreciseJson::List(list.values.into_iter().map(|v| PreciseJson::from(v.type_annotated_value.unwrap())).collect())
             }
             TypeAnnotatedValue::Tuple(tuple) => {
-                PreciseJson::Tuple(tuple.value.into_iter().map(PreciseJson::from).collect())
+                PreciseJson::Tuple(tuple.value.into_iter().map(|v| PreciseJson::from(v.type_annotated_value.unwrap())).collect())
             }
             TypeAnnotatedValue::Record(record) => PreciseJson::Record(
                 record.value
@@ -373,7 +376,7 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
                     .map(|typed_record| {
                         (
                             typed_record.name,
-                            PreciseJson::from(*typed_record.value.unwrap()),
+                            PreciseJson::from(typed_record.value.and_then(|v| v.type_annotated_value).unwrap()),
                         )
                     })
                     .collect(),
@@ -389,10 +392,47 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
                     case_value: Box::new(PreciseJson::from(type_annotated_value)),
                 }
             },
-            TypeAnnotatedValue::Enum(e) => PreciseJson::Enum(e),
-            TypeAnnotatedValue::Flags(flags) => PreciseJson::Flags(flags),
+            TypeAnnotatedValue::Enum(e) => {
+                let all_values = e.typ;
+                let index = all_values.into_iter().enumerate()
+                    .find(|(i, v)| (v.clone() == e.value)).map(|(i, v)| i).unwrap();
+
+                PreciseJson::Enum(index as u32)
+            },
+            TypeAnnotatedValue::Flags(flags) => {
+                let values = flags.values;
+
+                let mut boolean_flags = vec![];
+
+                for i in flags.typ {
+                    if values.contains(&i) {
+                        boolean_flags.push(true);
+                    } else {
+                        boolean_flags.push(false);
+                    }
+                }
+
+                PreciseJson::Flags(boolean_flags)
+            }
+
             TypeAnnotatedValue::Option(option) => {
-                PreciseJson::Option(option.map(|v| Box::new(PreciseJson::from(*v))))
+                PreciseJson::Option(option.value.map(|v| Box::new(PreciseJson::from(v.type_annotated_value.unwrap()))))
+            }
+            TypeAnnotatedValue::Result(result) => {
+                let result_value = result.result_value.unwrap();
+
+                match result_value {
+                    ResultValue::OkValue(ok) => {
+                        PreciseJson::Result(Ok(Box::new(PreciseJson::from(ok.type_annotated_value.unwrap()))))
+                    }
+                    ResultValue::ErrorValue(err) => {
+                        PreciseJson::Result(Err(Box::new(PreciseJson::from(err.type_annotated_value.unwrap()))))
+                    }
+                }
+            }
+
+            TypeAnnotatedValue::Handle(_) => {
+                unimplemented!()
             }
         }
     }
