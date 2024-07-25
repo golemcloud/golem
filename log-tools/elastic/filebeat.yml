@@ -1,0 +1,26 @@
+filebeat.inputs:
+- type: filestream
+  id: golem-local
+  enabled: true
+  paths:
+    - /golem/logs/*.log
+  parsers:
+    - ndjson:
+        target: ""
+        overwrite_keys: true
+        add_error_key: true
+        message_key: message
+
+output.elasticsearch:
+  hosts: ["es01:9200"]
+  preset: balanced
+  username: "elastic"
+  password: "123456"
+
+setup.template.enabled: false
+
+processors:
+  - timestamp:
+      field: "timestamp"
+      layouts:
+        - "2006-01-02T15:04:05.999999Z"
