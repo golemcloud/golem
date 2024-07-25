@@ -50,6 +50,7 @@ pub mod measure_test_component_mem;
 pub mod rpc;
 pub mod scalability;
 pub mod transactions;
+pub mod ts_rpc;
 pub mod wasi;
 
 #[derive(Clone)]
