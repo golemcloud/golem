@@ -199,12 +199,7 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        info!(
-            "Creating API definition - namespace: {}, id: {}, version: {}",
-            namespace,
-            definition.id.clone(),
-            definition.version.clone()
-        );
+        info!(namespace = %namespace, "Create API definition");
 
         let exists = self
             .definition_repo
@@ -242,12 +237,7 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        info!(
-            "Updating API definition - namespace: {}, id: {}, version: {}",
-            namespace,
-            definition.id.clone(),
-            definition.version.clone()
-        );
+        info!(namespace = %namespace, "Update API definition");
         let draft = self
             .definition_repo
             .get_draft(
@@ -293,10 +283,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
-        info!(
-            "Get API definition - namespace: {}, id: {}, version: {}",
-            namespace, id, version
-        );
+        info!(namespace = %namespace, "Get API definition");
         let value = self
             .definition_repo
             .get(&namespace.to_string(), id.0.as_str(), version.0.as_str())
@@ -320,10 +307,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
-        info!(
-            "Delete API definition - namespace: {}, id: {}, version: {}",
-            namespace, id, version
-        );
+        info!(namespace = %namespace, "Delete API definition");
 
         let deployments = self
             .deployment_repo
@@ -355,7 +339,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        info!("Get all API definitions - namespace: {}", namespace);
+        info!(namespace = %namespace, "Get all API definitions");
         let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
         let values: Vec<HttpApiDefinition> = records
@@ -375,10 +359,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        info!(
-            "Get all API definitions versions - namespace: {}, id: {}",
-            namespace, id
-        );
+        info!(namespace = %namespace, "Get all API definitions versions");
 
         let records = self
             .definition_repo

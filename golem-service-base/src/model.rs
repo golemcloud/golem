@@ -40,6 +40,12 @@ pub struct WorkerCreationResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct ComponentName(pub String);
 
+impl Display for ComponentName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -3286,7 +3292,7 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
     }
 }
 
-#[derive(Object)]
+#[derive(Object, Clone, Debug)]
 #[oai(rename_all = "camelCase")]
 pub struct GolemErrorBody {
     pub golem_error: GolemError,
@@ -3304,12 +3310,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
     }
 }
 
-#[derive(Object, Serialize)]
+#[derive(Debug, Clone, Object, Serialize)]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
 }
 
-#[derive(Object, Serialize)]
+#[derive(Debug, Clone, Object, Serialize)]
 pub struct ErrorBody {
     pub error: String,
 }
