@@ -383,7 +383,7 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
             ),
             TypeAnnotatedValue::Variant(variant) => {
                 let index = variant.typ.unwrap().cases.iter().enumerate()
-                    .find(|(i, c)| (c.name.clone() == variant.case_name)).map(|(i, _)| i);
+                    .find(|(_, c)| (c.name.clone() == variant.case_name)).map(|(i, _)| i);
 
                 let type_annotated_value = variant.case_value.unwrap().type_annotated_value.unwrap();
 
@@ -395,7 +395,7 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
             TypeAnnotatedValue::Enum(e) => {
                 let all_values = e.typ;
                 let index = all_values.into_iter().enumerate()
-                    .find(|(i, v)| (v.clone() == e.value)).map(|(i, v)| i).unwrap();
+                    .find(|(_, v)| (v.clone() == e.value)).map(|(i, v)| i).unwrap();
 
                 PreciseJson::Enum(index as u32)
             },

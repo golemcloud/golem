@@ -18,7 +18,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
-use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::broadcast::error::RecvError;
@@ -32,7 +31,7 @@ use wasmtime::Error;
 use crate::error::*;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
-use golem_api_grpc::proto::golem::common::{JsonValue, ResourceLimits as GrpcResourceLimits};
+use golem_api_grpc::proto::golem::common::{ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
