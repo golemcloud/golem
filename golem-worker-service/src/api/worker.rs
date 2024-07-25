@@ -1,19 +1,19 @@
+use crate::empty_worker_metadata;
+use crate::service::{component::ComponentService, worker::WorkerService};
 use golem_common::model::{
     CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
 };
+use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::model::*;
+use golem_worker_service_base::api::WorkerApiBaseError;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
-
-use golem_service_base::model::*;
-use golem_worker_service_base::api::WorkerApiBaseError;
-
-use crate::empty_worker_metadata;
-use crate::service::{component::ComponentService, worker::WorkerService};
+use tracing::Instrument;
 
 pub struct WorkerApi {
     pub component_service: ComponentService,
@@ -34,40 +34,51 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         request: Json<WorkerCreationRequest>,
     ) -> Result<Json<WorkerCreationResponse>> {
-        let component_id = component_id.0;
-        let latest_component = self
-            .component_service
-            .get_latest(&component_id, &EmptyAuthCtx::default())
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|error| {
-                WorkerApiBaseError::NotFound(Json(ErrorBody {
-                    error: format!(
-                        "Couldn't retrieve the component: {}. error: {}",
-                        &component_id, error
-                    ),
-                }))
-            })?;
+        let record = recorded_http_api_request!(
+            "launch_new_worker",
+            component_id = component_id.0.to_string(),
+            name = request.name
+        );
 
-        let WorkerCreationRequest { name, args, env } = request.0;
+        let response = {
+            let component_id = component_id.0;
+            let latest_component = self
+                .component_service
+                .get_latest(&component_id, &EmptyAuthCtx::default())
+                .instrument(record.span.clone())
+                .await
+                .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+                .map_err(|error| {
+                    WorkerApiBaseError::NotFound(Json(ErrorBody {
+                        error: format!(
+                            "Couldn't retrieve the component: {}. error: {}",
+                            &component_id, error
+                        ),
+                    }))
+                })?;
 
-        let worker_id = make_worker_id(component_id, name)?;
-        let worker_id = self
-            .worker_service
-            .create(
-                &worker_id,
-                latest_component.versioned_component_id.version,
-                args,
-                env,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
-            .await?;
+            let WorkerCreationRequest { name, args, env } = request.0;
 
-        Ok(Json(WorkerCreationResponse {
-            worker_id,
-            component_version: latest_component.versioned_component_id.version,
-        }))
+            let worker_id = make_worker_id(component_id, name)?;
+            let worker_id = self
+                .worker_service
+                .create(
+                    &worker_id,
+                    latest_component.versioned_component_id.version,
+                    args,
+                    env,
+                    empty_worker_metadata(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(WorkerCreationResponse {
+                worker_id,
+                component_version: latest_component.versioned_component_id.version,
+            }))
+        };
+
+        record.result(response)
     }
 
     #[oai(
@@ -81,16 +92,21 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-
-        self.worker_service
+        let record =
+            recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
+        let response = self
+            .worker_service
             .delete(
                 &worker_id,
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(DeleteWorkerResponse {}));
 
-        Ok(Json(DeleteWorkerResponse {}))
+        record.result(response)
     }
 
     #[oai(
@@ -108,10 +124,16 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResult>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
-        let result = self
+        let record = recorded_http_api_request!(
+            "invoke_and_await_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let response = self
             .worker_service
             .invoke_and_await_function(
                 &worker_id,
@@ -123,9 +145,12 @@ impl WorkerApi {
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|result| Json(InvokeResult { result }));
 
-        Ok(Json(InvokeResult { result }))
+        record.result(response)
     }
 
     #[oai(
@@ -143,7 +168,15 @@ impl WorkerApi {
     ) -> Result<Json<InvokeResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record = recorded_http_api_request!(
+            "invoke_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let response = self
+            .worker_service
             .invoke_function(
                 &worker_id,
                 idempotency_key.0,
@@ -153,9 +186,12 @@ impl WorkerApi {
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InvokeResponse {}));
 
-        Ok(Json(InvokeResponse {}))
+        record.result(response)
     }
 
     #[oai(
@@ -170,9 +206,13 @@ impl WorkerApi {
         params: Json<CompleteParameters>,
     ) -> Result<Json<bool>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record =
+            recorded_http_api_request!("complete_promise", worker_id = worker_id.to_string());
+
         let CompleteParameters { oplog_idx, data } = params.0;
 
-        let result = self
+        let response = self
             .worker_service
             .complete_promise(
                 &worker_id,
@@ -181,9 +221,12 @@ impl WorkerApi {
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
-        Ok(Json(result))
+        record.result(response)
     }
 
     #[oai(
@@ -199,16 +242,23 @@ impl WorkerApi {
     ) -> Result<Json<InterruptResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record =
+            recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
             .interrupt(
                 &worker_id,
                 recover_immediately.0.unwrap_or(false),
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InterruptResponse {}));
 
-        Ok(Json(InterruptResponse {}))
+        record.result(response)
     }
 
     #[oai(
@@ -222,16 +272,23 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<WorkerMetadata>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-        let result = self
+
+        let record =
+            recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
+
+        let response = self
             .worker_service
             .get_metadata(
                 &worker_id,
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
-        Ok(Json(result))
+        record.result(response)
     }
 
     #[oai(
@@ -247,36 +304,44 @@ impl WorkerApi {
         count: Query<Option<u64>>,
         precise: Query<Option<bool>>,
     ) -> Result<Json<WorkersMetadataResponse>> {
-        let filter = match filter.0 {
-            Some(filters) if !filters.is_empty() => {
-                Some(WorkerFilter::from(filters).map_err(|e| {
+        let record = recorded_http_api_request!(
+            "get_workers_metadata",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let filter = match filter.0 {
+                Some(filters) if !filters.is_empty() => {
+                    Some(WorkerFilter::from(filters).map_err(|e| {
+                        WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    })?)
+                }
+                _ => None,
+            };
+
+            let cursor = match cursor.0 {
+                Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
                     WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                })?)
-            }
-            _ => None,
+                })?),
+                None => None,
+            };
+
+            self.worker_service
+                .find_metadata(
+                    &component_id.0,
+                    filter,
+                    cursor.unwrap_or_default(),
+                    count.0.unwrap_or(50),
+                    precise.0.unwrap_or(false),
+                    empty_worker_metadata(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|(cursor, workers)| Json(WorkersMetadataResponse { workers, cursor }))
         };
 
-        let cursor = match cursor.0 {
-            Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
-                WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-            })?),
-            None => None,
-        };
-
-        let (cursor, workers) = self
-            .worker_service
-            .find_metadata(
-                &component_id.0,
-                filter,
-                cursor.unwrap_or_default(),
-                count.0.unwrap_or(50),
-                precise.0.unwrap_or(false),
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
-            .await?;
-
-        Ok(Json(WorkersMetadataResponse { workers, cursor }))
+        record.result(response)
     }
 
     #[oai(
@@ -289,7 +354,12 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         params: Json<WorkersMetadataRequest>,
     ) -> Result<Json<WorkersMetadataResponse>> {
-        let (cursor, workers) = self
+        let record = recorded_http_api_request!(
+            "find_workers_metadata",
+            component_id = component_id.0.to_string()
+        );
+
+        let response = self
             .worker_service
             .find_metadata(
                 &component_id.0,
@@ -300,9 +370,12 @@ impl WorkerApi {
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|(cursor, workers)| Json(WorkersMetadataResponse { workers, cursor }));
 
-        Ok(Json(WorkersMetadataResponse { workers, cursor }))
+        record.result(response)
     }
 
     #[oai(
@@ -317,15 +390,20 @@ impl WorkerApi {
     ) -> Result<Json<ResumeResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
+        let response = self
+            .worker_service
             .resume(
                 &worker_id,
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(ResumeResponse {}));
 
-        Ok(Json(ResumeResponse {}))
+        record.result(response)
     }
 
     #[oai(
@@ -341,7 +419,10 @@ impl WorkerApi {
     ) -> Result<Json<UpdateWorkerResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
             .update(
                 &worker_id,
                 params.mode.clone().into(),
@@ -349,9 +430,12 @@ impl WorkerApi {
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(UpdateWorkerResponse {}));
 
-        Ok(Json(UpdateWorkerResponse {}))
+        record.result(response)
     }
 }
 

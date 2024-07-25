@@ -24,8 +24,8 @@ use tonic::{Status, Streaming};
 use tracing::Instrument;
 
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::metrics::grpc::{
-    record_closed_grpc_active_stream, record_new_grpc_active_stream,
+use golem_common::metrics::api::{
+    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
 };
 
 pub struct ConnectWorkerStream {
@@ -43,7 +43,7 @@ impl ConnectWorkerStream {
         let cancel = CancellationToken::new();
 
         tokio::spawn({
-            record_new_grpc_active_stream();
+            record_new_grpc_api_active_stream();
 
             let cancel = cancel.clone();
 
@@ -73,7 +73,7 @@ impl ConnectWorkerStream {
                     }
                 }
                 sender.closed().await;
-                record_closed_grpc_active_stream();
+                record_closed_grpc_api_active_stream();
             }
             .in_current_span()
         });

@@ -3,12 +3,12 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::service::http::http_api_definition_validator::RouteValidationError;
 use golem_api_grpc::proto::golem::apidefinition::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_service_base::model::ErrorBody;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
 
-#[derive(Union)]
+#[derive(Union, Clone, Debug)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum WorkerServiceErrorsBody {
     Messages(MessagesErrorsBody),
@@ -17,17 +17,17 @@ pub enum WorkerServiceErrorsBody {
 
 // TODO: These should probably use golem_common ErrorBody and ErrorsBody instead.
 
-#[derive(Object)]
+#[derive(Clone, Debug, Object)]
 pub struct MessagesErrorsBody {
     errors: Vec<String>,
 }
 
-#[derive(Object)]
+#[derive(Clone, Debug, Object)]
 pub struct ValidationErrorsBody {
     errors: Vec<RouteValidationError>,
 }
 
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Clone, Debug)]
 pub enum ApiEndpointError {
     #[oai(status = 400)]
     BadRequest(Json<WorkerServiceErrorsBody>),
@@ -41,6 +41,19 @@ pub enum ApiEndpointError {
     AlreadyExists(Json<String>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for ApiEndpointError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            ApiEndpointError::BadRequest(_) => "BadRequest",
+            ApiEndpointError::NotFound(_) => "NotFound",
+            ApiEndpointError::AlreadyExists(_) => "AlreadyExists",
+            ApiEndpointError::Forbidden(_) => "Forbidden",
+            ApiEndpointError::Unauthorized(_) => "Unauthorized",
+            ApiEndpointError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 impl ApiEndpointError {

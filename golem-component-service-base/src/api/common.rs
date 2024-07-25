@@ -1,5 +1,5 @@
 use golem_api_grpc::proto::golem::component::{component_error, ComponentError};
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use std::fmt::{Debug, Formatter};
 
 pub struct ComponentTraceErrorKind<'a>(pub &'a ComponentError);

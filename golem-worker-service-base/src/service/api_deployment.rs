@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use async_trait::async_trait;
 
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, Route};
 
@@ -155,10 +155,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-        info!(
-            "Deploying API definitions - namespace: {}, site: {}",
-            deployment.namespace, deployment.site
-        );
+        info!(namespace = %deployment.namespace, "Deploy API definitions");
 
         // Existing deployment
         let existing_deployment_records = self
@@ -173,10 +170,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 || deployment_record.subdomain != deployment.site.subdomain
                 || deployment_record.host != deployment.site.host
             {
-                error!(
-                    "Deploying API definition - namespace: {}, site: {} - failed, site used by another API (under another namespace/API)",
-                    &deployment.namespace,
-                    &deployment.site,
+                info!(namespace = %deployment.namespace,
+                    "Deploying API definition - failed, site used by another API (under another namespace/API)",
                 );
                 return Err(ApiDeploymentError::ApiDeploymentConflict(
                     ApiSiteString::from(&ApiSite {
@@ -252,10 +247,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            error!(
-                "Deploying API definition - namespace: {}, site: {} - failed, conflicting definitions: {}",
-                &deployment.namespace,
-                &deployment.site,
+            info!(namespace = %deployment.namespace,
+                "Deploy API definition - failed, conflicting definitions: {}",
                 conflicting_definitions
             );
             Err(ApiDeploymentError::ApiDefinitionsConflict(
@@ -263,9 +256,9 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
             ))
         } else if !new_deployment_records.is_empty() {
             for api_definition_key in set_not_draft {
-                debug!(
-                    "Set API definition as not draft - namespace: {}, definition id: {}, definition version: {}",
-                    deployment.namespace, api_definition_key.id, api_definition_key.version
+                info!(namespace = %deployment.namespace,
+                    "Set API definition as not draft - definition id: {}, definition version: {}",
+                    api_definition_key.id, api_definition_key.version
                 );
 
                 self.definition_repo
@@ -288,10 +281,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         &self,
         deployment: &ApiDeployment<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
-        info!(
-            "Undeploying API definitions - namespace: {}, site: {}",
-            deployment.namespace, deployment.site
-        );
+        info!(namespace = %deployment.namespace, "Undeploying API definitions");
 
         // Existing deployment
         let existing_deployment_records = self
@@ -306,11 +296,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 || deployment_record.subdomain != deployment.site.subdomain
                 || deployment_record.host != deployment.site.host
             {
-                error!(
-                    "Undeploying API definition - namespace: {}, site: {} - failed, site used by another API (under another namespace/API)",
-                    &deployment.namespace,
-                    &deployment.site,
-                );
+                error!("Undeploying API definition - failed, site used by another API (under another namespace/API)");
                 return Err(ApiDeploymentError::ApiDeploymentConflict(
                     ApiSiteString::from(&ApiSite {
                         host: deployment_record.host,
@@ -346,10 +332,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         namespace: &Namespace,
         definition_id: &ApiDefinitionId,
     ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        info!(
-            "Get API deployment - namespace: {}, definition id: {}",
-            namespace, definition_id
-        );
+        info!(namespace = %namespace, "Get API deployment");
 
         let existing_deployment_records = self
             .deployment_repo
@@ -397,7 +380,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         &self,
         site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        info!("Get API deployment - site: {}", site);
+        info!("Get API deployment");
         let existing_deployment_records = self
             .deployment_repo
             .get_by_site(site.to_string().as_str())
@@ -443,7 +426,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         &self,
         site: &ApiSiteString,
     ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>> {
-        info!("Get API definitions - site: {}", site);
+        info!("Get API definitions");
         let records = self
             .deployment_repo
             .get_definitions_by_site(site.to_string().as_str())
@@ -465,10 +448,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         namespace: &Namespace,
         site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
-        info!(
-            "Get API deployment - namespace: {}, site: {}",
-            namespace, site
-        );
+        info!(namespace = %namespace, "Get API deployment");
         let existing_deployment_records = self
             .deployment_repo
             .get_by_site(site.to_string().as_str())
@@ -484,10 +464,9 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
             .any(|value| value.namespace != namespace.to_string())
         {
             error!(
-                "Failed to delete API deployment - namespace: {}, site: {} - site used by another API (under another namespace/API)",
-                namespace,
-                &site
+                "Failed to delete API deployment - site used by another API (under another namespace/API)"
             );
+
             Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
             self.deployment_repo

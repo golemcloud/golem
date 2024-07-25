@@ -288,6 +288,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Create worker");
                 let worker_id = worker_id_clone.clone();
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
@@ -324,6 +325,7 @@ where
             .call_worker_executor(
                 worker_id.clone(),
                 move |worker_executor_client| {
+                    info!("Connect worker");
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -347,6 +349,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Delete worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.delete_worker(
                     workerexecutor::DeleteWorkerRequest {
@@ -505,13 +508,12 @@ where
 
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
-        let function_name_clone = function_name.clone();
         let calling_convention = *calling_convention;
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
-                info!("Invoking function on {}: {}", worker_id_clone, function_name);
+                info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
                         InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
@@ -536,18 +538,17 @@ where
                                  },
                              )),
                     } => {
-                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         Ok(ProtoInvokeResult { result: output })
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse {
                         result:
                         Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
-                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
+                        error!("Invoked function error: {err:?}");
                         Err(err.into())
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
-                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
+                        error!("Invoked function failed with empty response");
                         Err("Empty response".into())
                     }
                 }
@@ -646,6 +647,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Invoke function");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
                     workerexecutor::InvokeWorkerRequest {
@@ -665,7 +667,10 @@ where
                 } => Ok(()),
                 workerexecutor::InvokeWorkerResponse {
                     result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
+                } => {
+                    error!("Invoked function error: {err:?}");
+                    Err(err.into())
+                }
                 workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
@@ -690,6 +695,7 @@ where
             .call_worker_executor(
                 worker_id.clone(),
                 move |worker_executor_client| {
+                    info!("Complete promise");
                     let promise_id = promise_id.clone();
                     let data = data.clone();
                     Box::pin(
@@ -736,6 +742,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Interrupt");
                 let worker_id = worker_id.clone();
                 Box::pin(
                     worker_executor_client.interrupt_worker(InterruptWorkerRequest {
@@ -767,12 +774,11 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
         let metadata = self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
-                info!("Getting metadata for {}", worker_id);
+                info!("Get metadata");
                 Box::pin(worker_executor_client.get_worker_metadata(
                         workerexecutor::GetWorkerMetadataRequest {
                             worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
@@ -786,14 +792,13 @@ where
                         result:
                         Some(workerexecutor::get_worker_metadata_response::Result::Success(metadata)),
                     } => {
-                        info!("Got metadata for {}", worker_id_clone);
                         Ok(metadata.try_into().unwrap())
                     },
                     workerexecutor::GetWorkerMetadataResponse {
                         result:
                         Some(workerexecutor::get_worker_metadata_response::Result::Failure(err)),
                     } => {
-                        error!("Failed to get metadata for {}: {err:?}", worker_id_clone);
+                        error!("Get metadata error: {err:?}");
                         Err(err.into())
                     },
                     workerexecutor::GetWorkerMetadataResponse { .. } => {
@@ -816,6 +821,7 @@ where
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
+        info!("Find metadata");
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
@@ -878,6 +884,7 @@ where
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
+                info!("Update worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
