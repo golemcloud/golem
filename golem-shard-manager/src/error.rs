@@ -16,7 +16,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

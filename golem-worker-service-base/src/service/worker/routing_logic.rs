@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -22,9 +23,10 @@ use async_trait::async_trait;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tonic::transport::Channel;
-use tonic::Status;
+use tonic::{Code, Status};
 use tracing::{debug, error, info, Instrument};
 
+use golem_api_grpc::proto::golem::shardmanager::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
@@ -342,7 +344,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
 
             let result = async {
                 match worker_result {
-                    Ok(None) => invalidate_routing_table_sleep(self, "NoActiveShards", None).await,
+                    Ok(None) => invalidate_routing_table_sleep(self, &"NoActiveShards").await,
                     Ok(Some(out)) => match response_map(out) {
                         Ok(result) => Ok(Some(result)),
                         Err(ResponseMapResult::InvalidShardId {
@@ -354,31 +356,21 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                                 available_shard_ids = format!("{:?}", shard_ids),
                                 "Invalid shard_id"
                             );
-                            invalidate_routing_table_sleep(self, "InvalidShardID", None).await
+                            invalidate_routing_table_sleep(self, &"InvalidShardID").await
                         }
                         Err(ResponseMapResult::Other(error)) => {
                             logged_non_retryable_error("WorkerExecutor", error)
                         }
                     },
-                    Err(GetWorkerExecutorClientError::FailedToGetRoutingTable(
-                        RoutingTableError::Unexpected(details),
-                    )) if is_connection_failure(&details) => {
-                        invalidate_routing_table_sleep(
-                            self,
-                            "FailedToGetRoutingTable",
-                            Some(details.as_str()),
-                        )
-                        .await
-                    }
-                    Err(GetWorkerExecutorClientError::FailedToConnectToPod(status))
-                        if is_connection_failure(&status.to_string()) =>
+                    Err(err @ GetWorkerExecutorClientError::FailedToGetRoutingTable(_))
+                        if err.is_retriable() =>
                     {
-                        invalidate_routing_table_no_sleep(
-                            self,
-                            "FailedToConnectToPod",
-                            Some(status.message()),
-                        )
-                        .await
+                        invalidate_routing_table_sleep(self, &err).await
+                    }
+                    Err(err @ GetWorkerExecutorClientError::FailedToConnectToPod(_))
+                        if err.is_retriable() =>
+                    {
+                        invalidate_routing_table_no_sleep(self, &err).await
                     }
                     Err(error) => {
                         logged_non_retryable_error("Routing", WorkerServiceError::internal(error))
@@ -410,11 +402,58 @@ pub enum GetWorkerExecutorClientError {
     FailedToConnectToPod(Status),
 }
 
-fn is_connection_failure(message: &str) -> bool {
-    message.contains("UNAVAILABLE")
-        || message.contains("CHANNEL CLOSED")
-        || message.contains("transport error")
-        || message.contains("Connection refused")
+trait IsRetriableError {
+    fn is_retriable(&self) -> bool;
+}
+
+impl IsRetriableError for Status {
+    fn is_retriable(&self) -> bool {
+        match self.code() {
+            Code::Ok
+            | Code::Cancelled
+            | Code::InvalidArgument
+            | Code::NotFound
+            | Code::AlreadyExists
+            | Code::PermissionDenied
+            | Code::FailedPrecondition
+            | Code::OutOfRange
+            | Code::Unimplemented
+            | Code::DataLoss
+            | Code::Unauthenticated => false,
+            Code::Unknown
+            | Code::DeadlineExceeded
+            | Code::ResourceExhausted
+            | Code::Aborted
+            | Code::Internal
+            | Code::Unavailable => true,
+        }
+    }
+}
+
+impl IsRetriableError for RoutingTableError {
+    fn is_retriable(&self) -> bool {
+        match &self {
+            RoutingTableError::GrpcError(status) => status.is_retriable(),
+            RoutingTableError::ShardManagerError(error) => match &error.error {
+                Some(error) => match error {
+                    Error::InvalidRequest(_) => false,
+                    Error::Timeout(_) => true,
+                    Error::Unknown(_) => true,
+                },
+                None => true,
+            },
+            RoutingTableError::NoResult => true,
+        }
+    }
+}
+
+impl IsRetriableError for GetWorkerExecutorClientError {
+    fn is_retriable(&self) -> bool {
+        match self {
+            GetWorkerExecutorClientError::FailedToGetRoutingTable(error) => error.is_retriable(),
+            GetWorkerExecutorClientError::FailedToConnectToPod(status) => status.is_retriable(),
+        }
+    }
 }
 
 fn logged_non_retryable_error<T>(
@@ -431,31 +470,27 @@ fn logged_non_retryable_error<T>(
 
 async fn invalidate_routing_table_no_sleep<T: HasRoutingTableService, U>(
     context: &T,
-    reason: &str,
-    error: Option<&str>,
+    error: &impl Debug,
 ) -> Result<Option<U>, WorkerServiceError> {
-    invalidate_routing_table(context, reason, error, false).await;
+    invalidate_routing_table(context, error, false).await;
     Ok(None)
 }
 
 async fn invalidate_routing_table_sleep<T: HasRoutingTableService, U>(
     context: &T,
-    reason: &str,
-    error: Option<&str>,
+    error: &impl Debug,
 ) -> Result<Option<U>, WorkerServiceError> {
-    invalidate_routing_table(context, reason, error, true).await;
+    invalidate_routing_table(context, error, true).await;
     Ok(None)
 }
 
 async fn invalidate_routing_table<T: HasRoutingTableService>(
     context: &T,
-    reason: &str,
-    error: Option<&str>,
+    error: &impl Debug,
     should_sleep: bool,
 ) {
     info!(
-        reason,
-        error,
+        error = format!("{error:?}"),
         sleep_after_invalidation = should_sleep,
         "Invalidating routing table"
     );

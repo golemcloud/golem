@@ -54,6 +54,11 @@ pub trait Redis {
         self.assert_valid();
         self.try_get_connection(db).unwrap()
     }
+
+    fn flush_db(&self, db: u16) {
+        let mut connection = self.get_connection(db);
+        redis::cmd("FLUSHDB").execute(&mut connection)
+    }
 }
 
 const DEFAULT_PORT: u16 = 6379;

@@ -53,14 +53,14 @@ pub trait ShardManager {
     }
 
     fn kill(&self);
-    async fn restart(&self);
+    async fn restart(&self, number_of_shards_override: Option<usize>);
 
-    fn blocking_restart(&self) {
+    fn blocking_restart(&self, number_of_shards_override: Option<usize>) {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async move { self.restart().await });
+            .block_on(async move { self.restart(number_of_shards_override).await });
     }
 }
 
@@ -78,6 +78,7 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 pub trait ShardManagerEnvVars {
     async fn env_vars(
         &self,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -89,18 +90,24 @@ pub trait ShardManagerEnvVars {
 impl ShardManagerEnvVars for GolemEnvVars {
     async fn env_vars(
         &self,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
         verbosity: Level,
     ) -> HashMap<String, String> {
-        EnvVarBuilder::golem_service(verbosity)
+        let mut builder = EnvVarBuilder::golem_service(verbosity)
             .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
             .with("GOLEM__HTTP_PORT", http_port.to_string())
             .with("GOLEM__REDIS__HOST", redis.private_host())
             .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
             .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
-            .with("REDIS__HOST", redis.private_host())
-            .build()
+            .with("REDIS__HOST", redis.private_host());
+
+        if let Some(number_of_shards) = number_of_shards_override {
+            builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+        }
+
+        builder.build()
     }
 }

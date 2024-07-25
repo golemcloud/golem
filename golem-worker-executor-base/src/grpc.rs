@@ -45,8 +45,8 @@ use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_worker_id_string,
 };
-use golem_common::metrics::grpc::{
-    record_closed_grpc_active_stream, record_new_grpc_active_stream,
+use golem_common::metrics::api::{
+    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
 };
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
@@ -54,8 +54,7 @@ use golem_common::model::{
     TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
-use golem_common::to_json::FromToJson;
-use golem_common::{model as common_model, recorded_grpc_request};
+use golem_common::{model as common_model, recorded_grpc_api_request};
 
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
@@ -1002,7 +1001,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let mut receiver = event_service.receiver();
 
                 info!("Client connected");
-                record_new_grpc_active_stream();
+                record_new_grpc_api_active_stream();
 
                 // spawn and channel are required if you want handle "disconnect" functionality
                 // the `out_stream` will not be polled after client disconnect
@@ -1101,7 +1100,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             }
                         }
 
-                        record_closed_grpc_active_stream();
+                        record_closed_grpc_api_active_stream();
                         info!("Client disconnected");
                     }
                     .in_current_span(),
@@ -1230,7 +1229,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CreateWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::CreateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             component_version = request.component_version,
@@ -1269,7 +1268,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeAndAwaitWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_and_await_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -1393,7 +1392,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InvokeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
@@ -1434,7 +1433,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::ConnectWorkerRequest>,
     ) -> ResponseResult<Self::ConnectWorkerStream> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "connect_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             account_id = proto_account_id_string(&request.account_id)
@@ -1450,7 +1449,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::DeleteWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::DeleteWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_worker",
             worker_id = proto_worker_id_string(&request.worker_id)
         );
@@ -1487,7 +1486,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CompletePromiseRequest>,
     ) -> Result<Response<golem::workerexecutor::CompletePromiseResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "complete_promise",
             promise_id = proto_promise_id_string(&request.promise_id)
         );
@@ -1524,7 +1523,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InterruptWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InterruptWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "interrupt_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
         );
@@ -1563,7 +1562,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::RevokeShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::RevokeShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!("revoke_shards",);
+        let record = recorded_grpc_api_request!("revoke_shards",);
 
         match self
             .revoke_shards_internal(request)
@@ -1597,7 +1596,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::AssignShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::AssignShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!("assign_shards",);
+        let record = recorded_grpc_api_request!("assign_shards",);
 
         match self
             .assign_shards_internal(request)
@@ -1632,7 +1631,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Response<golem::workerexecutor::GetWorkerMetadataResponse>, Status> {
         let request = request.into_inner();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_worker_metadata",
             worker_id = proto_worker_id_string(&request.worker_id)
         );
@@ -1680,7 +1679,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::ResumeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::ResumeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "resume_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
         );
@@ -1717,7 +1716,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetRunningWorkersMetadataRequest>,
     ) -> Result<Response<GetRunningWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_running_workers_metadata",
             component_id = proto_component_id_string(&request.component_id),
         );
@@ -1758,7 +1757,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_workers_metadata",
             component_id = proto_component_id_string(&request.component_id),
         );
@@ -1798,7 +1797,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<UpdateWorkerRequest>,
     ) -> Result<Response<UpdateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             target_version = request.target_version,

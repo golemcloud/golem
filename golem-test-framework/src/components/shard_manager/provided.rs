@@ -52,7 +52,7 @@ impl ShardManager for ProvidedShardManager {
         panic!("Cannot kill provided shard manager");
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, _number_of_shards_override: Option<usize>) {
         panic!("Cannot restart provided shard manager");
     }
 }

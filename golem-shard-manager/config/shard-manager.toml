@@ -29,6 +29,7 @@ multiplier = 2
 console = false
 dtor_friendly = false
 file_name = "shard-manager.log"
+file_truncate = true
 
 [tracing.file]
 ansi = false
@@ -98,6 +99,7 @@ multiplier = 2
 # console = false
 # dtor_friendly = false
 # file_name = "shard-manager.log"
+# file_truncate = true
 # 
 # [tracing.file]
 # ansi = false

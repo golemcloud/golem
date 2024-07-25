@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
-use crate::components::{DOCKER, NETWORK};
 use std::time::Duration;
+
 use testcontainers::{Container, RunnableImage};
 use tracing::info;
 
+use crate::components::docker::KillContainer;
+use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
+use crate::components::{DOCKER, NETWORK};
+
 pub struct DockerPostgresRdb {
     container: Container<'static, testcontainers_modules::postgres::Postgres>,
+    keep_container: bool,
     host: String,
     port: u16,
     host_port: u16,
@@ -29,7 +33,7 @@ impl DockerPostgresRdb {
     const DEFAULT_PORT: u16 = 5432;
 
     // TODO: can we simplify this and get rid of local_env (and always use localhost and exposed ports)?
-    pub async fn new(local_env: bool) -> Self {
+    pub async fn new(local_env: bool, keep_container: bool) -> Self {
         info!("Starting Postgres container");
 
         let name = "golem_postgres";
@@ -57,6 +61,7 @@ impl DockerPostgresRdb {
 
         Self {
             container,
+            keep_container,
             host: host.to_string(),
             port,
             host_port,
@@ -78,7 +83,7 @@ impl Rdb for DockerPostgresRdb {
 
     fn kill(&self) {
         info!("Stopping Postgres container");
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 }
 

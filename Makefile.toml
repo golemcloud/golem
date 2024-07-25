@@ -10,6 +10,7 @@
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make cli-tests`: runs CLI tests only
 # - `cargo make sharding-tests`: runs sharding integration tests only
+# - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
@@ -253,6 +254,24 @@ args = [
     "--test-threads=1",
 ]
 
+[tasks.sharding-tests-debug]
+dependencies = ["build-bins"]
+script = '''
+rm -rf logs data
+mkdir -pv logs data
+
+export RUST_LOG=info,golem_test_framework::components=WARN
+export RUST_BACKTRACE=1
+export GOLEM__TRACING__FILE_DIR=../logs
+export GOLEM__TRACING__FILE_TRUNCATE=false
+export GOLEM__TRACING__FILE__ENABLED=true
+
+cargo test \
+--package integration-tests \
+--test sharding ${@} \
+-- --nocapture --test-threads=1
+'''
+
 [tasks.cli-tests]
 description = "Runs CLI tests only"
 dependencies = ["build-bins"]
@@ -478,7 +497,7 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
 
 script = '''
-mkdir -pv logs
+mkdir -pv data logs
 
 redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &
 redis_pid=$!

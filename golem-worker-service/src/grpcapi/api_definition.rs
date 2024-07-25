@@ -22,7 +22,7 @@ use golem_common::grpc::{
     proto_api_definition_draft_string, proto_api_definition_id_string,
     proto_api_definition_kind_string, proto_api_definition_version_string,
 };
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
 use golem_worker_service_base::{
@@ -64,7 +64,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<CreateApiDefinitionRequest>,
     ) -> Result<tonic::Response<CreateApiDefinitionResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_api_definition",
             kind = proto_api_definition_kind_string(&request.api_definition),
             version = proto_api_definition_version_string(&request.api_definition),
@@ -93,7 +93,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<UpdateApiDefinitionRequest>,
     ) -> Result<tonic::Response<UpdateApiDefinitionResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_api_definition",
             kind = proto_api_definition_kind_string(&request.api_definition),
             api_definition_id = proto_api_definition_id_string(&request.api_definition),
@@ -123,7 +123,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<GetApiDefinitionRequest>,
     ) -> Result<tonic::Response<GetApiDefinitionResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_api_definition",
             api_definition_id = request
                 .api_definition_id
@@ -154,7 +154,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<GetApiDefinitionVersionsRequest>,
     ) -> Result<tonic::Response<GetApiDefinitionVersionsResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_api_definition_versions",
             api_definition_id = request
                 .api_definition_id
@@ -188,7 +188,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<GetAllApiDefinitionsRequest>,
     ) -> Result<tonic::Response<GetAllApiDefinitionsResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!("get_all_api_definitions",);
+        let record = recorded_grpc_api_request!("get_all_api_definitions",);
 
         let result = match self
             .get_all_api_definitions(request)
@@ -214,7 +214,7 @@ impl ApiDefinitionService for GrpcApiDefinitionService {
         request: tonic::Request<DeleteApiDefinitionRequest>,
     ) -> Result<tonic::Response<DeleteApiDefinitionResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_api_definition",
             api_definition_id = request
                 .api_definition_id

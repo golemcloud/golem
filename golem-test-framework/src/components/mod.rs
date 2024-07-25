@@ -28,6 +28,7 @@ use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
 
 pub mod component_compilation_service;
 pub mod component_service;
+mod docker;
 pub mod k8s;
 pub mod rdb;
 pub mod redis;

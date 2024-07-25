@@ -18,6 +18,7 @@ use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 use async_trait::async_trait;
 
 use crate::components::component_service::ComponentService;
+use crate::components::docker::KillContainer;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
@@ -35,6 +36,7 @@ pub struct DockerWorkerExecutor {
     public_http_port: u16,
     public_grpc_port: u16,
     container: Container<'static, WorkerExecutorImage>,
+    keep_container: bool,
     client: Option<WorkerExecutorClient<Channel>>,
 }
 
@@ -48,6 +50,7 @@ impl DockerWorkerExecutor {
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
+        keep_container: bool,
     ) -> Self {
         Self::new_base(
             Box::new(GolemEnvVars()),
@@ -59,6 +62,7 @@ impl DockerWorkerExecutor {
             worker_service,
             verbosity,
             shared_client,
+            keep_container,
         )
         .await
     }
@@ -73,6 +77,7 @@ impl DockerWorkerExecutor {
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
+        keep_container: bool,
     ) -> Self {
         info!("Starting golem-worker-executor container");
 
@@ -105,6 +110,7 @@ impl DockerWorkerExecutor {
             public_http_port,
             public_grpc_port,
             container,
+            keep_container,
             client: if shared_client {
                 Some(
                     new_client("localhost", public_grpc_port)
@@ -152,7 +158,7 @@ impl WorkerExecutor for DockerWorkerExecutor {
     }
 
     fn kill(&self) {
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 
     async fn restart(&self) {

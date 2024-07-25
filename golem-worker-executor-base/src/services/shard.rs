@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::{ShardAssignment, ShardId, WorkerId};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
-
-use golem_common::model::{ShardAssignment, ShardId, WorkerId};
+use tracing::debug;
 
 use crate::error::GolemError;
 use crate::metrics::sharding::*;
@@ -51,6 +51,11 @@ impl ShardServiceDefault {
 impl ShardService for ShardServiceDefault {
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>) {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
+        debug!(
+            shard_ids = format!("{:?}", shard_assignment.shard_ids),
+            shard_ids_to_assign = format!("{:?}", shard_ids),
+            "ShardService.assign_shards"
+        );
         shard_assignment.assign_shards(shard_ids);
         let assigned_shard_count = shard_assignment.shard_ids.len();
         record_assigned_shard_count(assigned_shard_count);
@@ -69,6 +74,12 @@ impl ShardService for ShardServiceDefault {
 
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
+        debug!(
+            number_of_shards,
+            shard_ids = format!("{:?}", shard_assignment.shard_ids),
+            shard_ids_to_assign = format!("{:?}", shard_ids),
+            "ShardService.register"
+        );
         shard_assignment.register(number_of_shards, shard_ids);
         let assigned_shard_count = shard_assignment.shard_ids.len();
         record_assigned_shard_count(assigned_shard_count);
@@ -76,6 +87,11 @@ impl ShardService for ShardServiceDefault {
 
     fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
+        debug!(
+            shard_ids = format!("{:?}", shard_assignment.shard_ids),
+            shard_ids_to_revoke = format!("{:?}", shard_ids),
+            "ShardService.revoke_shards"
+        );
         shard_assignment.revoke_shards(shard_ids);
         let assigned_shard_count = shard_assignment.shard_ids.len();
         record_assigned_shard_count(assigned_shard_count);

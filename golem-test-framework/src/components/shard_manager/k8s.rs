@@ -77,7 +77,7 @@ impl K8sShardManager {
         info!("Starting Golem Shard Manager pod");
 
         let env_vars = env_vars
-            .env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity)
+            .env_vars(None, Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity)
             .await;
         let env_vars = env_vars
             .into_iter()
@@ -229,7 +229,7 @@ impl ShardManager for K8sShardManager {
         });
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, _number_of_shards_override: Option<usize>) {
         panic!("Not supported yet");
     }
 }

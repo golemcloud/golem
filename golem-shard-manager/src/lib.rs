@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
 
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use model::{Pod, RoutingTable};
 use persistence::{PersistenceService, PersistenceServiceDefault};
@@ -150,7 +150,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
         &self,
         _request: tonic::Request<golem::shardmanager::GetRoutingTableRequest>,
     ) -> Result<tonic::Response<golem::shardmanager::GetRoutingTableResponse>, tonic::Status> {
-        let record = recorded_grpc_request!("get_routing_table",);
+        let record = recorded_grpc_api_request!("get_routing_table",);
 
         let response = self
             .get_routing_table_internal()
@@ -174,7 +174,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
     ) -> Result<tonic::Response<golem::shardmanager::RegisterResponse>, tonic::Status> {
         let source_ip = request.remote_addr();
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "register",
             source_ip = source_ip.map(|ip| ip.to_string()),
             host = &request.host,

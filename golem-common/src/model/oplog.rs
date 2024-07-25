@@ -1,5 +1,3 @@
-use std::fmt::{Display, Formatter};
-
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -7,6 +5,10 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
@@ -67,6 +69,62 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
+    }
+}
+
+#[derive(Clone)]
+pub struct AtomicOplogIndex(Arc<AtomicU64>);
+
+impl AtomicOplogIndex {
+    pub fn from_u64(value: u64) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value)))
+    }
+
+    pub fn get(&self) -> OplogIndex {
+        OplogIndex(self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    pub fn set(&self, value: OplogIndex) {
+        self.0.store(value.0, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn from_oplog_index(value: OplogIndex) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value.0)))
+    }
+
+    /// Gets the previous oplog index
+    pub fn previous(&self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the next oplog index
+    pub fn next(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
+    /// having `count` elements.
+    pub fn range_end(&self, count: u64) {
+        self.0
+            .fetch_sub(count - 1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl Display for AtomicOplogIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+impl From<AtomicOplogIndex> for u64 {
+    fn from(value: AtomicOplogIndex) -> Self {
+        value.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl From<AtomicOplogIndex> for OplogIndex {
+    fn from(value: AtomicOplogIndex) -> Self {
+        OplogIndex::from_u64(value.0.load(std::sync::atomic::Ordering::Acquire))
     }
 }
 
@@ -445,6 +503,45 @@ impl OplogEntry {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
     }
 
+    /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
+    /// is not a RemoteWrite entry which does not belong to the batched remote write started at `idx`.
+    pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
+        match self {
+            OplogEntry::ImportedFunctionInvoked {
+                wrapped_function_type,
+                ..
+            } => match wrapped_function_type {
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
+                    if *begin_index == idx =>
+                {
+                    debug!("writeremotebatched matching idx");
+                    true
+                }
+                WrappedFunctionType::ReadLocal => {
+                    debug!("readlocal");
+                    true
+                }
+                WrappedFunctionType::WriteLocal => {
+                    debug!("writelocal");
+                    true
+                }
+                WrappedFunctionType::ReadRemote => {
+                    debug!("readremote");
+                    true
+                }
+                _ => {
+                    debug!("writeremote or a different batched write remote ({wrapped_function_type:?} vs {idx})");
+                    false
+                }
+            },
+            OplogEntry::ExportedFunctionCompleted { .. } => false,
+            _ => {
+                debug!("non side-effecting entry");
+                true
+            }
+        }
+    }
+
     /// True if the oplog entry is a "hint" that should be skipped during replay
     pub fn is_hint(&self) -> bool {
         matches!(
@@ -536,10 +633,23 @@ pub enum OplogPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WrappedFunctionType {
+    /// The side-effect reads from the worker's local state (for example local file system,
+    /// random generator, etc.)
     ReadLocal,
+    /// The side-effect writes to the worker's local state (for example local file system)
     WriteLocal,
+    /// The side-effect reads from external state (for example a key-value store)
     ReadRemote,
+    /// The side-effect manipulates external state (for example an RPC call)
     WriteRemote,
+    /// The side-effect manipulates external state through multiple invoked functions (for example
+    /// a HTTP request where reading the response involves multiple host function calls)
+    ///
+    /// On the first invocation of the batch, the parameter should be `None` - this triggers
+    /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
+    /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
+    /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+    WriteRemoteBatched(Option<OplogIndex>),
 }
 
 /// Describes the error that occurred in the worker
