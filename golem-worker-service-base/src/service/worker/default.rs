@@ -15,6 +15,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
+use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_api_grpc::proto::golem::common::JsonValue;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
@@ -38,7 +39,6 @@ use golem_common::model::{
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_common::precise_json::PreciseJson;
-use golem_common::to_json::FromToJson;
 use golem_service_base::model::{
     FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
@@ -96,7 +96,7 @@ pub trait WorkerService<AuthCtx> {
     ) -> WorkerResult<Value>;
 
     // Accepts Json Params and Returns TypeAnnotatedValue (a Json with more type Info)
-    async fn invoke_and_await_function_json_typed(
+    async fn invoke_and_await_function_typed(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -360,66 +360,23 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value> {
-        let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
-        let function_name_clone = function_name.clone();
-        let calling_convention = *calling_convention;
-        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
-            .into_iter()
-            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
-            .collect::<Vec<_>>();
 
-        let invoke_response = self.call_worker_executor(
-            worker_id.clone(),
-            move |worker_executor_client| {
-                info!("Invoking function on {}: {}", worker_id_clone, function_name);
-                Box::pin(worker_executor_client.invoke_and_await_worker_json(
-                    InvokeAndAwaitWorkerRequest {
-                        worker_id: Some(worker_id_clone.clone().into()),
-                        name: function_name.clone(),
-                        input: params_.clone(),
-                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        calling_convention: calling_convention.into(),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                        account_limits: metadata.limits.clone().map(|id| id.into()),
-                        context: invocation_context.clone()
-                    }
-                )
-                )
-            },
-            move |response| {
-                match response.into_inner() {
-                    workerexecutor::InvokeAndAwaitWorkerResponseJson {
-                        result:
-                        Some(workerexecutor::invoke_and_await_worker_response_json::Result::Success(
-                                 workerexecutor::InvokeAndAwaitWorkerSuccessJson {
-                                     output,
-                                 },
-                             )),
-                    } => {
-                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
-                        let output = output.map(|v| v.to_serde_json_value());
-                        output.ok_or("Empty response".into())
-                    },
-                    workerexecutor::InvokeAndAwaitWorkerResponseJson {
-                        result:
-                        Some(workerexecutor::invoke_and_await_worker_response_json::Result::Failure(err)),
-                    } => {
-                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
-                        Err(err.into())
-                    },
-                    workerexecutor::InvokeAndAwaitWorkerResponseJson { .. } => {
-                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
-                        Err("Empty response".into())
-                    }
-                }
-            }
+        let result = self.invoke_and_await_function_typed(
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            calling_convention,
+            invocation_context,
+            metadata,
         ).await?;
 
-        Ok(invoke_response)
+        let json = get_json_from_typed_value(&result);
+
+        Ok(json)
     }
 
-    async fn invoke_and_await_function_json_typed(
+    async fn invoke_and_await_function_typed(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -1088,7 +1045,7 @@ where
         Ok(Value::default())
     }
 
-    async fn invoke_and_await_function_json_typed(
+    async fn invoke_and_await_function_typed(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
