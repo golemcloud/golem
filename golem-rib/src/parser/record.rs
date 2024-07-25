@@ -108,6 +108,29 @@ mod tests {
     }
 
     #[test]
+    fn test_record_with_values() {
+        let input = "{ foo: \"bar\" }";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::Record(vec![(
+                    "foo".to_string(),
+                    Box::new(Expr::Literal("bar".to_string()))
+                )]),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_record_with_invalid_values() {
+        let input = "{ foo: 'bar' }";
+        let result = rib_expr().easy_parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_nested_records() {
         let input = "{foo: {bar: baz}}";
         let result = rib_expr().easy_parse(input);
