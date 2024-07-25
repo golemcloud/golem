@@ -1,0 +1,47 @@
+package rpc:counters-stub;
+
+interface stub-counters {
+  use golem:rpc/types@0.1.0.{uri};
+  use wasi:io/poll@0.2.0.{pollable};
+
+  resource future-get-global-value-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<u64>;
+  }
+  resource future-counter-getvalue-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<u64>;
+  }
+  resource future-counter-getargs-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<list<string>>;
+  }
+  resource future-counter-getenv-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<list<tuple<string, string>>>;
+  }
+  resource api {
+    constructor(location: uri);
+    blocking-inc-global-by: func(value: u64);
+    inc-global-by: func(value: u64);
+    blocking-get-global-value: func() -> u64;
+    get-global-value: func() -> future-get-global-value-result;
+  }
+
+  resource counter {
+    constructor(location: uri, name: string);
+    blocking-incby: func(value: u64);
+    incby: func(value: u64);
+    blocking-getvalue: func() -> u64;
+    getvalue: func() -> future-counter-getvalue-result;
+    blocking-getargs: func() -> list<string>;
+    getargs: func() -> future-counter-getargs-result;
+    blocking-getenv: func() -> list<tuple<string, string>>;
+    getenv: func() -> future-counter-getenv-result;
+  }
+
+}
+
+world wasm-rpc-stub-counters {
+  export stub-counters;
+}
