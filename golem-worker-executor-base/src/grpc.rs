@@ -37,8 +37,7 @@ use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::Worker
 use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseJson,
-    InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest,
+    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest,
     UpdateWorkerResponse,
 };
 use golem_common::grpc::{
@@ -1303,48 +1302,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_and_await_worker_json(
-        &self,
-        request: Request<InvokeAndAwaitWorkerRequest>,
-    ) -> Result<Response<InvokeAndAwaitWorkerResponseJson>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            calling_convention = request.calling_convention,
-            account_id = proto_account_id_string(&request.account_id),
-        );
-
-        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(result) => {
-                let result_json = get_json_from_typed_value(&result).to_string();
-                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessJson { result_json };
-
-                record.succeed(Ok(Response::new(
-                    golem::workerexecutor::InvokeAndAwaitWorkerResponseJson {
-                        result: Some(
-                            golem::workerexecutor::invoke_and_await_worker_response_json::Result::Success(result),
-                        ),
-                    },
-                )))
-            },
-            Err(err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::InvokeAndAwaitWorkerResponseJson {
-                        result: Some(
-                            golem::workerexecutor::invoke_and_await_worker_response_json::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &err,
-            ),
-        }
-    }
-
-    async fn invoke_and_await_worker_json_typed(
+    async fn invoke_and_await_worker_typed(
         &self,
         request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {

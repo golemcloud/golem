@@ -27,8 +27,7 @@ package golem.workerexecutor;
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
   rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
-  rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseJson);
-  rpc InvokeAndAwaitWorkerJsonTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
+  rpc InvokeAndAwaitWorkerTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
@@ -122,13 +121,6 @@ message InvokeAndAwaitWorkerResponse {
   }
 }
 
-message InvokeAndAwaitWorkerResponseJson {
-  oneof result {
-    InvokeAndAwaitWorkerSuccessJson success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
-  }
-}
-
 message InvokeAndAwaitWorkerResponseTyped {
   oneof result {
     InvokeAndAwaitWorkerSuccessTyped success = 1;
@@ -144,9 +136,6 @@ message InvokeAndAwaitWorkerSuccessTyped {
   wasm.rpc.TypeAnnotatedValue output = 1;
 }
 
-message InvokeAndAwaitWorkerSuccessJson {
-  string resultJson = 1;
-}
 
 message InvokeWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
