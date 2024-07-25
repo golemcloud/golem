@@ -1,3 +1,5 @@
+#!/bin/bash
+set -euo pipefail
 
 pushd counter
 npm run gen:ts

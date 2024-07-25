@@ -32,22 +32,22 @@ function test1(): [string, bigint][] {
 
 function test2(): bigint {
     const counter = globalCounter ?? createGlobalCounter("counters_test2")
-    counter.blockingIncby(BigInt(1))
-    const value = counter.blockingGetvalue()
+    counter.blockingIncBy(BigInt(1))
+    const value = counter.blockingGetValue()
     return value
 }
 
 function test3(): bigint {
     const counter = globalCounter ?? createGlobalCounter("counters_test3")
-    counter.blockingIncby(BigInt(1))
-    const value = counter.blockingGetvalue()
+    counter.blockingIncBy(BigInt(1))
+    const value = counter.blockingGetValue()
     return value
 }
 
 function test4(): [string[], [string, string][]] {
     const counter = globalCounter ?? createGlobalCounter("counters_test4")
-    const args = counter.blockingGetargs()
-    const env = counter.blockingGetenv()
+    const args = counter.blockingGetArgs()
+    const env = counter.blockingGetEnv()
     return [args, env]
 }
 

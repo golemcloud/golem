@@ -18,8 +18,8 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 
-static COUNTER_COMPONENT_NAME: &str = "counters";
-static CALLER_COMPONENT_NAME: &str = "caller_composed";
+static COUNTER_COMPONENT_NAME: &str = "counter-ts";
+static CALLER_COMPONENT_NAME: &str = "caller-composed-ts";
 
 #[tokio::test]
 #[tracing::instrument]
