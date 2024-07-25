@@ -1,5 +1,6 @@
 
 pushd counter
+npm run gen:ts
 npm run build
 npm run componentize
 popd
@@ -9,6 +10,7 @@ cargo component build --release
 popd
 
 pushd caller
+npm run gen:ts
 npm run build
 npm run componentize
 popd

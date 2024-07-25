@@ -2526,41 +2526,41 @@ pub mod exports {
 
                 #[derive(Debug)]
                 #[repr(transparent)]
-                pub struct FutureCounterGetvalueResult {
-                    handle: _rt::Resource<FutureCounterGetvalueResult>,
+                pub struct FutureCounterGetValueResult {
+                    handle: _rt::Resource<FutureCounterGetValueResult>,
                 }
 
-                type _FutureCounterGetvalueResultRep<T> = Option<T>;
+                type _FutureCounterGetValueResultRep<T> = Option<T>;
 
-                impl FutureCounterGetvalueResult {
+                impl FutureCounterGetValueResult {
                     /// Creates a new resource from the specified representation.
                     ///
                     /// This function will create a new resource handle by moving `val` onto
                     /// the heap and then passing that heap pointer to the component model to
-                    /// create a handle. The owned handle is then returned as `FutureCounterGetvalueResult`.
-                    pub fn new<T: GuestFutureCounterGetvalueResult>(val: T) -> Self {
+                    /// create a handle. The owned handle is then returned as `FutureCounterGetValueResult`.
+                    pub fn new<T: GuestFutureCounterGetValueResult>(val: T) -> Self {
                         Self::type_guard::<T>();
-                        let val: _FutureCounterGetvalueResultRep<T> = Some(val);
-                        let ptr: *mut _FutureCounterGetvalueResultRep<T> =
+                        let val: _FutureCounterGetValueResultRep<T> = Some(val);
+                        let ptr: *mut _FutureCounterGetValueResultRep<T> =
                             _rt::Box::into_raw(_rt::Box::new(val));
                         unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
                     }
 
                     /// Gets access to the underlying `T` which represents this resource.
-                    pub fn get<T: GuestFutureCounterGetvalueResult>(&self) -> &T {
+                    pub fn get<T: GuestFutureCounterGetValueResult>(&self) -> &T {
                         let ptr = unsafe { &*self.as_ptr::<T>() };
                         ptr.as_ref().unwrap()
                     }
 
                     /// Gets mutable access to the underlying `T` which represents this
                     /// resource.
-                    pub fn get_mut<T: GuestFutureCounterGetvalueResult>(&mut self) -> &mut T {
+                    pub fn get_mut<T: GuestFutureCounterGetValueResult>(&mut self) -> &mut T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.as_mut().unwrap()
                     }
 
                     /// Consumes this resource and returns the underlying `T`.
-                    pub fn into_inner<T: GuestFutureCounterGetvalueResult>(self) -> T {
+                    pub fn into_inner<T: GuestFutureCounterGetValueResult>(self) -> T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.take().unwrap()
                     }
@@ -2582,7 +2582,7 @@ pub mod exports {
                         _rt::Resource::handle(&self.handle)
                     }
 
-                    // It's theoretically possible to implement the `GuestFutureCounterGetvalueResult` trait twice
+                    // It's theoretically possible to implement the `GuestFutureCounterGetValueResult` trait twice
                     // so guard against using it with two different types here.
                     #[doc(hidden)]
                     fn type_guard<T: 'static>() {
@@ -2605,27 +2605,27 @@ pub mod exports {
                     pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
                         Self::type_guard::<T>();
                         let _ =
-                            _rt::Box::from_raw(handle as *mut _FutureCounterGetvalueResultRep<T>);
+                            _rt::Box::from_raw(handle as *mut _FutureCounterGetValueResultRep<T>);
                     }
 
-                    fn as_ptr<T: GuestFutureCounterGetvalueResult>(
+                    fn as_ptr<T: GuestFutureCounterGetValueResult>(
                         &self,
-                    ) -> *mut _FutureCounterGetvalueResultRep<T> {
-                        FutureCounterGetvalueResult::type_guard::<T>();
+                    ) -> *mut _FutureCounterGetValueResultRep<T> {
+                        FutureCounterGetValueResult::type_guard::<T>();
                         T::_resource_rep(self.handle()).cast()
                     }
                 }
 
-                /// A borrowed version of [`FutureCounterGetvalueResult`] which represents a borrowed value
+                /// A borrowed version of [`FutureCounterGetValueResult`] which represents a borrowed value
                 /// with the lifetime `'a`.
                 #[derive(Debug)]
                 #[repr(transparent)]
-                pub struct FutureCounterGetvalueResultBorrow<'a> {
+                pub struct FutureCounterGetValueResultBorrow<'a> {
                     rep: *mut u8,
-                    _marker: core::marker::PhantomData<&'a FutureCounterGetvalueResult>,
+                    _marker: core::marker::PhantomData<&'a FutureCounterGetValueResult>,
                 }
 
-                impl<'a> FutureCounterGetvalueResultBorrow<'a> {
+                impl<'a> FutureCounterGetValueResultBorrow<'a> {
                     #[doc(hidden)]
                     pub unsafe fn lift(rep: usize) -> Self {
                         Self {
@@ -2635,7 +2635,7 @@ pub mod exports {
                     }
 
                     /// Gets access to the underlying `T` in this resource.
-                    pub fn get<T: GuestFutureCounterGetvalueResult>(&self) -> &T {
+                    pub fn get<T: GuestFutureCounterGetValueResult>(&self) -> &T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.as_ref().unwrap()
                     }
@@ -2643,13 +2643,13 @@ pub mod exports {
                     // NB: mutable access is not allowed due to the component model allowing
                     // multiple borrows of the same resource.
 
-                    fn as_ptr<T: 'static>(&self) -> *mut _FutureCounterGetvalueResultRep<T> {
-                        FutureCounterGetvalueResult::type_guard::<T>();
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureCounterGetValueResultRep<T> {
+                        FutureCounterGetValueResult::type_guard::<T>();
                         self.rep.cast()
                     }
                 }
 
-                unsafe impl _rt::WasmResource for FutureCounterGetvalueResult {
+                unsafe impl _rt::WasmResource for FutureCounterGetValueResult {
                     #[inline]
                     unsafe fn drop(_handle: u32) {
                         #[cfg(not(target_arch = "wasm32"))]
@@ -2659,7 +2659,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-drop]future-counter-getvalue-result"]
+                                #[link_name = "[resource-drop]future-counter-get-value-result"]
                                 fn drop(_: u32);
                             }
 
@@ -2670,41 +2670,41 @@ pub mod exports {
 
                 #[derive(Debug)]
                 #[repr(transparent)]
-                pub struct FutureCounterGetargsResult {
-                    handle: _rt::Resource<FutureCounterGetargsResult>,
+                pub struct FutureCounterGetArgsResult {
+                    handle: _rt::Resource<FutureCounterGetArgsResult>,
                 }
 
-                type _FutureCounterGetargsResultRep<T> = Option<T>;
+                type _FutureCounterGetArgsResultRep<T> = Option<T>;
 
-                impl FutureCounterGetargsResult {
+                impl FutureCounterGetArgsResult {
                     /// Creates a new resource from the specified representation.
                     ///
                     /// This function will create a new resource handle by moving `val` onto
                     /// the heap and then passing that heap pointer to the component model to
-                    /// create a handle. The owned handle is then returned as `FutureCounterGetargsResult`.
-                    pub fn new<T: GuestFutureCounterGetargsResult>(val: T) -> Self {
+                    /// create a handle. The owned handle is then returned as `FutureCounterGetArgsResult`.
+                    pub fn new<T: GuestFutureCounterGetArgsResult>(val: T) -> Self {
                         Self::type_guard::<T>();
-                        let val: _FutureCounterGetargsResultRep<T> = Some(val);
-                        let ptr: *mut _FutureCounterGetargsResultRep<T> =
+                        let val: _FutureCounterGetArgsResultRep<T> = Some(val);
+                        let ptr: *mut _FutureCounterGetArgsResultRep<T> =
                             _rt::Box::into_raw(_rt::Box::new(val));
                         unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
                     }
 
                     /// Gets access to the underlying `T` which represents this resource.
-                    pub fn get<T: GuestFutureCounterGetargsResult>(&self) -> &T {
+                    pub fn get<T: GuestFutureCounterGetArgsResult>(&self) -> &T {
                         let ptr = unsafe { &*self.as_ptr::<T>() };
                         ptr.as_ref().unwrap()
                     }
 
                     /// Gets mutable access to the underlying `T` which represents this
                     /// resource.
-                    pub fn get_mut<T: GuestFutureCounterGetargsResult>(&mut self) -> &mut T {
+                    pub fn get_mut<T: GuestFutureCounterGetArgsResult>(&mut self) -> &mut T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.as_mut().unwrap()
                     }
 
                     /// Consumes this resource and returns the underlying `T`.
-                    pub fn into_inner<T: GuestFutureCounterGetargsResult>(self) -> T {
+                    pub fn into_inner<T: GuestFutureCounterGetArgsResult>(self) -> T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.take().unwrap()
                     }
@@ -2726,7 +2726,7 @@ pub mod exports {
                         _rt::Resource::handle(&self.handle)
                     }
 
-                    // It's theoretically possible to implement the `GuestFutureCounterGetargsResult` trait twice
+                    // It's theoretically possible to implement the `GuestFutureCounterGetArgsResult` trait twice
                     // so guard against using it with two different types here.
                     #[doc(hidden)]
                     fn type_guard<T: 'static>() {
@@ -2749,27 +2749,27 @@ pub mod exports {
                     pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
                         Self::type_guard::<T>();
                         let _ =
-                            _rt::Box::from_raw(handle as *mut _FutureCounterGetargsResultRep<T>);
+                            _rt::Box::from_raw(handle as *mut _FutureCounterGetArgsResultRep<T>);
                     }
 
-                    fn as_ptr<T: GuestFutureCounterGetargsResult>(
+                    fn as_ptr<T: GuestFutureCounterGetArgsResult>(
                         &self,
-                    ) -> *mut _FutureCounterGetargsResultRep<T> {
-                        FutureCounterGetargsResult::type_guard::<T>();
+                    ) -> *mut _FutureCounterGetArgsResultRep<T> {
+                        FutureCounterGetArgsResult::type_guard::<T>();
                         T::_resource_rep(self.handle()).cast()
                     }
                 }
 
-                /// A borrowed version of [`FutureCounterGetargsResult`] which represents a borrowed value
+                /// A borrowed version of [`FutureCounterGetArgsResult`] which represents a borrowed value
                 /// with the lifetime `'a`.
                 #[derive(Debug)]
                 #[repr(transparent)]
-                pub struct FutureCounterGetargsResultBorrow<'a> {
+                pub struct FutureCounterGetArgsResultBorrow<'a> {
                     rep: *mut u8,
-                    _marker: core::marker::PhantomData<&'a FutureCounterGetargsResult>,
+                    _marker: core::marker::PhantomData<&'a FutureCounterGetArgsResult>,
                 }
 
-                impl<'a> FutureCounterGetargsResultBorrow<'a> {
+                impl<'a> FutureCounterGetArgsResultBorrow<'a> {
                     #[doc(hidden)]
                     pub unsafe fn lift(rep: usize) -> Self {
                         Self {
@@ -2779,7 +2779,7 @@ pub mod exports {
                     }
 
                     /// Gets access to the underlying `T` in this resource.
-                    pub fn get<T: GuestFutureCounterGetargsResult>(&self) -> &T {
+                    pub fn get<T: GuestFutureCounterGetArgsResult>(&self) -> &T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.as_ref().unwrap()
                     }
@@ -2787,13 +2787,13 @@ pub mod exports {
                     // NB: mutable access is not allowed due to the component model allowing
                     // multiple borrows of the same resource.
 
-                    fn as_ptr<T: 'static>(&self) -> *mut _FutureCounterGetargsResultRep<T> {
-                        FutureCounterGetargsResult::type_guard::<T>();
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureCounterGetArgsResultRep<T> {
+                        FutureCounterGetArgsResult::type_guard::<T>();
                         self.rep.cast()
                     }
                 }
 
-                unsafe impl _rt::WasmResource for FutureCounterGetargsResult {
+                unsafe impl _rt::WasmResource for FutureCounterGetArgsResult {
                     #[inline]
                     unsafe fn drop(_handle: u32) {
                         #[cfg(not(target_arch = "wasm32"))]
@@ -2803,7 +2803,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-drop]future-counter-getargs-result"]
+                                #[link_name = "[resource-drop]future-counter-get-args-result"]
                                 fn drop(_: u32);
                             }
 
@@ -2814,41 +2814,41 @@ pub mod exports {
 
                 #[derive(Debug)]
                 #[repr(transparent)]
-                pub struct FutureCounterGetenvResult {
-                    handle: _rt::Resource<FutureCounterGetenvResult>,
+                pub struct FutureCounterGetEnvResult {
+                    handle: _rt::Resource<FutureCounterGetEnvResult>,
                 }
 
-                type _FutureCounterGetenvResultRep<T> = Option<T>;
+                type _FutureCounterGetEnvResultRep<T> = Option<T>;
 
-                impl FutureCounterGetenvResult {
+                impl FutureCounterGetEnvResult {
                     /// Creates a new resource from the specified representation.
                     ///
                     /// This function will create a new resource handle by moving `val` onto
                     /// the heap and then passing that heap pointer to the component model to
-                    /// create a handle. The owned handle is then returned as `FutureCounterGetenvResult`.
-                    pub fn new<T: GuestFutureCounterGetenvResult>(val: T) -> Self {
+                    /// create a handle. The owned handle is then returned as `FutureCounterGetEnvResult`.
+                    pub fn new<T: GuestFutureCounterGetEnvResult>(val: T) -> Self {
                         Self::type_guard::<T>();
-                        let val: _FutureCounterGetenvResultRep<T> = Some(val);
-                        let ptr: *mut _FutureCounterGetenvResultRep<T> =
+                        let val: _FutureCounterGetEnvResultRep<T> = Some(val);
+                        let ptr: *mut _FutureCounterGetEnvResultRep<T> =
                             _rt::Box::into_raw(_rt::Box::new(val));
                         unsafe { Self::from_handle(T::_resource_new(ptr.cast())) }
                     }
 
                     /// Gets access to the underlying `T` which represents this resource.
-                    pub fn get<T: GuestFutureCounterGetenvResult>(&self) -> &T {
+                    pub fn get<T: GuestFutureCounterGetEnvResult>(&self) -> &T {
                         let ptr = unsafe { &*self.as_ptr::<T>() };
                         ptr.as_ref().unwrap()
                     }
 
                     /// Gets mutable access to the underlying `T` which represents this
                     /// resource.
-                    pub fn get_mut<T: GuestFutureCounterGetenvResult>(&mut self) -> &mut T {
+                    pub fn get_mut<T: GuestFutureCounterGetEnvResult>(&mut self) -> &mut T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.as_mut().unwrap()
                     }
 
                     /// Consumes this resource and returns the underlying `T`.
-                    pub fn into_inner<T: GuestFutureCounterGetenvResult>(self) -> T {
+                    pub fn into_inner<T: GuestFutureCounterGetEnvResult>(self) -> T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.take().unwrap()
                     }
@@ -2870,7 +2870,7 @@ pub mod exports {
                         _rt::Resource::handle(&self.handle)
                     }
 
-                    // It's theoretically possible to implement the `GuestFutureCounterGetenvResult` trait twice
+                    // It's theoretically possible to implement the `GuestFutureCounterGetEnvResult` trait twice
                     // so guard against using it with two different types here.
                     #[doc(hidden)]
                     fn type_guard<T: 'static>() {
@@ -2892,27 +2892,27 @@ pub mod exports {
                     #[doc(hidden)]
                     pub unsafe fn dtor<T: 'static>(handle: *mut u8) {
                         Self::type_guard::<T>();
-                        let _ = _rt::Box::from_raw(handle as *mut _FutureCounterGetenvResultRep<T>);
+                        let _ = _rt::Box::from_raw(handle as *mut _FutureCounterGetEnvResultRep<T>);
                     }
 
-                    fn as_ptr<T: GuestFutureCounterGetenvResult>(
+                    fn as_ptr<T: GuestFutureCounterGetEnvResult>(
                         &self,
-                    ) -> *mut _FutureCounterGetenvResultRep<T> {
-                        FutureCounterGetenvResult::type_guard::<T>();
+                    ) -> *mut _FutureCounterGetEnvResultRep<T> {
+                        FutureCounterGetEnvResult::type_guard::<T>();
                         T::_resource_rep(self.handle()).cast()
                     }
                 }
 
-                /// A borrowed version of [`FutureCounterGetenvResult`] which represents a borrowed value
+                /// A borrowed version of [`FutureCounterGetEnvResult`] which represents a borrowed value
                 /// with the lifetime `'a`.
                 #[derive(Debug)]
                 #[repr(transparent)]
-                pub struct FutureCounterGetenvResultBorrow<'a> {
+                pub struct FutureCounterGetEnvResultBorrow<'a> {
                     rep: *mut u8,
-                    _marker: core::marker::PhantomData<&'a FutureCounterGetenvResult>,
+                    _marker: core::marker::PhantomData<&'a FutureCounterGetEnvResult>,
                 }
 
-                impl<'a> FutureCounterGetenvResultBorrow<'a> {
+                impl<'a> FutureCounterGetEnvResultBorrow<'a> {
                     #[doc(hidden)]
                     pub unsafe fn lift(rep: usize) -> Self {
                         Self {
@@ -2922,7 +2922,7 @@ pub mod exports {
                     }
 
                     /// Gets access to the underlying `T` in this resource.
-                    pub fn get<T: GuestFutureCounterGetenvResult>(&self) -> &T {
+                    pub fn get<T: GuestFutureCounterGetEnvResult>(&self) -> &T {
                         let ptr = unsafe { &mut *self.as_ptr::<T>() };
                         ptr.as_ref().unwrap()
                     }
@@ -2930,13 +2930,13 @@ pub mod exports {
                     // NB: mutable access is not allowed due to the component model allowing
                     // multiple borrows of the same resource.
 
-                    fn as_ptr<T: 'static>(&self) -> *mut _FutureCounterGetenvResultRep<T> {
-                        FutureCounterGetenvResult::type_guard::<T>();
+                    fn as_ptr<T: 'static>(&self) -> *mut _FutureCounterGetEnvResultRep<T> {
+                        FutureCounterGetEnvResult::type_guard::<T>();
                         self.rep.cast()
                     }
                 }
 
-                unsafe impl _rt::WasmResource for FutureCounterGetenvResult {
+                unsafe impl _rt::WasmResource for FutureCounterGetEnvResult {
                     #[inline]
                     unsafe fn drop(_handle: u32) {
                         #[cfg(not(target_arch = "wasm32"))]
@@ -2946,7 +2946,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-drop]future-counter-getenv-result"]
+                                #[link_name = "[resource-drop]future-counter-get-env-result"]
                                 fn drop(_: u32);
                             }
 
@@ -3274,29 +3274,29 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_future_counter_getvalue_result_subscribe_cabi<
-                    T: GuestFutureCounterGetvalueResult,
+                pub unsafe fn _export_method_future_counter_get_value_result_subscribe_cabi<
+                    T: GuestFutureCounterGetValueResult,
                 >(
                     arg0: *mut u8,
                 ) -> i32 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 = T::subscribe(
-                        FutureCounterGetvalueResultBorrow::lift(arg0 as u32 as usize).get(),
+                        FutureCounterGetValueResultBorrow::lift(arg0 as u32 as usize).get(),
                     );
                     (result0).take_handle() as i32
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_future_counter_getvalue_result_get_cabi<
-                    T: GuestFutureCounterGetvalueResult,
+                pub unsafe fn _export_method_future_counter_get_value_result_get_cabi<
+                    T: GuestFutureCounterGetValueResult,
                 >(
                     arg0: *mut u8,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 =
-                        T::get(FutureCounterGetvalueResultBorrow::lift(arg0 as u32 as usize).get());
+                        T::get(FutureCounterGetValueResultBorrow::lift(arg0 as u32 as usize).get());
                     let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result0 {
                         Some(e) => {
@@ -3311,29 +3311,29 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_future_counter_getargs_result_subscribe_cabi<
-                    T: GuestFutureCounterGetargsResult,
+                pub unsafe fn _export_method_future_counter_get_args_result_subscribe_cabi<
+                    T: GuestFutureCounterGetArgsResult,
                 >(
                     arg0: *mut u8,
                 ) -> i32 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 = T::subscribe(
-                        FutureCounterGetargsResultBorrow::lift(arg0 as u32 as usize).get(),
+                        FutureCounterGetArgsResultBorrow::lift(arg0 as u32 as usize).get(),
                     );
                     (result0).take_handle() as i32
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_future_counter_getargs_result_get_cabi<
-                    T: GuestFutureCounterGetargsResult,
+                pub unsafe fn _export_method_future_counter_get_args_result_get_cabi<
+                    T: GuestFutureCounterGetArgsResult,
                 >(
                     arg0: *mut u8,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 =
-                        T::get(FutureCounterGetargsResultBorrow::lift(arg0 as u32 as usize).get());
+                        T::get(FutureCounterGetArgsResultBorrow::lift(arg0 as u32 as usize).get());
                     let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result0 {
                         Some(e) => {
@@ -3375,8 +3375,8 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_method_future_counter_getargs_result_get<
-                    T: GuestFutureCounterGetargsResult,
+                pub unsafe fn __post_return_method_future_counter_get_args_result_get<
+                    T: GuestFutureCounterGetArgsResult,
                 >(
                     arg0: *mut u8,
                 ) {
@@ -3402,29 +3402,29 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_future_counter_getenv_result_subscribe_cabi<
-                    T: GuestFutureCounterGetenvResult,
+                pub unsafe fn _export_method_future_counter_get_env_result_subscribe_cabi<
+                    T: GuestFutureCounterGetEnvResult,
                 >(
                     arg0: *mut u8,
                 ) -> i32 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 = T::subscribe(
-                        FutureCounterGetenvResultBorrow::lift(arg0 as u32 as usize).get(),
+                        FutureCounterGetEnvResultBorrow::lift(arg0 as u32 as usize).get(),
                     );
                     (result0).take_handle() as i32
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_future_counter_getenv_result_get_cabi<
-                    T: GuestFutureCounterGetenvResult,
+                pub unsafe fn _export_method_future_counter_get_env_result_get_cabi<
+                    T: GuestFutureCounterGetEnvResult,
                 >(
                     arg0: *mut u8,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 =
-                        T::get(FutureCounterGetenvResultBorrow::lift(arg0 as u32 as usize).get());
+                        T::get(FutureCounterGetEnvResultBorrow::lift(arg0 as u32 as usize).get());
                     let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result0 {
                         Some(e) => {
@@ -3473,8 +3473,8 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_method_future_counter_getenv_result_get<
-                    T: GuestFutureCounterGetenvResult,
+                pub unsafe fn __post_return_method_future_counter_get_env_result_get<
+                    T: GuestFutureCounterGetEnvResult,
                 >(
                     arg0: *mut u8,
                 ) {
@@ -3585,54 +3585,57 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_blocking_incby_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_blocking_inc_by_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                     arg1: i64,
                 ) {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
-                    T::blocking_incby(CounterBorrow::lift(arg0 as u32 as usize).get(), arg1 as u64);
+                    T::blocking_inc_by(
+                        CounterBorrow::lift(arg0 as u32 as usize).get(),
+                        arg1 as u64,
+                    );
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_incby_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_inc_by_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                     arg1: i64,
                 ) {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
-                    T::incby(CounterBorrow::lift(arg0 as u32 as usize).get(), arg1 as u64);
+                    T::inc_by(CounterBorrow::lift(arg0 as u32 as usize).get(), arg1 as u64);
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_blocking_getvalue_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_blocking_get_value_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                 ) -> i64 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 =
-                        T::blocking_getvalue(CounterBorrow::lift(arg0 as u32 as usize).get());
+                        T::blocking_get_value(CounterBorrow::lift(arg0 as u32 as usize).get());
                     _rt::as_i64(result0)
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_getvalue_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_get_value_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                 ) -> i32 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
-                    let result0 = T::getvalue(CounterBorrow::lift(arg0 as u32 as usize).get());
+                    let result0 = T::get_value(CounterBorrow::lift(arg0 as u32 as usize).get());
                     (result0).take_handle() as i32
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_blocking_getargs_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_blocking_get_args_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 =
-                        T::blocking_getargs(CounterBorrow::lift(arg0 as u32 as usize).get());
+                        T::blocking_get_args(CounterBorrow::lift(arg0 as u32 as usize).get());
                     let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     let vec3 = result0;
                     let len3 = vec3.len();
@@ -3665,7 +3668,7 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_method_counter_blocking_getargs<T: GuestCounter>(
+                pub unsafe fn __post_return_method_counter_blocking_get_args<T: GuestCounter>(
                     arg0: *mut u8,
                 ) {
                     let l2 = *arg0.add(0).cast::<*mut u8>();
@@ -3684,23 +3687,23 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_getargs_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_get_args_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                 ) -> i32 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
-                    let result0 = T::getargs(CounterBorrow::lift(arg0 as u32 as usize).get());
+                    let result0 = T::get_args(CounterBorrow::lift(arg0 as u32 as usize).get());
                     (result0).take_handle() as i32
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_blocking_getenv_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_blocking_get_env_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                 ) -> *mut u8 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
                     let result0 =
-                        T::blocking_getenv(CounterBorrow::lift(arg0 as u32 as usize).get());
+                        T::blocking_get_env(CounterBorrow::lift(arg0 as u32 as usize).get());
                     let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     let vec5 = result0;
                     let len5 = vec5.len();
@@ -3740,7 +3743,7 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_method_counter_blocking_getenv<T: GuestCounter>(
+                pub unsafe fn __post_return_method_counter_blocking_get_env<T: GuestCounter>(
                     arg0: *mut u8,
                 ) {
                     let l4 = *arg0.add(0).cast::<*mut u8>();
@@ -3762,19 +3765,19 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_method_counter_getenv_cabi<T: GuestCounter>(
+                pub unsafe fn _export_method_counter_get_env_cabi<T: GuestCounter>(
                     arg0: *mut u8,
                 ) -> i32 {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
-                    let result0 = T::getenv(CounterBorrow::lift(arg0 as u32 as usize).get());
+                    let result0 = T::get_env(CounterBorrow::lift(arg0 as u32 as usize).get());
                     (result0).take_handle() as i32
                 }
                 pub trait Guest {
                     type FutureGetGlobalValueResult: GuestFutureGetGlobalValueResult;
-                    type FutureCounterGetvalueResult: GuestFutureCounterGetvalueResult;
-                    type FutureCounterGetargsResult: GuestFutureCounterGetargsResult;
-                    type FutureCounterGetenvResult: GuestFutureCounterGetenvResult;
+                    type FutureCounterGetValueResult: GuestFutureCounterGetValueResult;
+                    type FutureCounterGetArgsResult: GuestFutureCounterGetArgsResult;
+                    type FutureCounterGetEnvResult: GuestFutureCounterGetEnvResult;
                     type Api: GuestApi;
                     type Counter: GuestCounter;
                 }
@@ -3826,7 +3829,7 @@ pub mod exports {
                     fn subscribe(&self) -> Pollable;
                     fn get(&self) -> Option<u64>;
                 }
-                pub trait GuestFutureCounterGetvalueResult: 'static {
+                pub trait GuestFutureCounterGetValueResult: 'static {
                     #[doc(hidden)]
                     unsafe fn _resource_new(val: *mut u8) -> u32
                     where
@@ -3842,7 +3845,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-new]future-counter-getvalue-result"]
+                                #[link_name = "[resource-new]future-counter-get-value-result"]
                                 fn new(_: *mut u8) -> u32;
                             }
                             new(val)
@@ -3864,7 +3867,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-rep]future-counter-getvalue-result"]
+                                #[link_name = "[resource-rep]future-counter-get-value-result"]
                                 fn rep(_: u32) -> *mut u8;
                             }
                             unsafe { rep(handle) }
@@ -3874,7 +3877,7 @@ pub mod exports {
                     fn subscribe(&self) -> Pollable;
                     fn get(&self) -> Option<u64>;
                 }
-                pub trait GuestFutureCounterGetargsResult: 'static {
+                pub trait GuestFutureCounterGetArgsResult: 'static {
                     #[doc(hidden)]
                     unsafe fn _resource_new(val: *mut u8) -> u32
                     where
@@ -3890,7 +3893,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-new]future-counter-getargs-result"]
+                                #[link_name = "[resource-new]future-counter-get-args-result"]
                                 fn new(_: *mut u8) -> u32;
                             }
                             new(val)
@@ -3912,7 +3915,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-rep]future-counter-getargs-result"]
+                                #[link_name = "[resource-rep]future-counter-get-args-result"]
                                 fn rep(_: u32) -> *mut u8;
                             }
                             unsafe { rep(handle) }
@@ -3922,7 +3925,7 @@ pub mod exports {
                     fn subscribe(&self) -> Pollable;
                     fn get(&self) -> Option<_rt::Vec<_rt::String>>;
                 }
-                pub trait GuestFutureCounterGetenvResult: 'static {
+                pub trait GuestFutureCounterGetEnvResult: 'static {
                     #[doc(hidden)]
                     unsafe fn _resource_new(val: *mut u8) -> u32
                     where
@@ -3938,7 +3941,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-new]future-counter-getenv-result"]
+                                #[link_name = "[resource-new]future-counter-get-env-result"]
                                 fn new(_: *mut u8) -> u32;
                             }
                             new(val)
@@ -3960,7 +3963,7 @@ pub mod exports {
                         {
                             #[link(wasm_import_module = "[export]rpc:counters-stub/stub-counters")]
                             extern "C" {
-                                #[link_name = "[resource-rep]future-counter-getenv-result"]
+                                #[link_name = "[resource-rep]future-counter-get-env-result"]
                                 fn rep(_: u32) -> *mut u8;
                             }
                             unsafe { rep(handle) }
@@ -4067,14 +4070,14 @@ pub mod exports {
                     }
 
                     fn new(location: Uri, name: _rt::String) -> Self;
-                    fn blocking_incby(&self, value: u64);
-                    fn incby(&self, value: u64);
-                    fn blocking_getvalue(&self) -> u64;
-                    fn getvalue(&self) -> FutureCounterGetvalueResult;
-                    fn blocking_getargs(&self) -> _rt::Vec<_rt::String>;
-                    fn getargs(&self) -> FutureCounterGetargsResult;
-                    fn blocking_getenv(&self) -> _rt::Vec<(_rt::String, _rt::String)>;
-                    fn getenv(&self) -> FutureCounterGetenvResult;
+                    fn blocking_inc_by(&self, value: u64);
+                    fn inc_by(&self, value: u64);
+                    fn blocking_get_value(&self) -> u64;
+                    fn get_value(&self) -> FutureCounterGetValueResult;
+                    fn blocking_get_args(&self) -> _rt::Vec<_rt::String>;
+                    fn get_args(&self) -> FutureCounterGetArgsResult;
+                    fn blocking_get_env(&self) -> _rt::Vec<(_rt::String, _rt::String)>;
+                    fn get_env(&self) -> FutureCounterGetEnvResult;
                 }
                 #[doc(hidden)]
 
@@ -4089,37 +4092,37 @@ pub mod exports {
     unsafe extern "C" fn export_method_future_get_global_value_result_get(arg0: *mut u8,) -> *mut u8 {
       $($path_to_types)*::_export_method_future_get_global_value_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureGetGlobalValueResult>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-getvalue-result.subscribe"]
-    unsafe extern "C" fn export_method_future_counter_getvalue_result_subscribe(arg0: *mut u8,) -> i32 {
-      $($path_to_types)*::_export_method_future_counter_getvalue_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetvalueResult>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-value-result.subscribe"]
+    unsafe extern "C" fn export_method_future_counter_get_value_result_subscribe(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_future_counter_get_value_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetValueResult>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-getvalue-result.get"]
-    unsafe extern "C" fn export_method_future_counter_getvalue_result_get(arg0: *mut u8,) -> *mut u8 {
-      $($path_to_types)*::_export_method_future_counter_getvalue_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetvalueResult>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-value-result.get"]
+    unsafe extern "C" fn export_method_future_counter_get_value_result_get(arg0: *mut u8,) -> *mut u8 {
+      $($path_to_types)*::_export_method_future_counter_get_value_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetValueResult>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-getargs-result.subscribe"]
-    unsafe extern "C" fn export_method_future_counter_getargs_result_subscribe(arg0: *mut u8,) -> i32 {
-      $($path_to_types)*::_export_method_future_counter_getargs_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetargsResult>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-args-result.subscribe"]
+    unsafe extern "C" fn export_method_future_counter_get_args_result_subscribe(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_future_counter_get_args_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetArgsResult>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-getargs-result.get"]
-    unsafe extern "C" fn export_method_future_counter_getargs_result_get(arg0: *mut u8,) -> *mut u8 {
-      $($path_to_types)*::_export_method_future_counter_getargs_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetargsResult>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-args-result.get"]
+    unsafe extern "C" fn export_method_future_counter_get_args_result_get(arg0: *mut u8,) -> *mut u8 {
+      $($path_to_types)*::_export_method_future_counter_get_args_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetArgsResult>(arg0)
     }
-    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-counter-getargs-result.get"]
-    unsafe extern "C" fn _post_return_method_future_counter_getargs_result_get(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_method_future_counter_getargs_result_get::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetargsResult>(arg0)
+    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-counter-get-args-result.get"]
+    unsafe extern "C" fn _post_return_method_future_counter_get_args_result_get(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_method_future_counter_get_args_result_get::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetArgsResult>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-getenv-result.subscribe"]
-    unsafe extern "C" fn export_method_future_counter_getenv_result_subscribe(arg0: *mut u8,) -> i32 {
-      $($path_to_types)*::_export_method_future_counter_getenv_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetenvResult>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-env-result.subscribe"]
+    unsafe extern "C" fn export_method_future_counter_get_env_result_subscribe(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_future_counter_get_env_result_subscribe_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetEnvResult>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-getenv-result.get"]
-    unsafe extern "C" fn export_method_future_counter_getenv_result_get(arg0: *mut u8,) -> *mut u8 {
-      $($path_to_types)*::_export_method_future_counter_getenv_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetenvResult>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]future-counter-get-env-result.get"]
+    unsafe extern "C" fn export_method_future_counter_get_env_result_get(arg0: *mut u8,) -> *mut u8 {
+      $($path_to_types)*::_export_method_future_counter_get_env_result_get_cabi::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetEnvResult>(arg0)
     }
-    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-counter-getenv-result.get"]
-    unsafe extern "C" fn _post_return_method_future_counter_getenv_result_get(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_method_future_counter_getenv_result_get::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetenvResult>(arg0)
+    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]future-counter-get-env-result.get"]
+    unsafe extern "C" fn _post_return_method_future_counter_get_env_result_get(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_method_future_counter_get_env_result_get::<<$ty as $($path_to_types)*::Guest>::FutureCounterGetEnvResult>(arg0)
     }
     #[export_name = "rpc:counters-stub/stub-counters#[constructor]api"]
     unsafe extern "C" fn export_constructor_api(arg0: *mut u8,arg1: usize,) -> i32 {
@@ -4145,45 +4148,45 @@ pub mod exports {
     unsafe extern "C" fn export_constructor_counter(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> i32 {
       $($path_to_types)*::_export_constructor_counter_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0, arg1, arg2, arg3)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-incby"]
-    unsafe extern "C" fn export_method_counter_blocking_incby(arg0: *mut u8,arg1: i64,) {
-      $($path_to_types)*::_export_method_counter_blocking_incby_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0, arg1)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-inc-by"]
+    unsafe extern "C" fn export_method_counter_blocking_inc_by(arg0: *mut u8,arg1: i64,) {
+      $($path_to_types)*::_export_method_counter_blocking_inc_by_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0, arg1)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.incby"]
-    unsafe extern "C" fn export_method_counter_incby(arg0: *mut u8,arg1: i64,) {
-      $($path_to_types)*::_export_method_counter_incby_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0, arg1)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.inc-by"]
+    unsafe extern "C" fn export_method_counter_inc_by(arg0: *mut u8,arg1: i64,) {
+      $($path_to_types)*::_export_method_counter_inc_by_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0, arg1)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-getvalue"]
-    unsafe extern "C" fn export_method_counter_blocking_getvalue(arg0: *mut u8,) -> i64 {
-      $($path_to_types)*::_export_method_counter_blocking_getvalue_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-get-value"]
+    unsafe extern "C" fn export_method_counter_blocking_get_value(arg0: *mut u8,) -> i64 {
+      $($path_to_types)*::_export_method_counter_blocking_get_value_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.getvalue"]
-    unsafe extern "C" fn export_method_counter_getvalue(arg0: *mut u8,) -> i32 {
-      $($path_to_types)*::_export_method_counter_getvalue_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-value"]
+    unsafe extern "C" fn export_method_counter_get_value(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_counter_get_value_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-getargs"]
-    unsafe extern "C" fn export_method_counter_blocking_getargs(arg0: *mut u8,) -> *mut u8 {
-      $($path_to_types)*::_export_method_counter_blocking_getargs_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-get-args"]
+    unsafe extern "C" fn export_method_counter_blocking_get_args(arg0: *mut u8,) -> *mut u8 {
+      $($path_to_types)*::_export_method_counter_blocking_get_args_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.blocking-getargs"]
-    unsafe extern "C" fn _post_return_method_counter_blocking_getargs(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_method_counter_blocking_getargs::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.blocking-get-args"]
+    unsafe extern "C" fn _post_return_method_counter_blocking_get_args(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_method_counter_blocking_get_args::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.getargs"]
-    unsafe extern "C" fn export_method_counter_getargs(arg0: *mut u8,) -> i32 {
-      $($path_to_types)*::_export_method_counter_getargs_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-args"]
+    unsafe extern "C" fn export_method_counter_get_args(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_counter_get_args_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-getenv"]
-    unsafe extern "C" fn export_method_counter_blocking_getenv(arg0: *mut u8,) -> *mut u8 {
-      $($path_to_types)*::_export_method_counter_blocking_getenv_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.blocking-get-env"]
+    unsafe extern "C" fn export_method_counter_blocking_get_env(arg0: *mut u8,) -> *mut u8 {
+      $($path_to_types)*::_export_method_counter_blocking_get_env_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.blocking-getenv"]
-    unsafe extern "C" fn _post_return_method_counter_blocking_getenv(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_method_counter_blocking_getenv::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "cabi_post_rpc:counters-stub/stub-counters#[method]counter.blocking-get-env"]
+    unsafe extern "C" fn _post_return_method_counter_blocking_get_env(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_method_counter_blocking_get_env::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
-    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.getenv"]
-    unsafe extern "C" fn export_method_counter_getenv(arg0: *mut u8,) -> i32 {
-      $($path_to_types)*::_export_method_counter_getenv_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
+    #[export_name = "rpc:counters-stub/stub-counters#[method]counter.get-env"]
+    unsafe extern "C" fn export_method_counter_get_env(arg0: *mut u8,) -> i32 {
+      $($path_to_types)*::_export_method_counter_get_env_cabi::<<$ty as $($path_to_types)*::Guest>::Counter>(arg0)
     }
 
     const _: () = {
@@ -4200,11 +4203,11 @@ pub mod exports {
 
     const _: () = {
       #[doc(hidden)]
-      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-counter-getvalue-result"]
+      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-counter-get-value-result"]
       #[allow(non_snake_case)]
       unsafe extern "C" fn dtor(rep: *mut u8) {
-        $($path_to_types)*::FutureCounterGetvalueResult::dtor::<
-        <$ty as $($path_to_types)*::Guest>::FutureCounterGetvalueResult
+        $($path_to_types)*::FutureCounterGetValueResult::dtor::<
+        <$ty as $($path_to_types)*::Guest>::FutureCounterGetValueResult
         >(rep)
       }
     };
@@ -4212,11 +4215,11 @@ pub mod exports {
 
     const _: () = {
       #[doc(hidden)]
-      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-counter-getargs-result"]
+      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-counter-get-args-result"]
       #[allow(non_snake_case)]
       unsafe extern "C" fn dtor(rep: *mut u8) {
-        $($path_to_types)*::FutureCounterGetargsResult::dtor::<
-        <$ty as $($path_to_types)*::Guest>::FutureCounterGetargsResult
+        $($path_to_types)*::FutureCounterGetArgsResult::dtor::<
+        <$ty as $($path_to_types)*::Guest>::FutureCounterGetArgsResult
         >(rep)
       }
     };
@@ -4224,11 +4227,11 @@ pub mod exports {
 
     const _: () = {
       #[doc(hidden)]
-      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-counter-getenv-result"]
+      #[export_name = "rpc:counters-stub/stub-counters#[dtor]future-counter-get-env-result"]
       #[allow(non_snake_case)]
       unsafe extern "C" fn dtor(rep: *mut u8) {
-        $($path_to_types)*::FutureCounterGetenvResult::dtor::<
-        <$ty as $($path_to_types)*::Guest>::FutureCounterGetenvResult
+        $($path_to_types)*::FutureCounterGetEnvResult::dtor::<
+        <$ty as $($path_to_types)*::Guest>::FutureCounterGetEnvResult
         >(rep)
       }
     };
@@ -4586,8 +4589,8 @@ pub(crate) use __export_wasm_rpc_stub_counters_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:wasm-rpc-stub-counters:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2722] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x95\x14\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2739] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa6\x14\x01A\x02\x01\
 A\x08\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
@@ -4614,35 +4617,35 @@ h\x14\x01i\x01\x01@\x01\x04self\x1f\0\x20\x04\0&[method]future-invoke-result.sub
 scribe\x01!\x01k\x19\x01@\x01\x04self\x1f\0\"\x04\0\x20[method]future-invoke-res\
 ult.get\x01#\x03\x01\x15golem:rpc/types@0.1.0\x05\x02\x02\x03\0\x01\x03uri\x01BG\
 \x02\x03\x02\x01\x03\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
-\0\x02\x04\0\x1efuture-get-global-value-result\x03\x01\x04\0\x1efuture-counter-g\
-etvalue-result\x03\x01\x04\0\x1dfuture-counter-getargs-result\x03\x01\x04\0\x1cf\
-uture-counter-getenv-result\x03\x01\x04\0\x03api\x03\x01\x04\0\x07counter\x03\x01\
+\0\x02\x04\0\x1efuture-get-global-value-result\x03\x01\x04\0\x1ffuture-counter-g\
+et-value-result\x03\x01\x04\0\x1efuture-counter-get-args-result\x03\x01\x04\0\x1d\
+future-counter-get-env-result\x03\x01\x04\0\x03api\x03\x01\x04\0\x07counter\x03\x01\
 \x01h\x04\x01i\x03\x01@\x01\x04self\x0a\0\x0b\x04\00[method]future-get-global-va\
 lue-result.subscribe\x01\x0c\x01kw\x01@\x01\x04self\x0a\0\x0d\x04\0*[method]futu\
 re-get-global-value-result.get\x01\x0e\x01h\x05\x01@\x01\x04self\x0f\0\x0b\x04\0\
-0[method]future-counter-getvalue-result.subscribe\x01\x10\x01@\x01\x04self\x0f\0\
-\x0d\x04\0*[method]future-counter-getvalue-result.get\x01\x11\x01h\x06\x01@\x01\x04\
-self\x12\0\x0b\x04\0/[method]future-counter-getargs-result.subscribe\x01\x13\x01\
-ps\x01k\x14\x01@\x01\x04self\x12\0\x15\x04\0)[method]future-counter-getargs-resu\
-lt.get\x01\x16\x01h\x07\x01@\x01\x04self\x17\0\x0b\x04\0.[method]future-counter-\
-getenv-result.subscribe\x01\x18\x01o\x02ss\x01p\x19\x01k\x1a\x01@\x01\x04self\x17\
-\0\x1b\x04\0([method]future-counter-getenv-result.get\x01\x1c\x01i\x08\x01@\x01\x08\
-location\x01\0\x1d\x04\0\x10[constructor]api\x01\x1e\x01h\x08\x01@\x02\x04self\x1f\
-\x05valuew\x01\0\x04\0\"[method]api.blocking-inc-global-by\x01\x20\x04\0\x19[met\
-hod]api.inc-global-by\x01\x20\x01@\x01\x04self\x1f\0w\x04\0%[method]api.blocking\
--get-global-value\x01!\x01i\x04\x01@\x01\x04self\x1f\0\"\x04\0\x1c[method]api.ge\
-t-global-value\x01#\x01i\x09\x01@\x02\x08location\x01\x04names\0$\x04\0\x14[cons\
-tructor]counter\x01%\x01h\x09\x01@\x02\x04self&\x05valuew\x01\0\x04\0\x1e[method\
-]counter.blocking-incby\x01'\x04\0\x15[method]counter.incby\x01'\x01@\x01\x04sel\
-f&\0w\x04\0![method]counter.blocking-getvalue\x01(\x01i\x05\x01@\x01\x04self&\0)\
-\x04\0\x18[method]counter.getvalue\x01*\x01@\x01\x04self&\0\x14\x04\0\x20[method\
-]counter.blocking-getargs\x01+\x01i\x06\x01@\x01\x04self&\0,\x04\0\x17[method]co\
-unter.getargs\x01-\x01@\x01\x04self&\0\x1a\x04\0\x1f[method]counter.blocking-get\
-env\x01.\x01i\x07\x01@\x01\x04self&\0/\x04\0\x16[method]counter.getenv\x010\x04\x01\
-\x1frpc:counters-stub/stub-counters\x05\x04\x04\x01(rpc:counters-stub/wasm-rpc-s\
-tub-counters\x04\0\x0b\x1c\x01\0\x16wasm-rpc-stub-counters\x03\0\0\0G\x09produce\
-rs\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.\
-25.0";
+1[method]future-counter-get-value-result.subscribe\x01\x10\x01@\x01\x04self\x0f\0\
+\x0d\x04\0+[method]future-counter-get-value-result.get\x01\x11\x01h\x06\x01@\x01\
+\x04self\x12\0\x0b\x04\00[method]future-counter-get-args-result.subscribe\x01\x13\
+\x01ps\x01k\x14\x01@\x01\x04self\x12\0\x15\x04\0*[method]future-counter-get-args\
+-result.get\x01\x16\x01h\x07\x01@\x01\x04self\x17\0\x0b\x04\0/[method]future-cou\
+nter-get-env-result.subscribe\x01\x18\x01o\x02ss\x01p\x19\x01k\x1a\x01@\x01\x04s\
+elf\x17\0\x1b\x04\0)[method]future-counter-get-env-result.get\x01\x1c\x01i\x08\x01\
+@\x01\x08location\x01\0\x1d\x04\0\x10[constructor]api\x01\x1e\x01h\x08\x01@\x02\x04\
+self\x1f\x05valuew\x01\0\x04\0\"[method]api.blocking-inc-global-by\x01\x20\x04\0\
+\x19[method]api.inc-global-by\x01\x20\x01@\x01\x04self\x1f\0w\x04\0%[method]api.\
+blocking-get-global-value\x01!\x01i\x04\x01@\x01\x04self\x1f\0\"\x04\0\x1c[metho\
+d]api.get-global-value\x01#\x01i\x09\x01@\x02\x08location\x01\x04names\0$\x04\0\x14\
+[constructor]counter\x01%\x01h\x09\x01@\x02\x04self&\x05valuew\x01\0\x04\0\x1f[m\
+ethod]counter.blocking-inc-by\x01'\x04\0\x16[method]counter.inc-by\x01'\x01@\x01\
+\x04self&\0w\x04\0\"[method]counter.blocking-get-value\x01(\x01i\x05\x01@\x01\x04\
+self&\0)\x04\0\x19[method]counter.get-value\x01*\x01@\x01\x04self&\0\x14\x04\0![\
+method]counter.blocking-get-args\x01+\x01i\x06\x01@\x01\x04self&\0,\x04\0\x18[me\
+thod]counter.get-args\x01-\x01@\x01\x04self&\0\x1a\x04\0\x20[method]counter.bloc\
+king-get-env\x01.\x01i\x07\x01@\x01\x04self&\0/\x04\0\x17[method]counter.get-env\
+\x010\x04\x01\x1frpc:counters-stub/stub-counters\x05\x04\x04\x01(rpc:counters-st\
+ub/wasm-rpc-stub-counters\x04\0\x0b\x1c\x01\0\x16wasm-rpc-stub-counters\x03\0\0\0\
+G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindge\
+n-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

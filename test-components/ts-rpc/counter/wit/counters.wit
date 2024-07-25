@@ -3,11 +3,11 @@ package rpc:counters;
 interface api {
   resource counter {
     constructor(name: string);
-    incby: func(value: u64);
-    getvalue: func() -> u64;
+    inc-by: func(value: u64);
+    get-value: func() -> u64;
 
-    getargs: func() -> list<string>;
-    getenv: func() -> list<tuple<string, string>>;
+    get-args: func() -> list<string>;
+    get-env: func() -> list<tuple<string, string>>;
   }
 
   inc-global-by: func(value: u64);

@@ -23,13 +23,13 @@ impl Counter {
         }
     }
 }
-pub struct FutureCounterGetvalueResult {
+pub struct FutureCounterGetValueResult {
     pub future_invoke_result: FutureInvokeResult,
 }
-pub struct FutureCounterGetargsResult {
+pub struct FutureCounterGetArgsResult {
     pub future_invoke_result: FutureInvokeResult,
 }
-pub struct FutureCounterGetenvResult {
+pub struct FutureCounterGetEnvResult {
     pub future_invoke_result: FutureInvokeResult,
 }
 struct Component;
@@ -37,9 +37,9 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::Guest for Comp
     type Api = crate::Api;
     type FutureGetGlobalValueResult = crate::FutureGetGlobalValueResult;
     type Counter = crate::Counter;
-    type FutureCounterGetvalueResult = crate::FutureCounterGetvalueResult;
-    type FutureCounterGetargsResult = crate::FutureCounterGetargsResult;
-    type FutureCounterGetenvResult = crate::FutureCounterGetenvResult;
+    type FutureCounterGetValueResult = crate::FutureCounterGetValueResult;
+    type FutureCounterGetArgsResult = crate::FutureCounterGetArgsResult;
+    type FutureCounterGetEnvResult = crate::FutureCounterGetEnvResult;
 }
 impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureGetGlobalValueResult
 for FutureGetGlobalValueResult {
@@ -130,8 +130,8 @@ impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestApi for A
         })
     }
 }
-impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureCounterGetvalueResult
-for FutureCounterGetvalueResult {
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureCounterGetValueResult
+for FutureCounterGetValueResult {
     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
         let pollable = self.future_invoke_result.subscribe();
         let pollable = unsafe {
@@ -147,7 +147,7 @@ for FutureCounterGetvalueResult {
                     .expect(
                         &format!(
                             "Failed to invoke remote {}",
-                            "rpc:counters/api.{counter.getvalue}"
+                            "rpc:counters/api.{counter.get-value}"
                         ),
                     );
                 (result
@@ -158,8 +158,8 @@ for FutureCounterGetvalueResult {
             })
     }
 }
-impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureCounterGetargsResult
-for FutureCounterGetargsResult {
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureCounterGetArgsResult
+for FutureCounterGetArgsResult {
     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
         let pollable = self.future_invoke_result.subscribe();
         let pollable = unsafe {
@@ -175,7 +175,7 @@ for FutureCounterGetargsResult {
                     .expect(
                         &format!(
                             "Failed to invoke remote {}",
-                            "rpc:counters/api.{counter.getargs}"
+                            "rpc:counters/api.{counter.get-args}"
                         ),
                     );
                 (result
@@ -188,8 +188,8 @@ for FutureCounterGetargsResult {
             })
     }
 }
-impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureCounterGetenvResult
-for FutureCounterGetenvResult {
+impl crate::bindings::exports::rpc::counters_stub::stub_counters::GuestFutureCounterGetEnvResult
+for FutureCounterGetEnvResult {
     fn subscribe(&self) -> bindings::wasi::io::poll::Pollable {
         let pollable = self.future_invoke_result.subscribe();
         let pollable = unsafe {
@@ -205,7 +205,7 @@ for FutureCounterGetenvResult {
                     .expect(
                         &format!(
                             "Failed to invoke remote {}",
-                            "rpc:counters/api.{counter.getenv}"
+                            "rpc:counters/api.{counter.get-env}"
                         ),
                     );
                 (result
@@ -259,11 +259,11 @@ for Counter {
             Self { rpc, id, uri }
         })
     }
-    fn blocking_incby(&self, value: u64) -> () {
+    fn blocking_inc_by(&self, value: u64) -> () {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api.{counter.incby}",
+                "rpc:counters/api.{counter.inc-by}",
                 &[
                     WitValue::builder().handle(self.uri.clone(), self.id),
                     WitValue::builder().u64(value),
@@ -272,16 +272,16 @@ for Counter {
             .expect(
                 &format!(
                     "Failed to invoke-and-await remote {}",
-                    "rpc:counters/api.{counter.incby}"
+                    "rpc:counters/api.{counter.inc-by}"
                 ),
             );
         ()
     }
-    fn incby(&self, value: u64) -> () {
+    fn inc_by(&self, value: u64) -> () {
         let result = self
             .rpc
             .invoke(
-                "rpc:counters/api.{counter.incby}",
+                "rpc:counters/api.{counter.inc-by}",
                 &[
                     WitValue::builder().handle(self.uri.clone(), self.id),
                     WitValue::builder().u64(value),
@@ -289,50 +289,50 @@ for Counter {
             )
             .expect(
                 &format!(
-                    "Failed to invoke remote {}", "rpc:counters/api.{counter.incby}"
+                    "Failed to invoke remote {}", "rpc:counters/api.{counter.inc-by}"
                 ),
             );
         ()
     }
-    fn blocking_getvalue(&self) -> u64 {
+    fn blocking_get_value(&self) -> u64 {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api.{counter.getvalue}",
+                "rpc:counters/api.{counter.get-value}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect(
                 &format!(
                     "Failed to invoke-and-await remote {}",
-                    "rpc:counters/api.{counter.getvalue}"
+                    "rpc:counters/api.{counter.get-value}"
                 ),
             );
         (result.tuple_element(0).expect("tuple not found").u64().expect("u64 not found"))
     }
-    fn getvalue(
+    fn get_value(
         &self,
-    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetvalueResult {
+    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetValueResult {
         let result = self
             .rpc
             .async_invoke_and_await(
-                "rpc:counters/api.{counter.getvalue}",
+                "rpc:counters/api.{counter.get-value}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             );
-        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetvalueResult::new(FutureCounterGetvalueResult {
+        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetValueResult::new(FutureCounterGetValueResult {
             future_invoke_result: result,
         })
     }
-    fn blocking_getargs(&self) -> Vec<String> {
+    fn blocking_get_args(&self) -> Vec<String> {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api.{counter.getargs}",
+                "rpc:counters/api.{counter.get-args}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect(
                 &format!(
                     "Failed to invoke-and-await remote {}",
-                    "rpc:counters/api.{counter.getargs}"
+                    "rpc:counters/api.{counter.get-args}"
                 ),
             );
         (result
@@ -341,30 +341,30 @@ for Counter {
             .list_elements(|item| item.string().expect("string not found").to_string())
             .expect("list not found"))
     }
-    fn getargs(
+    fn get_args(
         &self,
-    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetargsResult {
+    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetArgsResult {
         let result = self
             .rpc
             .async_invoke_and_await(
-                "rpc:counters/api.{counter.getargs}",
+                "rpc:counters/api.{counter.get-args}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             );
-        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetargsResult::new(FutureCounterGetargsResult {
+        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetArgsResult::new(FutureCounterGetArgsResult {
             future_invoke_result: result,
         })
     }
-    fn blocking_getenv(&self) -> Vec<(String, String)> {
+    fn blocking_get_env(&self) -> Vec<(String, String)> {
         let result = self
             .rpc
             .invoke_and_await(
-                "rpc:counters/api.{counter.getenv}",
+                "rpc:counters/api.{counter.get-env}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             )
             .expect(
                 &format!(
                     "Failed to invoke-and-await remote {}",
-                    "rpc:counters/api.{counter.getenv}"
+                    "rpc:counters/api.{counter.get-env}"
                 ),
             );
         (result
@@ -389,16 +389,16 @@ for Counter {
             })
             .expect("list not found"))
     }
-    fn getenv(
+    fn get_env(
         &self,
-    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetenvResult {
+    ) -> crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetEnvResult {
         let result = self
             .rpc
             .async_invoke_and_await(
-                "rpc:counters/api.{counter.getenv}",
+                "rpc:counters/api.{counter.get-env}",
                 &[WitValue::builder().handle(self.uri.clone(), self.id)],
             );
-        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetenvResult::new(FutureCounterGetenvResult {
+        crate::bindings::exports::rpc::counters_stub::stub_counters::FutureCounterGetEnvResult::new(FutureCounterGetEnvResult {
             future_invoke_result: result,
         })
     }

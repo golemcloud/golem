@@ -8,10 +8,10 @@ export interface CounterStatic {
   new(name: string): CounterInstance,
 }
 export interface CounterInstance {
-  incby(value: bigint): void,
-  getvalue(): bigint,
-  getargs(): string[],
-  getenv(): [string, string][],
+  incBy(value: bigint): void,
+  getValue(): bigint,
+  getArgs(): string[],
+  getEnv(): [string, string][],
 }
 
 export interface CountersWorld {

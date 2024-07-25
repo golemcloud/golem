@@ -5,15 +5,15 @@ declare module "rpc:counters-stub/stub-counters" {
     subscribe(): Pollable;
     get(): bigint | undefined;
   }
-  export class FutureCounterGetvalueResult {
+  export class FutureCounterGetValueResult {
     subscribe(): Pollable;
     get(): bigint | undefined;
   }
-  export class FutureCounterGetargsResult {
+  export class FutureCounterGetArgsResult {
     subscribe(): Pollable;
     get(): string[] | undefined;
   }
-  export class FutureCounterGetenvResult {
+  export class FutureCounterGetEnvResult {
     subscribe(): Pollable;
     get(): [string, string][] | undefined;
   }
@@ -26,13 +26,13 @@ declare module "rpc:counters-stub/stub-counters" {
   }
   export class Counter {
     constructor(location: Uri, name: string)
-    blockingIncby(value: bigint): void;
-    incby(value: bigint): void;
-    blockingGetvalue(): bigint;
-    getvalue(): FutureCounterGetvalueResult;
-    blockingGetargs(): string[];
-    getargs(): FutureCounterGetargsResult;
-    blockingGetenv(): [string, string][];
-    getenv(): FutureCounterGetenvResult;
+    blockingIncBy(value: bigint): void;
+    incBy(value: bigint): void;
+    blockingGetValue(): bigint;
+    getValue(): FutureCounterGetValueResult;
+    blockingGetArgs(): string[];
+    getArgs(): FutureCounterGetArgsResult;
+    blockingGetEnv(): [string, string][];
+    getEnv(): FutureCounterGetEnvResult;
   }
 }

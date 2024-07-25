@@ -4,13 +4,13 @@
     "description": "",
     "main": "dist/index.js",
     "scripts": {
-        "ts:gen": "jco stubgen wit/ -o src/generated/",
+        "gen:ts": "jco stubgen wit/ -o src/generated/",
         "build": "rollup -c",
         "componentize": "jco componentize -w wit -o dist/caller-ts.wasm dist/index.js"
     },
     "devDependencies": {
         "@golemcloud/componentize-js": "0.8.3-golem.3",
-        "@golemcloud/jco": "1.2.4-golem.4",
+        "@golemcloud/jco": "1.2.4-golem.5",
         "@rollup/plugin-node-resolve": "^15.2.3",
         "rollup": "4.19.0",
         "rollup-plugin-typescript2": "^0.36.0",

@@ -7,16 +7,16 @@ class CounterResource implements CounterInstance {
         this.value = BigInt(0)
     }
 
-    incby(value: bigint): void {
+    incBy(value: bigint): void {
         this.value += value
     }
-    getvalue(): bigint {
+    getValue(): bigint {
         return this.value
     }
-    getargs(): string[] {
+    getArgs(): string[] {
         return getArguments()
     }
-    getenv(): [string, string][] {
+    getEnv(): [string, string][] {
         return getEnvironment()
     }
 
