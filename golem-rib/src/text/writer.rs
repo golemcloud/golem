@@ -243,7 +243,7 @@ impl<W: Write> Writer<W> {
             Expr::Call(string, params) => {
                 let function_name = match string.site().interface_name() {
                     Some(interface) => {
-                        format!("{{{}}}.{}", interface, string.function().function_name())
+                        format!("{}.{{{}}}", interface, string.function().function_name())
                     }
                     None => string.function().function_name().to_string(),
                 };

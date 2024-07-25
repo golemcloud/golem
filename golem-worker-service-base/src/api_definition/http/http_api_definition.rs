@@ -379,27 +379,27 @@ mod tests {
 
     #[test]
     fn expression_with_predicate0() {
-        test_string_expr_parse_and_encode("1>2");
+        test_string_expr_parse_and_encode("${ 1 < 2 }");
     }
 
     #[test]
     fn expression_with_predicate1() {
-        test_string_expr_parse_and_encode("${request.path.user-id > request.path.id}");
+        test_string_expr_parse_and_encode("${ request.path.user-id > request.path.id }");
     }
 
     #[test]
     fn expression_with_predicate2() {
-        test_string_expr_parse_and_encode("${request.path.user-id}>2");
+        test_string_expr_parse_and_encode("${ request.path.user-id > 2 }");
     }
 
     #[test]
     fn expression_with_predicate3() {
-        test_string_expr_parse_and_encode("${request.path.user-id}=2");
+        test_string_expr_parse_and_encode("${ request.path.user-id == 2 }");
     }
 
     #[test]
     fn expression_with_predicate4() {
-        test_string_expr_parse_and_encode("${request.path.user-id}<2");
+        test_string_expr_parse_and_encode("${ request.path.user-id < 2 }");
     }
 
     #[test]
@@ -449,7 +449,6 @@ mod tests {
     fn get_api_spec(
         path_pattern: &str,
         worker_id: &str,
-        function_params: &str,
         response_mapping: &str,
     ) -> serde_yaml::Value {
         let yaml_string = format!(
@@ -463,12 +462,10 @@ mod tests {
             binding:
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              functionName: golem:it/api.{{get-cart-contents}}
-              functionParams: {}
               response: '{}'
 
         "#,
-            path_pattern, worker_id, function_params, response_mapping
+            path_pattern, worker_id, response_mapping
         );
 
         let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
@@ -479,41 +476,32 @@ mod tests {
     fn test_api_spec_serde() {
         test_serde(
             "foo/{user-id}?{id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_serde(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_serde(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.path.user-id}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_serde(
             "foo",
-            "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
-            "[ \"data\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 
     #[track_caller]
-    fn test_serde(
-        path_pattern: &str,
-        worker_id: &str,
-        function_params: &str,
-        response_mapping: &str,
-    ) {
-        let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
+    fn test_serde(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+        let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
 
         let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
@@ -531,13 +519,8 @@ mod tests {
 
     #[test]
     fn test_api_spec_encode_decode() {
-        fn test_encode_decode(
-            path_pattern: &str,
-            worker_id: &str,
-            function_params: &str,
-            response_mapping: &str,
-        ) {
-            let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
+        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
             let encoded = serialization::serialize(&original).unwrap();
             let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
@@ -547,49 +530,33 @@ mod tests {
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body}\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.path.user-id}\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo",
-            "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
-            "[ \"data\"]",
-            "{status : 200}",
-        );
-
-        test_encode_decode(
-            "foo",
-            "match worker.response { ok(value) => 1, error => 0 }",
-            "[ \"data\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 
     #[test]
     fn test_api_spec_proto_conversion() {
-        fn test_encode_decode(
-            path_pattern: &str,
-            worker_id: &str,
-            function_params: &str,
-            response_mapping: &str,
-        ) {
-            let yaml = get_api_spec(path_pattern, worker_id, function_params, response_mapping);
+        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
             let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
@@ -599,37 +566,26 @@ mod tests {
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body}\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.path.user-id}\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo",
-            "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
-            "[ \"data\"]",
-            "{status : 200}",
-        );
-
-        test_encode_decode(
-            "foo",
-            "match worker.response { ok(value) => 1, error => 0 }",
-            "[ \"data\"]",
-            "{status : 200}",
+            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 }

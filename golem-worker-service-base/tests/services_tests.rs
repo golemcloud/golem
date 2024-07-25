@@ -152,18 +152,16 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/1/foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.path.user-id}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def2draft = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/2/foo/{user-id}",
-            "shopping-cart-${if (${request.body.user-id}>100) then 0 else 1}",
-            "[ \"data\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
             true,
         );
         let def2 = HttpApiDefinition {
@@ -174,18 +172,16 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/3/foo/{user-id}?{id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def4 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/4/foo/{user-id}",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.path.user-id}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(\"doo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
 
@@ -340,8 +336,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker1",
-            "[]",
-            "[]",
+            "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200 }  }",
             false,
         );
         let def2 = get_api_definition(
@@ -349,8 +344,7 @@ mod tests {
             "0.0.1",
             "/api/get2",
             "worker2",
-            "[]",
-            "[]",
+            "${ {body: golem:it/api.{get-cart-contents}()} }",
             true,
         );
 
@@ -359,8 +353,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker2",
-            "[]",
-            "[]",
+            "${ {body: golem:it/api.{get-cart-contents}()} }",
             false,
         );
 
@@ -431,27 +424,24 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get1",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}();  {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def1v1_upd = get_api_definition(
             &def1v1.id.0,
             "0.0.1",
             "/api/get1/1",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def1v2 = get_api_definition(
             &def1v1.id.0,
             "0.0.2",
             "/api/get1/2",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
             true,
         );
 
@@ -459,9 +449,8 @@ mod tests {
             &def1v1.id.0,
             "0.0.2",
             "/api/get1/22",
-            "shopping-cart-${if (${request.path.user-id}>100) then 0 else 1}",
-            "[\"${request.body.foo}\"]",
-            "{status: if (worker.response.user == admin) then 401 else 200}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
             true,
         );
 
@@ -586,7 +575,6 @@ mod tests {
         version: &str,
         path_pattern: &str,
         worker_id: &str,
-        function_params: &str,
         response_mapping: &str,
         draft: bool,
     ) -> HttpApiDefinition {
@@ -601,11 +589,9 @@ mod tests {
             binding:
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              functionName: golem:it/api.{{get-cart-contents}}
-              functionParams: {}
               response: '{}'
         "#,
-            id, version, draft, path_pattern, worker_id, function_params, response_mapping
+            id, version, draft, path_pattern, worker_id, response_mapping
         );
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()
