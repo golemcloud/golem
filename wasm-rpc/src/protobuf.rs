@@ -667,21 +667,33 @@ impl TryFrom<type_annotated_value::TypeAnnotatedValue> for Value {
 
                 match value {
                     ResultValue::OkValue(ok_value) => {
-                        let type_annotated_value =
-                            ok_value.type_annotated_value.ok_or_else(|| {
-                                "Missing type_annotated_value in Result Ok".to_string()
-                            })?;
-                        let value = type_annotated_value.try_into()?;
-                        Ok(Value::Result(Ok(Some(Box::new(value)))))
+                        let type_annotated_value = ok_value.type_annotated_value;
+
+                        match type_annotated_value {
+                            Some(v) => {
+                                let value = v.try_into()?;
+                                Ok(Value::Result(Ok(Some(Box::new(value)))))
+                            }
+                            None => {
+                                Ok(Value::Result(Ok(None)))
+                            }
+                        }
                     }
 
                     ResultValue::ErrorValue(err_value) => {
                         let type_annotated_value =
-                            err_value.type_annotated_value.ok_or_else(|| {
-                                "Missing type_annotated_value in Result Err".to_string()
-                            })?;
-                        let value = type_annotated_value.try_into()?;
-                        Ok(Value::Result(Err(Some(Box::new(value)))))
+                            err_value.type_annotated_value;
+
+                        match type_annotated_value {
+                            Some(v) => {
+                                let value = v.try_into()?;
+                                Ok(Value::Result(Err(Some(Box::new(value)))))
+                            }
+
+                            None => {
+                                Ok(Value::Result(Err(None)))
+                            }
+                        }
                     }
                 }
             }
