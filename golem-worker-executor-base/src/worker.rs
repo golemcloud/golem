@@ -1347,9 +1347,6 @@ impl RunningWorker {
                                     function_input,
                                     calling_convention,
                                 } => {
-                                    let component_metadata =
-                                        store.as_context().data().component_metadata().clone();
-
                                     let span = span!(
                                         Level::INFO,
                                         "invocation",
@@ -1393,39 +1390,76 @@ impl RunningWorker {
                                                 output,
                                                 consumed_fuel,
                                             }) => {
-                                                let function_results: Vec<AnalysedFunctionResult> =
+                                                let component_metadata =
+                                                    store.as_context().data().component_metadata();
+
+                                                let function_results =
                                                     exports::function_by_name(
                                                         &component_metadata.exports,
                                                         &full_function_name,
-                                                    )
-                                                    .unwrap()
-                                                    .unwrap()
-                                                    .results
-                                                    .into_iter()
-                                                    .map(|t| t.into())
-                                                    .collect();
+                                                    );
 
-                                                let result = output
-                                                    .validate_function_result(
-                                                        function_results,
-                                                        calling_convention,
-                                                    )
-                                                    .map_err(|e| GolemError::ValueMismatch {
-                                                        details: e.join(", "),
-                                                    })
-                                                    .unwrap();
+                                                match function_results {
+                                                    Ok(Some(export_function)) => {
+                                                        let function_results =  export_function.results
+                                                            .into_iter()
+                                                            .map(|t| t.into())
+                                                            .collect();
 
-                                                store
-                                                    .data_mut()
-                                                    .on_invocation_success(
-                                                        &full_function_name,
-                                                        &function_input,
-                                                        consumed_fuel,
-                                                        result,
-                                                    )
-                                                    .await
-                                                    .unwrap(); // TODO: handle this error
-                                                false // do not break
+                                                        let result = output
+                                                            .validate_function_result(
+                                                                function_results,
+                                                                calling_convention,
+                                                            )
+                                                            .map_err(|e| GolemError::ValueMismatch {
+                                                                details: e.join(", "),
+                                                            });
+
+                                                        match result {
+                                                            Ok(result) => {
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_success(
+                                                                        &full_function_name,
+                                                                        &function_input,
+                                                                        consumed_fuel,
+                                                                        result,
+                                                                    )
+                                                                    .await
+                                                                    .unwrap(); // TODO: handle this error
+                                                                false // do not break
+                                                            }
+                                                            Err(error) => {
+                                                                let trap_type =
+                                                                    TrapType::from_error::<Ctx>(&anyhow!(error));
+
+                                                                final_decision = RetryDecision::None;
+                                                                true // break
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Ok(None) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown("Function not found".to_string())))
+                                                            .await;
+
+                                                        final_decision = RetryDecision::None;
+                                                        true // break
+                                                    }
+
+                                                    Err(result) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(result)))
+                                                            .await;
+
+                                                        final_decision = RetryDecision::None;
+                                                        true // break
+                                                    }
+                                                }
+
                                             }
                                             _ => {
                                                 let trap_type = match result {
