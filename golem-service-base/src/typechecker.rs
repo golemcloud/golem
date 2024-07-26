@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use golem_common::model::CallingConvention;
-use golem_wasm_rpc::protobuf::{val, Type, Val};
+use golem_wasm_rpc::protobuf::Type;
 
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
-use golem_wasm_rpc::{json, protobuf};
+use golem_wasm_rpc::json;
 use serde_json::Value;
 
 

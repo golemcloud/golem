@@ -15,7 +15,6 @@ use std::str::FromStr;
 use tap::TapFallible;
 use golem_common::precise_json::PreciseJson;
 
-use golem_service_base::model::*;
 
 use tracing::Instrument;
 
