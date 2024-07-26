@@ -28,6 +28,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
+use golem_common::retries::with_retries;
 
 use crate::error::ShardManagerError;
 use crate::healthcheck::HealthCheckError;
@@ -114,32 +115,25 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            "Assigning shards: {}",
-            pod_shard_assignments_to_string(pod, shard_ids.iter())
+            assigned_shards = pod_shard_assignments_to_string(pod, shard_ids.iter()),
+            "Assigning shards",
         );
 
-        // TODO: jitter (and let's use the common retry)
-        let retry_max_attempts = self.config.retries.max_attempts;
-        let retry_min_delay = self.config.retries.min_delay;
-        let retry_max_delay = self.config.retries.max_delay;
-        let retry_multiplier = self.config.retries.multiplier;
-
-        let mut attempts = 0;
-        let mut delay = retry_min_delay;
-
-        loop {
-            match self.assign_shards_internal(pod, shard_ids).await {
-                Ok(shard_ids) => return Ok(shard_ids),
-                Err(e) => {
-                    if attempts >= retry_max_attempts {
-                        return Err(e);
-                    }
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
-                }
-            }
-        }
+        with_retries(
+            "worker_executor",
+            "assign_shards",
+            Some(format!("{pod}")),
+            &self.config.retries,
+            &(pod, shard_ids),
+            |(pod, shard_ids)| {
+                Box::pin(async move { self.assign_shards_internal(pod, shard_ids).await })
+            },
+            |_err| {
+                // TODO: match on error once it has sources
+                true
+            },
+        )
+        .await
     }
 
     async fn revoke_shards(
@@ -148,34 +142,29 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            "Revoking shards: {}",
-            pod_shard_assignments_to_string(pod, shard_ids.iter())
+            revoked_shards = pod_shard_assignments_to_string(pod, shard_ids.iter()),
+            "Revoking shards",
         );
 
-        let retry_max_attempts = self.config.retries.max_attempts;
-        let retry_min_delay = self.config.retries.min_delay;
-        let retry_max_delay = self.config.retries.max_delay;
-        let retry_multiplier = self.config.retries.multiplier;
-
-        let mut attempts = 0;
-        let mut delay = retry_min_delay;
-
-        loop {
-            match self.revoke_shards_internal(pod, shard_ids).await {
-                Ok(shard_ids) => return Ok(shard_ids),
-                Err(e) => {
-                    if attempts >= retry_max_attempts {
-                        return Err(e);
-                    }
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
-                }
-            }
-        }
+        with_retries(
+            "worker_executor",
+            "revoke_shards",
+            Some(format!("{pod}")),
+            &self.config.retries,
+            &(pod, shard_ids),
+            |(pod, shard_ids)| {
+                Box::pin(async move { self.revoke_shards_internal(pod, shard_ids).await })
+            },
+            |_err| {
+                // TODO: match on error once it has sources
+                true
+            },
+        )
+        .await
     }
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
+        // NOTE: retries are handled in healthcheck.rs
         let endpoint = pod.endpoint();
         let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
         match conn {

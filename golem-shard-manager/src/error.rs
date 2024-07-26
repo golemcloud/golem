@@ -19,6 +19,7 @@ use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use tonic::Status;
 
+// TODO: use actual source errors?
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShardManagerError {
     InvalidRequest { details: String },

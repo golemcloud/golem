@@ -69,7 +69,10 @@ where
         retry_config,
         pod,
         implementation,
-        |_| true,
+        |_| {
+            // TODO: recheck for which errors should not be retried
+            true
+        },
     )
     .await
     .is_ok()
