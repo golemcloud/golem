@@ -33,6 +33,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use uuid::Uuid;
+use golem_common::precise_json::PreciseJson;
 
 #[async_trait]
 pub trait WorkerService {
@@ -192,7 +193,7 @@ fn wave_parameters_to_json(
     wave: &[String],
     component: &Component,
     function: &str,
-) -> Result<Value, GolemError> {
+) -> Result<Vec<PreciseJson>, GolemError> {
     let types = function_params_types(component, function)?;
 
     if wave.len() != types.len() {
@@ -210,11 +211,11 @@ fn wave_parameters_to_json(
         .collect::<Result<Vec<_>, _>>()?;
 
     let json_params = params
-        .iter()
-        .map(golem_wasm_rpc::json::get_json_from_typed_value)
+        .into_iter()
+        .map(|v| PreciseJson::from(v))
         .collect::<Vec<_>>();
 
-    Ok(Value::Array(json_params))
+    Ok(json_params)
 }
 
 fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
@@ -244,15 +245,17 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
     {
         let json = wave_parameters_to_json(&wave, &component, function)?;
 
-        Ok((json, Some(component)))
+        let json_array: Vec<Value> = json.into_iter().map(|v| v.into()).collect();
+        Ok((Value::Array(json_array), Some(component)))
     } else {
         info!("No worker found with name {worker_name}. Assuming it should be create with the latest component version");
         let component = components.get_latest_metadata(component_id).await?;
 
         let json = wave_parameters_to_json(&wave, &component, function)?;
+        let json_array: Vec<Value> = json.into_iter().map(|v| v.into()).collect();
 
         // We are not going to use this component for result parsing.
-        Ok((json, None))
+        Ok((Value::Array(json_array), None))
     }
 }
 
