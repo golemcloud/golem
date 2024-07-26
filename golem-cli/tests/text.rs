@@ -507,15 +507,21 @@ fn text_example_list(
 
     let expected = formatdoc!(
         "
-            +------------+----------+-------+--------------------+
-            | Name       | Language | Tier  | Description        |
-            +------------+----------+-------+--------------------+
-            | cs-minimal | C#       | tier3 | A simple stateless |
-            |            |          |       | Golem function     |
-            |            |          |       | written in C# with |
-            |            |          |       | no dependencies on |
-            |            |          |       | external services  |
-            +------------+----------+-------+--------------------+
+            +---------------------+----------+-------+----------------------+
+            | Name                | Language | Tier  | Description          |
+            +---------------------+----------+-------+----------------------+
+            | zig-default         | Zig      | tier1 | A stateful Golem     |
+            |                     |          |       | worker written in    |
+            |                     |          |       | Zig with full access |
+            |                     |          |       | to WASI and the      |
+            |                     |          |       | Golem runtime APIs   |
+            +---------------------+----------+-------+----------------------+
+            | zig-default-minimal | Zig      | tier1 | A simple stateful    |
+            |                     |          |       | Golem worker written |
+            |                     |          |       | in Zig with no       |
+            |                     |          |       | dependencies on      |
+            |                     |          |       | external services    |
+            +---------------------+----------+-------+----------------------+
             "
     );
 
