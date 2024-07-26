@@ -48,13 +48,13 @@ impl From<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
     }
 }
 
-impl Into<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
-    fn into(self) -> bindings::golem::api::host::RetryPolicy {
+impl From<RetryPolicy> for bindings::golem::api::host::RetryPolicy {
+    fn from(val: RetryPolicy) -> Self {
         bindings::golem::api::host::RetryPolicy {
-            max_attempts: self.max_attempts,
-            min_delay: self.min_delay.as_nanos() as u64,
-            max_delay: self.max_delay.as_nanos() as u64,
-            multiplier: self.multiplier,
+            max_attempts: val.max_attempts,
+            min_delay: val.min_delay.as_nanos() as u64,
+            max_delay: val.max_delay.as_nanos() as u64,
+            multiplier: val.multiplier,
         }
     }
 }
