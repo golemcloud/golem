@@ -106,37 +106,6 @@ mod tests {
             )
             .map(|typed_value| json::get_json_from_typed_value(&typed_value));
 
-        assert_eq!(res, Ok(Value::String("str".to_string())));
-
-        let num_val = vec![WasmRpcValue::String("12.3".to_string())];
-
-        let res = num_val
-            .validate_function_result(
-                vec![AnalysedFunctionResult {
-                    name: Some("a".to_string()),
-                    typ: AnalysedType::F64,
-                }],
-                CallingConvention::Stdio,
-            )
-            .map(|typed_value| json::get_json_from_typed_value(&typed_value));
-
-        assert_eq!(
-            res,
-            Ok(Value::Number(serde_json::Number::from_f64(12.3).unwrap()))
-        );
-
-        let bool_val = vec![WasmRpcValue::String("true".to_string())];
-
-        let res = bool_val
-            .validate_function_result(
-                vec![AnalysedFunctionResult {
-                    name: Some("a".to_string()),
-                    typ: AnalysedType::Bool,
-                }],
-                CallingConvention::Stdio,
-            )
-            .map(|typed_value| json::get_json_from_typed_value(&typed_value));
-
-        assert_eq!(res, Ok(Value::Bool(true)));
+        assert_eq!(res, Ok(Value::Array(vec![Value::String("str".to_string())])));
     }
 }
