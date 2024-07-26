@@ -15,4 +15,4 @@ until curl --output /dev/null --silent --head --fail $KIBANA_HOST; do
     sleep 1
 done
 
-curl -X POST "$KIBANA_HOST/api/saved_objects/_import?createNewCopies=false" -H "kbn-xsrf: true" --form file=@/provision/saved_objects.ndjson -H 'kbn-xsrf: true'
+curl -X POST "$KIBANA_HOST/api/saved_objects/_import?createNewCopies=false" -H "kbn-xsrf: true" --form file=@/provision/saved_objects.ndjson
