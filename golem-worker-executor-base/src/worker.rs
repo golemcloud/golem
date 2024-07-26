@@ -1321,6 +1321,7 @@ impl RunningWorker {
                 }
             };
 
+
             if final_decision == RetryDecision::None {
                 debug!("Invocation queue loop started");
 

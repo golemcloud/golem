@@ -1153,12 +1153,32 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 break Err(err);
                                             }
                                         } else {
+                                            let trap_type = TrapType::Error(WorkerError::Unknown(format!(
+                                                "Function {full_function_name} not found"
+                                            )));
+
+                                            let _ = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_failure(&trap_type)
+                                                .await;
+
                                             break Err(GolemError::invalid_request(format!(
                                                 "Function {full_function_name} not found"
                                             )));
                                         }
                                     }
                                     Err(err) => {
+                                        let trap_type = TrapType::Error(WorkerError::Unknown(format!(
+                                            "Function {full_function_name} not found: {err}"
+                                        )));
+
+                                        let _ = store
+                                            .as_context_mut()
+                                            .data_mut()
+                                            .on_invocation_failure(&trap_type)
+                                            .await;
+
                                         break Err(GolemError::invalid_request(format!(
                                             "Function {full_function_name} not found: {err}"
                                         )));

@@ -1204,6 +1204,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
         )
         .await;
 
+
     let r1 = executor
         .invoke_and_await(
             &worker_id,
@@ -1976,13 +1977,17 @@ async fn counter_resource_test_1() {
         )
         .await
         .unwrap();
-    let _ = executor
+
+    dbg!(counter1.clone());
+    let result2 = executor
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[method]counter.inc-by}",
             vec![counter1[0].clone(), Value::U64(5)],
         )
         .await;
+
+    dbg!(result2.clone());
 
     let result1 = executor
         .invoke_and_await(
@@ -1992,9 +1997,13 @@ async fn counter_resource_test_1() {
         )
         .await;
 
+    dbg!(result1.clone());
+
     let metadata1 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
-    let _ = executor
+    dbg!(metadata1.clone());
+
+    let xyz = executor
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[drop]counter}",
@@ -2002,12 +2011,18 @@ async fn counter_resource_test_1() {
         )
         .await;
 
+    dbg!("Am I done here??????");
+    dbg!(xyz.clone());
+
     let result2 = executor
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
+    dbg!(result2.clone());
+
     let metadata2 = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    dbg!(metadata2.clone());
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(5)]));
