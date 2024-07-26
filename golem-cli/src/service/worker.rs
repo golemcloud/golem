@@ -212,7 +212,7 @@ fn wave_parameters_to_json(
 
     let json_params = params
         .into_iter()
-        .map(|v| PreciseJson::from(v))
+        .map(PreciseJson::from)
         .collect::<Vec<_>>();
 
     Ok(json_params)
