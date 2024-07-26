@@ -26,9 +26,38 @@ use bindings::golem::api::host::*;
 
 pub use bindings::golem::api::host::oplog_commit;
 pub use bindings::golem::api::host::PersistenceLevel;
-pub use bindings::golem::api::host::RetryPolicy;
 
 pub use transaction::*;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetryPolicy {
+    pub max_attempts: u32,
+    pub min_delay: std::time::Duration,
+    pub max_delay: std::time::Duration,
+    pub multiplier: f64,
+}
+
+impl From<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
+    fn from(value: bindings::golem::api::host::RetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: std::time::Duration::from_nanos(value.min_delay),
+            max_delay: std::time::Duration::from_nanos(value.max_delay),
+            multiplier: value.multiplier,
+        }
+    }
+}
+
+impl Into<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
+    fn into(self) -> bindings::golem::api::host::RetryPolicy {
+        bindings::golem::api::host::RetryPolicy {
+            max_attempts: self.max_attempts,
+            min_delay: self.min_delay.as_nanos() as u64,
+            max_delay: self.max_delay.as_nanos() as u64,
+            multiplier: self.multiplier,
+        }
+    }
+}
 
 pub struct PersistenceLevelGuard {
     original_level: PersistenceLevel,
@@ -104,7 +133,7 @@ pub struct RetryPolicyGuard {
 
 impl Drop for RetryPolicyGuard {
     fn drop(&mut self) {
-        set_retry_policy(self.original);
+        set_retry_policy(Into::into(self.original.clone()));
     }
 }
 
@@ -113,8 +142,8 @@ impl Drop for RetryPolicyGuard {
 /// When the returned guard is dropped, the original retry policy is restored.
 #[must_use]
 pub fn use_retry_policy(policy: RetryPolicy) -> RetryPolicyGuard {
-    let original = get_retry_policy();
-    set_retry_policy(policy);
+    let original = Into::into(get_retry_policy());
+    set_retry_policy(Into::into(policy));
     RetryPolicyGuard { original }
 }
 
