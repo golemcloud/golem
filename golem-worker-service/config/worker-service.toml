@@ -13,7 +13,7 @@ port = 9090
 max_attempts = 3
 max_delay = "1s"
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [db]
 type = "Sqlite"
@@ -72,7 +72,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [db]
 # type = "Postgres"
