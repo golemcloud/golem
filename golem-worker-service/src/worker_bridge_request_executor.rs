@@ -79,7 +79,7 @@ mod internal {
 
         let type_annotated_value = default_executor
             .worker_service
-            .invoke_and_await_function_json_typed(
+            .invoke_and_await_function_typed(
                 &worker_id,
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name.to_string(),

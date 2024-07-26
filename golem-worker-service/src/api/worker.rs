@@ -156,7 +156,7 @@ impl WorkerApi {
             }
         }
 
-        let result = self
+        let response = self
             .worker_service
             .invoke_and_await_function_json(
                 &worker_id,
@@ -197,21 +197,33 @@ impl WorkerApi {
             function = function.0
         );
 
-        let param_values = params.0.params.as_array().ok_or_else(|| {
+        let json_values = params.0.params.as_array().ok_or_else(|| {
             WorkerApiBaseError::BadRequest(Json(ErrorsBody {
                 errors: vec!["Invalid parameters".to_string()],
             }))
         })?;
 
-        self.worker_service
+        let mut precise_jsons = vec![];
+
+        for json_value in json_values {
+            let precise_json = PreciseJson::try_from(json_value.clone());
+
+            match precise_json {
+                Ok(precise_json) => precise_jsons.push(precise_json),
+                Err(err) => return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                    errors: vec![format!("Invalid function parameters {}", err)],
+                })))
+            }
+        }
+
+        let response = self.worker_service
             .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                param_values.clone(),
+                precise_jsons.clone(),
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await

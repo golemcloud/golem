@@ -16,81 +16,12 @@ use golem_common::model::CallingConvention;
 use golem_wasm_rpc::protobuf::{val, Type, Val};
 
 use crate::type_inference::infer_analysed_type;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
+use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
 use golem_wasm_rpc::{json, protobuf};
 use serde_json::Value;
 
-pub trait TypeCheckIn {
-    fn validate_function_parameters(
-        self,
-        expected_parameters: Vec<AnalysedFunctionParameter>,
-        calling_convention: CallingConvention,
-    ) -> Result<Vec<Val>, Vec<String>>;
-}
-
-impl TypeCheckIn for Vec<Value> {
-    fn validate_function_parameters(
-        self,
-        expected_parameters: Vec<AnalysedFunctionParameter>,
-        calling_convention: CallingConvention,
-    ) -> Result<Vec<Val>, Vec<String>> {
-        match calling_convention {
-            CallingConvention::Component => {
-                let parameter_values =
-                    json::function_parameters(&Value::Array(self), &expected_parameters)?;
-                Ok(parameter_values
-                    .into_iter()
-                    .map(|value| value.into())
-                    .collect())
-            }
-            CallingConvention::Stdio => {
-                if expected_parameters.is_empty() {
-                    let vval: Val = Val {
-                        val: Some(val::Val::String(Value::Array(self).to_string())),
-                    };
-
-                    Ok(vec![vval])
-                } else {
-                    Err(vec!["The exported function should not have any parameters when using the stdio calling convention".to_string()])
-                }
-            }
-        }
-    }
-}
-
-impl TypeCheckIn for Vec<Val> {
-    fn validate_function_parameters(
-        self,
-        expected_parameters: Vec<AnalysedFunctionParameter>,
-        calling_convention: CallingConvention,
-    ) -> Result<Vec<Val>, Vec<String>> {
-        match calling_convention {
-            CallingConvention::Component => {
-                protobuf::function_parameters(&self, expected_parameters)?;
-                Ok(self)
-            }
-            CallingConvention::Stdio => {
-                if expected_parameters.is_empty() {
-                    if self.len() == 1 {
-                        match &self[0].val {
-                            Some(val::Val::String(_)) => Ok(self.clone()),
-                            _ => Err(vec!["The exported function should be called with a single string parameter".to_string()])
-                        }
-                    } else {
-                        Err(vec![
-                            "The exported function should be called with a single string parameter"
-                                .to_string(),
-                        ])
-                    }
-                } else {
-                    Err(vec!["The exported function should not have any parameters when using the stdio calling convention".to_string()])
-                }
-            }
-        }
-    }
-}
 
 pub trait TypeCheckOut {
     fn validate_function_result(
