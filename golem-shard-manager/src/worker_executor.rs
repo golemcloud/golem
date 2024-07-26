@@ -189,14 +189,14 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
                             let status = health_check_serving_status(response);
                             (status == ServingStatus::Serving)
                                 .then_some(())
-                                .ok_or_else(|| HealthCheckError::Other(status.as_str_name()))
+                                .ok_or_else(|| HealthCheckError::GrpcOther(status.as_str_name()))
                         }
                         Err(status) => Err(HealthCheckError::GrpcError(status)),
                     }
                 }
                 Err(err) => Err(HealthCheckError::GrpcConnectError(err)),
             },
-            Err(_) => Err(HealthCheckError::GrpcConnectTimeout),
+            Err(_) => Err(HealthCheckError::GrpcOther("connect timeout")),
         }
     }
 }

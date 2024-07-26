@@ -10,16 +10,16 @@ use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum HealthCheckError {
-    #[error("gRPC error: {0}")]
+    #[error("gRPC: error status: {0}")]
     GrpcError(tonic::Status),
-    #[error("gRPC connect timeout")]
-    GrpcConnectTimeout,
-    #[error("gRPC connect error: {0}")]
+    #[error("gRPC: connect error: {0}")]
     GrpcConnectError(#[source] tonic::transport::Error),
-    #[error("K8s connect error: {0}")]
+    #[error("gRPC: {0}")]
+    GrpcOther(&'static str),
+    #[error("K8s: connect error: {0}")]
     K8sConnectError(#[source] kube::Error),
-    #[error("{0}")]
-    Other(&'static str),
+    #[error("K8s: {0}")]
+    K8sOther(&'static str),
 }
 
 #[async_trait]
@@ -145,13 +145,13 @@ pub mod kubernetes {
                     Ok(Some(k8s_pod)) => match k8s_pod.status {
                         Some(status) => Self::is_pod_ready(status)
                             .then_some(())
-                            .ok_or(HealthCheckError::Other("k8s: pod status is not ready")),
-                        None => Err(HealthCheckError::Other("k8s: no pod status")),
+                            .ok_or(HealthCheckError::K8sOther("pod status is not ready")),
+                        None => Err(HealthCheckError::K8sOther("no pod status")),
                     },
-                    Ok(None) => Err(HealthCheckError::Other("k8s: pod not found")),
+                    Ok(None) => Err(HealthCheckError::K8sOther("pod not found")),
                     Err(err) => Err(HealthCheckError::K8sConnectError(err)),
                 },
-                None => Err(HealthCheckError::Other("k8s: no pod_name")),
+                None => Err(HealthCheckError::K8sOther("no pod_name")),
             }
         }
 
