@@ -1,12 +1,14 @@
-import Random from "random"
-import Result from "result"
-import Time from "sys/time"
+module GrainTest1
+
+from "random" include Random
+from "result" include Result
+from "wasi/time" include Time
 
 
 let rnd = Result.unwrap(Random.makeUnseeded())
 let epoch = Result.unwrap(Time.realTime())
 
 print("hello world")
-print(Random.nextInt64(rnd))
+print(Random.nextUint64(rnd))
 print(epoch)
 

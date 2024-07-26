@@ -61,7 +61,7 @@ impl RedisPool {
             config.retries.max_attempts,
             config.retries.min_delay.as_millis() as u32,
             config.retries.max_delay.as_millis() as u32,
-            config.retries.multiplier,
+            config.retries.multiplier.round() as u32,
         );
         let pool = FredRedisPool::new(redis_config, None, None, Some(policy), config.pool_size)?;
 

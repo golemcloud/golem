@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::debug;
 
 #[async_trait]
@@ -63,7 +64,10 @@ where
                 }
                 tokio::time::sleep(delay).await;
                 attempts += 1;
-                delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
+                delay = std::cmp::min(
+                    Duration::from_millis(((delay.as_millis() as f64) * retry_multiplier) as u64),
+                    retry_max_delay,
+                );
             }
         }
     }

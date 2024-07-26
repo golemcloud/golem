@@ -15,15 +15,20 @@ python_test_components=("python-1" "py-echo")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
+# - update-wit: update the wit/deps directories
 # - rust / zig / tinygo / grain / js / java / dotnet / swift / c / python: build only the specified language
 
 rebuild=false
 single_lang=false
+update_wit=false
 lang=""
 for arg in "$@"; do
   case $arg in
     rebuild)
       rebuild=true
+      ;;
+    update-wit)
+      update_wit=true
       ;;
     rust)
       single_lang=true
@@ -78,6 +83,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       cargo clean
     fi
@@ -98,6 +107,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "zig" ]; then
   for subdir in "${zig_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm -rf zig-out
@@ -120,6 +133,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "tinygo" ]; then
   for subdir in "${tinygo_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -145,6 +162,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "grain" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       rm *.wasm
     fi
@@ -165,6 +186,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "js" ]; then
   for subdir in ${js_test_components[@]}; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -191,6 +216,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "java" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       mvn clean
     fi
@@ -213,6 +242,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "dotnet" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       dotnet clean
     fi
@@ -233,6 +266,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "swift" ]; then
   for subdir in ${swift_test_components[@]}; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -256,6 +293,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       rm *.wasm
     fi
@@ -278,6 +319,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       rm *.wasm
       rm -rf bindings
@@ -285,11 +330,13 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
 
     echo "Compiling the python code into a WebAssembly Component..."
     componentize-py bindings bindings
-    componentize-py componentize test
+    componentize-py componentize test -o "${subdir}_full.wasm"
+    wasm-tools strip "${subdir}_full.wasm" -o "${subdir}.wasm"
 
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    mv index.wasm $target
+    mv "$subdir.wasm" $target
+
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit

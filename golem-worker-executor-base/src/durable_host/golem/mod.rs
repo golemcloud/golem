@@ -129,8 +129,8 @@ impl GetWorkersEntry {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
-    async fn golem_create_promise(&mut self) -> Result<golem::api::host::PromiseId, anyhow::Error> {
-        record_host_function_call("golem::api", "golem_create_promise");
+    async fn create_promise(&mut self) -> Result<golem::api::host::PromiseId, anyhow::Error> {
+        record_host_function_call("golem::api", "create_promise");
         let oplog_idx = self.get_oplog_index().await?;
         let _permit = self.begin_async_host_function().await?;
         Ok(self
@@ -144,12 +144,12 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
             .into())
     }
 
-    async fn golem_await_promise(
+    async fn await_promise(
         &mut self,
         promise_id: golem::api::host::PromiseId,
     ) -> Result<Vec<u8>, anyhow::Error> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("golem::api", "golem_await_promise");
+        record_host_function_call("golem::api", "await_promise");
         let promise_id: PromiseId = promise_id.into();
         match self
             .public_state
@@ -165,13 +165,13 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn golem_complete_promise(
+    async fn complete_promise(
         &mut self,
         promise_id: golem::api::host::PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, anyhow::Error> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("golem::api", "golem_complete_promise");
+        record_host_function_call("golem::api", "complete_promise");
         Durability::<Ctx, bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteLocal,
@@ -189,12 +189,12 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         .await
     }
 
-    async fn golem_delete_promise(
+    async fn delete_promise(
         &mut self,
         promise_id: golem::api::host::PromiseId,
     ) -> Result<(), anyhow::Error> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("golem::api", "golem_delete_promise");
+        record_host_function_call("golem::api", "delete_promise");
         Durability::<Ctx, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteLocal,
@@ -560,30 +560,30 @@ impl<Ctx: WorkerCtx> HostGetWorkers for &mut DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem::api::host::Host for &mut DurableWorkerCtx<Ctx> {
-    async fn golem_create_promise(&mut self) -> anyhow::Result<golem::api::host::PromiseId> {
-        (*self).golem_create_promise().await
+    async fn create_promise(&mut self) -> anyhow::Result<golem::api::host::PromiseId> {
+        (*self).create_promise().await
     }
 
-    async fn golem_await_promise(
+    async fn await_promise(
         &mut self,
         promise_id: golem::api::host::PromiseId,
     ) -> anyhow::Result<Vec<u8>> {
-        (*self).golem_await_promise(promise_id).await
+        (*self).await_promise(promise_id).await
     }
 
-    async fn golem_complete_promise(
+    async fn complete_promise(
         &mut self,
         promise_id: golem::api::host::PromiseId,
         data: Vec<u8>,
     ) -> anyhow::Result<bool> {
-        (*self).golem_complete_promise(promise_id, data).await
+        (*self).complete_promise(promise_id, data).await
     }
 
-    async fn golem_delete_promise(
+    async fn delete_promise(
         &mut self,
         promise_id: golem::api::host::PromiseId,
     ) -> anyhow::Result<()> {
-        (*self).golem_delete_promise(promise_id).await
+        (*self).delete_promise(promise_id).await
     }
 
     async fn get_self_uri(&mut self, function_name: String) -> anyhow::Result<Uri> {
