@@ -85,6 +85,15 @@ pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
 /// Generates an idempotency key. This operation will never be replayed —
 /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
 /// to introduce idempotence.
+#[cfg(feature = "uuid")]
+pub fn generate_idempotency_key() -> ::uuid::Uuid {
+    Into::into(bindings::golem::api::host::generate_idempotency_key())
+}
+
+/// Generates an idempotency key. This operation will never be replayed —
+/// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
+/// to introduce idempotence.
+#[cfg(not(feature = "uuid"))]
 pub fn generate_idempotency_key() -> Uuid {
     bindings::golem::api::host::generate_idempotency_key()
 }
