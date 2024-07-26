@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::CallingConvention;
-use golem_wasm_rpc::protobuf::Type;
+use golem_wasm_rpc::protobuf::{r#type, Type, TypedTuple, TypeOption};
 
 use crate::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
@@ -48,17 +48,31 @@ impl TypeCheckOut for Vec<golem_wasm_rpc::Value> {
                 match self.first() {
                     Some(golem_wasm_rpc::Value::String(s)) => {
                         let analysed_typ = AnalysedType::Str;
+
                         if s.is_empty() {
-                            Ok(TypeAnnotatedValue::Option(
+                            let option = TypeAnnotatedValue::Option(
                                 Box::new(TypedOption {
                                     value: None,
                                     typ: Some(Type::from(&analysed_typ)),
                                 })
-                            ))
+                            );
+
+                            let optional = AnalysedType::Option(Box::new(analysed_typ.clone()));
+
+                            Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                                typ: vec![Type::from(&optional)],
+                                value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                                    type_annotated_value: Some(option),
+                                }],
+                            }))
+
                         } else {
-                            let result: Value = serde_json::from_str(s).unwrap_or(Value::String(s.to_string()));
-                            let typ = infer_analysed_type(&result);
-                            json::get_typed_value_from_json(&result, &typ)
+                            Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                                typ: vec![Type::from(&analysed_typ)],
+                                value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                                    type_annotated_value: Some(TypeAnnotatedValue::Str(s.to_string())),
+                                }],
+                            }))
                         }
                     }
                     _ => Err(vec!["Expecting a single string as the result value when using stdio calling convention".to_string()]),

@@ -1433,6 +1433,11 @@ impl RunningWorker {
                                                                 let trap_type =
                                                                     TrapType::from_error::<Ctx>(&anyhow!(error));
 
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_failure(&trap_type)
+                                                                    .await;
+
                                                                 final_decision = RetryDecision::None;
                                                                 true // break
                                                             }

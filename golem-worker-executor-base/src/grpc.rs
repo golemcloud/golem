@@ -556,8 +556,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             golem_wasm_rpc::Value::Tuple(tuple) => {
                 Ok(tuple.into_iter().map(|v| v.into()).collect())
             }
-            _ => Err(GolemError::Unknown {
-                details: "Values retrieved after invocation is expected to be a string."
+
+            golem_wasm_rpc::Value::Record(record) => {
+                Ok(record.into_iter().map(|v| v.into()).collect())
+            }
+
+            v => Err(GolemError::Unknown {
+                details: format!("Values retrieved after invocation is expected. Retrivee {:?}", v)
                     .to_string(),
             }),
         }
