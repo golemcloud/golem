@@ -201,7 +201,7 @@ mod tests {
             PreciseJson::U16(u16) => TypeAnnotatedValue::U16(u16 as u32),
             PreciseJson::S32(s32) => TypeAnnotatedValue::S32(s32),
             PreciseJson::U32(u32) => TypeAnnotatedValue::U32(u32),
-            PreciseJson::S64(s64) => TypeAnnotatedValue::S64(s64 as i64),
+            PreciseJson::S64(s64) => TypeAnnotatedValue::S64(s64),
             PreciseJson::U64(u64) => TypeAnnotatedValue::U64(u64),
             PreciseJson::F32(f32) => TypeAnnotatedValue::F32(f32),
             PreciseJson::F64(f64) => TypeAnnotatedValue::F64(f64),
@@ -242,10 +242,7 @@ mod tests {
                 }
                 create_record(record_values).unwrap()
             }
-            PreciseJson::Variant {
-                case_idx,
-                case_value,
-            } => {
+            PreciseJson::Variant { .. } => {
                 unimplemented!("Variant not implemented")
             }
             PreciseJson::Enum(_) => {
@@ -264,11 +261,6 @@ mod tests {
     }
 
     fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
-        let function_params = worker_request
-            .function_params
-            .iter()
-            .map(|x| convert_to_type_annotated_value(x.clone()));
-
         let mut required = create_record(vec![
             (
                 "component_id".to_string(),
@@ -289,7 +281,7 @@ mod tests {
                         .function_params
                         .clone()
                         .into_iter()
-                        .map(|x| convert_to_type_annotated_value(x))
+                        .map(convert_to_type_annotated_value)
                         .collect(),
                 ),
             ),

@@ -208,7 +208,7 @@ pub(crate) async fn call_worker_function(
 
     let precise_jsons = json_params
         .into_iter()
-        .map(|v| PreciseJson::from(v))
+        .map(PreciseJson::from)
         .collect::<Vec<_>>();
 
     let worker_request = WorkerRequest {
