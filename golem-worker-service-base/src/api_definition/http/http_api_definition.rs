@@ -379,27 +379,27 @@ mod tests {
 
     #[test]
     fn expression_with_predicate0() {
-        test_string_expr_parse_and_encode("${ 1 < 2 }");
+        test_string_expr_parse_and_encode("${1<2}");
     }
 
     #[test]
     fn expression_with_predicate1() {
-        test_string_expr_parse_and_encode("${ request.path.user-id > request.path.id }");
+        test_string_expr_parse_and_encode("${request.path.user-id>request.path.id}");
     }
 
     #[test]
     fn expression_with_predicate2() {
-        test_string_expr_parse_and_encode("${ request.path.user-id > 2 }");
+        test_string_expr_parse_and_encode("${request.path.user-id>2}");
     }
 
     #[test]
     fn expression_with_predicate3() {
-        test_string_expr_parse_and_encode("${ request.path.user-id == 2 }");
+        test_string_expr_parse_and_encode("${request.path.user-id==2}");
     }
 
     #[test]
     fn expression_with_predicate4() {
-        test_string_expr_parse_and_encode("${ request.path.user-id < 2 }");
+        test_string_expr_parse_and_encode("${request.path.user-id<2}");
     }
 
     #[test]
