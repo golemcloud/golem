@@ -23,27 +23,27 @@ impl<C: golem_cloud_client::api::AccountClient + Sync + Send> AccountClient
 {
     async fn get(&self, id: &AccountId) -> Result<Account, CloudGolemError> {
         info!("Getting account {id}");
-        Ok(self.client.account_id_get(&id.id).await?)
+        Ok(self.client.get_account(&id.id).await?)
     }
 
     async fn get_plan(&self, id: &AccountId) -> Result<Plan, CloudGolemError> {
         info!("Getting account plan of {id}.");
-        Ok(self.client.account_id_plan_get(&id.id).await?)
+        Ok(self.client.get_account_plan(&id.id).await?)
     }
 
     async fn put(&self, id: &AccountId, data: AccountData) -> Result<Account, CloudGolemError> {
         info!("Updating account {id}.");
-        Ok(self.client.account_id_put(&id.id, &data).await?)
+        Ok(self.client.update_account(&id.id, &data).await?)
     }
 
     async fn post(&self, data: AccountData) -> Result<Account, CloudGolemError> {
         info!("Creating account.");
-        Ok(self.client.post(&data).await?)
+        Ok(self.client.create_account(&data).await?)
     }
 
     async fn delete(&self, id: &AccountId) -> Result<(), CloudGolemError> {
         info!("Deleting account {id}.");
-        let _ = self.client.account_id_delete(&id.id).await?;
+        let _ = self.client.delete_account(&id.id).await?;
         Ok(())
     }
 }

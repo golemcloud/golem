@@ -28,19 +28,16 @@ impl<C: HttpClient + Sync + Send> LoginClient for LoginClientLive<C> {
 
         let client = golem_cloud_client::api::LoginClientLive { context };
 
-        Ok(client.v_2_login_token_get().await?)
+        Ok(client.current_login_token().await?)
     }
 
     async fn start_oauth2(&self) -> Result<OAuth2Data, CloudGolemError> {
         info!("Start OAuth2 workflow");
-        Ok(self.client.login_oauth_2_device_start_post().await?)
+        Ok(self.client.start_login_oauth_2().await?)
     }
 
     async fn complete_oauth2(&self, session: String) -> Result<UnsafeToken, CloudGolemError> {
         info!("Complete OAuth2 workflow");
-        Ok(self
-            .client
-            .login_oauth_2_device_complete_post(&session)
-            .await?)
+        Ok(self.client.complete_login_oauth_2(&session).await?)
     }
 }

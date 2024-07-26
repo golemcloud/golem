@@ -29,7 +29,7 @@ impl<C: golem_cloud_client::api::ApiDomainClient + Sync + Send> DomainClient
     for DomainClientLive<C>
 {
     async fn get(&self, project_id: ProjectId) -> Result<Vec<ApiDomain>, CloudGolemError> {
-        Ok(self.client.get(&project_id.0).await?)
+        Ok(self.client.get_domains(&project_id.0).await?)
     }
 
     async fn update(
@@ -39,7 +39,7 @@ impl<C: golem_cloud_client::api::ApiDomainClient + Sync + Send> DomainClient
     ) -> Result<ApiDomain, CloudGolemError> {
         Ok(self
             .client
-            .put(&DomainRequest {
+            .create_or_update_domain(&DomainRequest {
                 project_id: project_id.0,
                 domain_name,
             })
@@ -51,6 +51,9 @@ impl<C: golem_cloud_client::api::ApiDomainClient + Sync + Send> DomainClient
         project_id: ProjectId,
         domain_name: &str,
     ) -> Result<String, CloudGolemError> {
-        Ok(self.client.delete(&project_id.0, domain_name).await?)
+        Ok(self
+            .client
+            .delete_domain(&project_id.0, domain_name)
+            .await?)
     }
 }

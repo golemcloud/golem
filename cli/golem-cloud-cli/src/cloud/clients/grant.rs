@@ -21,7 +21,7 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
     async fn get_all(&self, account_id: &AccountId) -> Result<Vec<Role>, CloudGolemError> {
         info!("Getting account roles.");
 
-        let roles = self.client.get(&account_id.id).await?;
+        let roles = self.client.get_account_grants(&account_id.id).await?;
 
         Ok(roles.into_iter().map(api_to_cli).collect())
     }
@@ -31,7 +31,7 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
         let role = cli_to_api(role);
 
         Ok(api_to_cli(
-            self.client.role_get(&account_id.id, &role).await?,
+            self.client.get_account_grant(&account_id.id, &role).await?,
         ))
     }
 
@@ -39,7 +39,10 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
         info!("Adding account role.");
         let role = cli_to_api(role);
 
-        let _ = self.client.role_put(&account_id.id, &role).await?;
+        let _ = self
+            .client
+            .create_account_grant(&account_id.id, &role)
+            .await?;
 
         Ok(())
     }
@@ -48,7 +51,10 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
         info!("Deleting account role.");
         let role = cli_to_api(role);
 
-        let _ = self.client.role_delete(&account_id.id, &role).await?;
+        let _ = self
+            .client
+            .delete_account_grant(&account_id.id, &role)
+            .await?;
 
         Ok(())
     }

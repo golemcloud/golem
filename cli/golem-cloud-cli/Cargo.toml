@@ -29,8 +29,8 @@ harness = false
 
 [dependencies]
 golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0"}
-golem-client = "0.0.122"
-golem-cli = "0.0.122"
+golem-client = "0.0.123"
+golem-cli = "0.0.123"
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -72,7 +72,7 @@ textwrap = "0.16.1"
 anyhow.workspace = true
 colored = "2.1.0"
 inquire = "0.7.5"
-golem-test-framework = "0.0.122"
+golem-test-framework = "0.0.123"
 
 [dev-dependencies]
 libtest-mimic = { git = "https://github.com/senia-psm/libtest-mimic.git", branch = "async_and_context_tests" }

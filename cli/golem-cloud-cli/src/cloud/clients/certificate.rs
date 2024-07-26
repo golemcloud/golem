@@ -35,14 +35,17 @@ impl<C: golem_cloud_client::api::ApiCertificateClient + Sync + Send> Certificate
         project_id: ProjectId,
         certificate_id: Option<&Uuid>,
     ) -> Result<Vec<Certificate>, CloudGolemError> {
-        Ok(self.client.get(&project_id.0, certificate_id).await?)
+        Ok(self
+            .client
+            .get_certificates(&project_id.0, certificate_id)
+            .await?)
     }
 
     async fn create(
         &self,
         certificate: CertificateRequest,
     ) -> Result<Certificate, CloudGolemError> {
-        Ok(self.client.post(&certificate).await?)
+        Ok(self.client.create_certificate(&certificate).await?)
     }
 
     async fn delete(
@@ -50,6 +53,9 @@ impl<C: golem_cloud_client::api::ApiCertificateClient + Sync + Send> Certificate
         project_id: ProjectId,
         certificate_id: &Uuid,
     ) -> Result<String, CloudGolemError> {
-        Ok(self.client.delete(&project_id.0, certificate_id).await?)
+        Ok(self
+            .client
+            .delete_certificate(&project_id.0, certificate_id)
+            .await?)
     }
 }

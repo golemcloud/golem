@@ -46,7 +46,10 @@ impl<C: golem_cloud_client::api::ProjectGrantClient + Sync + Send> ProjectGrantC
             project_policy_name: None,
         };
 
-        Ok(self.client.post(&project_id.0, &data).await?)
+        Ok(self
+            .client
+            .create_project_grant(&project_id.0, &data)
+            .await?)
     }
 
     async fn create_actions(
@@ -64,6 +67,9 @@ impl<C: golem_cloud_client::api::ProjectGrantClient + Sync + Send> ProjectGrantC
             project_actions: actions.into_iter().map(action_cli_to_api).collect(),
         };
 
-        Ok(self.client.post(&project_id.0, &data).await?)
+        Ok(self
+            .client
+            .create_project_grant(&project_id.0, &data)
+            .await?)
     }
 }

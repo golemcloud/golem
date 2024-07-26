@@ -25,6 +25,7 @@ use tracing::Level;
 impl ShardManagerEnvVars for CloudEnvVars {
     async fn env_vars(
         &self,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -44,6 +45,15 @@ impl ShardManagerEnvVars for CloudEnvVars {
             ("GOLEM__HEALTH_CHECK__MODE__TYPE", "Grpc"),
         ];
 
-        HashMap::from_iter(env.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+        let mut env = HashMap::from_iter(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+
+        if let Some(number_of_shards) = number_of_shards_override {
+            env.insert(
+                "GOLEM__NUMBER_OF_SHARDS".to_string(),
+                number_of_shards.to_string(),
+            );
+        };
+
+        env
     }
 }

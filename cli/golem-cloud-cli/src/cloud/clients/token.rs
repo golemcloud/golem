@@ -26,13 +26,13 @@ pub struct TokenClientLive<C: golem_cloud_client::api::TokenClient + Sync + Send
 impl<C: golem_cloud_client::api::TokenClient + Sync + Send> TokenClient for TokenClientLive<C> {
     async fn get_all(&self, account_id: &AccountId) -> Result<Vec<Token>, CloudGolemError> {
         info!("Getting all tokens for used: {account_id}");
-        Ok(self.client.get(&account_id.id).await?)
+        Ok(self.client.get_tokens(&account_id.id).await?)
     }
 
     async fn get(&self, account_id: &AccountId, id: TokenId) -> Result<Token, CloudGolemError> {
         info!("Getting derails for token: {id}");
 
-        Ok(self.client.token_id_get(&account_id.id, &id.0).await?)
+        Ok(self.client.get_token(&account_id.id, &id.0).await?)
     }
 
     async fn post(
@@ -44,14 +44,14 @@ impl<C: golem_cloud_client::api::TokenClient + Sync + Send> TokenClient for Toke
 
         Ok(self
             .client
-            .post(&account_id.id, &CreateTokenDto { expires_at })
+            .create_token(&account_id.id, &CreateTokenDto { expires_at })
             .await?)
     }
 
     async fn delete(&self, account_id: &AccountId, id: TokenId) -> Result<(), CloudGolemError> {
         info!("Deleting token: {id}");
 
-        let _ = self.client.token_id_delete(&account_id.id, &id.0).await?;
+        let _ = self.client.delete_token(&account_id.id, &id.0).await?;
         Ok(())
     }
 }

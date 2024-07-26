@@ -1,5 +1,6 @@
 use crate::components::TestDependencies;
 use crate::config::CloudEnvBasedTestDependencies;
+use golem_test_framework::config::EnvBasedTestDependenciesConfig;
 use libtest_mimic::{Arguments, Conclusion, Failed};
 use std::sync::Arc;
 use tracing::info;
@@ -43,8 +44,13 @@ fn main() -> Result<(), Failed> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let deps: Arc<dyn TestDependencies + Send + Sync + 'static> =
-        Arc::new(CloudEnvBasedTestDependencies::blocking_new(3));
+    let deps: Arc<dyn TestDependencies + Send + Sync + 'static> = Arc::new(
+        CloudEnvBasedTestDependencies::blocking_new(EnvBasedTestDependenciesConfig {
+            worker_executor_cluster_size: 3,
+            keep_docker_containers: true,
+            ..EnvBasedTestDependenciesConfig::new()
+        }),
+    );
     let cluster = deps.worker_executor_cluster(); // forcing startup by getting it
     info!("Using cluster with {:?} worker executors", cluster.size());
 

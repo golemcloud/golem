@@ -38,25 +38,25 @@ impl<C: golem_cloud_client::api::ProjectClient + Sync + Send> ProjectClient
             owner_account_id: owner_account_id.id.to_string(),
             description: description.unwrap_or("".to_string()),
         };
-        Ok(self.client.post(&request).await?)
+        Ok(self.client.create_project(&request).await?)
     }
 
     async fn find(&self, name: Option<String>) -> Result<Vec<Project>, CloudGolemError> {
         info!("Listing projects.");
 
-        Ok(self.client.get(name.as_deref()).await?)
+        Ok(self.client.get_projects(name.as_deref()).await?)
     }
 
     async fn find_default(&self) -> Result<Project, CloudGolemError> {
         info!("Getting default project.");
 
-        Ok(self.client.default_get().await?)
+        Ok(self.client.get_default_project().await?)
     }
 
     async fn delete(&self, project_id: ProjectId) -> Result<(), CloudGolemError> {
         info!("Deleting project {project_id:?}");
 
-        let _ = self.client.project_id_delete(&project_id.0).await?;
+        let _ = self.client.delete_project(&project_id.0).await?;
 
         Ok(())
     }

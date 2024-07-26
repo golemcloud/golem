@@ -38,12 +38,12 @@ impl<C: golem_cloud_client::api::ProjectPolicyClient + Sync + Send> ProjectPolic
             project_actions: ProjectActions { actions },
         };
 
-        Ok(self.client.post(&data).await?)
+        Ok(self.client.create_project_policy(&data).await?)
     }
 
     async fn get(&self, policy_id: ProjectPolicyId) -> Result<ProjectPolicy, CloudGolemError> {
         info!("Getting project policy");
 
-        Ok(self.client.project_policy_id_get(&policy_id.0).await?)
+        Ok(self.client.get_project_policies(&policy_id.0).await?)
     }
 }
