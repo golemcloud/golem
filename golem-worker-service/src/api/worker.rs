@@ -3,6 +3,7 @@ use crate::service::{component::ComponentService, worker::WorkerService};
 use golem_common::model::{
     CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
 };
+use golem_common::precise_json::PreciseJson;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -13,8 +14,6 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
-use golem_common::precise_json::PreciseJson;
-
 
 use tracing::Instrument;
 
@@ -149,9 +148,11 @@ impl WorkerApi {
 
             match precise_json {
                 Ok(precise_json) => precise_jsons.push(precise_json),
-                Err(err) => return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                    errors: vec![format!("Invalid function parameters {}", err)],
-                })))
+                Err(err) => {
+                    return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                        errors: vec![format!("Invalid function parameters {}", err)],
+                    })))
+                }
             }
         }
 
@@ -209,13 +210,16 @@ impl WorkerApi {
 
             match precise_json {
                 Ok(precise_json) => precise_jsons.push(precise_json),
-                Err(err) => return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                    errors: vec![format!("Invalid function parameters {}", err)],
-                })))
+                Err(err) => {
+                    return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                        errors: vec![format!("Invalid function parameters {}", err)],
+                    })))
+                }
             }
         }
 
-        let response = self.worker_service
+        let response = self
+            .worker_service
             .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,

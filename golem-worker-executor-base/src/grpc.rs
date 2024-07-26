@@ -30,14 +30,14 @@ use wasmtime::Error;
 
 use crate::error::*;
 use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
-use golem_api_grpc::proto::golem::common::{ResourceLimits as GrpcResourceLimits};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest,
-    UpdateWorkerResponse,
+    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
+    UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -562,8 +562,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
 
             v => Err(GolemError::Unknown {
-                details: format!("Values retrieved after invocation is expected. Retrivee {:?}", v)
-                    .to_string(),
+                details: format!(
+                    "Values retrieved after invocation is expected. Retrivee {:?}",
+                    v
+                )
+                .to_string(),
             }),
         }
     }

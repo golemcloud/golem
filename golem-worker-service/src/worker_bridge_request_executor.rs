@@ -33,7 +33,6 @@ mod internal {
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
     use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
-    
 
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,

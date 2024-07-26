@@ -17,9 +17,9 @@ use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{CallingConvention, IdempotencyKey, OwnedWorkerId};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use std::sync::Arc;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tokio::sync::RwLock;
 use tracing::debug;
 

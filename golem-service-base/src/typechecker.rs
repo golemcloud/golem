@@ -13,16 +13,12 @@
 // limitations under the License.
 
 use golem_common::model::CallingConvention;
-use golem_wasm_rpc::protobuf::{r#type, Type, TypedTuple, TypeOption};
+use golem_wasm_rpc::protobuf::{Type, TypedTuple};
 
-use crate::type_inference::infer_analysed_type;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
+use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
+use golem_wasm_rpc::json;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
-use golem_wasm_rpc::json;
-use golem_wasm_rpc::protobuf::Val;
-use serde_json::Value;
-
 
 pub trait TypeCheckOut {
     fn validate_function_result(
@@ -88,9 +84,8 @@ mod tests {
     use golem_common::model::CallingConvention;
     use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
     use golem_wasm_rpc::json;
-    use golem_wasm_rpc::protobuf::{val, Val};
-    use serde_json::Value;
     use golem_wasm_rpc::Value as WasmRpcValue;
+    use serde_json::Value;
 
     #[test]
     fn test_validate_function_result_stdio() {
@@ -106,6 +101,9 @@ mod tests {
             )
             .map(|typed_value| json::get_json_from_typed_value(&typed_value));
 
-        assert_eq!(res, Ok(Value::Array(vec![Value::String("str".to_string())])));
+        assert_eq!(
+            res,
+            Ok(Value::Array(vec![Value::String("str".to_string())]))
+        );
     }
 }

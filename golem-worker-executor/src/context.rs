@@ -17,9 +17,9 @@ use std::sync::{Arc, RwLock, Weak};
 
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 

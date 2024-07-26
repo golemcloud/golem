@@ -364,41 +364,65 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
                 char::from_u32(chr as u32).map(PreciseJson::Chr).unwrap()
             }
             TypeAnnotatedValue::Str(str) => PreciseJson::Str(str),
-            TypeAnnotatedValue::List(list) => {
-                PreciseJson::List(list.values.into_iter().map(|v| PreciseJson::from(v.type_annotated_value.unwrap())).collect())
-            }
-            TypeAnnotatedValue::Tuple(tuple) => {
-                PreciseJson::Tuple(tuple.value.into_iter().map(|v| PreciseJson::from(v.type_annotated_value.unwrap())).collect())
-            }
+            TypeAnnotatedValue::List(list) => PreciseJson::List(
+                list.values
+                    .into_iter()
+                    .map(|v| PreciseJson::from(v.type_annotated_value.unwrap()))
+                    .collect(),
+            ),
+            TypeAnnotatedValue::Tuple(tuple) => PreciseJson::Tuple(
+                tuple
+                    .value
+                    .into_iter()
+                    .map(|v| PreciseJson::from(v.type_annotated_value.unwrap()))
+                    .collect(),
+            ),
             TypeAnnotatedValue::Record(record) => PreciseJson::Record(
-                record.value
+                record
+                    .value
                     .into_iter()
                     .map(|typed_record| {
                         (
                             typed_record.name,
-                            PreciseJson::from(typed_record.value.and_then(|v| v.type_annotated_value).unwrap()),
+                            PreciseJson::from(
+                                typed_record
+                                    .value
+                                    .and_then(|v| v.type_annotated_value)
+                                    .unwrap(),
+                            ),
                         )
                     })
                     .collect(),
             ),
             TypeAnnotatedValue::Variant(variant) => {
-                let index = variant.typ.unwrap().cases.iter().enumerate()
-                    .find(|(_, c)| (c.name.clone() == variant.case_name)).map(|(i, _)| i);
+                let index = variant
+                    .typ
+                    .unwrap()
+                    .cases
+                    .iter()
+                    .enumerate()
+                    .find(|(_, c)| (c.name.clone() == variant.case_name))
+                    .map(|(i, _)| i);
 
-                let type_annotated_value = variant.case_value.unwrap().type_annotated_value.unwrap();
+                let type_annotated_value =
+                    variant.case_value.unwrap().type_annotated_value.unwrap();
 
                 PreciseJson::Variant {
                     case_idx: index.unwrap() as u32,
                     case_value: Box::new(PreciseJson::from(type_annotated_value)),
                 }
-            },
+            }
             TypeAnnotatedValue::Enum(e) => {
                 let all_values = e.typ;
-                let index = all_values.into_iter().enumerate()
-                    .find(|(_, v)| (v.clone() == e.value)).map(|(i, _)| i).unwrap();
+                let index = all_values
+                    .into_iter()
+                    .enumerate()
+                    .find(|(_, v)| (v.clone() == e.value))
+                    .map(|(i, _)| i)
+                    .unwrap();
 
                 PreciseJson::Enum(index as u32)
-            },
+            }
             TypeAnnotatedValue::Flags(flags) => {
                 let values = flags.values;
 
@@ -415,19 +439,21 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
                 PreciseJson::Flags(boolean_flags)
             }
 
-            TypeAnnotatedValue::Option(option) => {
-                PreciseJson::Option(option.value.map(|v| Box::new(PreciseJson::from(v.type_annotated_value.unwrap()))))
-            }
+            TypeAnnotatedValue::Option(option) => PreciseJson::Option(
+                option
+                    .value
+                    .map(|v| Box::new(PreciseJson::from(v.type_annotated_value.unwrap()))),
+            ),
             TypeAnnotatedValue::Result(result) => {
                 let result_value = result.result_value.unwrap();
 
                 match result_value {
-                    ResultValue::OkValue(ok) => {
-                        PreciseJson::Result(Ok(Box::new(PreciseJson::from(ok.type_annotated_value.unwrap()))))
-                    }
-                    ResultValue::ErrorValue(err) => {
-                        PreciseJson::Result(Err(Box::new(PreciseJson::from(err.type_annotated_value.unwrap()))))
-                    }
+                    ResultValue::OkValue(ok) => PreciseJson::Result(Ok(Box::new(
+                        PreciseJson::from(ok.type_annotated_value.unwrap()),
+                    ))),
+                    ResultValue::ErrorValue(err) => PreciseJson::Result(Err(Box::new(
+                        PreciseJson::from(err.type_annotated_value.unwrap()),
+                    ))),
                 }
             }
 

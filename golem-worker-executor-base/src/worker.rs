@@ -48,7 +48,6 @@ use golem_common::model::{
 use golem_common::retries::get_delay;
 use golem_service_base::exports;
 use golem_service_base::typechecker::TypeCheckOut;
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -1393,15 +1392,15 @@ impl RunningWorker {
                                                 let component_metadata =
                                                     store.as_context().data().component_metadata();
 
-                                                let function_results =
-                                                    exports::function_by_name(
-                                                        &component_metadata.exports,
-                                                        &full_function_name,
-                                                    );
+                                                let function_results = exports::function_by_name(
+                                                    &component_metadata.exports,
+                                                    &full_function_name,
+                                                );
 
                                                 match function_results {
                                                     Ok(Some(export_function)) => {
-                                                        let function_results =  export_function.results
+                                                        let function_results = export_function
+                                                            .results
                                                             .into_iter()
                                                             .map(|t| t.into())
                                                             .collect();
@@ -1411,8 +1410,10 @@ impl RunningWorker {
                                                                 function_results,
                                                                 calling_convention,
                                                             )
-                                                            .map_err(|e| GolemError::ValueMismatch {
-                                                                details: e.join(", "),
+                                                            .map_err(|e| {
+                                                                GolemError::ValueMismatch {
+                                                                    details: e.join(", "),
+                                                                }
                                                             });
 
                                                         match result {
@@ -1431,14 +1432,19 @@ impl RunningWorker {
                                                             }
                                                             Err(error) => {
                                                                 let trap_type =
-                                                                    TrapType::from_error::<Ctx>(&anyhow!(error));
+                                                                    TrapType::from_error::<Ctx>(
+                                                                        &anyhow!(error),
+                                                                    );
 
                                                                 store
                                                                     .data_mut()
-                                                                    .on_invocation_failure(&trap_type)
+                                                                    .on_invocation_failure(
+                                                                        &trap_type,
+                                                                    )
                                                                     .await;
 
-                                                                final_decision = RetryDecision::None;
+                                                                final_decision =
+                                                                    RetryDecision::None;
                                                                 true // break
                                                             }
                                                         }
@@ -1447,7 +1453,14 @@ impl RunningWorker {
                                                     Ok(None) => {
                                                         store
                                                             .data_mut()
-                                                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown("Function not found".to_string())))
+                                                            .on_invocation_failure(
+                                                                &TrapType::Error(
+                                                                    WorkerError::Unknown(
+                                                                        "Function not found"
+                                                                            .to_string(),
+                                                                    ),
+                                                                ),
+                                                            )
                                                             .await;
 
                                                         final_decision = RetryDecision::None;
@@ -1457,14 +1470,17 @@ impl RunningWorker {
                                                     Err(result) => {
                                                         store
                                                             .data_mut()
-                                                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(result)))
+                                                            .on_invocation_failure(
+                                                                &TrapType::Error(
+                                                                    WorkerError::Unknown(result),
+                                                                ),
+                                                            )
                                                             .await;
 
                                                         final_decision = RetryDecision::None;
                                                         true // break
                                                     }
                                                 }
-
                                             }
                                             _ => {
                                                 let trap_type = match result {
