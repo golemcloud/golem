@@ -40,6 +40,7 @@ http = { workspace = true }
 hyper = { workspace = true }
 indoc = "2.0.4"
 itertools = { workspace = true }
+log = { version = "0.4.22" }
 native-tls = "0.2.11"
 openapiv3 = { workspace = true }
 rand = { workspace = true }
