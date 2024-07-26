@@ -205,7 +205,7 @@ fn text_component_update(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Updated component with ID {}. New version: 1. Component size is 72129 bytes.",
+            "Updated component with ID {}. New version: 1. Component size is 71830 bytes.",
             component.component_id
         )
     );
@@ -256,7 +256,7 @@ fn text_component_get(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Component with ID {}. Version: 0. Component size is 72129 bytes.",
+            "Component with ID {}. Version: 0. Component size is 71830 bytes.",
             component.component_id
         )
     );
@@ -307,7 +307,7 @@ fn text_component_list(
         +--------------------------------------+-------------------------------+---------+-------+---------------+
         | ID                                   | Name                          | Version | Size  | Exports count |
         +--------------------------------------+-------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 72129 |             2 |
+        | {} | {} |       0 | 71830 |             2 |
         +--------------------------------------+-------------------------------+---------+-------+---------------+
         ",
         component.component_id,
