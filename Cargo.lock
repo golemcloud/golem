@@ -3561,9 +3561,9 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a39ae0f0f7ebef01a1250f97600dcfeb373d569b6d2f93710e55f607d5d3ebf7"
+checksum = "37409e49376d86d7e7911617ae3c4634ff9304fdc9f215eb9f2925067e4a0a31"
 dependencies = [
  "Inflector",
  "cargo_metadata",
@@ -3571,7 +3571,7 @@ dependencies = [
  "derive_more",
  "dir-diff",
  "fancy-regex",
- "golem-wit",
+ "golem-wit 0.4.0",
  "include_dir",
  "once_cell",
  "serde 1.0.204",
@@ -3797,6 +3797,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8b4e1c1cad2fa57e4490c85b1fb1f93ee89720cafcc26ed1b672bb64c635f74"
 
 [[package]]
+name = "golem-wit"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1feaed707b1eaa126dc1f91da58f901e49ad05c6b6321c918060f803bccf5c9"
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -3863,7 +3869,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
- "golem-wit",
+ "golem-wit 0.3.1",
  "hex",
  "http 0.2.12",
  "http 1.1.0",
