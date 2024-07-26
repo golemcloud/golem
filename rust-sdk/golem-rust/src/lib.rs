@@ -17,6 +17,12 @@
 #[rustfmt::skip]
 pub mod bindings;
 
+#[cfg(feature = "json")]
+mod json;
+
+#[cfg(feature = "json")]
+pub use json::*;
+
 #[cfg(feature = "uuid")]
 mod uuid;
 
