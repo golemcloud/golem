@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
-uuid = { version = "1.8.0", features = ["v4"], optional = true }
+uuid = { version = "1.10.0", features = ["v4"], optional = true }
 wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 
 [features]
