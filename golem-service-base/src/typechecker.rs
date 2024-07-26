@@ -16,10 +16,11 @@ use golem_common::model::CallingConvention;
 use golem_wasm_rpc::protobuf::Type;
 
 use crate::type_inference::infer_analysed_type;
-use golem_wasm_ast::analysis::{AnalysedFunctionResult, AnalysedType};
+use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
 use golem_wasm_rpc::json;
+use golem_wasm_rpc::protobuf::Val;
 use serde_json::Value;
 
 
@@ -75,12 +76,11 @@ mod tests {
     use golem_wasm_rpc::json;
     use golem_wasm_rpc::protobuf::{val, Val};
     use serde_json::Value;
+    use golem_wasm_rpc::Value as WasmRpcValue;
 
     #[test]
     fn test_validate_function_result_stdio() {
-        let str_val = vec![Val {
-            val: Some(val::Val::String("str".to_string())),
-        }];
+        let str_val = vec![WasmRpcValue::String("str".to_string())];
 
         let res = str_val
             .validate_function_result(
@@ -94,9 +94,7 @@ mod tests {
 
         assert_eq!(res, Ok(Value::String("str".to_string())));
 
-        let num_val = vec![Val {
-            val: Some(val::Val::String("12.3".to_string())),
-        }];
+        let num_val = vec![WasmRpcValue::String("12.3".to_string())];
 
         let res = num_val
             .validate_function_result(
@@ -113,9 +111,7 @@ mod tests {
             Ok(Value::Number(serde_json::Number::from_f64(12.3).unwrap()))
         );
 
-        let bool_val = vec![Val {
-            val: Some(val::Val::String("true".to_string())),
-        }];
+        let bool_val = vec![WasmRpcValue::String("true".to_string())];
 
         let res = bool_val
             .validate_function_result(
