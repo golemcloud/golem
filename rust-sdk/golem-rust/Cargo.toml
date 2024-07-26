@@ -13,11 +13,14 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
-uuid = { version = "1.8.0", features = ["v4"], optional = true }
+serde = { version = "1.0.204", optional = true }
+serde_json = { version = "1.0.120", optional = true }
+uuid = { version = "1.10.0", features = ["v4"], optional = true }
 wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
 
 [features]
-default = ["macro", "uuid"]
+default = ["json", "macro", "uuid"]
+json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
 uuid = ["dep:uuid"]
 

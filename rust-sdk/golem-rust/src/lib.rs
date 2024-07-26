@@ -17,6 +17,12 @@
 #[rustfmt::skip]
 pub mod bindings;
 
+#[cfg(feature = "json")]
+mod json;
+
+#[cfg(feature = "json")]
+pub use json::*;
+
 #[cfg(feature = "uuid")]
 mod uuid;
 
@@ -26,9 +32,38 @@ use bindings::golem::api::host::*;
 
 pub use bindings::golem::api::host::oplog_commit;
 pub use bindings::golem::api::host::PersistenceLevel;
-pub use bindings::golem::api::host::RetryPolicy;
 
 pub use transaction::*;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetryPolicy {
+    pub max_attempts: u32,
+    pub min_delay: std::time::Duration,
+    pub max_delay: std::time::Duration,
+    pub multiplier: f64,
+}
+
+impl From<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
+    fn from(value: bindings::golem::api::host::RetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: std::time::Duration::from_nanos(value.min_delay),
+            max_delay: std::time::Duration::from_nanos(value.max_delay),
+            multiplier: value.multiplier,
+        }
+    }
+}
+
+impl From<RetryPolicy> for bindings::golem::api::host::RetryPolicy {
+    fn from(val: RetryPolicy) -> Self {
+        bindings::golem::api::host::RetryPolicy {
+            max_attempts: val.max_attempts,
+            min_delay: val.min_delay.as_nanos() as u64,
+            max_delay: val.max_delay.as_nanos() as u64,
+            multiplier: val.multiplier,
+        }
+    }
+}
 
 pub struct PersistenceLevelGuard {
     original_level: PersistenceLevel,
@@ -85,6 +120,15 @@ pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
 /// Generates an idempotency key. This operation will never be replayed —
 /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
 /// to introduce idempotence.
+#[cfg(feature = "uuid")]
+pub fn generate_idempotency_key() -> ::uuid::Uuid {
+    Into::into(bindings::golem::api::host::generate_idempotency_key())
+}
+
+/// Generates an idempotency key. This operation will never be replayed —
+/// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
+/// to introduce idempotence.
+#[cfg(not(feature = "uuid"))]
 pub fn generate_idempotency_key() -> Uuid {
     bindings::golem::api::host::generate_idempotency_key()
 }
@@ -95,7 +139,7 @@ pub struct RetryPolicyGuard {
 
 impl Drop for RetryPolicyGuard {
     fn drop(&mut self) {
-        set_retry_policy(self.original);
+        set_retry_policy(Into::into(self.original.clone()));
     }
 }
 
@@ -104,8 +148,8 @@ impl Drop for RetryPolicyGuard {
 /// When the returned guard is dropped, the original retry policy is restored.
 #[must_use]
 pub fn use_retry_policy(policy: RetryPolicy) -> RetryPolicyGuard {
-    let original = get_retry_policy();
-    set_retry_policy(policy);
+    let original = Into::into(get_retry_policy());
+    set_retry_policy(Into::into(policy));
     RetryPolicyGuard { original }
 }
 
