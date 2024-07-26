@@ -93,7 +93,7 @@ impl<'a> RetryState<'a> {
     }
 }
 
-pub async fn with_retries<'a, In, F, G, R, E>(
+pub async fn with_retries<In, F, G, R, E>(
     target_label: &'static str,
     op_label: &'static str,
     op_id: Option<String>,
@@ -104,7 +104,7 @@ pub async fn with_retries<'a, In, F, G, R, E>(
 ) -> Result<R, E>
 where
     E: std::error::Error,
-    F: for<'b> Fn(&'b In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'b + Send>>,
+    F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
     G: Fn(&E) -> bool,
 {
     let mut attempts = 0;

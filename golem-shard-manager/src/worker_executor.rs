@@ -15,20 +15,24 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::error::ShardManagerError;
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
-use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
+use tokio::time::timeout;
+use tonic::transport::Channel;
+use tonic::Response;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tonic_health::pb::health_client::HealthClient;
+use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
+use tracing::info;
+
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
-use tokio::time::timeout;
-use tonic::transport::Channel;
-use tonic_health::pb::health_check_response::ServingStatus;
-use tonic_health::pb::health_client::HealthClient;
-use tonic_health::pb::HealthCheckRequest;
-use tracing::{debug, info, warn};
+
+use crate::error::ShardManagerError;
+use crate::healthcheck::HealthCheckError;
+use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
+use crate::shard_manager_config::WorkerExecutorServiceConfig;
 
 #[async_trait]
 pub trait WorkerExecutorService {
@@ -38,7 +42,7 @@ pub trait WorkerExecutorService {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
 
-    async fn health_check(&self, pod: &Pod) -> bool;
+    async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError>;
 
     async fn revoke_shards(
         &self,
@@ -171,8 +175,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         }
     }
 
-    async fn health_check(&self, pod: &Pod) -> bool {
-        debug!("Health checking pod {pod}");
+    async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
         let endpoint = pod.endpoint();
         let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
         match conn {
@@ -183,23 +186,17 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
                     };
                     match HealthClient::new(conn).check(request).await {
                         Ok(response) => {
-                            response.into_inner().status == ServingStatus::Serving as i32
+                            let status = health_check_serving_status(response);
+                            (status == ServingStatus::Serving)
+                                .then_some(())
+                                .ok_or_else(|| HealthCheckError::Other(status.as_str_name()))
                         }
-                        Err(err) => {
-                            warn!("Health request returned with an error: {:?}", err);
-                            false
-                        }
+                        Err(status) => Err(HealthCheckError::GrpcError(status)),
                     }
                 }
-                Err(err) => {
-                    warn!("Failed to connect to pod {pod}: {:?}", err);
-                    false
-                }
+                Err(err) => Err(HealthCheckError::GrpcConnectError(err)),
             },
-            Err(_) => {
-                warn!("Connection to pod {pod} timed out");
-                false
-            }
+            Err(_) => Err(HealthCheckError::GrpcConnectTimeout),
         }
     }
 }
@@ -297,4 +294,12 @@ impl WorkerExecutorServiceDefault {
             }
         }
     }
+}
+
+fn health_check_serving_status(response: Response<HealthCheckResponse>) -> ServingStatus {
+    response
+        .into_inner()
+        .status
+        .try_into()
+        .unwrap_or(ServingStatus::Unknown)
 }

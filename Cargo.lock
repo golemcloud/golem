@@ -3672,6 +3672,7 @@ dependencies = [
  "rustls 0.23.11",
  "serde 1.0.204",
  "serde_json",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-health",
