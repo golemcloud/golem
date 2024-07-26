@@ -359,16 +359,17 @@ where
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value> {
-
-        let result = self.invoke_and_await_function_typed(
-            worker_id,
-            idempotency_key,
-            function_name,
-            params,
-            calling_convention,
-            invocation_context,
-            metadata,
-        ).await?;
+        let result = self
+            .invoke_and_await_function_typed(
+                worker_id,
+                idempotency_key,
+                function_name,
+                params,
+                calling_convention,
+                invocation_context,
+                metadata,
+            )
+            .await?;
 
         let json = get_json_from_typed_value(&result);
 

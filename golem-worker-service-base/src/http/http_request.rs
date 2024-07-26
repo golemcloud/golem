@@ -105,12 +105,15 @@ mod tests {
     use async_trait::async_trait;
     use golem_wasm_rpc::json::get_json_from_typed_value;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
+    use golem_wasm_rpc::protobuf::{
+        NameTypePair, NameValuePair, Type, TypedList, TypedRecord, TypedTuple,
+    };
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
     use serde_json::Value;
     use std::sync::Arc;
 
     use golem_common::model::IdempotencyKey;
+    use golem_common::precise_json::PreciseJson;
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;
@@ -135,7 +138,6 @@ mod tests {
             resolved_worker_request: WorkerRequest,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
             let response = convert_to_worker_response(&resolved_worker_request);
-
             let response_dummy = create_tuple(vec![response]);
 
             Ok(WorkerResponse::new(response_dummy))
@@ -189,7 +191,84 @@ mod tests {
         }))
     }
 
+    // Only for test purposes, as it really doesn't matter what the types are
+    fn convert_to_type_annotated_value(x: PreciseJson) -> TypeAnnotatedValue {
+        match x {
+            PreciseJson::Bool(bool) => TypeAnnotatedValue::Bool(bool),
+            PreciseJson::S8(s8) => TypeAnnotatedValue::S8(s8 as i32),
+            PreciseJson::U8(u8) => TypeAnnotatedValue::U8(u8 as u32),
+            PreciseJson::S16(s16) => TypeAnnotatedValue::S16(s16 as i32),
+            PreciseJson::U16(u16) => TypeAnnotatedValue::U16(u16 as u32),
+            PreciseJson::S32(s32) => TypeAnnotatedValue::S32(s32),
+            PreciseJson::U32(u32) => TypeAnnotatedValue::U32(u32),
+            PreciseJson::S64(s64) => TypeAnnotatedValue::S64(s64 as i64),
+            PreciseJson::U64(u64) => TypeAnnotatedValue::U64(u64),
+            PreciseJson::F32(f32) => TypeAnnotatedValue::F32(f32),
+            PreciseJson::F64(f64) => TypeAnnotatedValue::F64(f64),
+            PreciseJson::Chr(char) => TypeAnnotatedValue::Char(char as i32),
+            PreciseJson::Str(str) => TypeAnnotatedValue::Str(str.clone()),
+            PreciseJson::List(list) => {
+                let mut list_values = vec![];
+                for value in list.into_iter() {
+                    list_values.push(convert_to_type_annotated_value(value));
+                }
+                TypeAnnotatedValue::List({
+                    let types = list_values
+                        .iter()
+                        .map(|x| golem_wasm_rpc::protobuf::Type::try_from(x).unwrap())
+                        .collect::<Vec<_>>();
+                    TypedList {
+                        values: list_values
+                            .iter()
+                            .map(|x| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                                type_annotated_value: Some(x.clone()),
+                            })
+                            .collect::<Vec<_>>(),
+                        typ: types.first().cloned(),
+                    }
+                })
+            }
+            PreciseJson::Tuple(tuple) => {
+                let mut tuple_values = vec![];
+                for value in tuple.into_iter() {
+                    tuple_values.push(convert_to_type_annotated_value(value));
+                }
+                create_tuple(tuple_values)
+            }
+            PreciseJson::Record(record) => {
+                let mut record_values = vec![];
+                for (key, value) in record.into_iter() {
+                    record_values.push((key.clone(), convert_to_type_annotated_value(value)));
+                }
+                create_record(record_values).unwrap()
+            }
+            PreciseJson::Variant {
+                case_idx,
+                case_value,
+            } => {
+                unimplemented!("Variant not implemented")
+            }
+            PreciseJson::Enum(_) => {
+                unimplemented!("Enum not implemented")
+            }
+            PreciseJson::Flags(_) => {
+                unimplemented!("Flags not implemented")
+            }
+            PreciseJson::Option(_) => {
+                unimplemented!("Option not implemented")
+            }
+            PreciseJson::Result(_) => {
+                unimplemented!("Result not implemented")
+            }
+        }
+    }
+
     fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
+        let function_params = worker_request
+            .function_params
+            .iter()
+            .map(|x| convert_to_type_annotated_value(x.clone()));
+
         let mut required = create_record(vec![
             (
                 "component_id".to_string(),
@@ -205,7 +284,14 @@ mod tests {
             ),
             (
                 "function_params".to_string(),
-                create_tuple(worker_request.function_params.clone()),
+                create_tuple(
+                    worker_request
+                        .function_params
+                        .clone()
+                        .into_iter()
+                        .map(|x| convert_to_type_annotated_value(x))
+                        .collect(),
+                ),
             ),
         ])
         .unwrap();
