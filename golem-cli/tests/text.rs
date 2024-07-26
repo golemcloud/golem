@@ -502,7 +502,7 @@ fn text_example_list(
     let res = cli.with_format(Format::Text).run_string(&[
         "list-examples",
         &cfg.arg('l', "language"),
-        "C#",
+        "zig",
     ])?;
 
     let expected = formatdoc!(
