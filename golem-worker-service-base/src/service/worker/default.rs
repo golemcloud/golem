@@ -16,7 +16,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use golem_wasm_rpc::json::get_json_from_typed_value;
-use golem_api_grpc::proto::golem::common::JsonValue;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
@@ -400,7 +399,7 @@ where
             worker_id.clone(),
             move |worker_executor_client| {
                 info!("Invoking function on {}: {}", worker_id_clone, function_name);
-                Box::pin(worker_executor_client.invoke_and_await_worker_json_typed(
+                Box::pin(worker_executor_client.invoke_and_await_worker_typed(
                     InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
@@ -531,7 +530,7 @@ where
                     workerexecutor::InvokeWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         name: function_name.clone(),
-                        input: params_,
+                        input: params_.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
@@ -1079,7 +1078,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: TypeAnnotatedValue,
+        _params: Vec<PreciseJson>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {

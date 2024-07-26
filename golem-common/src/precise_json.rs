@@ -395,7 +395,7 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
             TypeAnnotatedValue::Enum(e) => {
                 let all_values = e.typ;
                 let index = all_values.into_iter().enumerate()
-                    .find(|(_, v)| (v.clone() == e.value)).map(|(i, v)| i).unwrap();
+                    .find(|(_, v)| (v.clone() == e.value)).map(|(i, _)| i).unwrap();
 
                 PreciseJson::Enum(index as u32)
             },

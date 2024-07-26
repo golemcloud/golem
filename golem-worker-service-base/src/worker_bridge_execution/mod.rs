@@ -1,5 +1,3 @@
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::precise_json::PreciseJson;
 
