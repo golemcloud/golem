@@ -52,6 +52,7 @@ pub async fn get_unhealthy_pods(
 }
 
 async fn health_check_with_retries<F>(
+    target: &'static str,
     implementation: F,
     retry_config: &RetryConfig,
     pod: &Pod,
@@ -62,7 +63,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<(), HealthCheckError>> + 'a + Send>>,
 {
     with_retries(
-        "pod",
+        target,
         "healtcheck",
         Some(format!("{pod}")),
         retry_config,
@@ -96,6 +97,7 @@ impl GrpcHealthCheck {
 impl HealthCheck for GrpcHealthCheck {
     async fn health_check(&self, pod: &Pod) -> bool {
         health_check_with_retries(
+            "worker_executor_grpc",
             |pod| {
                 let worker_executors = self.worker_executors.clone();
                 Box::pin(async move { worker_executors.health_check(pod).await })
@@ -166,6 +168,7 @@ pub mod kubernetes {
     impl HealthCheck for KubernetesHealthCheck {
         async fn health_check(&self, pod: &crate::model::Pod) -> bool {
             health_check_with_retries(
+                "worker_executor_k8s",
                 |pod| {
                     let health_check = self.clone();
                     Box::pin(async move { health_check.health_check_impl(pod).await })
