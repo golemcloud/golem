@@ -17,9 +17,9 @@ use cloud_common::grpc::proto_token_id_string;
 use cloud_common::model::TokenId;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -164,7 +164,7 @@ impl CloudTokenService for TokenGrpcApi {
     ) -> Result<Response<GetTokensResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_tokens",
             account_id = proto_account_id_string(&r.account_id)
         );
@@ -194,7 +194,7 @@ impl CloudTokenService for TokenGrpcApi {
     ) -> Result<Response<CreateTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_token",
             account_id = proto_account_id_string(&r.account_id)
         );
@@ -218,10 +218,10 @@ impl CloudTokenService for TokenGrpcApi {
     ) -> Result<Response<DeleteTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_token",
             account_id = proto_account_id_string(&r.account_id),
-            token_Id = proto_token_id_string(&r.token_id)
+            token_id = proto_token_id_string(&r.token_id)
         );
 
         let response = match self.delete(r, m).instrument(record.span.clone()).await {
@@ -243,10 +243,10 @@ impl CloudTokenService for TokenGrpcApi {
     ) -> Result<Response<GetTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_token",
             account_id = proto_account_id_string(&r.account_id),
-            token_Id = proto_token_id_string(&r.token_id)
+            token_id = proto_token_id_string(&r.token_id)
         );
 
         let response = match self.get(r, m).instrument(record.span.clone()).await {

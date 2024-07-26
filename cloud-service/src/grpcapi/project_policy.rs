@@ -15,8 +15,8 @@ use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
 use cloud_common::grpc::proto_project_policy_id_string;
 use cloud_common::model::ProjectPolicyId;
 use golem_api_grpc::proto::golem::common::ErrorBody;
-use golem_common::metrics::grpc::TraceErrorKind;
-use golem_common::recorded_grpc_request;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::recorded_grpc_api_request;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
@@ -139,7 +139,7 @@ impl CloudProjectPolicyService for ProjectPolicyGrpcApi {
     ) -> Result<Response<CreateProjectPolicyResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_project_policy",
             project_policy_name = r.project_policy_data.as_ref().map(|p| p.name.clone())
         );
@@ -163,7 +163,7 @@ impl CloudProjectPolicyService for ProjectPolicyGrpcApi {
     ) -> Result<Response<GetProjectPolicyResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_project_policy",
             project_policy_id = proto_project_policy_id_string(&r.project_policy_id)
         );

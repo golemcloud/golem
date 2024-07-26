@@ -23,9 +23,9 @@ use cloud_common::grpc::{proto_project_grant_id_string, proto_project_id_string}
 use cloud_common::model::ProjectGrantId;
 use cloud_common::model::ProjectPolicyId;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ProjectId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -248,7 +248,7 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
     ) -> Result<Response<GetProjectGrantsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_project_grants",
             project_id = proto_project_id_string(&r.project_id)
         );
@@ -276,7 +276,7 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
     ) -> Result<Response<DeleteProjectGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_project_grant",
             project_id = proto_project_id_string(&r.project_id),
             project_grant_id = proto_project_grant_id_string(&r.grant_id)
@@ -301,7 +301,7 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
     ) -> Result<Response<GetProjectGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_project_grant",
             project_id = proto_project_id_string(&r.project_id),
             project_grant_id = proto_project_grant_id_string(&r.grant_id)
@@ -326,7 +326,7 @@ impl CloudProjectGrantService for ProjectGrantGrpcApi {
     ) -> Result<Response<CreateProjectGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_project_grant",
             project_id = proto_project_id_string(&r.project_id)
         );

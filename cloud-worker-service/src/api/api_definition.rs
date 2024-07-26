@@ -7,6 +7,7 @@ use crate::service::api_domain::RegisterDomainRoute;
 use crate::service::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::ProjectId;
+use golem_common::recorded_http_api_request;
 use golem_worker_service_base::api::HttpApiDefinition;
 use golem_worker_service_base::api_definition::http::{
     get_api_definition, HttpApiDefinition as CoreHttpApiDefinition, JsonOpenApiDefinition,
@@ -16,7 +17,7 @@ use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use tracing::{error, info};
+use tracing::{error, Instrument};
 
 pub struct ApiDefinitionApi {
     definition_service: Arc<dyn ApiDefinitionService + Sync + Send>,
@@ -52,19 +53,26 @@ impl ApiDefinitionApi {
         let project_id = &project_id.0;
         let token = token.secret();
 
-        let definition = get_api_definition(openapi.0).map_err(|e| {
-            error!("Invalid Spec {}", e);
-            ApiEndpointError::bad_request(e)
-        })?;
+        let record = recorded_http_api_request!("import_open_api",);
 
-        self.definition_service
-            .create(project_id, &definition, &CloudAuthCtx::new(token))
-            .await?;
+        let response = {
+            let definition = get_api_definition(openapi.0).map_err(|e| {
+                error!("Invalid Spec {}", e);
+                ApiEndpointError::bad_request(e)
+            })?;
 
-        let definition: HttpApiDefinition =
-            definition.try_into().map_err(ApiEndpointError::internal)?;
+            self.definition_service
+                .create(project_id, &definition, &CloudAuthCtx::new(token))
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(definition))
+            definition
+                .try_into()
+                .map_err(ApiEndpointError::internal)
+                .map(Json)
+        };
+
+        record.result(response)
     }
 
     #[oai(
@@ -80,24 +88,30 @@ impl ApiDefinitionApi {
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
-
-        info!(
-            "Create API definition - project: {}, id: {}",
-            project_id, payload.id
+        let record = recorded_http_api_request!(
+            "create_definition",
+            api_definition_id = payload.0.id.to_string(),
+            version = payload.0.version.to_string(),
+            draft = payload.0.draft.to_string(),
+            project_id = project_id.0.to_string()
         );
 
-        let definition: CoreHttpApiDefinition = payload
-            .0
-            .clone()
-            .try_into()
-            .map_err(ApiEndpointError::bad_request)?;
+        let response = {
+            let definition: CoreHttpApiDefinition = payload
+                .0
+                .clone()
+                .try_into()
+                .map_err(ApiEndpointError::bad_request)?;
 
-        let _ = self
-            .definition_service
-            .create(project_id, &definition, &CloudAuthCtx::new(token))
-            .await?;
+            let _ = self
+                .definition_service
+                .create(project_id, &definition, &CloudAuthCtx::new(token))
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(payload.0))
+        };
 
-        Ok(Json(payload.0))
+        record.result(response)
     }
 
     #[oai(
@@ -115,33 +129,39 @@ impl ApiDefinitionApi {
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
-
-        info!(
-            "Update API definition - project: {}, id: {}",
-            project_id, payload.id
+        let record = recorded_http_api_request!(
+            "update_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string(),
+            draft = payload.0.draft.to_string(),
+            project_id = project_id.0.to_string()
         );
 
-        let definition: CoreHttpApiDefinition = payload
-            .0
-            .clone()
-            .try_into()
-            .map_err(ApiEndpointError::bad_request)?;
+        let response = {
+            let definition: CoreHttpApiDefinition = payload
+                .0
+                .clone()
+                .try_into()
+                .map_err(ApiEndpointError::bad_request)?;
 
-        if id.0 != definition.id {
-            return Err(ApiEndpointError::bad_request("Unmatched url and body ids."));
-        }
+            if id.0 != definition.id {
+                Err(ApiEndpointError::bad_request("Unmatched url and body ids."))
+            } else if version.0 != definition.version {
+                Err(ApiEndpointError::bad_request(
+                    "Unmatched url and body versions.",
+                ))
+            } else {
+                let _ = self
+                    .definition_service
+                    .update(project_id, &definition, &CloudAuthCtx::new(token))
+                    .instrument(record.span.clone())
+                    .await?;
 
-        if version.0 != definition.version {
-            return Err(ApiEndpointError::bad_request(
-                "Unmatched url and body versions.",
-            ));
-        }
-        let _ = self
-            .definition_service
-            .update(project_id, &definition, &CloudAuthCtx::new(token))
-            .await?;
+                Ok(Json(payload.0))
+            }
+        };
 
-        Ok(Json(payload.0))
+        record.result(response)
     }
 
     #[oai(
@@ -157,24 +177,34 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let token = token.secret();
-        let project_id = project_id.0;
-        let api_definition_id = id.0;
-        let version = version.0;
+        let record = recorded_http_api_request!(
+            "get_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string(),
+            project_id = project_id.0.to_string()
+        );
 
-        let auth_ctx = CloudAuthCtx::new(token);
+        let response = {
+            let project_id = project_id.0;
+            let api_definition_id = id.0;
+            let version = version.0;
 
-        info!("Get API definition - project: {project_id}, id: {api_definition_id}, version: {version}");
+            let auth_ctx = CloudAuthCtx::new(token);
 
-        let (data, _) = self
-            .definition_service
-            .get(&project_id, &api_definition_id, &version, &auth_ctx)
-            .await?;
+            let (data, _) = self
+                .definition_service
+                .get(&project_id, &api_definition_id, &version, &auth_ctx)
+                .instrument(record.span.clone())
+                .await?;
 
-        let data = data.ok_or(ApiEndpointError::not_found(
-            format!("Can't find api definition with id {api_definition_id}, and version {version} in project {project_id}")
-        ))?;
+            let data = data.ok_or(ApiEndpointError::not_found(
+                format!("Can't find api definition with id {api_definition_id}, and version {version} in project {project_id}")
+            ))?;
 
-        Ok(Json(data.try_into().map_err(ApiEndpointError::internal)?))
+            Ok(Json(data.try_into().map_err(ApiEndpointError::internal)?))
+        };
+
+        record.result(response)
     }
 
     #[oai(
@@ -189,43 +219,36 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
         let token = token.secret();
-        let project_id = project_id.0;
-        let api_definition_id_optional = api_definition_id_query.0;
+        let record = recorded_http_api_request!(
+            "list_definitions",
+            api_definition_id = api_definition_id_query.0.as_ref().map(|id| id.to_string()),
+            project_id = project_id.0.to_string()
+        );
 
-        let auth_ctx = CloudAuthCtx::new(token);
+        let response = {
+            let project_id = project_id.0;
+            let api_definition_id_optional = api_definition_id_query.0;
 
-        if let Some(api_definition_id) = api_definition_id_optional {
-            info!(
-                "Get API definition - project: {}, id: {}",
-                project_id, api_definition_id
-            );
+            let auth_ctx = CloudAuthCtx::new(token);
 
-            let (data, _) = self
-                .definition_service
-                .get_all_versions(&project_id, &api_definition_id, &auth_ctx)
-                .await?;
-
+            let (data, _) = if let Some(api_definition_id) = api_definition_id_optional {
+                self.definition_service
+                    .get_all_versions(&project_id, &api_definition_id, &auth_ctx)
+                    .instrument(record.span.clone())
+                    .await?
+            } else {
+                self.definition_service
+                    .get_all(&project_id, &auth_ctx)
+                    .instrument(record.span.clone())
+                    .await?
+            };
             let values = data
                 .into_iter()
                 .map(|d| d.try_into().map_err(ApiEndpointError::internal))
                 .collect::<Result<Vec<HttpApiDefinition>, ApiEndpointError>>()?;
-
             Ok(Json(values))
-        } else {
-            info!("Get API definitions - project: {}", project_id);
-
-            let (data, _) = self
-                .definition_service
-                .get_all(&project_id, &auth_ctx)
-                .await?;
-
-            let values = data
-                .into_iter()
-                .map(|d| d.try_into().map_err(ApiEndpointError::internal))
-                .collect::<Result<Vec<HttpApiDefinition>, ApiEndpointError>>()?;
-
-            Ok(Json(values))
-        }
+        };
+        record.result(response)
     }
 
     #[oai(
@@ -241,46 +264,57 @@ impl ApiDefinitionApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<String>, ApiEndpointError> {
         let token = token.secret();
-        let project_id = project_id.0;
-        let api_definition_id = id.0;
-        let version = version.0;
-
-        info!(
-            "Delete API definition - project: {project_id}, id: {api_definition_id}, version: {version}"
+        let record = recorded_http_api_request!(
+            "delete_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string(),
+            project_id = project_id.0.to_string()
         );
 
-        let auth_ctx = CloudAuthCtx::new(token);
+        let response = {
+            let project_id = project_id.0;
+            let api_definition_id = id.0;
+            let version = version.0;
 
-        let (value, namespace) = self
-            .definition_service
-            .get(&project_id, &api_definition_id, &version, &auth_ctx)
-            .await?;
+            let auth_ctx = CloudAuthCtx::new(token);
 
-        match value {
-            Some(_) => {
-                let deployments = self
-                    .deployment_service
-                    .get_by_id(&namespace, &api_definition_id)
-                    .await?;
+            let (value, namespace) = self
+                .definition_service
+                .get(&project_id, &api_definition_id, &version, &auth_ctx)
+                .instrument(record.span.clone())
+                .await?;
 
-                for deployment in deployments {
-                    self.domain_route
-                        .unregister(&deployment.site.host, deployment.site.subdomain.as_deref())
-                        .await
-                        .map_err(ApiEndpointError::from)?;
-
-                    self.deployment_service
-                        .delete(&namespace, &ApiSiteString(deployment.site.to_string()))
+            match value {
+                Some(_) => {
+                    let deployments = self
+                        .deployment_service
+                        .get_by_id(&namespace, &api_definition_id)
+                        .instrument(record.span.clone())
                         .await?;
+
+                    for deployment in deployments {
+                        self.domain_route
+                            .unregister(&deployment.site.host, deployment.site.subdomain.as_deref())
+                            .instrument(record.span.clone())
+                            .await
+                            .map_err(ApiEndpointError::from)?;
+
+                        self.deployment_service
+                            .delete(&namespace, &ApiSiteString(deployment.site.to_string()))
+                            .instrument(record.span.clone())
+                            .await?;
+                    }
+
+                    self.definition_service
+                        .delete(&project_id, &api_definition_id, &version, &auth_ctx)
+                        .instrument(record.span.clone())
+                        .await?;
+
+                    Ok(Json("API definition deleted".to_string()))
                 }
-
-                self.definition_service
-                    .delete(&project_id, &api_definition_id, &version, &auth_ctx)
-                    .await?;
-
-                Ok(Json("API definition deleted".to_string()))
+                None => Err(ApiEndpointError::not_found("API definition not found")),
             }
-            None => Err(ApiEndpointError::not_found("API definition not found")),
-        }
+        };
+        record.result(response)
     }
 }

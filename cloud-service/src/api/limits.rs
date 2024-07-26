@@ -1,20 +1,20 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use cloud_common::auth::GolemSecurityScheme;
-use golem_common::model::AccountId;
-use poem_openapi::param::Query;
-use poem_openapi::payload::Json;
-use poem_openapi::*;
-
 use crate::api::ApiTags;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
-
 use crate::model::*;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
+use cloud_common::auth::GolemSecurityScheme;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::AccountId;
+use golem_common::recorded_http_api_request;
+use golem_service_base::model::{ErrorBody, ErrorsBody};
+use poem_openapi::param::Query;
+use poem_openapi::payload::Json;
+use poem_openapi::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::Instrument;
 
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Debug, Clone)]
 pub enum LimitsError {
     /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
@@ -27,6 +27,17 @@ pub enum LimitsError {
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for LimitsError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            LimitsError::BadRequest(_) => "BadRequest",
+            LimitsError::LimitExceeded(_) => "LimitExceeded",
+            LimitsError::Unauthorized(_) => "Unauthorized",
+            LimitsError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, LimitsError>;
@@ -77,7 +88,7 @@ pub struct LimitsApi {
 #[OpenApi(prefix_path = "/v2/resource-limits", tag = ApiTags::Limits)]
 impl LimitsApi {
     /// Get resource limits for a given account.
-    #[oai(path = "/", method = "get")]
+    #[oai(path = "/", method = "get", operation_id = "get_resource_limits")]
     async fn get_resource_limits(
         &self,
         /// The Account ID to check resource limits for.
@@ -85,35 +96,58 @@ impl LimitsApi {
         account_id: Query<AccountId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResourceLimits>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let record = recorded_http_api_request!(
+            "get_resource_limits",
+            account_id = account_id.0.to_string()
+        );
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
 
-        let result = self
-            .plan_limit_service
-            .get_resource_limits(&account_id.0, &auth)
-            .await?;
+            let result = self
+                .plan_limit_service
+                .get_resource_limits(&account_id.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(result))
+            Ok(Json(result))
+        };
+
+        record.result(response)
     }
 
     /// Update resource limits for a given account.
-    #[oai(path = "/", method = "post")]
+    #[oai(path = "/", method = "post", operation_id = "update_resource_limits")]
     async fn update_resource_limits(
         &self,
         limits: Json<BatchUpdateResourceLimits>,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateResourceLimitsResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
+        let record = recorded_http_api_request!("update_resource_limits",);
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
 
-        let mut updates: HashMap<AccountId, i64> = HashMap::new();
+            let mut updates: HashMap<AccountId, i64> = HashMap::new();
 
-        for (k, v) in limits.0.updates.iter() {
-            updates.insert(AccountId::from(k.as_str()), *v);
-        }
+            for (k, v) in limits.0.updates.iter() {
+                updates.insert(AccountId::from(k.as_str()), *v);
+            }
 
-        self.plan_limit_service
-            .record_fuel_consumption(updates, &auth)
-            .await?;
+            self.plan_limit_service
+                .record_fuel_consumption(updates, &auth)
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(UpdateResourceLimitsResponse {}))
+            Ok(Json(UpdateResourceLimitsResponse {}))
+        };
+
+        record.result(response)
     }
 }

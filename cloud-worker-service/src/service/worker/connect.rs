@@ -1,7 +1,7 @@
+use crate::service::auth::CloudNamespace;
 use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::AccountId;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::service::worker::ConnectWorkerStream as BaseWorkerStream;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use tonic::Status;
 pub struct ConnectWorkerStream {
     stream: BaseWorkerStream,
     worker_id: WorkerId,
-    account_id: AccountId,
+    namespace: CloudNamespace,
     limit_service: Arc<dyn LimitService + Sync + Send>,
 }
 
@@ -18,13 +18,13 @@ impl ConnectWorkerStream {
     pub fn new(
         stream: BaseWorkerStream,
         worker_id: WorkerId,
-        account_id: AccountId,
+        namespace: CloudNamespace,
         limit_service: Arc<dyn LimitService + Sync + Send>,
     ) -> Self {
         Self {
             stream,
             worker_id,
-            account_id,
+            namespace,
             limit_service,
         }
     }
@@ -44,20 +44,21 @@ impl Stream for ConnectWorkerStream {
 impl Drop for ConnectWorkerStream {
     fn drop(&mut self) {
         tracing::info!(
-            "Dropping worker {} connections of account {}",
-            self.worker_id,
-            self.account_id
+            namespace = %self.namespace,
+            "Dropping worker {} connections",
+            self.worker_id
         );
         let limit_service = self.limit_service.clone();
-        let account_id = self.account_id.clone();
+        let namespace = self.namespace.clone();
         let worker_id = self.worker_id.clone();
         tokio::spawn(async move {
             let result = limit_service
-                .update_worker_connection_limit(&account_id, &worker_id, -1)
+                .update_worker_connection_limit(&namespace.account_id, &worker_id, -1)
                 .await;
             if let Err(error) = result {
                 tracing::error!(
-                    "Decrement active connections of account {account_id} failed {error}",
+                    namespace = %namespace,
+                    "Decrement active connections failed {error}",
                 );
             }
         });

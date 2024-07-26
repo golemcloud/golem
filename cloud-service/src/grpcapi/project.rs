@@ -23,9 +23,9 @@ use cloud_api_grpc::proto::golem::cloud::project::{
 };
 use cloud_common::grpc::proto_project_id_string;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ProjectId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -239,7 +239,7 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<GetDefaultProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("get_default_project",);
+        let record = recorded_grpc_api_request!("get_default_project",);
 
         let response = match self.get_default(r, m).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(get_default_project_response::Result::Success(result)),
@@ -260,7 +260,7 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<GetProjectsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("get_projects", project_name = &r.project_name);
+        let record = recorded_grpc_api_request!("get_projects", project_name = &r.project_name);
 
         let response = match self.get_all(r, m).instrument(record.span.clone()).await {
             Ok(data) => record.succeed(get_projects_response::Result::Success(
@@ -283,9 +283,9 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<CreateProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_project",
-            project_policy_name = r.project_data_request.as_ref().map(|p| p.name.clone())
+            project_name = r.project_data_request.as_ref().map(|p| p.name.clone())
         );
 
         let response = match self.create(r, m).instrument(record.span.clone()).await {
@@ -311,8 +311,8 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<DeleteProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "create_project",
+        let record = recorded_grpc_api_request!(
+            "delete_project",
             project_id = proto_project_id_string(&r.project_id)
         );
 
@@ -335,7 +335,7 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<GetProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_project",
             project_id = proto_project_id_string(&r.project_id)
         );
@@ -359,8 +359,8 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<GetProjectActionsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "get_project",
+        let record = recorded_grpc_api_request!(
+            "get_project_actions",
             project_id = proto_project_id_string(&r.project_id)
         );
 

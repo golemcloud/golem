@@ -17,7 +17,7 @@ use golem_worker_service_base::service::worker::{
 };
 use serde_json::Value;
 
-use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx};
+use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
 use cloud_common::model::ProjectAction;
 use golem_service_base::model::*;
 use golem_wasm_rpc::TypeAnnotatedValue;
@@ -219,7 +219,7 @@ impl WorkerServiceDefault {
             .await?;
 
         Ok(WorkerNamespace {
-            account_id: namespace.account_id.clone(),
+            namespace,
             resource_limits,
         })
     }
@@ -235,7 +235,7 @@ impl WorkerService for WorkerServiceDefault {
         environment_variables: HashMap<String, String>,
         auth: &CloudAuthCtx,
     ) -> Result<WorkerId, WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
@@ -246,13 +246,13 @@ impl WorkerService for WorkerServiceDefault {
                 component_version,
                 arguments,
                 environment_variables,
-                namespace.as_worker_request_metadata(),
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
 
         self.limit_service
-            .update_worker_limit(&namespace.account_id, worker_id, 1)
+            .update_worker_limit(&worker_namespace.namespace.account_id, worker_id, 1)
             .await?;
 
         Ok(value)
@@ -263,43 +263,46 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         auth: &CloudAuthCtx,
     ) -> Result<ConnectWorkerStream, WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
         let value = self
             .base_worker_service
-            .connect(worker_id, namespace.as_worker_request_metadata(), auth)
+            .connect(
+                worker_id,
+                worker_namespace.as_worker_request_metadata(),
+                auth,
+            )
             .await?;
 
         self.limit_service
-            .update_worker_connection_limit(&namespace.account_id, worker_id, 1)
+            .update_worker_connection_limit(&worker_namespace.namespace.account_id, worker_id, 1)
             .await?;
 
         Ok(ConnectWorkerStream::new(
             value,
             worker_id.clone(),
-            namespace.account_id,
+            worker_namespace.namespace,
             self.limit_service.clone(),
         ))
     }
 
     async fn delete(&self, worker_id: &WorkerId, auth: &CloudAuthCtx) -> Result<(), WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::DeleteWorker, auth)
             .await?;
 
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(namespace.account_id.clone()),
-            limits: Some(namespace.resource_limits.clone()),
-        };
-
         self.base_worker_service
-            .delete(worker_id, worker_request_metadata, auth)
+            .delete(
+                worker_id,
+                worker_namespace.as_worker_request_metadata(),
+                auth,
+            )
             .await?;
 
         self.limit_service
-            .update_worker_limit(&namespace.account_id, worker_id, -1)
+            .update_worker_limit(&worker_namespace.namespace.account_id, worker_id, -1)
             .await?;
 
         Ok(())
@@ -315,7 +318,7 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<Value, WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
@@ -328,7 +331,7 @@ impl WorkerService for WorkerServiceDefault {
                 params,
                 calling_convention,
                 invocation_context,
-                namespace.as_worker_request_metadata(),
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
@@ -346,7 +349,7 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
@@ -359,7 +362,7 @@ impl WorkerService for WorkerServiceDefault {
                 params,
                 calling_convention,
                 invocation_context,
-                namespace.as_worker_request_metadata(),
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
@@ -377,7 +380,7 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<TypedResult, WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
@@ -390,7 +393,7 @@ impl WorkerService for WorkerServiceDefault {
                 params,
                 calling_convention,
                 invocation_context,
-                namespace.as_worker_request_metadata(),
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
@@ -407,7 +410,7 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
         let _ = self
@@ -418,7 +421,7 @@ impl WorkerService for WorkerServiceDefault {
                 function_name,
                 params,
                 invocation_context,
-                namespace.as_worker_request_metadata(),
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
@@ -465,14 +468,15 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
 
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(worker_namespace.account_id.clone()),
-            limits: Some(worker_namespace.resource_limits.clone()),
-        };
-
         let value = self
             .base_worker_service
-            .complete_promise(worker_id, oplog_id, data, worker_request_metadata, auth)
+            .complete_promise(
+                worker_id,
+                oplog_id,
+                data,
+                worker_namespace.as_worker_request_metadata(),
+                auth,
+            )
             .await?;
 
         Ok(value)
@@ -488,16 +492,11 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
 
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(worker_namespace.account_id.clone()),
-            limits: Some(worker_namespace.resource_limits.clone()),
-        };
-
         self.base_worker_service
             .interrupt(
                 worker_id,
                 recover_immediately,
-                worker_request_metadata,
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
@@ -514,17 +513,16 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.component_id, &ProjectAction::ViewWorker, auth)
             .await?;
 
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(worker_namespace.account_id.clone()),
-            limits: Some(worker_namespace.resource_limits.clone()),
-        };
-
         let metadata = self
             .base_worker_service
-            .get_metadata(worker_id, worker_request_metadata, auth)
+            .get_metadata(
+                worker_id,
+                worker_namespace.as_worker_request_metadata(),
+                auth,
+            )
             .await?;
 
-        let metadata = convert_metadata(metadata, worker_namespace.account_id);
+        let metadata = convert_metadata(metadata, worker_namespace.namespace.account_id);
 
         Ok(metadata)
     }
@@ -538,14 +536,9 @@ impl WorkerService for WorkerServiceDefault {
         precise: bool,
         auth: &CloudAuthCtx,
     ) -> Result<(Option<ScanCursor>, Vec<crate::model::WorkerMetadata>), WorkerError> {
-        let namespace = self
+        let worker_namespace = self
             .authorize(component_id, &ProjectAction::ViewWorker, auth)
             .await?;
-
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(namespace.account_id.clone()),
-            limits: Some(namespace.resource_limits.clone()),
-        };
 
         let (pagination, metadata) = self
             .base_worker_service
@@ -555,14 +548,16 @@ impl WorkerService for WorkerServiceDefault {
                 cursor,
                 count,
                 precise,
-                worker_request_metadata,
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
 
         let metadata = metadata
             .into_iter()
-            .map(|metadata| convert_metadata(metadata, namespace.account_id.clone()))
+            .map(|metadata| {
+                convert_metadata(metadata, worker_namespace.namespace.account_id.clone())
+            })
             .collect();
 
         Ok((pagination, metadata))
@@ -572,15 +567,13 @@ impl WorkerService for WorkerServiceDefault {
         let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
-
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(worker_namespace.account_id.clone()),
-            limits: Some(worker_namespace.resource_limits.clone()),
-        };
-
         let _ = self
             .base_worker_service
-            .resume(worker_id, worker_request_metadata, auth)
+            .resume(
+                worker_id,
+                worker_namespace.as_worker_request_metadata(),
+                auth,
+            )
             .await?;
 
         Ok(())
@@ -597,18 +590,13 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.component_id, &ProjectAction::UpdateWorker, auth)
             .await?;
 
-        let worker_request_metadata = WorkerRequestMetadata {
-            account_id: Some(worker_namespace.account_id.clone()),
-            limits: Some(worker_namespace.resource_limits.clone()),
-        };
-
         let _ = self
             .base_worker_service
             .update(
                 worker_id,
                 update_mode,
                 target_version,
-                worker_request_metadata,
+                worker_namespace.as_worker_request_metadata(),
                 auth,
             )
             .await?;
@@ -621,18 +609,17 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         auth: &CloudAuthCtx,
     ) -> Result<Component, WorkerError> {
-        let result = self
+        let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::ViewWorker, auth)
             .await?;
 
-        let metadata = WorkerRequestMetadata {
-            account_id: Some(result.account_id),
-            limits: Some(result.resource_limits),
-        };
-
         let component = self
             .base_worker_service
-            .get_component_for_worker(worker_id, metadata, auth)
+            .get_component_for_worker(
+                worker_id,
+                worker_namespace.as_worker_request_metadata(),
+                auth,
+            )
             .await?;
 
         Ok(component)
@@ -663,14 +650,14 @@ fn convert_metadata(
 
 #[derive(Clone)]
 pub struct WorkerNamespace {
-    pub account_id: AccountId,
+    pub namespace: CloudNamespace,
     pub resource_limits: ResourceLimits,
 }
 
 impl WorkerNamespace {
     fn as_worker_request_metadata(&self) -> WorkerRequestMetadata {
         WorkerRequestMetadata {
-            account_id: Some(self.account_id.clone()),
+            account_id: Some(self.namespace.account_id.clone()),
             limits: Some(self.resource_limits.clone()),
         }
     }

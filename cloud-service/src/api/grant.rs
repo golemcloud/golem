@@ -1,19 +1,20 @@
-use std::sync::Arc;
-
-use golem_common::model::AccountId;
-use poem_openapi::param::Path;
-use poem_openapi::payload::Json;
-use poem_openapi::*;
-
 use crate::api::ApiTags;
 use crate::model::*;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::Role;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::AccountId;
+use golem_common::recorded_http_api_request;
 use golem_service_base::model::{ErrorBody, ErrorsBody};
+use poem_openapi::param::Path;
+use poem_openapi::payload::Json;
+use poem_openapi::*;
+use std::sync::Arc;
+use tracing::Instrument;
 
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Debug, Clone)]
 pub enum GrantError {
     #[oai(status = 400)]
     BadRequest(Json<ErrorsBody>),
@@ -23,6 +24,17 @@ pub enum GrantError {
     NotFound(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for GrantError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            GrantError::BadRequest(_) => "BadRequest",
+            GrantError::NotFound(_) => "NotFound",
+            GrantError::Unauthorized(_) => "Unauthorized",
+            GrantError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, GrantError>;
@@ -63,61 +75,131 @@ pub struct GrantApi {
 
 #[OpenApi(prefix_path = "/v2/accounts", tag = ApiTags::Grant)]
 impl GrantApi {
-    #[oai(path = "/:account_id/grants", method = "get")]
+    #[oai(
+        path = "/:account_id/grants",
+        method = "get",
+        operation_id = "get_account_grants"
+    )]
     async fn get_grants(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<Role>>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let roles = self.account_grant_service.get(&account_id.0, &auth).await?;
-        Ok(Json(roles))
+        let record =
+            recorded_http_api_request!("get_account_grants", account_id = account_id.0.to_string());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            let roles = self
+                .account_grant_service
+                .get(&account_id.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(roles))
+        };
+
+        record.result(response)
     }
 
-    #[oai(path = "/:account_id/grants/:role", method = "get")]
+    #[oai(
+        path = "/:account_id/grants/:role",
+        method = "get",
+        operation_id = "get_account_grant"
+    )]
     async fn get_grant(
         &self,
         account_id: Path<AccountId>,
         role: Path<Role>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Role>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let roles = self.account_grant_service.get(&account_id.0, &auth).await?;
-        if roles.contains(&role.0) {
-            Ok(Json(role.0))
-        } else {
-            Err(GrantError::NotFound(Json(ErrorBody {
-                error: "Role not found".to_string(),
-            })))
-        }
+        let record =
+            recorded_http_api_request!("get_account_grant", account_id = account_id.0.to_string());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            let roles = self
+                .account_grant_service
+                .get(&account_id.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            if roles.contains(&role.0) {
+                Ok(Json(role.0))
+            } else {
+                Err(GrantError::NotFound(Json(ErrorBody {
+                    error: "Role not found".to_string(),
+                })))
+            }
+        };
+
+        record.result(response)
     }
 
-    #[oai(path = "/:account_id/grants/:role", method = "put")]
+    #[oai(
+        path = "/:account_id/grants/:role",
+        method = "put",
+        operation_id = "create_account_grant"
+    )]
     async fn put_grant(
         &self,
         account_id: Path<AccountId>,
         role: Path<Role>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Role>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.account_grant_service
-            .add(&account_id.0, &role.0, &auth)
-            .await?;
-        Ok(Json(role.0))
+        let record = recorded_http_api_request!(
+            "create_account_grant",
+            account_id = account_id.0.to_string()
+        );
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            self.account_grant_service
+                .add(&account_id.0, &role.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(role.0))
+        };
+
+        record.result(response)
     }
 
-    #[oai(path = "/:account_id/grants/:role", method = "delete")]
+    #[oai(
+        path = "/:account_id/grants/:role",
+        method = "delete",
+        operation_id = "delete_account_grant"
+    )]
     async fn delete_grant(
         &self,
         account_id: Path<AccountId>,
         role: Path<Role>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteGrantResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.account_grant_service
-            .remove(&account_id.0, &role.0, &auth)
-            .await?;
+        let record = recorded_http_api_request!(
+            "delete_account_grant",
+            account_id = account_id.0.to_string()
+        );
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            self.account_grant_service
+                .remove(&account_id.0, &role.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(DeleteGrantResponse {}))
+            Ok(Json(DeleteGrantResponse {}))
+        };
+
+        record.result(response)
     }
 }

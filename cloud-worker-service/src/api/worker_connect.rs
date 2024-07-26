@@ -2,19 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::service::auth::CloudAuthCtx;
+use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use cloud_common::auth::WrappedGolemSecuritySchema;
 use cloud_common::model::TokenSecret;
 use futures_util::StreamExt;
 use golem_common::model::ComponentId;
+use golem_common::recorded_http_api_request;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::service::worker::proxy_worker_connection;
 use http::StatusCode;
 use poem::web::websocket::WebSocket;
 use poem::web::{Data, Path};
 use poem::*;
-use tap::TapFallible;
-
-use crate::service::worker::{ConnectWorkerStream, WorkerService};
+use tracing::Instrument;
 
 #[derive(Clone)]
 pub struct ConnectService {
@@ -67,14 +67,22 @@ async fn get_worker_stream(
     let worker_id = WorkerId::new(component_id, worker_name)
         .map_err(|e| single_error(StatusCode::BAD_REQUEST, format!("Invalid worker id: {e}")))?;
 
-    let worker_stream = service
+    let record = recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
+
+    let result = service
         .worker_service
         .connect(&worker_id, &CloudAuthCtx::new(token))
-        .await
-        .tap_err(|e| tracing::info!("Error connecting to worker {e}"))
-        .map_err(|e| e.into_response())?;
+        .instrument(record.span.clone())
+        .await;
 
-    Ok((worker_id, worker_stream))
+    match result {
+        Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
+        Err(error) => {
+            tracing::info!("Error connecting to worker {error}");
+            let error = record.fail(error, &("InternalError")); // TODO: Use a better error tags instead of InternalError
+            Err(error.into_response())
+        }
+    }
 }
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);

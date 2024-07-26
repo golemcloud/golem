@@ -19,9 +19,9 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, Resourc
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_worker_id_string,
 };
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -206,7 +206,7 @@ impl CloudLimitsService for LimitsGrpcApi {
     ) -> Result<Response<UpdateComponentLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_component_limit",
             component_id = proto_component_id_string(&r.component_id),
             account_id = proto_account_id_string(&r.account_id)
@@ -235,7 +235,7 @@ impl CloudLimitsService for LimitsGrpcApi {
     ) -> Result<Response<UpdateWorkerLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_worker_limit",
             component_id = proto_worker_id_string(&r.worker_id),
             account_id = proto_account_id_string(&r.account_id)
@@ -264,7 +264,7 @@ impl CloudLimitsService for LimitsGrpcApi {
     ) -> Result<Response<UpdateWorkerLimitResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_worker_connection_limit",
             component_id = proto_worker_id_string(&r.worker_id),
             account_id = proto_account_id_string(&r.account_id)
@@ -293,7 +293,7 @@ impl CloudLimitsService for LimitsGrpcApi {
     ) -> Result<Response<GetResourceLimitsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_resource_limits",
             account_id = proto_account_id_string(&r.account_id)
         );
@@ -317,7 +317,7 @@ impl CloudLimitsService for LimitsGrpcApi {
     ) -> Result<Response<BatchUpdateResourceLimitsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("batch_update_resource_limits",);
+        let record = recorded_grpc_api_request!("batch_update_resource_limits",);
 
         let response = match self.update(r, m).instrument(record.span.clone()).await {
             Ok(_) => record.succeed(batch_update_resource_limits_response::Result::Success(

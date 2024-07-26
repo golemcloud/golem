@@ -40,6 +40,7 @@ max_connections = 10
 console = false
 dtor_friendly = false
 file_name = "component-service.log"
+file_truncate = true
 
 [tracing.file]
 ansi = false

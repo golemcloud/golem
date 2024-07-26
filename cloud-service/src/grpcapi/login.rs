@@ -17,8 +17,8 @@ use cloud_api_grpc::proto::golem::cloud::login::{
 use cloud_api_grpc::proto::golem::cloud::login::{login_error, LoginError, OAuth2Data};
 use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_common::metrics::grpc::TraceErrorKind;
-use golem_common::recorded_grpc_request;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -143,7 +143,7 @@ impl CloudLoginService for LoginGrpcApi {
         request: Request<CompleteOAuth2Request>,
     ) -> Result<Response<CompleteOAuth2Response>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!("complete_o_auth2",);
+        let record = recorded_grpc_api_request!("complete_login_oauth2",);
 
         let response = match self
             .complete_oauth2(r, m)
@@ -166,7 +166,7 @@ impl CloudLoginService for LoginGrpcApi {
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<StartOAuth2Response>, Status> {
-        let record = recorded_grpc_request!("start_o_auth2",);
+        let record = recorded_grpc_api_request!("start_login_oauth2",);
 
         let response = match self.start_oauth2().instrument(record.span.clone()).await {
             Ok(result) => record.succeed(start_o_auth2_response::Result::Success(result)),
@@ -187,7 +187,7 @@ impl CloudLoginService for LoginGrpcApi {
     ) -> Result<Response<CurrentTokenResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("current_token",);
+        let record = recorded_grpc_api_request!("current_login_token",);
 
         let response = match self
             .get_current_token(r, m)
@@ -212,7 +212,7 @@ impl CloudLoginService for LoginGrpcApi {
     ) -> Result<Response<OAuth2Response>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("o_auth2",);
+        let record = recorded_grpc_api_request!("login_oauth2",);
 
         let response = match self.oauth2(r, m).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(o_auth2_response::Result::Success(result)),

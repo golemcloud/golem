@@ -45,6 +45,7 @@ worker_limit = 10000
 console = false
 dtor_friendly = false
 file_name = "cloud-service.log"
+file_truncate = true
 
 [tracing.file]
 ansi = false

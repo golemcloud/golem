@@ -22,7 +22,7 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
 };
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::WorkerServiceError;
@@ -43,7 +43,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<LaunchNewWorkerRequest>,
     ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "launch_new_worker",
             component_id = proto_component_id_string(&r.component_id),
             name = r.name
@@ -76,7 +76,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<DeleteWorkerRequest>,
     ) -> Result<Response<DeleteWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_worker",
             worker_id = proto_worker_id_string(&r.worker_id),
         );
@@ -103,7 +103,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<CompletePromiseRequest>,
     ) -> Result<Response<CompletePromiseResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "complete_promise",
             worker_id = proto_worker_id_string(&r.worker_id),
         );
@@ -130,7 +130,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<UpdateWorkerRequest>,
     ) -> Result<Response<UpdateWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_worker",
             worker_id = proto_worker_id_string(&r.worker_id),
         );
@@ -157,7 +157,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<GetWorkerMetadataRequest>,
     ) -> Result<Response<GetWorkerMetadataResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_worker_metadata",
             worker_id = proto_worker_id_string(&r.worker_id),
         );
@@ -184,7 +184,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_workers_metadata",
             component_id = proto_component_id_string(&r.component_id),
         );
@@ -216,7 +216,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<InterruptWorkerRequest>,
     ) -> Result<Response<InterruptWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "interrupt_worker",
             worker_id = proto_worker_id_string(&r.worker_id),
             recover_immedietaly = r.recover_immediately,
@@ -244,7 +244,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<InvokeAndAwaitRequest>,
     ) -> Result<Response<InvokeAndAwaitResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_and_await",
             worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
@@ -274,7 +274,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke",
             worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
@@ -300,7 +300,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         request: Request<ResumeWorkerRequest>,
     ) -> Result<Response<ResumeWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "resume_worker",
             worker_id = proto_worker_id_string(&r.worker_id),
         );
@@ -330,7 +330,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
     ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "connect_worker",
             worker_id = proto_worker_id_string(&r.worker_id),
         );

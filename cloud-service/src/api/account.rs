@@ -1,19 +1,19 @@
-use std::sync::Arc;
-
-use golem_common::model::AccountId;
-use poem_openapi::param::Path;
-use poem_openapi::payload::Json;
-use poem_openapi::*;
-
 use crate::api::ApiTags;
 use crate::model::*;
 use crate::service::account::{AccountError as AccountServiceError, AccountService};
 use crate::service::auth::{AuthService, AuthServiceError};
-use golem_service_base::model::{ErrorBody, ErrorsBody};
-
 use cloud_common::auth::GolemSecurityScheme;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::AccountId;
+use golem_common::recorded_http_api_request;
+use golem_service_base::model::{ErrorBody, ErrorsBody};
+use poem_openapi::param::Path;
+use poem_openapi::payload::Json;
+use poem_openapi::*;
+use std::sync::Arc;
+use tracing::Instrument;
 
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Debug, Clone)]
 pub enum AccountError {
     /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
@@ -27,6 +27,17 @@ pub enum AccountError {
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for AccountError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            AccountError::BadRequest(_) => "BadRequest",
+            AccountError::NotFound(_) => "NotFound",
+            AccountError::Unauthorized(_) => "Unauthorized",
+            AccountError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 type Result<T> = std::result::Result<T, AccountError>;
@@ -75,27 +86,59 @@ impl AccountApi {
     /// Get account
     ///
     /// Retrieve an account for a given Account ID
-    #[oai(path = "/:account_id", method = "get")]
+    #[oai(path = "/:account_id", method = "get", operation_id = "get_account")]
     async fn get_account(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Account>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_service.get(&account_id.0, &auth).await?;
-        Ok(Json(response))
+        let record =
+            recorded_http_api_request!("get_account", account_id = account_id.0.to_string());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            let response = self
+                .account_service
+                .get(&account_id.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(response))
+        };
+
+        record.result(response)
     }
 
     /// Get account's plan
-    #[oai(path = "/:account_id/plan", method = "get")]
+    #[oai(
+        path = "/:account_id/plan",
+        method = "get",
+        operation_id = "get_account_plan"
+    )]
     async fn get_account_plan(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Plan>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self.account_service.get_plan(&account_id.0, &auth).await?;
-        Ok(Json(response))
+        let record =
+            recorded_http_api_request!("get_account_plan", account_id = account_id.0.to_string());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            let response = self
+                .account_service
+                .get_plan(&account_id.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(response))
+        };
+
+        record.result(response)
     }
 
     /// Update account
@@ -104,49 +147,87 @@ impl AccountApi {
     ///
     /// Changing the planId is not allowed and the request will be rejected.
     /// The response is the updated account data.
-    #[oai(path = "/:account_id", method = "put")]
+    #[oai(path = "/:account_id", method = "put", operation_id = "update_account")]
     async fn put_account(
         &self,
         account_id: Path<AccountId>,
         data: Json<AccountData>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Account>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self
-            .account_service
-            .update(&account_id.0, &data.0, &auth)
-            .await?;
-        Ok(Json(response))
+        let record =
+            recorded_http_api_request!("update_account", account_id = account_id.0.to_string());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            let response = self
+                .account_service
+                .update(&account_id.0, &data.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(response))
+        };
+
+        record.result(response)
     }
 
     /// Create account
     ///
     /// Create a new account. The response is the created account data.
-    #[oai(path = "/", method = "post")]
+    #[oai(path = "/", method = "post", operation_id = "create_account")]
     async fn post_account(
         &self,
         data: Json<AccountData>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Account>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        let response = self
-            .account_service
-            .create(&AccountId::generate(), &data.0, &auth)
-            .await?;
-        Ok(Json(response))
+        let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            let response = self
+                .account_service
+                .create(&AccountId::generate(), &data.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(response))
+        };
+
+        record.result(response)
     }
 
     /// Delete account
     ///
     /// Delete an account.
-    #[oai(path = "/:account_id", method = "delete")]
+    #[oai(
+        path = "/:account_id",
+        method = "delete",
+        operation_id = "delete_account"
+    )]
     async fn delete_account(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteAccountResponse>> {
-        let auth = self.auth_service.authorization(token.as_ref()).await?;
-        self.account_service.delete(&account_id.0, &auth).await?;
-        Ok(Json(DeleteAccountResponse {}))
+        let record =
+            recorded_http_api_request!("delete_account", account_id = account_id.0.to_string());
+        let response = {
+            let auth = self
+                .auth_service
+                .authorization(token.as_ref())
+                .instrument(record.span.clone())
+                .await?;
+            self.account_service
+                .delete(&account_id.0, &auth)
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(DeleteAccountResponse {}))
+        };
+
+        record.result(response)
     }
 }

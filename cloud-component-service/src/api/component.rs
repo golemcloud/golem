@@ -1,23 +1,24 @@
-use futures_util::TryStreamExt;
-use std::sync::Arc;
-
+use crate::api::ApiTags;
+use crate::model::*;
+use crate::service::auth::CloudAuthCtx;
+use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
 use cloud_common::auth::GolemSecurityScheme;
+use futures_util::TryStreamExt;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
+use golem_common::recorded_http_api_request;
+use golem_service_base::model::*;
 use poem::error::ReadBodyError;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
+use std::sync::Arc;
+use tracing::Instrument;
 
-use crate::api::ApiTags;
-use crate::model::*;
-use crate::service::auth::CloudAuthCtx;
-use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
-use golem_service_base::model::*;
-
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Debug, Clone)]
 pub enum ComponentError {
     /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
@@ -37,6 +38,19 @@ pub enum ComponentError {
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for ComponentError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            ComponentError::BadRequest(_) => "BadRequest",
+            ComponentError::NotFound(_) => "NotFound",
+            ComponentError::AlreadyExists(_) => "AlreadyExists",
+            ComponentError::LimitExceeded(_) => "LimitExceeded",
+            ComponentError::Unauthorized(_) => "Unauthorized",
+            ComponentError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 #[derive(Multipart)]
@@ -148,12 +162,20 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let data = wasm.0.into_vec().await?;
-        let response = self
-            .component_service
-            .update(&component_id.0, data, &auth)
-            .await?;
-        Ok(Json(response))
+        let record = recorded_http_api_request!(
+            "update_component",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let data = wasm.0.into_vec().await?;
+            self.component_service
+                .update(&component_id.0, data, &auth)
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(Json)
+        };
+        record.result(response)
     }
 
     /// Create a new component
@@ -166,14 +188,23 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let data = payload.component.into_vec().await?;
-        let component_name = payload.query.0.component_name;
-        let project_id = payload.query.0.project_id;
-        let response = self
-            .component_service
-            .create(project_id, &component_name, data, &auth)
-            .await?;
-        Ok(Json(response))
+        let record = recorded_http_api_request!(
+            "create_component",
+            component_name = payload.query.0.component_name.to_string(),
+            project_id = payload.query.0.project_id.as_ref().map(|v| v.to_string()),
+        );
+        let response = {
+            let data = payload.component.into_vec().await?;
+            let component_name = payload.query.0.component_name;
+            let project_id = payload.query.0.project_id;
+            self.component_service
+                .create(project_id, &component_name, data, &auth)
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(Json)
+        };
+        record.result(response)
     }
 
     /// Download a component
@@ -191,13 +222,23 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let bytes = self
+        let record = recorded_http_api_request!(
+            "download_component",
+            component_id = component_id.0.to_string(),
+            version = version.0.map(|v| v.to_string())
+        );
+        let response = self
             .component_service
             .download_stream(&component_id.0, version.0, &auth)
-            .await?;
-        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        }))))
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|bytes| {
+                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })))
+            });
+        record.result(response)
     }
 
     /// Get the version of a given component
@@ -215,31 +256,38 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let version_int = match version.0.parse::<u64>() {
-            Ok(v) => v,
-            Err(_) => {
-                return Err(ComponentError::BadRequest(Json(ErrorsBody {
+        let record = recorded_http_api_request!(
+            "get_component_metadata",
+            component_id = component_id.0.to_string(),
+            version = version.0,
+        );
+
+        let response = {
+            let version_int = version.0.parse::<u64>().map_err(|_| {
+                ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec!["Invalid version".to_string()],
-                })))
-            }
+                }))
+            })?;
+
+            let versioned_component_id = VersionedComponentId {
+                component_id: component_id.0,
+                version: version_int,
+            };
+
+            self.component_service
+                .get_by_version(&versioned_component_id, &auth)
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .and_then(|response| match response {
+                    Some(component) => Ok(Json(component)),
+                    None => Err(ComponentError::NotFound(Json(ErrorBody {
+                        error: "Component not found".to_string(),
+                    }))),
+                })
         };
 
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.0,
-            version: version_int,
-        };
-
-        let response = self
-            .component_service
-            .get_by_version(&versioned_component_id, &auth)
-            .await?;
-
-        match response {
-            Some(component) => Ok(Json(component)),
-            None => Err(ComponentError::NotFound(Json(ErrorBody {
-                error: "Component not found".to_string(),
-            }))),
-        }
+        record.result(response)
     }
 
     /// Get the latest version of a given component
@@ -256,17 +304,25 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "get_latest_component_metadata",
+            component_id = component_id.0.to_string()
+        );
+
         let response = self
             .component_service
             .get_latest_version(&component_id.0, &auth)
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .and_then(|response| match response {
+                Some(component) => Ok(Json(component)),
+                None => Err(ComponentError::NotFound(Json(ErrorBody {
+                    error: "Component not found".to_string(),
+                }))),
+            });
 
-        match response {
-            Some(component) => Ok(Json(component)),
-            None => Err(ComponentError::NotFound(Json(ErrorBody {
-                error: "Component not found".to_string(),
-            }))),
-        }
+        record.result(response)
     }
 
     /// Get all components
@@ -284,11 +340,20 @@ impl ComponentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<crate::model::Component>>> {
         let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "get_components",
+            component_name = component_name.0.as_ref().map(|v| v.0.clone()),
+            project_id = project_id.0.as_ref().map(|v| v.to_string()),
+        );
+
         let response = self
             .component_service
             .find_by_project_and_name(project_id.0, component_name.0, &auth)
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
-        Ok(Json(response))
+        record.result(response)
     }
 }

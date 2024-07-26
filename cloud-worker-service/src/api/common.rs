@@ -1,6 +1,3 @@
-use golem_service_base::model::ErrorBody;
-use std::fmt::Display;
-
 use crate::service::api_certificate::CertificateServiceError;
 use crate::service::api_definition::ApiDefinitionError;
 use crate::service::api_domain::ApiDomainServiceError;
@@ -8,10 +5,13 @@ use crate::service::api_domain::RegisterDomainRouteError;
 use crate::service::auth::{AuthServiceError, CloudNamespace};
 use crate::service::project::ProjectError;
 use cloud_api_grpc::proto::golem::cloud::project::project_error::Error;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_service_base::model::ErrorBody;
 use golem_worker_service_base::service::api_definition::ApiDefinitionError as BaseApiDefinitionError;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Tags, Union};
+use std::fmt::Display;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Tags)]
@@ -23,29 +23,29 @@ pub enum ApiTags {
     Worker,
 }
 
-#[derive(Union)]
+#[derive(Union, Debug, Clone)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum WorkerServiceErrorsBody {
     Messages(MessagesErrorsBody),
     Validation(ValidationErrorsBody),
 }
 
-#[derive(Object)]
+#[derive(Object, Debug, Clone)]
 pub struct MessagesErrorsBody {
     errors: Vec<String>,
 }
 
-#[derive(Object)]
+#[derive(Object, Debug, Clone)]
 pub struct ValidationErrorsBody {
     errors: Vec<RouteValidationError>,
 }
 
-#[derive(Object)]
+#[derive(Object, Debug, Clone)]
 pub struct MessageBody {
     message: String,
 }
 
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Debug, Clone)]
 pub enum ApiEndpointError {
     #[oai(status = 400)]
     BadRequest(Json<WorkerServiceErrorsBody>),
@@ -59,6 +59,19 @@ pub enum ApiEndpointError {
     AlreadyExists(Json<String>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for ApiEndpointError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            ApiEndpointError::BadRequest(_) => "BadRequest",
+            ApiEndpointError::NotFound(_) => "NotFound",
+            ApiEndpointError::AlreadyExists(_) => "AlreadyExists",
+            ApiEndpointError::LimitExceeded(_) => "LimitExceeded",
+            ApiEndpointError::Unauthorized(_) => "Unauthorized",
+            ApiEndpointError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 impl ApiEndpointError {

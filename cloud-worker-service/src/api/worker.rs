@@ -4,9 +4,11 @@ use crate::api::common::ApiTags;
 use crate::service::auth::{AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::GolemSecurityScheme;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{
     CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
 };
+use golem_common::recorded_http_api_request;
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
 use poem_openapi::param::{Header, Path, Query};
@@ -15,8 +17,9 @@ use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
 use tonic::Status;
+use tracing::Instrument;
 
-#[derive(ApiResponse)]
+#[derive(ApiResponse, Debug, Clone)]
 pub enum WorkerError {
     /// Invalid request, returning with a list of issues detected in the request
     #[oai(status = 400)]
@@ -36,6 +39,19 @@ pub enum WorkerError {
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<GolemErrorBody>),
+}
+
+impl TraceErrorKind for WorkerError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            WorkerError::BadRequest(_) => "BadRequest",
+            WorkerError::NotFound(_) => "NotFound",
+            WorkerError::AlreadyExists(_) => "AlreadyExists",
+            WorkerError::LimitExceeded(_) => "LimitExceeded",
+            WorkerError::Unauthorized(_) => "Unauthorized",
+            WorkerError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 impl WorkerError {
@@ -197,41 +213,52 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "launch_new_worker",
+            component_id = component_id.0.to_string(),
+            name = request.name
+        );
 
-        let component_id = component_id.0;
-        let latest_component = self
-            .component_service
-            .get_latest(&component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|error| {
-                WorkerError::NotFound(Json(ErrorBody {
-                    error: format!(
-                        "Couldn't retrieve the component: {}. error: {}",
-                        &component_id, error
-                    ),
-                }))
-            })?;
+        let response = {
+            let component_id = component_id.0;
+            let latest_component = self
+                .component_service
+                .get_latest(&component_id, &auth)
+                .instrument(record.span.clone())
+                .await
+                .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+                .map_err(|error| {
+                    WorkerError::NotFound(Json(ErrorBody {
+                        error: format!(
+                            "Couldn't retrieve the component: {}. error: {}",
+                            &component_id, error
+                        ),
+                    }))
+                })?;
 
-        let WorkerCreationRequest { name, args, env } = request.0;
+            let WorkerCreationRequest { name, args, env } = request.0;
 
-        let worker_id = make_worker_id(component_id, name)?;
+            let worker_id = make_worker_id(component_id, name)?;
 
-        let _worker = self
-            .worker_service
-            .create(
-                &worker_id,
-                latest_component.versioned_component_id.version,
-                args,
-                env,
-                &auth,
-            )
-            .await?;
+            let _worker = self
+                .worker_service
+                .create(
+                    &worker_id,
+                    latest_component.versioned_component_id.version,
+                    args,
+                    env,
+                    &auth,
+                )
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(WorkerCreationResponse {
-            worker_id,
-            component_version: latest_component.versioned_component_id.version,
-        }))
+            Ok(Json(WorkerCreationResponse {
+                worker_id,
+                component_version: latest_component.versioned_component_id.version,
+            }))
+        };
+
+        record.result(response)
     }
 
     /// Delete a worker
@@ -251,9 +278,17 @@ impl WorkerApi {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service.delete(&worker_id, &auth).await?;
+        let record =
+            recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
+        let response = self
+            .worker_service
+            .delete(&worker_id, &auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(DeleteWorkerResponse {}));
 
-        Ok(Json(DeleteWorkerResponse {}))
+        record.result(response)
     }
 
     /// Invoke a function and await it's resolution
@@ -281,7 +316,14 @@ impl WorkerApi {
 
         let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
-        let result = self
+        let record = recorded_http_api_request!(
+            "invoke_and_await_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let response = self
             .worker_service
             .invoke_and_await_function(
                 &worker_id,
@@ -292,9 +334,12 @@ impl WorkerApi {
                 None,
                 &auth,
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|result| Json(InvokeResult { result }));
 
-        Ok(Json(InvokeResult { result }))
+        record.result(response)
     }
 
     /// Invoke a function
@@ -319,7 +364,15 @@ impl WorkerApi {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record = recorded_http_api_request!(
+            "invoke_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let response = self
+            .worker_service
             .invoke_function(
                 &worker_id,
                 idempotency_key.0,
@@ -328,9 +381,12 @@ impl WorkerApi {
                 None,
                 &auth,
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InvokeResponse {}));
 
-        Ok(Json(InvokeResponse {}))
+        record.result(response)
     }
 
     /// Complete a promise
@@ -352,14 +408,21 @@ impl WorkerApi {
     ) -> Result<Json<bool>> {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record =
+            recorded_http_api_request!("complete_promise", worker_id = worker_id.to_string());
+
         let CompleteParameters { oplog_idx, data } = params.0;
 
-        let result = self
+        let response = self
             .worker_service
             .complete_promise(&worker_id, oplog_idx, data, &auth)
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
-        Ok(Json(result))
+        record.result(response)
     }
 
     /// Interrupt a worker
@@ -385,11 +448,18 @@ impl WorkerApi {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
-            .interrupt(&worker_id, recover_immediately.0.unwrap_or(false), &auth)
-            .await?;
+        let record =
+            recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
 
-        Ok(Json(InterruptResponse {}))
+        let response = self
+            .worker_service
+            .interrupt(&worker_id, recover_immediately.0.unwrap_or(false), &auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InterruptResponse {}));
+
+        record.result(response)
     }
 
     /// Get metadata of a worker
@@ -422,9 +492,19 @@ impl WorkerApi {
     ) -> Result<Json<crate::model::WorkerMetadata>> {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-        let result = self.worker_service.get_metadata(&worker_id, &auth).await?;
 
-        Ok(Json(result))
+        let record =
+            recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_metadata(&worker_id, &auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
     }
 
     /// Get metadata of multiple workers
@@ -467,39 +547,46 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "get_workers_metadata",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let filter = match filter.0 {
+                Some(filters) if !filters.is_empty() => {
+                    Some(WorkerFilter::from(filters).map_err(|e| {
+                        WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    })?)
+                }
+                _ => None,
+            };
 
-        let filter = match filter.0 {
-            Some(filters) if !filters.is_empty() => Some(
-                WorkerFilter::from(filters)
-                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
-            ),
-            _ => None,
+            let cursor =
+                match cursor.0 {
+                    Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
+                        WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    })?),
+                    None => None,
+                };
+
+            self.worker_service
+                .find_metadata(
+                    &component_id.0,
+                    filter,
+                    cursor.unwrap_or_default(),
+                    count.0.unwrap_or(50),
+                    precise.0.unwrap_or(false),
+                    &auth,
+                )
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|(cursor, workers)| {
+                    Json(crate::model::WorkersMetadataResponse { workers, cursor })
+                })
         };
 
-        let cursor = match cursor.0 {
-            Some(cursor) => Some(
-                ScanCursor::from_str(&cursor)
-                    .map_err(|e| WorkerError::BadRequest(Json(ErrorsBody { errors: vec![e] })))?,
-            ),
-            None => None,
-        };
-
-        let (cursor, workers) = self
-            .worker_service
-            .find_metadata(
-                &component_id.0,
-                filter,
-                cursor.unwrap_or_default(),
-                count.0.unwrap_or(50),
-                precise.0.unwrap_or(false),
-                &auth,
-            )
-            .await?;
-
-        Ok(Json(crate::model::WorkersMetadataResponse {
-            workers,
-            cursor,
-        }))
+        record.result(response)
     }
 
     /// Advanced search for workers
@@ -535,8 +622,12 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkersMetadataResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "find_workers_metadata",
+            component_id = component_id.0.to_string()
+        );
 
-        let (cursor, workers) = self
+        let response = self
             .worker_service
             .find_metadata(
                 &component_id.0,
@@ -546,12 +637,14 @@ impl WorkerApi {
                 params.precise.unwrap_or(false),
                 &auth,
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|(cursor, workers)| {
+                Json(crate::model::WorkersMetadataResponse { workers, cursor })
+            });
 
-        Ok(Json(crate::model::WorkersMetadataResponse {
-            workers,
-            cursor,
-        }))
+        record.result(response)
     }
 
     /// Resume a worker
@@ -569,9 +662,16 @@ impl WorkerApi {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service.resume(&worker_id, &auth).await?;
+        let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
+        let response = self
+            .worker_service
+            .resume(&worker_id, &auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(ResumeResponse {}));
 
-        Ok(Json(ResumeResponse {}))
+        record.result(response)
     }
 
     #[oai(
@@ -589,16 +689,22 @@ impl WorkerApi {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
             .update(
                 &worker_id,
                 params.mode.clone().into(),
                 params.target_version,
                 &auth,
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(UpdateWorkerResponse {}));
 
-        Ok(Json(UpdateWorkerResponse {}))
+        record.result(response)
     }
 }
 

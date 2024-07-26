@@ -17,9 +17,9 @@ use cloud_api_grpc::proto::golem::cloud::account::{account_error, Account, Accou
 use cloud_api_grpc::proto::golem::cloud::plan::Plan;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -175,7 +175,7 @@ impl CloudAccountService for AccountGrpcApi {
         request: Request<AccountDeleteRequest>,
     ) -> Result<Response<AccountDeleteResponse>, Status> {
         let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_account",
             account_id = proto_account_id_string(&r.account_id)
         );
@@ -199,7 +199,7 @@ impl CloudAccountService for AccountGrpcApi {
     ) -> Result<Response<AccountGetResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_account",
             account_id = proto_account_id_string(&r.account_id)
         );
@@ -223,8 +223,8 @@ impl CloudAccountService for AccountGrpcApi {
     ) -> Result<Response<AccountGetPlanResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "get_plan",
+        let record = recorded_grpc_api_request!(
+            "get_account_plan",
             account_id = proto_account_id_string(&r.account_id)
         );
 
@@ -251,7 +251,7 @@ impl CloudAccountService for AccountGrpcApi {
     ) -> Result<Response<AccountUpdateResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_account",
             account_id = proto_account_id_string(&r.account_id)
         );
@@ -275,7 +275,7 @@ impl CloudAccountService for AccountGrpcApi {
     ) -> Result<Response<AccountCreateResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_account",
             account_name = r.account_data.as_ref().map(|data| data.name.clone())
         );

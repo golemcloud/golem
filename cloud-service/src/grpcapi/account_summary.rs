@@ -13,8 +13,8 @@ use cloud_api_grpc::proto::golem::cloud::accountsummary::{
     GetAccountsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
-use golem_common::metrics::grpc::TraceErrorKind;
-use golem_common::recorded_grpc_request;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::recorded_grpc_api_request;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
@@ -111,7 +111,7 @@ impl CloudAccountSummaryService for AccountSummaryGrpcApi {
     ) -> Result<Response<GetAccountCountResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("get_account_count",);
+        let record = recorded_grpc_api_request!("get_account_count",);
 
         let response = match self.count(r, m).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(get_account_count_response::Result::Success(result)),
@@ -132,7 +132,7 @@ impl CloudAccountSummaryService for AccountSummaryGrpcApi {
     ) -> Result<Response<GetAccountsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!("get_accounts",);
+        let record = recorded_grpc_api_request!("get_accounts",);
 
         let response = match self.get(r, m).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(get_accounts_response::Result::Success(result)),

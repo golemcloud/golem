@@ -15,9 +15,9 @@ use cloud_api_grpc::proto::golem::cloud::grant::{grant_error, GrantError};
 use cloud_common::model::Role;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;
-use golem_common::metrics::grpc::TraceErrorKind;
+use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
-use golem_common::recorded_grpc_request;
+use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -189,8 +189,8 @@ impl CloudGrantService for GrantGrpcApi {
     ) -> Result<Response<GetGrantsResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "get_grants",
+        let record = recorded_grpc_api_request!(
+            "get_account_grants",
             account_id = proto_account_id_string(&r.account_id)
         );
 
@@ -217,8 +217,8 @@ impl CloudGrantService for GrantGrpcApi {
     ) -> Result<Response<DeleteGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "delete_grant",
+        let record = recorded_grpc_api_request!(
+            "delete_account_grant",
             account_id = proto_account_id_string(&r.account_id)
         );
 
@@ -241,8 +241,8 @@ impl CloudGrantService for GrantGrpcApi {
     ) -> Result<Response<GetGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "get_grant",
+        let record = recorded_grpc_api_request!(
+            "get_account_grant",
             account_id = proto_account_id_string(&r.account_id)
         );
 
@@ -265,8 +265,8 @@ impl CloudGrantService for GrantGrpcApi {
     ) -> Result<Response<PutGrantResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_request!(
-            "put_grant",
+        let record = recorded_grpc_api_request!(
+            "create_account_grant",
             account_id = proto_account_id_string(&r.account_id)
         );
 

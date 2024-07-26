@@ -152,13 +152,13 @@ impl CertificateService for CertificateServiceDefault {
         let namespace = self
             .is_authorized(project_id, ProjectAction::CreateApiDefinition, auth)
             .await?;
-        let account_id = namespace.account_id;
-
         info!(
-            "Create API certificate - account: {}, project: {}, domain name: {}",
-            account_id, project_id, request.domain_name
+            namespace = %namespace,
+            "Create API certificate - domain name: {}",
+            request.domain_name
         );
 
+        let account_id = namespace.account_id;
         let certificate_body = request.certificate_body.clone().leak();
         let certificate_private_key = request.certificate_private_key.clone().leak();
 
@@ -195,12 +195,11 @@ impl CertificateService for CertificateServiceDefault {
         let namespace = self
             .is_authorized(&project_id, ProjectAction::ViewApiDefinition, auth)
             .await?;
-        let account_id = namespace.account_id.clone();
-
         let records = if let Some(certificate_id) = certificate_id {
             info!(
-                "Get API certificate - account: {}, project: {}, id: {}",
-                account_id, project_id, certificate_id
+                namespace = %namespace,
+                "Get API certificate - id: {}",
+                certificate_id
             );
 
             let data = self
@@ -214,8 +213,8 @@ impl CertificateService for CertificateServiceDefault {
             }
         } else {
             info!(
-                "Get API certificates - account: {}, project: {}",
-                account_id, project_id
+                namespace = %namespace,
+                "Get API certificates"
             );
 
             self.certificate_repo
@@ -241,12 +240,13 @@ impl CertificateService for CertificateServiceDefault {
         let namespace = self
             .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
             .await?;
-        let account_id = namespace.account_id.clone();
 
         info!(
-            "Delete API certificate - account: {}, project: {}, id: {}",
-            account_id, project_id, certificate_id
+            namespace = %namespace,
+            "Delete API certificate -id: {}",
+            certificate_id
         );
+        let account_id = namespace.account_id.clone();
 
         let data = self
             .certificate_repo
@@ -375,16 +375,13 @@ pub struct CertificateManagerNoop {
 impl CertificateManager for CertificateManagerNoop {
     async fn import(
         &self,
-        account_id: &AccountId,
+        _account_id: &AccountId,
         domain_name: &str,
         _certificate_body: &'static str,
         _certificate_private_key: &'static str,
         _external_id: Option<String>,
     ) -> Result<String, CertificateManagerError> {
-        info!(
-            "Import certificate - account: {}, domain name: {}",
-            account_id, domain_name
-        );
+        info!("Import certificate - domain name: {}", domain_name);
 
         if !self
             .domain_records_config
@@ -399,39 +396,30 @@ impl CertificateManager for CertificateManagerNoop {
 
     async fn unregister(
         &self,
-        account_id: &AccountId,
+        _account_id: &AccountId,
         certificate_id: &str,
     ) -> Result<bool, CertificateManagerError> {
-        info!(
-            "Unregister certificate - account: {}, id: {}",
-            account_id, certificate_id
-        );
+        info!("Unregister certificate - id: {}", certificate_id);
 
         Ok(false)
     }
 
     async fn get(
         &self,
-        account_id: &AccountId,
+        _account_id: &AccountId,
         certificate_id: &str,
     ) -> Result<Option<CertificateDetail>, CertificateManagerError> {
-        info!(
-            "Get certificate - account: {}, id: {}",
-            account_id, certificate_id
-        );
+        info!("Get certificate - id: {}", certificate_id);
 
         Ok(None)
     }
 
     async fn delete(
         &self,
-        account_id: &AccountId,
+        _account_id: &AccountId,
         certificate_id: &str,
     ) -> Result<bool, CertificateManagerError> {
-        info!(
-            "Delete certificate account: {}, id: {}",
-            account_id, certificate_id
-        );
+        info!("Delete certificate - id: {}", certificate_id);
 
         Ok(false)
     }
@@ -475,10 +463,7 @@ impl CertificateManager for AwsCertificateManager {
         certificate_private_key: &'static str,
         external_id: Option<String>,
     ) -> Result<String, CertificateManagerError> {
-        info!(
-            "Import certificate - account: {}, domain name: {}",
-            account_id, domain_name
-        );
+        info!("Import certificate - domain name: {}", domain_name);
 
         if !self
             .domain_records_config
@@ -511,8 +496,8 @@ impl CertificateManager for AwsCertificateManager {
         .map_err(CertificateManagerError::internal)?;
 
         info!(
-            "Import certificate - account: {}, domain name: {}, id: {}",
-            account_id, domain_name, certificate_id
+            "Import certificate - domain name: {}, id: {}",
+            domain_name, certificate_id
         );
 
         let elb_client: ElbClient = self
@@ -533,10 +518,7 @@ impl CertificateManager for AwsCertificateManager {
         account_id: &AccountId,
         certificate_id: &str,
     ) -> Result<bool, CertificateManagerError> {
-        info!(
-            "Unregister certificate - account: {}, id: {}",
-            account_id, certificate_id
-        );
+        info!("Unregister certificate - id: {}", certificate_id);
 
         let client: AcmClient = self
             .aws_config
@@ -573,10 +555,7 @@ impl CertificateManager for AwsCertificateManager {
         account_id: &AccountId,
         certificate_id: &str,
     ) -> Result<Option<CertificateDetail>, CertificateManagerError> {
-        info!(
-            "Get certificate - account: {}, id: {}",
-            account_id, certificate_id
-        );
+        info!("Get certificate - id: {}", certificate_id);
 
         let client: AcmClient = self
             .aws_config
@@ -603,10 +582,7 @@ impl CertificateManager for AwsCertificateManager {
         account_id: &AccountId,
         certificate_id: &str,
     ) -> Result<bool, CertificateManagerError> {
-        info!(
-            "Delete certificate - account: {}, id: {}",
-            account_id, certificate_id
-        );
+        info!("Delete certificate - id: {}", certificate_id);
 
         let client: AcmClient = self
             .aws_config

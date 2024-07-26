@@ -168,7 +168,7 @@ impl ApiDomainService for ApiDomainServiceDefault {
             .is_authorized(project_id, ProjectAction::CreateApiDefinition, auth)
             .await?;
 
-        let account_id = namespace.account_id;
+        let account_id = namespace.account_id.clone();
 
         let current_registration = self.domain_repo.get(&payload.domain_name).await?;
 
@@ -180,8 +180,9 @@ impl ApiDomainService for ApiDomainServiceDefault {
             if current.account_id != account_id || current.domain.project_id != namespace.project_id
             {
                 error!(
-                    "Register API domain - account: {}, project: {}, domain: {} - already used",
-                    account_id, &project_id, &payload.domain_name
+                    namespace = %namespace,
+                    "Register API domain - domain: {} - already used",
+                    &payload.domain_name
                 );
 
                 return Err(ApiDomainServiceError::already_exists(
@@ -190,13 +191,15 @@ impl ApiDomainService for ApiDomainServiceDefault {
             }
         }
 
-        let current_name_servers = self.register_domain
+        let current_name_servers = self
+            .register_domain
             .get(&payload.domain_name)
             .await
             .tap_err(|e| {
                 error!(
-                    "Domain registration - account: {}, project: {}, domain: {} - register error: {}",
-                    account_id, namespace.project_id, payload.domain_name, e
+                    namespace = %namespace,
+                    "Domain registration - domain: {} - register error: {}",
+                    payload.domain_name, e
                 );
             })?;
 
@@ -214,8 +217,9 @@ impl ApiDomainService for ApiDomainServiceDefault {
                     .await
                     .tap_err(|e| {
                         error!(
-                            "Domain registration - for account: {}, project: {}, domain: {} - register error: {}",
-                            account_id, namespace.project_id, payload.domain_name, e
+                            namespace = %namespace,
+                            "Domain registration - domain: {} - register error: {}",
+                             payload.domain_name, e
                         );
                     })?
             }
@@ -228,9 +232,10 @@ impl ApiDomainService for ApiDomainServiceDefault {
             .await
             .map_err(|e| {
                 error!(
-                "Domain registration - account: {}, project: {}, domain: {} - register error: {}",
-                account_id, namespace.project_id, payload.domain_name, e
-            );
+                    namespace = %namespace,
+                    "Domain registration - domain: {} - register error: {}",
+                    payload.domain_name, e
+                );
                 ApiDomainServiceError::internal(e)
             })?;
 
@@ -246,11 +251,9 @@ impl ApiDomainService for ApiDomainServiceDefault {
             .is_authorized(project_id, ProjectAction::ViewApiDefinition, auth)
             .await?;
 
-        let account_id = namespace.account_id.clone();
-
         info!(
-            "Get API domains - account: {}, project: {}",
-            account_id, project_id
+            namespace = %namespace,
+            "Get API domains"
         );
 
         let data = self.domain_repo.get_all(&namespace.to_string()).await?;
@@ -273,16 +276,17 @@ impl ApiDomainService for ApiDomainServiceDefault {
             .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
             .await?;
 
-        let account_id = namespace.account_id;
-
         info!(
-            "Delete API domain - account: {}, project: {}, domain: {}",
-            account_id, project_id, domain_name
+            namespace = %namespace,
+            "Delete API domain - domain: {}",
+            domain_name
         );
 
         let data = self.domain_repo.get(domain_name).await?;
 
         if let Some(domain) = data {
+            let account_id = namespace.account_id;
+
             let domain: AccountApiDomain =
                 domain.try_into().map_err(ApiDomainServiceError::internal)?;
 
