@@ -1398,6 +1398,8 @@ impl RunningWorker {
                                                     &full_function_name,
                                                 );
 
+                                                debug!( "{:?}", &full_function_name);
+
                                                 match function_results {
                                                     Ok(Some(export_function)) => {
                                                         let function_results = export_function
@@ -1406,6 +1408,8 @@ impl RunningWorker {
                                                             .map(|t| t.into())
                                                             .collect();
 
+                                                        debug!( "{:?}", &function_results);
+                                                        debug!("{:?}", output.clone());
                                                         let result = output
                                                             .validate_function_result(
                                                                 function_results,
@@ -1452,6 +1456,7 @@ impl RunningWorker {
                                                     }
 
                                                     Ok(None) => {
+                                                        debug!("is this here?");
                                                         store
                                                             .data_mut()
                                                             .on_invocation_failure(
@@ -1469,6 +1474,7 @@ impl RunningWorker {
                                                     }
 
                                                     Err(result) => {
+                                                        debug!("is this here?2");
                                                         store
                                                             .data_mut()
                                                             .on_invocation_failure(
