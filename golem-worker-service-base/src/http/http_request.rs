@@ -772,8 +772,8 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}(if 2 < 1 then 0 else 1);
-          response
+           let response = golem:it/api.{get-cart-contents}(if 2 < 1 then 0 else 1);
+           response
         "#;
 
         let api_specification: HttpApiDefinition =
@@ -1026,7 +1026,7 @@ mod tests {
 
             let expression = r#"
             let param = request.body;
-            let response = golem:it/api.{get-cart-contents};
+            let response = golem:it/api.{get-cart-contents}(param);
             response
             "#;
 

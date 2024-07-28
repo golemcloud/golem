@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
 use crate::error::ShardManagerError;
 use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
 use crate::shard_manager_config::WorkerExecutorServiceConfig;
@@ -23,6 +20,9 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::time::timeout;
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -131,7 +131,12 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
                     }
                     tokio::time::sleep(delay).await;
                     attempts += 1;
-                    delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
+                    delay = std::cmp::min(
+                        Duration::from_millis(
+                            ((delay.as_millis() as f64) * retry_multiplier) as u64,
+                        ),
+                        retry_max_delay,
+                    );
                 }
             }
         }
@@ -164,7 +169,12 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
                     }
                     tokio::time::sleep(delay).await;
                     attempts += 1;
-                    delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
+                    delay = std::cmp::min(
+                        Duration::from_millis(
+                            ((delay.as_millis() as f64) * retry_multiplier) as u64,
+                        ),
+                        retry_max_delay,
+                    );
                 }
             }
         }

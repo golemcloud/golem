@@ -270,7 +270,7 @@ impl BlobOplogArchive {
 
     pub(crate) fn oplog_index_to_path(&self, idx: OplogIndex) -> PathBuf {
         let mut path = PathBuf::new();
-        path.push(&self.owned_worker_id.worker_name());
+        path.push(self.owned_worker_id.worker_name());
         path.push(idx.to_string());
         path
     }
@@ -418,7 +418,7 @@ impl OplogArchive for BlobOplogArchive {
             .iter()
             .map(|idx| {
                 let mut path = PathBuf::new();
-                path.push(&self.owned_worker_id.worker_name());
+                path.push(self.owned_worker_id.worker_name());
                 path.push(idx.to_string());
                 path
             })

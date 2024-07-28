@@ -54,7 +54,13 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     let version_check = factory.version_service(ctx)?.check().await;
 
     if let Err(err) = version_check {
-        eprintln!("{}", err.0.yellow())
+        if cmd.verbosity.log_level() == Some(log::Level::Warn)
+            || cmd.verbosity.log_level() == Some(log::Level::Info)
+            || cmd.verbosity.log_level() == Some(log::Level::Debug)
+            || cmd.verbosity.log_level() == Some(log::Level::Trace)
+        {
+            eprintln!("{}", err.0.yellow())
+        }
     }
 
     let res = match cmd.command {

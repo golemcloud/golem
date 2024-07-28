@@ -1057,7 +1057,7 @@ async fn get_worker_metadata() {
                 value: "test-account".to_string()
             }
     );
-    check!(metadata2.last_known_status.component_size == 60782);
+    check!(metadata2.last_known_status.component_size == 60758);
     check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
 }
 
