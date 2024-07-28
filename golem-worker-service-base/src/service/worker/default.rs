@@ -434,6 +434,14 @@ where
                 ))
             })?;
 
+        let function_results: Vec<AnalysedFunctionResult> = function_type
+            .results
+            .iter()
+            .map(|x| x.clone().into())
+            .collect();
+
+        dbg!(function_results.clone());
+        
         let params_val = params
             .validate_function_parameters(
                 Self::get_expected_function_parameters(&function_name, &function_type),
@@ -453,15 +461,9 @@ where
             )
             .await?;
 
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
 
         dbg!(results_val.clone());
 
-        dbg!(function_results.clone());
 
         results_val
             .result
@@ -512,6 +514,7 @@ where
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
+        dbg!(params_val.clone());
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let calling_convention = *calling_convention;
@@ -560,6 +563,8 @@ where
                 }
             }
         ).await?;
+
+        dbg!(invoke_response.clone());
 
         Ok(invoke_response)
     }
