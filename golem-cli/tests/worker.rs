@@ -321,6 +321,22 @@ fn worker_invoke_drop(
         "test-arg",
     ])?;
     let args_key: IdempotencyKey = IdempotencyKey::fresh();
+    let result = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "rpc:counters/api.{[constructor]counter}",
+        &cfg.arg('j', "parameters"),
+        "[\"counter1\"]",
+        &cfg.arg('k', "idempotency-key"),
+        &args_key.0,
+    ])?;
+    dbg!(result.clone());
+    let args_key: IdempotencyKey = IdempotencyKey::fresh();
     cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -331,7 +347,7 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[drop]counter}",
         &cfg.arg('j', "parameters"),
-        "[]",
+        &result.to_string(),
         &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;

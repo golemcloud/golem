@@ -459,6 +459,10 @@ where
             .map(|x| x.clone().into())
             .collect();
 
+        dbg!(results_val.clone());
+
+        dbg!(function_results.clone());
+
         results_val
             .result
             .validate_function_result(function_results, *calling_convention)
@@ -499,9 +503,11 @@ where
                     component_details.function_names().join(", ")
                 ))
             })?;
+        let expected = Self::get_expected_function_parameters(&function_name, &function_type);
+        dbg!(expected.clone());
         let params_val = params
             .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
+                expected,
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
