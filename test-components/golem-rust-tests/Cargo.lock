@@ -209,20 +209,22 @@ checksum = "40ecd4077b5ae9fd2e9e169b102c6c330d0605168eb0e8bf79952b256dbefffd"
 
 [[package]]
 name = "golem-rust"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "528a1a25e41a33e2eb107aade5aca822cdf34f69e842c9546431630f6879dabe"
+checksum = "f3eee21493a21f3bbdfdc79ad10fff2e72c20f12a7c24d017ad69c5bcf656127"
 dependencies = [
  "golem-rust-macro",
+ "serde",
+ "serde_json",
  "uuid",
  "wit-bindgen-rt",
 ]
 
 [[package]]
 name = "golem-rust-macro"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99d3c24dccea11431d77b66f36aed220845729023f7c54cdda2c6a526f8b3ca7"
+checksum = "dcff0f7297bf27c13ba6d840aff62f7081b1826d89cd025a9ff06d652521d522"
 dependencies = [
  "heck",
  "proc-macro2",

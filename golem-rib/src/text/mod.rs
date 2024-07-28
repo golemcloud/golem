@@ -425,6 +425,25 @@ mod record_tests {
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_record_str, output_expr));
     }
+
+    #[test]
+    fn test_round_trip_record_literal_invalid() {
+        let expr_str = r#"
+                 ${  {body: golem:component/api.{get-character}(), headers: { x-test: 'foobar' } } }
+            "#;
+
+        let result = from_string(expr_str);
+
+        assert!(result.is_err());
+
+        let expr_str = r#"
+                ${   {body: golem:component/api.{get-character}(), headers: { x-test: "foobar" } } }
+            "#;
+
+        let result = from_string(expr_str);
+
+        assert!(result.is_ok());
+    }
 }
 
 #[cfg(test)]

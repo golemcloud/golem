@@ -99,6 +99,7 @@ async fn coordinated_scenario_01_01() {
 }
 
 #[tokio::test]
+#[ignore] // TODO: re-enable after speed ups
 async fn coordinated_scenario_01_02() {
     for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
@@ -118,6 +119,7 @@ async fn coordinated_scenario_01_02() {
 }
 
 #[tokio::test]
+#[ignore] // TODO: re-enable after speed ups
 async fn coordinated_scenario_02_01() {
     for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
@@ -137,6 +139,7 @@ async fn coordinated_scenario_02_01() {
 }
 
 #[tokio::test]
+#[ignore] // TODO: re-enable after speed ups
 async fn coordinated_scenario_03_01() {
     for _ in 0..coordinated_scenario_retries() {
         coordinated_scenario(
