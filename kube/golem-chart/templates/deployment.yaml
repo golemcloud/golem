@@ -59,6 +59,8 @@ spec:
               value: "info,h2=warn,hyper=warn,tower=warn"
             - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
+            - name: GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN
+              value: "true"
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.shardManager.ports.http }}"
             - name: GOLEM_SHARD_MANAGER_PORT
@@ -169,6 +171,8 @@ spec:
               value: "info"
             - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
+            - name: GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN
+              value: "true"
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.workerExecutor.ports.http }}"
             - name: GOLEM__PORT
@@ -308,6 +312,8 @@ spec:
               value: "info"
             - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
+            - name: GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN
+              value: "true"
             - name: GOLEM__CUSTOM_REQUEST_PORT
               value: "{{ .Values.workerService.ports.requestHttp }}"
             - name: GOLEM__PORT
@@ -374,6 +380,8 @@ spec:
               value: "info,h2=warn,hyper=warn,tower=warn"
             - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
+            - name: GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN
+              value: "true"
             - name: GOLEM__DB__TYPE
               value: "Postgres"
             - name: GOLEM__DB__CONFIG__MAX_CONNECTIONS
@@ -503,6 +511,8 @@ spec:
               value: "info"
             - name: GOLEM__TRACING__STDOUT__JSON
               value: "{{ .Values.logging.json }}"
+            - name: GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN
+              value: "true"
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.componentCompilationService.ports.http }}"
             - name: GOLEM__GRPC_PORT
