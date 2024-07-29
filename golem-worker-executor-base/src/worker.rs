@@ -431,7 +431,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
-            LookupResult::Complete(output) => Ok(Some(output)),
+            LookupResult::Complete(output) => {
+                dbg!(output.clone());
+
+                Ok(Some(output))
+            },
             LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
