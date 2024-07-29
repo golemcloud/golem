@@ -68,7 +68,7 @@ impl WorkerExecutorEnvVars for CloudEnvVars {
             ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS"    , "5"),
             ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY"    , "100ms"),
             ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY"    , "2s"),
-            ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER"    , "2"),
+            ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER"    , "2.0"),
             ("GOLEM__PORT"                                   , &grpc_port.to_string()),
             ("GOLEM__HTTP_PORT"                              , &http_port.to_string()),
             ("GOLEM__RESOURCE_LIMITS__CONFIG__HOST", &self.cloud_service.private_host()),
