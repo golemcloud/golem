@@ -70,8 +70,14 @@ impl Expr {
     pub fn from_text(input: &str) -> Result<Expr, String> {
         rib_program()
             .easy_parse(input.as_ref())
-            .map(|(expr, _)| expr)
             .map_err(|err| err.to_string())
+            .and_then(|(expr, remaining)| {
+                if remaining.is_empty() {
+                    Ok(expr)
+                } else {
+                    Err(format!("Failed to parse: {}", remaining))
+                }
+            })
     }
 
     /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`

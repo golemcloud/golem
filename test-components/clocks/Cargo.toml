@@ -13,7 +13,7 @@ strip = true
 
 [dependencies]
 wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
-time = { version = "0.3.21", features = ["formatting"] }
+time = { version = "0.3.36", features = ["formatting"] }
 
 [package.metadata.component]
 package = "golem:it"

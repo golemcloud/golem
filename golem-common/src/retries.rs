@@ -172,7 +172,7 @@ mod tests {
             max_attempts: 5,
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(2),
-            multiplier: 2,
+            multiplier: 2.0,
             max_jitter_factor: None,
         };
 

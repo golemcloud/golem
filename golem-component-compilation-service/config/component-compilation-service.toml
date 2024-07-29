@@ -18,7 +18,7 @@ max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [compiled_component_service]
 type = "Enabled"
@@ -84,7 +84,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [compile_worker]
 # max_component_size = 1000000
@@ -94,7 +94,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [compiled_component_service]
 # type = "Disabled"

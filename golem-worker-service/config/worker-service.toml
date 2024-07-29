@@ -14,7 +14,7 @@ max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [db]
 type = "Sqlite"
@@ -75,7 +75,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [db]
 # type = "Postgres"

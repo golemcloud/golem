@@ -1,5 +1,6 @@
 mod bindings;
 
+use std::time::Duration;
 use crate::bindings::exports::golem::it::api::*;
 use golem_rust::*;
 use golem_rust::bindings::wasi;
@@ -13,9 +14,9 @@ impl Guest for Component {
     fn fail_with_custom_max_retries(max_retries: u64) {
         let _guard = use_retry_policy(RetryPolicy {
             max_attempts: max_retries as u32,
-            min_delay: 1000000000, // 1s
-            max_delay: 1000000000, // 1s
-            multiplier: 1,
+            min_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(1),
+            multiplier: 1.0,
         });
 
         panic!("Fail now");

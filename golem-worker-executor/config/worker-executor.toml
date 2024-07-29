@@ -39,7 +39,7 @@ max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [indexed_storage]
 type = "KVStoreRedis"
@@ -60,7 +60,7 @@ max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [limits]
 epoch_interval = "10ms"
@@ -81,7 +81,7 @@ worker_memory_ratio = 0.8
 max_attempts = 4294967295
 max_delay = "5s"
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [oplog]
 archive_interval = "1day"
@@ -101,7 +101,7 @@ max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [scheduler]
 refresh_interval = "2s"
@@ -118,7 +118,7 @@ max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [suspend]
 suspend_after = "10s"
@@ -182,7 +182,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [compiled_component_service]
 # type = "Enabled"
@@ -208,7 +208,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [indexed_storage]
 # type = "Redis"
@@ -226,7 +226,7 @@ without_time = false
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [key_value_storage]
 # type = "InMemory"
@@ -250,7 +250,7 @@ without_time = false
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [oplog]
 # archive_interval = "1day"
@@ -270,7 +270,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [scheduler]
 # refresh_interval = "2s"
@@ -349,7 +349,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [indexed_storage]
 # type = "InMemory"
@@ -376,7 +376,7 @@ without_time = false
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [oplog]
 # archive_interval = "1day"
@@ -396,7 +396,7 @@ without_time = false
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [scheduler]
 # refresh_interval = "2s"
@@ -413,7 +413,7 @@ without_time = false
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [suspend]
 # suspend_after = "10s"
