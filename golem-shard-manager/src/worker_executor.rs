@@ -125,9 +125,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             Some(format!("{pod}")),
             &self.config.retries,
             &(pod, shard_ids),
-            |(pod, shard_ids)| {
-                Box::pin(async move { self.assign_shards_internal(pod, shard_ids).await })
-            },
+            |(pod, shard_ids)| Box::pin(self.assign_shards_internal(pod, shard_ids)),
             |_err| {
                 // TODO: match on error once it has sources
                 true
@@ -152,9 +150,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             Some(format!("{pod}")),
             &self.config.retries,
             &(pod, shard_ids),
-            |(pod, shard_ids)| {
-                Box::pin(async move { self.revoke_shards_internal(pod, shard_ids).await })
-            },
+            |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
             |_err| {
                 // TODO: match on error once it has sources
                 true
