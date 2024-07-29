@@ -58,6 +58,13 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
+[worker_executor_retries]
+max_attempts = 5
+max_delay = "3s"
+max_jitter_factor = 0.15
+min_delay = "10ms"
+multiplier = 10.0
+
 
 ## Generated from example config: with postgres
 # custom_request_port = 9006
@@ -122,3 +129,10 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
+# 
+# [worker_executor_retries]
+# max_attempts = 5
+# max_delay = "3s"
+# max_jitter_factor = 0.15
+# min_delay = "10ms"
+# multiplier = 10.0

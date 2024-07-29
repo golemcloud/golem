@@ -75,7 +75,6 @@ impl Services {
         let worker_executor_grpc_clients = MultiTargetGrpcClient::new(
             WorkerExecutorClient::new,
             GrpcClientConfig {
-                // TODO
                 retries_on_unavailable: RetryConfig {
                     max_attempts: 0, // we want to invalidate the routing table asap
                     min_delay: Duration::from_millis(100),
@@ -97,6 +96,7 @@ impl Services {
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
             worker_executor_grpc_clients.clone(),
+            config.worker_executor_retries.clone(),
             component_service.clone(),
             routing_table_service.clone(),
         ));
