@@ -9,6 +9,7 @@ use serde_json::json;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Duration;
+use golem_wasm_rpc::Value;
 
 fn make(
     suffix: &str,
@@ -331,12 +332,19 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[constructor]counter}",
         &cfg.arg('j', "parameters"),
-        "[\"counter1\"]",
+        "[{\"str\": \"counter1\"}]",
         &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;
-    dbg!(result.clone());
-   // let args_key: IdempotencyKey = IdempotencyKey::fresh();
+    let handle_str = match result {
+        serde_json::Value::Array(vec) => match vec[0].clone() {
+            serde_json::Value::String(str) => str,
+            _ => panic!("Expected handle string"),
+        },
+        _ => panic!("Expected handle string"),
+    };
+
+    let handle_json = format!("[{{\"handle\" : \"{}\"}}]", handle_str);
     cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -347,7 +355,7 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[drop]counter}",
         &cfg.arg('j', "parameters"),
-        &result.to_string(),
+        handle_json.as_str(),
         &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;

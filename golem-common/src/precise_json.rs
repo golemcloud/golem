@@ -1,6 +1,8 @@
+use std::str::FromStr;
 use golem_wasm_rpc::protobuf::type_annotated_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
+use golem_wasm_rpc::Uri;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -34,6 +36,10 @@ pub enum PreciseJson {
     Flags(Vec<bool>),
     Option(Option<Box<PreciseJson>>),
     Result(Result<Box<PreciseJson>, Box<PreciseJson>>),
+    Handle {
+        uri: String,
+        resource_id: u64
+    }
 }
 
 #[derive(Error, Debug)]
@@ -124,6 +130,9 @@ impl Into<JsonValue> for PreciseJson {
                         ("err".to_string(), (*boxed).into())
                     ])),
                 })
+            ])),
+            PreciseJson::Handle { uri, resource_id } => JsonValue::Object(serde_json::Map::from_iter(vec![
+                ("handle".to_string(), JsonValue::String(format!("{}/{}", uri, resource_id)))
             ])),
         }
     }
@@ -364,6 +373,37 @@ impl TryFrom<JsonValue> for PreciseJson {
                             "Expected result key to be 'Ok' or 'Err'".to_string(),
                         )),
                     },
+                    "handle" => {
+                        match value.as_str() {
+                            Some(str) => {
+                                // not assuming much about the url format, just checking it ends with a /<resource-id-u64>
+                                let parts: Vec<&str> = str.split('/').collect();
+                                if parts.len() >= 2 {
+                                    match u64::from_str(parts[parts.len() - 1]) {
+                                        Ok(resource_id) => {
+                                            let uri = parts[0..(parts.len() - 1)].join("/");
+
+                                            let handle = PreciseJson::Handle {
+                                                uri,
+                                                resource_id
+                                            };
+                                            Ok(handle)
+                                        }
+                                        Err(err) => {
+                                            Err(PreciseJsonConversionError::InvalidValue("Failed to parse resource-id section of the handle value".to_string()))
+                                        }
+                                    }
+                                } else {
+                                    Err(PreciseJsonConversionError::InvalidValue(
+                                        "Expected function parameter type is Handle, represented by a worker-url/resource-id string".to_string(),
+                                    ))
+                                }
+                            }
+                            None => Err(PreciseJsonConversionError::InvalidValue(
+                                "Expected function parameter type is Handle, represented by a worker-url/resource-id string".to_string()
+                            )),
+                        }
+                    }
                     _ => Err(PreciseJsonConversionError::InvalidValue(
                         "Expected result object".to_string(),
                     )),
@@ -424,6 +464,12 @@ impl From<PreciseJson> for golem_wasm_rpc::Value {
                     golem_wasm_rpc::Value::from(*precise_json),
                 )))),
             },
+            PreciseJson::Handle { uri, resource_id } => {
+                golem_wasm_rpc::Value::Handle {
+                    uri: Uri { value: uri },
+                    resource_id
+                }
+            }
         }
     }
 }
@@ -541,8 +587,11 @@ impl From<type_annotated_value::TypeAnnotatedValue> for PreciseJson {
                 }
             }
 
-            TypeAnnotatedValue::Handle(_) => {
-                unimplemented!()
+            TypeAnnotatedValue::Handle(handle) => {
+                PreciseJson::Handle {
+                    uri: handle.uri,
+                    resource_id: handle.resource_id,
+                }
             }
         }
     }

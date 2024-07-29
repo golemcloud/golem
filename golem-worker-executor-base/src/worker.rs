@@ -439,6 +439,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
+                dbg!("here??");
                 // Invoke the function in the background
                 self.enqueue(
                     idempotency_key,
