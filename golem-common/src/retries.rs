@@ -29,7 +29,7 @@ use crate::metrics::external_calls::{
 /// Returns None if the maximum number of attempts has been reached.
 pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
     // Exponential backoff algorithm inspired by fred::pool::ReconnectPolicy::Exponential
-    // Unlike fred, max jitter is not a static value, rather proportional of the current calculated delay
+    // Unlike fred, max jitter is not a static value, rather proportional to the current calculated delay
     if attempts >= (config.max_attempts as u64) {
         return None;
     }
