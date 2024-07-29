@@ -136,6 +136,7 @@ mod tests {
             ));
 
         test_definition_crud(definition_service.clone()).await;
+        test_delete_non_existing(definition_service.clone()).await;
         test_deployment(definition_service.clone(), deployment_service.clone()).await;
         test_deployment_conflict(definition_service.clone(), deployment_service.clone()).await;
     }
@@ -302,13 +303,16 @@ mod tests {
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
 
-        deployment_service
-            .delete(
-                &DefaultNamespace::default(),
-                &ApiSiteString("test.com".to_string()),
-            )
-            .await
-            .unwrap();
+        assert!(
+            deployment_service
+                .delete(
+                    &DefaultNamespace::default(),
+                    &ApiSiteString("test.com".to_string()),
+                )
+                .await
+                .unwrap(),
+            "Deployment not found"
+        );
 
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
@@ -517,24 +521,32 @@ mod tests {
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2_upd));
 
-        definition_service
-            .delete(
-                &def1v1.id,
-                &def1v1.version,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .unwrap();
-        definition_service
-            .delete(
-                &def1v2.id,
-                &def1v2.version,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .unwrap();
+        assert!(
+            definition_service
+                .delete(
+                    &def1v1.id,
+                    &def1v1.version,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "Failed to delete definition"
+        );
+        assert!(
+            definition_service
+                .delete(
+                    &def1v2.id,
+                    &def1v2.version,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "Failed to delete definition"
+        );
 
         let definitions = definition_service
             .get_all_versions(
@@ -545,6 +557,26 @@ mod tests {
             .await
             .unwrap();
         assert!(definitions.is_empty());
+    }
+
+    async fn test_delete_non_existing(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+    ) {
+        let delete_result = definition_service
+            .delete(
+                &ApiDefinitionId("non-existing".to_string()),
+                &ApiVersion("0.0.1".to_string()),
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .expect("delete succeeded");
+
+        assert!(delete_result.is_none(), "definition should not exist");
     }
 
     fn get_api_deployment(
