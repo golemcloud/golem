@@ -23,6 +23,72 @@ static CALLER_COMPONENT_NAME: &str = "caller-composed-ts";
 
 #[tokio::test]
 #[tracing::instrument]
+async fn counter_resource_test_1() {
+    let context = common::TestContext::new();
+    let executor = common::start(&context).await.unwrap();
+
+    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
+    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .start_worker_with(&caller_component_id, "rpc-counters-1", vec![], env)
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .await;
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![Value::U64(1)]));
+    check!(result2 == Ok(vec![Value::U64(2)]));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_1_with_restart() {
+    let context = common::TestContext::new();
+    let executor = common::start(&context).await.unwrap();
+
+    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
+    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "COUNTERS_COMPONENT_ID".to_string(),
+        counters_component_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .start_worker_with(&caller_component_id, "rpc-counters-1r", vec![], env)
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .await;
+
+    drop(executor);
+    let executor = common::start(&context).await.unwrap();
+
+    let result2 = executor
+        .invoke_and_await(&caller_worker_id, "test1", vec![])
+        .await;
+
+    drop(executor);
+
+    check!(result1 == Ok(vec![Value::U64(1)]));
+    check!(result2 == Ok(vec![Value::U64(2)]));
+}
+
+#[tokio::test]
+#[tracing::instrument]
 async fn counter_resource_test_2() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
@@ -89,72 +155,6 @@ async fn counter_resource_test_2_with_restart() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn counter_resource_test_3() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
-
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
-
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-3", vec![], env)
-        .await;
-
-    let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test3", vec![])
-        .await;
-    let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test3", vec![])
-        .await;
-
-    drop(executor);
-
-    check!(result1 == Ok(vec![Value::U64(1)]));
-    check!(result2 == Ok(vec![Value::U64(2)]));
-}
-
-#[tokio::test]
-#[tracing::instrument]
-async fn counter_resource_test_3_with_restart() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
-
-    let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
-    let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
-
-    let mut env = HashMap::new();
-    env.insert(
-        "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-3r", vec![], env)
-        .await;
-
-    let result1 = executor
-        .invoke_and_await(&caller_worker_id, "test3", vec![])
-        .await;
-
-    drop(executor);
-    let executor = common::start(&context).await.unwrap();
-
-    let result2 = executor
-        .invoke_and_await(&caller_worker_id, "test3", vec![])
-        .await;
-
-    drop(executor);
-
-    check!(result1 == Ok(vec![Value::U64(1)]));
-    check!(result2 == Ok(vec![Value::U64(2)]));
-}
-
-#[tokio::test]
-#[tracing::instrument]
 async fn context_inheritance() {
     let context = common::TestContext::new();
     let executor = common::start(&context).await.unwrap();
@@ -178,7 +178,7 @@ async fn context_inheritance() {
         .await;
 
     let result = executor
-        .invoke_and_await(&caller_worker_id, "test4", vec![])
+        .invoke_and_await(&caller_worker_id, "test3", vec![])
         .await;
 
     drop(executor);

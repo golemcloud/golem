@@ -1,8 +1,6 @@
 
 export interface CallerWorld {
-  test1(): [string, bigint][],
+  test1(): bigint,
   test2(): bigint,
-  test3(): bigint,
-  test4(): [string[], [string, string][]],
-  test5(): BigUint64Array,
+  test3(): [string[], [string, string][]],
 }

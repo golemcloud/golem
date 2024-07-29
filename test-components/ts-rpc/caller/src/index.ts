@@ -26,25 +26,22 @@ function createGlobalCounter(workerName: string): Counter {
     return counter
 }
 
-function test1(): [string, bigint][] {
-    return []
-}
 
-function test2(): bigint {
+function test1(): bigint {
     const counter = globalCounter ?? createGlobalCounter("counters_test2")
     counter.blockingIncBy(BigInt(1))
     const value = counter.blockingGetValue()
     return value
 }
 
-function test3(): bigint {
+function test2(): bigint {
     const counter = globalCounter ?? createGlobalCounter("counters_test3")
     counter.blockingIncBy(BigInt(1))
     const value = counter.blockingGetValue()
     return value
 }
 
-function test4(): [string[], [string, string][]] {
+function test3(): [string[], [string, string][]] {
     const counter = globalCounter ?? createGlobalCounter("counters_test4")
     const args = counter.blockingGetArgs()
     const env = counter.blockingGetEnv()
@@ -59,14 +56,10 @@ const _: CallerWorld = {
     test1,
     test2,
     test3,
-    test4,
-    test5,
 }
 
 export {
     test1,
     test2,
     test3,
-    test4,
-    test5,
 }
