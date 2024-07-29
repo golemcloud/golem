@@ -80,7 +80,7 @@ impl Services {
                     max_attempts: 0, // we want to invalidate the routing table asap
                     min_delay: Duration::from_millis(100),
                     max_delay: Duration::from_secs(2),
-                    multiplier: 2,
+                    multiplier: 2.0,
                 },
                 connect_timeout: Duration::from_secs(10),
             },

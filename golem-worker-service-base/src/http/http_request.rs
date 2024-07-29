@@ -737,11 +737,9 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}(if 2 < 1 then 0 else 1);
-          response
+           let response = golem:it/api.{get-cart-contents}(if 2 < 1 then 0 else 1);
+           response
         "#;
-
-        dbg!(rib::from_string(expression).unwrap());
 
         let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "shopping-cart", expression);
@@ -993,7 +991,7 @@ mod tests {
 
             let expression = r#"
             let param = request.body;
-            let response = golem:it/api.{get-cart-contents};
+            let response = golem:it/api.{get-cart-contents}(param);
             response
             "#;
 

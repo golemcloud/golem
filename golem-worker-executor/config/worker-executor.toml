@@ -38,7 +38,7 @@ port = 9090
 max_attempts = 3
 max_delay = "1s"
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [indexed_storage]
 type = "KVStoreRedis"
@@ -58,7 +58,7 @@ tracing = false
 max_attempts = 5
 max_delay = "2s"
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [limits]
 epoch_interval = "10ms"
@@ -79,7 +79,7 @@ worker_memory_ratio = 0.8
 max_attempts = 4294967295
 max_delay = "5s"
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [oplog]
 archive_interval = "1day"
@@ -98,7 +98,7 @@ port = 9007
 max_attempts = 3
 max_delay = "1s"
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [scheduler]
 refresh_interval = "2s"
@@ -114,7 +114,7 @@ port = 9002
 max_attempts = 5
 max_delay = "2s"
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [suspend]
 suspend_after = "10s"
@@ -143,7 +143,7 @@ compact = false
 enabled = true
 json = false
 json_flatten = true
-json_flatten_span = false
+json_flatten_span = true
 pretty = false
 span_events_active = false
 span_events_full = false
@@ -177,7 +177,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [compiled_component_service]
 # type = "Enabled"
@@ -202,7 +202,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [indexed_storage]
 # type = "Redis"
@@ -219,7 +219,7 @@ without_time = false
 # max_attempts = 5
 # max_delay = "2s"
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [key_value_storage]
 # type = "InMemory"
@@ -243,7 +243,7 @@ without_time = false
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [oplog]
 # archive_interval = "1day"
@@ -262,7 +262,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [scheduler]
 # refresh_interval = "2s"
@@ -297,7 +297,7 @@ without_time = false
 # enabled = true
 # json = false
 # json_flatten = true
-# json_flatten_span = false
+# json_flatten_span = true
 # pretty = false
 # span_events_active = false
 # span_events_full = false
@@ -340,7 +340,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [indexed_storage]
 # type = "InMemory"
@@ -367,7 +367,7 @@ without_time = false
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [oplog]
 # archive_interval = "1day"
@@ -386,7 +386,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [scheduler]
 # refresh_interval = "2s"
@@ -402,7 +402,7 @@ without_time = false
 # max_attempts = 5
 # max_delay = "2s"
 # min_delay = "100ms"
-# multiplier = 2
+# multiplier = 2.0
 # 
 # [suspend]
 # suspend_after = "10s"
@@ -431,7 +431,7 @@ without_time = false
 # enabled = true
 # json = false
 # json_flatten = true
-# json_flatten_span = false
+# json_flatten_span = true
 # pretty = false
 # span_events_active = false
 # span_events_full = false

@@ -17,7 +17,7 @@ max_component_size = 1000000
 max_attempts = 3
 max_delay = "1s"
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [compiled_component_service]
 type = "Enabled"
@@ -53,7 +53,7 @@ compact = false
 enabled = true
 json = false
 json_flatten = true
-json_flatten_span = false
+json_flatten_span = true
 pretty = false
 span_events_active = false
 span_events_full = false
@@ -82,7 +82,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [compile_worker]
 # max_component_size = 1000000
@@ -91,7 +91,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [compiled_component_service]
 # type = "Disabled"
@@ -127,7 +127,7 @@ without_time = false
 # enabled = true
 # json = false
 # json_flatten = true
-# json_flatten_span = false
+# json_flatten_span = true
 # pretty = false
 # span_events_active = false
 # span_events_full = false
