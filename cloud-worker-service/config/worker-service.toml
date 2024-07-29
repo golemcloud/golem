@@ -13,7 +13,7 @@ port = 9090
 max_attempts = 3
 max_delay = "1s"
 min_delay = "100ms"
-multiplier = 3
+multiplier = 3.0
 
 [db]
 type = "Sqlite"
@@ -50,7 +50,7 @@ compact = false
 enabled = true
 json = false
 json_flatten = true
-json_flatten_span = false
+json_flatten_span = true
 pretty = false
 span_events_active = false
 span_events_full = false
@@ -72,7 +72,7 @@ without_time = false
 # max_attempts = 3
 # max_delay = "1s"
 # min_delay = "100ms"
-# multiplier = 3
+# multiplier = 3.0
 # 
 # [db]
 # type = "Postgres"
@@ -113,7 +113,7 @@ without_time = false
 # enabled = true
 # json = false
 # json_flatten = true
-# json_flatten_span = false
+# json_flatten_span = true
 # pretty = false
 # span_events_active = false
 # span_events_full = false
@@ -130,7 +130,7 @@ port = 8080
 max_attempts = 5
 max_delay = "2s"
 min_delay = "100ms"
-multiplier = 2
+multiplier = 2.0
 
 [domain_records]
 domain_allow_list = []

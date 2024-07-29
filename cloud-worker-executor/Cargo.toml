@@ -63,7 +63,7 @@ wasmtime-wasi = { version = "=21.0.1" }
 wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { workspace = true }
 windows-sys = "0.52.0"
-log = "0.4.20"
+log = "0.4.22"
 
 [dev-dependencies]
 golem-worker-executor-base = { workspace = true, features = ["mocks"] }
