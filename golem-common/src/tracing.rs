@@ -60,7 +60,7 @@ impl OutputConfig {
             enabled: true,
             json: false,
             json_flatten: true,
-            json_flatten_span: false,
+            json_flatten_span: true,
             ansi: false,
             compact: false,
             pretty: false,
@@ -75,7 +75,7 @@ impl OutputConfig {
             enabled: true,
             json: false,
             json_flatten: true,
-            json_flatten_span: false,
+            json_flatten_span: true,
             ansi: true,
             compact: false,
             pretty: false,
@@ -584,7 +584,6 @@ pub(crate) mod format {
 
 #[cfg(test)]
 mod test {
-
     pub fn make_mock_writer<'a>() -> tracing_test::internal::MockWriter<'a> {
         tracing_test::internal::MockWriter::new(tracing_test::internal::global_buf())
     }
@@ -596,7 +595,7 @@ mod test {
                 .unwrap()
                 .to_vec(),
         )
-        .unwrap()
+            .unwrap()
     }
 
     mod json_flatten_span_formatter {
