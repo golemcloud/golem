@@ -595,7 +595,7 @@ mod test {
                 .unwrap()
                 .to_vec(),
         )
-            .unwrap()
+        .unwrap()
     }
 
     mod json_flatten_span_formatter {
