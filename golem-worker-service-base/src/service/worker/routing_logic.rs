@@ -358,11 +358,12 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             + 'static,
         G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
     {
+        // TODO: extract to config
         let retry_config = &RetryConfig {
             max_attempts: 5,
             min_delay: Duration::from_millis(10),
             max_delay: Duration::from_secs(3),
-            multiplier: 10,
+            multiplier: 10.0,
             max_jitter_factor: Some(0.15),
         };
 

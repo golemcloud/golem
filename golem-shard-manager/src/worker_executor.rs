@@ -15,9 +15,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::error::ShardManagerError;
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
-use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
 use tokio::time::timeout;
 use tonic::transport::Channel;
