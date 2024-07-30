@@ -18,16 +18,11 @@ use golem_common::redis::RedisPool;
 
 use crate::error::ShardManagerError;
 use crate::model::{RoutingTable, ShardManagerState};
-use crate::rebalancing::Rebalance;
 
 #[async_trait]
 pub trait PersistenceService {
-    async fn write(
-        &self,
-        routing_table: &RoutingTable,
-        rebalance: &Rebalance,
-    ) -> Result<(), ShardManagerError>;
-    async fn read(&self) -> Result<(RoutingTable, Rebalance), ShardManagerError>;
+    async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError>;
+    async fn read(&self) -> Result<RoutingTable, ShardManagerError>;
 }
 
 pub struct PersistenceServiceDefault {
@@ -37,12 +32,8 @@ pub struct PersistenceServiceDefault {
 
 #[async_trait]
 impl PersistenceService for PersistenceServiceDefault {
-    async fn write(
-        &self,
-        routing_table: &RoutingTable,
-        rebalance: &Rebalance,
-    ) -> Result<(), ShardManagerError> {
-        let shard_manager_state = ShardManagerState::new(routing_table, rebalance);
+    async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError> {
+        let shard_manager_state = ShardManagerState::new(routing_table);
         let key = "shard:shard_manager_state";
         let value = self
             .pool
@@ -56,7 +47,7 @@ impl PersistenceService for PersistenceServiceDefault {
             .map_err(ShardManagerError::RedisError)
     }
 
-    async fn read(&self) -> Result<(RoutingTable, Rebalance), ShardManagerError> {
+    async fn read(&self) -> Result<RoutingTable, ShardManagerError> {
         let key = "shard:shard_manager_state";
 
         let value: Option<Bytes> = self
@@ -72,12 +63,9 @@ impl PersistenceService for PersistenceServiceDefault {
                     .pool
                     .deserialize(&value)
                     .map_err(ShardManagerError::SerializationError)?;
-                Ok((
-                    shard_manager_state.get_routing_table(),
-                    shard_manager_state.get_rebalance(),
-                ))
+                Ok(shard_manager_state.get_routing_table())
             }
-            None => Ok((RoutingTable::new(self.number_of_shards), Rebalance::empty())),
+            None => Ok(RoutingTable::new(self.number_of_shards)),
         }
     }
 }

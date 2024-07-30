@@ -45,8 +45,7 @@ impl ShardManagement {
         health_check: Arc<dyn HealthCheck + Send + Sync>,
         threshold: f64,
     ) -> Result<Self, ShardManagerError> {
-        // TODO: decide if we actually need persistent rebalance plans
-        let (routing_table, _pending_rebalance) = persistence_service.read().await.unwrap();
+        let routing_table = persistence_service.read().await.unwrap();
 
         info!("Starting initial healthcheck");
 
@@ -125,51 +124,60 @@ impl ShardManagement {
             change.notified().await;
 
             let (new_pods, removed_pods) = updates.lock().await.reset();
-            debug!("Shard management loop woken up by change; new pods: {new_pods:?}, removed pods: {removed_pods:?}");
+            debug!(
+                new_pods=?new_pods,
+                removed_pods=?removed_pods,
+                "Shard management loop woken up",
+            );
 
-            // Getting a write lock while the rebalance plan is calculated and got persisted (but NOT applied)
-            let mut current_routing_table = routing_table.write().await;
+            // Getting a write lock while
+            //   - the rebalance plan is calculated,
+            //   - new and removed pods are added to the routing table and got persisted,
+            // but the rebalance plan is NOT applied yet. The lock is then release for apply.
+            let mut rebalance = {
+                let mut current_routing_table = routing_table.write().await;
 
-            for pod in removed_pods {
-                current_routing_table.remove_pod(&pod);
-            }
-
-            let mut send_full_assignment = Vec::new();
-            for pod in new_pods {
-                if current_routing_table.has_pod(&pod) {
-                    // This pod has already an assignment - we have to send the full list of assigned shards to it
-                    send_full_assignment.push(pod.clone());
-
-                    info!("Registered worker executor returned: {pod}")
-                } else {
-                    // New pod, adding with empty assignment
-                    current_routing_table.add_pod(&pod);
-
-                    info!("Registered new worker executor: {pod}")
+                for pod in removed_pods {
+                    current_routing_table.remove_pod(&pod);
+                    info!(pod= ?pod, "Pod removed");
                 }
-            }
-            let mut rebalance = Rebalance::from_routing_table(&current_routing_table, threshold);
 
-            for pod in send_full_assignment {
-                let assignments = current_routing_table.get_shards(&pod).unwrap_or_default();
-                rebalance.add_assignments(&pod, assignments);
-            }
+                let mut send_full_assignment = Vec::new();
+                for pod in new_pods {
+                    if current_routing_table.has_pod(&pod) {
+                        // This pod has already an assignment - we have to send the full list of assigned shards to it
+                        send_full_assignment.push(pod.clone());
+                        info!(pod= ?pod, "Pod returned");
+                    } else {
+                        // New pod, adding with empty assignment
+                        current_routing_table.add_pod(&pod);
+                        info!(pod= ?pod, "Pod added");
+                    }
+                }
+                let mut rebalance =
+                    Rebalance::from_routing_table(&current_routing_table, threshold);
 
-            debug!("Applying rebalance plan: {rebalance}");
+                for pod in send_full_assignment {
+                    let assignments = current_routing_table.get_shards(&pod).unwrap_or_default();
+                    rebalance.add_assignments(&pod, assignments);
+                }
 
-            persistence_service
-                .write(&current_routing_table, &rebalance)
-                .await
-                .expect("Failed to persist routing table");
-            drop(current_routing_table); // not holding the write lock while executing the rebalance
+                persistence_service
+                    .write(&current_routing_table)
+                    .await
+                    .expect("Failed to persist routing table after pod changes");
 
+                rebalance
+            };
+
+            debug!(rebalance=?rebalance, "Applying rebalance plan");
             Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await;
 
             routing_table.write().await.rebalance(rebalance);
             persistence_service
-                .write(&routing_table.read().await.clone(), &Rebalance::empty())
+                .write(&routing_table.read().await.clone())
                 .await
-                .expect("Failed to persist routing table");
+                .expect("Failed to persist routing table after rebalance");
         }
     }
 

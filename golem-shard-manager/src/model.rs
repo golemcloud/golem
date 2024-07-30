@@ -367,12 +367,10 @@ impl Display for Unassignments {
 pub struct ShardManagerState {
     pub number_of_shards: usize,
     pub shard_assignments: Vec<(Pod, Vec<ShardId>)>,
-    pub assignments: Vec<(Pod, Vec<ShardId>)>,
-    pub unassignments: Vec<(Pod, Vec<ShardId>)>,
 }
 
 impl ShardManagerState {
-    pub fn new(routing_table: &RoutingTable, rebalance: &Rebalance) -> Self {
+    pub fn new(routing_table: &RoutingTable) -> Self {
         let mut shard_assignments: Vec<(Pod, Vec<ShardId>)> = Vec::new();
         for routing_table_entry in routing_table.get_entries() {
             shard_assignments.push((
@@ -380,19 +378,9 @@ impl ShardManagerState {
                 routing_table_entry.shard_ids.iter().cloned().collect(),
             ));
         }
-        let mut assignments: Vec<(Pod, Vec<ShardId>)> = Vec::new();
-        for (pod, shard_ids) in &rebalance.get_assignments().assignments {
-            assignments.push((pod.clone(), shard_ids.iter().cloned().collect()));
-        }
-        let mut unassignments: Vec<(Pod, Vec<ShardId>)> = Vec::new();
-        for (pod, shard_ids) in &rebalance.get_unassignments().unassignments {
-            unassignments.push((pod.clone(), shard_ids.iter().cloned().collect()));
-        }
         ShardManagerState {
             number_of_shards: routing_table.number_of_shards,
             shard_assignments,
-            assignments,
-            unassignments,
         }
     }
 
@@ -406,33 +394,15 @@ impl ShardManagerState {
             shard_assignments,
         }
     }
-
-    pub fn get_rebalance(&self) -> Rebalance {
-        let mut assignments = Assignments::new();
-        for (pod, shard_ids) in &self.assignments {
-            for shard_id in shard_ids {
-                assignments.assign(pod.clone(), *shard_id);
-            }
-        }
-        let mut unassignments = Unassignments::new();
-        for (pod, shard_ids) in &self.unassignments {
-            for shard_id in shard_ids {
-                unassignments.unassign(pod.clone(), *shard_id);
-            }
-        }
-        Rebalance::new(assignments, unassignments)
-    }
 }
 
 impl Display for ShardManagerState {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "{{ number_of_shards: {}, shard_assignments: [{}], assignments: [{}], unassignments: [{}] }}",
+            "{{ number_of_shards: {}, shard_assignments: [{}]}}",
             self.number_of_shards,
             shard_assignments_to_string(&self.shard_assignments),
-            shard_assignments_to_string(&self.assignments),
-            shard_assignments_to_string(&self.unassignments)
         )
     }
 }
