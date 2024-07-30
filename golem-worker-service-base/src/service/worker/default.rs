@@ -434,22 +434,17 @@ where
                 ))
             })?;
 
-        dbg!(function_type.clone());
-
         let function_results: Vec<AnalysedFunctionResult> = function_type
             .results
             .iter()
             .map(|x| x.clone().into())
             .collect();
 
-        dbg!(function_results.clone());
-
-        let hello = Self::get_expected_function_parameters(&function_name, &function_type);
-
-        dbg!(hello.clone());
+        let expected_parameters =
+            Self::get_expected_function_parameters(&function_name, &function_type);
 
         let params_val = params
-            .validate_function_parameters(hello, *calling_convention)
+            .validate_function_parameters(expected_parameters, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         dbg!(function_name.clone());
@@ -466,8 +461,6 @@ where
                 auth_ctx,
             )
             .await?;
-
-        dbg!(results_val.clone());
 
         results_val
             .result
@@ -510,12 +503,10 @@ where
                 ))
             })?;
         let expected = Self::get_expected_function_parameters(&function_name, &function_type);
-        dbg!(expected.clone());
         let params_val = params
             .validate_function_parameters(expected, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        dbg!(params_val.clone());
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let calling_convention = *calling_convention;
