@@ -12,33 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use figment::providers::{Env, Format, Toml};
-use figment::Figment;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::{ComponentStoreConfig, DbConfig};
-use serde::Deserialize;
-use std::time::Duration;
+use golem_service_base::config::{
+    ComponentStoreConfig, ComponentStoreLocalConfig, ComponentStoreS3Config, DbConfig,
+    DbSqliteConfig,
+};
+use golem_service_base::model::Empty;
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct WorkerExecutorClientCacheConfig {
-    pub max_capacity: usize,
-    #[serde(with = "humantime_serde")]
-    pub time_to_idle: Duration,
-}
-
-impl Default for WorkerExecutorClientCacheConfig {
-    fn default() -> Self {
-        Self {
-            max_capacity: 1000,
-            time_to_idle: Duration::from_secs(60 * 60 * 4),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
-    pub enable_tracing_console: bool,
-    pub enable_json_log: bool,
+    pub tracing: TracingConfig,
     pub http_port: u16,
     pub grpc_port: u16,
     pub db: DbConfig,
@@ -46,41 +34,59 @@ pub struct ComponentServiceConfig {
     pub compilation: ComponentCompilationConfig,
 }
 
-impl ComponentServiceConfig {
-    pub fn new() -> Self {
-        Figment::new()
-            .merge(Toml::file("config/component-service.toml"))
-            .merge(Env::prefixed("GOLEM__").split("__"))
-            .extract()
-            .expect("Failed to parse config")
-    }
-}
-
 impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
-            enable_tracing_console: false,
-            enable_json_log: false,
-            http_port: 8081,
-            grpc_port: 9091,
-            db: DbConfig::default(),
-            component_store: ComponentStoreConfig::default(),
+            tracing: TracingConfig::local_dev("component-service"),
+            http_port: 8083,
+            grpc_port: 9090,
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: "../data/golem_component.sqlite".to_string(),
+                max_connections: 10,
+            }),
+            component_store: ComponentStoreConfig::Local(ComponentStoreLocalConfig {
+                root_path: "../data/component_store".to_string(),
+                object_prefix: "".to_string(),
+            }),
             compilation: ComponentCompilationConfig::default(),
         }
     }
 }
 
+impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
+    fn examples() -> Vec<ConfigExample<ComponentServiceConfig>> {
+        vec![(
+            "with postgres, s3 and disabled compilation",
+            Self {
+                db: DbConfig::postgres_example(),
+                component_store: ComponentStoreConfig::S3(ComponentStoreS3Config {
+                    bucket_name: "bucket".to_string(),
+                    object_prefix: "object_prefix".to_string(),
+                }),
+                compilation: ComponentCompilationConfig::Disabled(Empty {}),
+                ..ComponentServiceConfig::default()
+            },
+        )]
+    }
+}
+
+pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
+    ConfigLoader::new_with_examples(Path::new("config/component-service.toml"))
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::config::make_config_loader;
+
     #[test]
     pub fn config_is_loadable() {
-        let _ = super::ComponentServiceConfig::new();
+        let _ = make_config_loader().load().expect("Failed to load config");
     }
 
     #[test]
     pub fn compilation_can_be_disabled() {
         std::env::set_var("GOLEM__COMPILATION__TYPE", "Disabled");
-        let cfg = super::ComponentServiceConfig::new();
+        let cfg = make_config_loader().load().expect("Failed to load config");
         std::env::remove_var("GOLEM__COMPILATION__TYPE");
 
         assert!(matches!(

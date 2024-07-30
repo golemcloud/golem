@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
+    use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
     use golem_worker_service_base::api_definition::{
         ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
     };
-    use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
         ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
@@ -65,7 +65,7 @@ mod tests {
         let cli = Cli::default();
         let (db_config, _container) = start_docker_postgres(&cli);
 
-        db::postgres_migrate(&db_config, "tests/db/migration/postgres")
+        db::postgres_migrate(&db_config, "../golem-worker-service/db/migration/postgres")
             .await
             .unwrap();
 
@@ -91,7 +91,7 @@ mod tests {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, "tests/db/migration/sqlite")
+        db::sqlite_migrate(&db_config, "../golem-worker-service/db/migration/sqlite")
             .await
             .unwrap();
 
@@ -135,7 +135,8 @@ mod tests {
                 api_definition_repo.clone(),
             ));
 
-        test_definition_create_and_delete(definition_service.clone()).await;
+        test_definition_crud(definition_service.clone()).await;
+        test_delete_non_existing(definition_service.clone()).await;
         test_deployment(definition_service.clone(), deployment_service.clone()).await;
         test_deployment_conflict(definition_service.clone(), deployment_service.clone()).await;
     }
@@ -151,19 +152,17 @@ mod tests {
         let def1 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get1",
-            "worker1",
-            "[]",
-            "[]",
+            "/api/1/foo/{user-id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def2draft = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get2",
-            "worker2",
-            "[]",
-            "[]",
+            "/api/2/foo/{user-id}",
+            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
             true,
         );
         let def2 = HttpApiDefinition {
@@ -173,19 +172,17 @@ mod tests {
         let def3 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get3",
-            "worker3",
-            "[]",
-            "[]",
+            "/api/3/foo/{user-id}?{id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def4 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
-            "/api/get4",
-            "worker4",
-            "[]",
-            "[]",
+            "/api/4/foo/{user-id}",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{do-something}(\"doo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
 
@@ -306,13 +303,16 @@ mod tests {
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
 
-        deployment_service
-            .delete(
-                &DefaultNamespace::default(),
-                &ApiSiteString("test.com".to_string()),
-            )
-            .await
-            .unwrap();
+        assert!(
+            deployment_service
+                .delete(
+                    &DefaultNamespace::default(),
+                    &ApiSiteString("test.com".to_string()),
+                )
+                .await
+                .unwrap(),
+            "Deployment not found"
+        );
 
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
@@ -340,8 +340,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker1",
-            "[]",
-            "[]",
+            "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200 }  }",
             false,
         );
         let def2 = get_api_definition(
@@ -349,8 +348,7 @@ mod tests {
             "0.0.1",
             "/api/get2",
             "worker2",
-            "[]",
-            "[]",
+            "${ {body: golem:it/api.{get-cart-contents}()} }",
             true,
         );
 
@@ -359,8 +357,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker2",
-            "[]",
-            "[]",
+            "${ {body: golem:it/api.{get-cart-contents}()} }",
             false,
         );
 
@@ -420,35 +417,50 @@ mod tests {
         );
     }
 
-    async fn test_definition_create_and_delete(
+    async fn test_definition_crud(
         definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
                 + Send,
         >,
     ) {
-        let def1 = get_api_definition(
+        let def1v1 = get_api_definition(
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get1",
-            "worker1",
-            "[]",
-            "[]",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}();  {status: if result.user == \"admin\" then 401 else 200 } }",
+            false,
+        );
+        let def1v1_upd = get_api_definition(
+            &def1v1.id.0,
+            "0.0.1",
+            "/api/get1/1",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
             false,
         );
         let def1v2 = get_api_definition(
-            &def1.id.0,
+            &def1v1.id.0,
             "0.0.2",
             "/api/get1/2",
-            "worker1",
-            "[]",
-            "[]",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
+            true,
+        );
+
+        let def1v2_upd = get_api_definition(
+            &def1v1.id.0,
+            "0.0.2",
+            "/api/get1/22",
+            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
             true,
         );
 
         definition_service
             .create(
-                &def1,
+                &def1v1,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
@@ -465,43 +477,106 @@ mod tests {
 
         let definitions = definition_service
             .get_all_versions(
-                &def1.id,
+                &def1v1.id,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
             .await
             .unwrap();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1) && definitions.contains(&def1v2));
+        assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2));
 
-        definition_service
-            .delete(
-                &def1.id,
-                &def1.version,
+        let update_result = definition_service
+            .update(
+                &def1v1_upd,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
-            .await
-            .unwrap();
-        definition_service
-            .delete(
-                &def1v2.id,
-                &def1v2.version,
+            .await;
+
+        assert!(update_result.is_err());
+        assert_eq!(
+            update_result.unwrap_err().to_string(),
+            ApiDefinitionError::<RouteValidationError>::ApiDefinitionNotDraft(def1v1_upd.id)
+                .to_string()
+        );
+
+        let update_result = definition_service
+            .update(
+                &def1v2_upd,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
-            .await
-            .unwrap();
+            .await;
+        assert!(update_result.is_ok());
 
         let definitions = definition_service
             .get_all_versions(
-                &def1.id,
+                &def1v1.id,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2_upd));
+
+        assert!(
+            definition_service
+                .delete(
+                    &def1v1.id,
+                    &def1v1.version,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "Failed to delete definition"
+        );
+        assert!(
+            definition_service
+                .delete(
+                    &def1v2.id,
+                    &def1v2.version,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .await
+                .unwrap()
+                .is_some(),
+            "Failed to delete definition"
+        );
+
+        let definitions = definition_service
+            .get_all_versions(
+                &def1v1.id,
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
             .await
             .unwrap();
         assert!(definitions.is_empty());
+    }
+
+    async fn test_delete_non_existing(
+        definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        >,
+    ) {
+        let delete_result = definition_service
+            .delete(
+                &ApiDefinitionId("non-existing".to_string()),
+                &ApiVersion("0.0.1".to_string()),
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .expect("delete succeeded");
+
+        assert!(delete_result.is_none(), "definition should not exist");
     }
 
     fn get_api_deployment(
@@ -532,7 +607,6 @@ mod tests {
         version: &str,
         path_pattern: &str,
         worker_id: &str,
-        function_params: &str,
         response_mapping: &str,
         draft: bool,
     ) -> HttpApiDefinition {
@@ -547,11 +621,9 @@ mod tests {
             binding:
               componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
               workerName: '{}'
-              functionName: golem:it/api/get-cart-contents
-              functionParams: {}
               response: '{}'
         "#,
-            id, version, draft, path_pattern, worker_id, function_params, response_mapping
+            id, version, draft, path_pattern, worker_id, response_mapping
         );
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()

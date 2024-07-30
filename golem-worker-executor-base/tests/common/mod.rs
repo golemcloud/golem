@@ -23,8 +23,8 @@ use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
     BlobStorageConfig, CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, ShardManagerServiceConfig,
-    WorkerServiceGrpcConfig,
+    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
@@ -45,7 +45,7 @@ use golem_worker_executor_base::services::shard_manager::ShardManagerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
-use golem_worker_executor_base::services::{All, HasAll};
+use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
@@ -65,6 +65,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
 };
+use golem_common::model::oplog::WorkerResourceId;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
@@ -82,7 +83,7 @@ use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
+use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
@@ -274,6 +275,13 @@ impl TestContext {
 }
 
 pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
+    start_limited(context, None).await
+}
+
+pub async fn start_limited(
+    context: &TestContext,
+    system_memory_override: Option<u64>,
+) -> anyhow::Result<TestWorkerExecutor> {
     let redis = BASE_DEPS.redis();
     let redis_monitor = BASE_DEPS.redis_monitor();
     redis.assert_valid();
@@ -304,6 +312,10 @@ pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> 
             host: "localhost".to_string(),
             port: context.grpc_port(),
             access_token: "03494299-B515-4427-8C37-4C1C915679B7".to_string(),
+        },
+        memory: MemoryConfig {
+            system_memory_override,
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -384,20 +396,26 @@ impl FuelManagement for TestWorkerCtx {
     }
 }
 
+#[async_trait]
 impl IndexedResourceStore for TestWorkerCtx {
-    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+    fn get_indexed_resource(
+        &self,
+        resource_name: &str,
+        resource_params: &[String],
+    ) -> Option<WorkerResourceId> {
         self.durable_ctx
             .get_indexed_resource(resource_name, resource_params)
     }
 
-    fn store_indexed_resource(
+    async fn store_indexed_resource(
         &mut self,
         resource_name: &str,
         resource_params: &[String],
-        resource: u64,
+        resource: WorkerResourceId,
     ) {
         self.durable_ctx
             .store_indexed_resource(resource_name, resource_params, resource)
+            .await
     }
 
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
@@ -418,7 +436,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             .await
     }
 
-    async fn compute_latest_worker_status<T: HasAll<TestWorkerCtx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
@@ -435,7 +453,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
-    ) -> Result<RecoveryDecision, GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -496,8 +514,8 @@ impl StatusManagement for TestWorkerCtx {
         self.durable_ctx.check_interrupt()
     }
 
-    fn set_suspended(&self) {
-        self.durable_ctx.set_suspended()
+    async fn set_suspended(&self) -> Result<(), GolemError> {
+        self.durable_ctx.set_suspended().await
     }
 
     fn set_running(&self) {
@@ -534,7 +552,7 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
@@ -557,16 +575,16 @@ impl ResourceStore for TestWorkerCtx {
         self.durable_ctx.self_uri()
     }
 
-    fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource)
+    async fn add(&mut self, resource: ResourceAny) -> u64 {
+        self.durable_ctx.add(resource).await
     }
 
-    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.get(resource_id)
+    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.get(resource_id).await
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.borrow(resource_id)
+    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.borrow(resource_id).await
     }
 }
 
@@ -694,7 +712,14 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             current,
             desired
         );
-        Ok(true)
+        let current_known = self.durable_ctx.total_linear_memory_size();
+        let delta = (desired as u64).saturating_sub(current_known);
+        if delta > 0 {
+            debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
+            Ok(self.durable_ctx.increase_memory(delta).await?)
+        } else {
+            Ok(true)
+        }
     }
 
     async fn table_growing(
@@ -719,11 +744,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
-        Arc::new(ActiveWorkers::<TestWorkerCtx>::bounded(
-            golem_config.limits.max_active_workers,
-            golem_config.active_workers.drop_when_full,
-            golem_config.active_workers.ttl,
-        ))
+        Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
     async fn create_services(

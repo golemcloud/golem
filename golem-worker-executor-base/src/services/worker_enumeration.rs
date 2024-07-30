@@ -37,15 +37,14 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
         filter: Option<WorkerFilter>,
     ) -> Result<Vec<WorkerMetadata>, GolemError> {
         info!(
-            "Get workers for component: {}, filter: {}",
-            component_id,
+            "Get workers - filter: {}",
             filter
                 .clone()
                 .map(|f| f.to_string())
                 .unwrap_or("N/A".to_string())
         );
 
-        let active_workers = self.active_workers.enum_workers();
+        let active_workers = self.active_workers.iter();
 
         let mut workers: Vec<WorkerMetadata> = vec![];
         for (worker_id, worker) in active_workers {
@@ -210,8 +209,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
         info!(
-            "Get workers for component: {}, filter: {}, cursor: {}, count: {}, precise: {}",
-            component_id,
+            "Get workers - filter: {}, cursor: {}, count: {}, precise: {}",
             filter
                 .clone()
                 .map(|f| f.to_string())

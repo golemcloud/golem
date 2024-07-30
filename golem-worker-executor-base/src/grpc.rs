@@ -12,30 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use gethostname::gethostname;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-
 use std::sync::Arc;
 
-use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
-use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse,
-};
-use golem_common::model as common_model;
-use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId,
-    ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-};
+use gethostname::gethostname;
 use golem_wasm_rpc::protobuf::Val;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -43,14 +27,37 @@ use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
+use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
+use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutor;
+use golem_api_grpc::proto::golem::workerexecutor::{
+    ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
+};
+use golem_common::grpc::{
+    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
+    proto_promise_id_string, proto_worker_id_string,
+};
+use golem_common::metrics::api::{
+    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
+};
+use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::{
+    AccountId, CallingConvention, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
+};
+use golem_common::{model as common_model, recorded_grpc_api_request};
+
 use crate::error::*;
-use crate::metrics::grpc::{record_closed_grpc_active_stream, record_new_grpc_active_stream};
 use crate::model::{InterruptKind, LastError};
-use crate::recorded_grpc_request;
+use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::LogLevel;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasPromiseService,
+    worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -156,7 +163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let host = gethostname().to_string_lossy().to_string();
 
-        info!("Registering worker executor as {}:{}", host, port);
+        info!(host, port, "Registering worker executor");
 
         let shard_assignment = worker_executor
             .shard_manager_service()
@@ -243,6 +250,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
+        let existing_worker = self.worker_service().get(&owned_worker_id).await;
+        if existing_worker.is_some() {
+            return Err(GolemError::worker_already_exists(worker_id.clone()));
+        }
+
         let args = request.args;
         let env = request
             .env
@@ -259,9 +271,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
         )
         .await?;
-        Worker::start_if_needed(worker.clone()).await?;
 
-        Ok(())
+        let mut subscription = self.events().subscribe();
+        Worker::start_if_needed(worker.clone()).await?;
+        if worker.is_loading() {
+            match subscription
+                .wait_for(|event| match event {
+                    Event::WorkerLoaded { worker_id, result }
+                        if worker_id == &owned_worker_id.worker_id =>
+                    {
+                        Some(result.clone())
+                    }
+                    _ => None,
+                })
+                .await
+            {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(RecvError::Closed) => Err(GolemError::unknown("Events subscription closed")),
+                Err(RecvError::Lagged(_)) => Err(GolemError::unknown(
+                    "Worker executor is overloaded and could not wait for worker to load",
+                )),
+            }
+        } else {
+            Ok(())
+        }
     }
 
     async fn complete_promise_internal(
@@ -397,7 +431,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // Worker does not exist, we still check if it is in the list active workers due to some inconsistency
             if let Some((_, worker)) = self
                 .active_workers()
-                .enum_workers()
                 .iter()
                 .find(|(id, _)| *id == worker_id)
             {
@@ -620,9 +653,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids);
 
-        let workers = self.active_workers().enum_workers();
-
-        for (worker_id, worker_details) in workers {
+        for (worker_id, worker_details) in self.active_workers().iter() {
             if self.shard_service().check_worker(&worker_id).is_err() {
                 if let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
@@ -943,7 +974,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let mut receiver = event_service.receiver();
 
                 info!("Client connected");
-                record_new_grpc_active_stream();
+                record_new_grpc_api_active_stream();
 
                 // spawn and channel are required if you want handle "disconnect" functionality
                 // the `out_stream` will not be polled after client disconnect
@@ -1042,7 +1073,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             }
                         }
 
-                        record_closed_grpc_active_stream();
+                        record_closed_grpc_api_active_stream();
                         info!("Client disconnected");
                     }
                     .in_current_span(),
@@ -1118,6 +1149,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 + record.timestamp.as_ref().unwrap().nanos as i64
         });
 
+        let mut owned_resources = HashMap::new();
+        for (resource_id, resource) in metadata.last_known_status.owned_resources {
+            owned_resources.insert(
+                resource_id.0,
+                ResourceMetadata {
+                    created_at: Some(resource.created_at.into()),
+                    indexed: resource.indexed_resource_key.map(|t| t.into()),
+                },
+            );
+        }
+
         golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             args: metadata.args.clone(),
@@ -1136,6 +1178,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             last_error: last_error_and_retry_count.map(|last_error| last_error.error.to_string()),
             component_size: metadata.last_known_status.component_size,
             total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
+            owned_resources,
         }
     }
 }
@@ -1150,49 +1193,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 }
 
-fn proto_component_id_string(
-    component_id: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
-) -> Option<String> {
-    component_id
-        .clone()
-        .and_then(|v| TryInto::<ComponentId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
-fn proto_worker_id_string(
-    worker_id: &Option<golem_api_grpc::proto::golem::worker::WorkerId>,
-) -> Option<String> {
-    worker_id
-        .clone()
-        .and_then(|v| TryInto::<WorkerId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
-fn proto_idempotency_key_string(
-    idempotency_key: &Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
-) -> Option<String> {
-    idempotency_key
-        .clone()
-        .map(|v| Into::<IdempotencyKey>::into(v).to_string())
-}
-
-fn proto_account_id_string(
-    account_id: &Option<golem_api_grpc::proto::golem::common::AccountId>,
-) -> Option<String> {
-    account_id
-        .clone()
-        .map(|v| Into::<AccountId>::into(v).to_string())
-}
-
-fn proto_promise_id_string(
-    promise_id: &Option<golem_api_grpc::proto::golem::worker::PromiseId>,
-) -> Option<String> {
-    promise_id
-        .clone()
-        .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
 #[tonic::async_trait]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutor for WorkerExecutorImpl<Ctx, Svcs>
@@ -1202,7 +1202,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CreateWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::CreateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             component_version = request.component_version,
@@ -1241,7 +1241,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeAndAwaitWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_and_await_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
@@ -1277,7 +1277,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InvokeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "invoke_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
@@ -1318,7 +1318,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::ConnectWorkerRequest>,
     ) -> ResponseResult<Self::ConnectWorkerStream> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "connect_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             account_id = proto_account_id_string(&request.account_id)
@@ -1334,7 +1334,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::DeleteWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::DeleteWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "delete_worker",
             worker_id = proto_worker_id_string(&request.worker_id)
         );
@@ -1371,7 +1371,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::CompletePromiseRequest>,
     ) -> Result<Response<golem::workerexecutor::CompletePromiseResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "complete_promise",
             promise_id = proto_promise_id_string(&request.promise_id)
         );
@@ -1408,7 +1408,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::InterruptWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InterruptWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "interrupt_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
         );
@@ -1447,7 +1447,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::RevokeShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::RevokeShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!("revoke_shards",);
+        let record = recorded_grpc_api_request!("revoke_shards",);
 
         match self
             .revoke_shards_internal(request)
@@ -1481,7 +1481,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::AssignShardsRequest>,
     ) -> Result<Response<golem::workerexecutor::AssignShardsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!("assign_shards",);
+        let record = recorded_grpc_api_request!("assign_shards",);
 
         match self
             .assign_shards_internal(request)
@@ -1516,7 +1516,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Response<golem::workerexecutor::GetWorkerMetadataResponse>, Status> {
         let request = request.into_inner();
 
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_worker_metadata",
             worker_id = proto_worker_id_string(&request.worker_id)
         );
@@ -1564,7 +1564,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::ResumeWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::ResumeWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "resume_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
         );
@@ -1601,7 +1601,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetRunningWorkersMetadataRequest>,
     ) -> Result<Response<GetRunningWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_running_workers_metadata",
             component_id = proto_component_id_string(&request.component_id),
         );
@@ -1642,7 +1642,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "get_workers_metadata",
             component_id = proto_component_id_string(&request.component_id),
         );
@@ -1682,7 +1682,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<UpdateWorkerRequest>,
     ) -> Result<Response<UpdateWorkerResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_request!(
+        let record = recorded_grpc_api_request!(
             "update_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             target_version = request.target_version,

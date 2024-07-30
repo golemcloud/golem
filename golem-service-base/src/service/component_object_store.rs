@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::{ComponentStoreLocalConfig, ComponentStoreS3Config};
+use crate::stream::ByteStream;
+use anyhow::Error;
+use async_trait::async_trait;
+use aws_config::BehaviorVersion;
+use futures::Stream;
 use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-
-use crate::config::{ComponentStoreLocalConfig, ComponentStoreS3Config};
-use crate::stream::ByteStream;
-use async_trait::async_trait;
-use aws_config::BehaviorVersion;
-use futures::Stream;
 use tracing::{debug, info};
 
 #[async_trait]
@@ -31,6 +31,8 @@ pub trait ComponentObjectStore {
     async fn get_stream(&self, object_key: &str) -> ByteStream;
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error>;
+
+    async fn delete(&self, object_key: &str) -> Result<(), anyhow::Error>;
 }
 
 pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
@@ -133,6 +135,21 @@ impl ComponentObjectStore for AwsS3ComponentObjectStore {
 
         Ok(())
     }
+
+    async fn delete(&self, object_key: &str) -> Result<(), anyhow::Error> {
+        let key = self.get_key(object_key);
+
+        info!("Deleting object: {}/{}", self.bucket_name, key);
+
+        self.client
+            .delete_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .send()
+            .await?;
+
+        Ok(())
+    }
 }
 
 pub struct FsComponentObjectStore {
@@ -209,6 +226,24 @@ impl ComponentObjectStore for FsComponentObjectStore {
         let file_path = dir_path.join(object_key);
 
         fs::write(file_path, data).map_err(|e| e.into())
+    }
+
+    async fn delete(&self, object_key: &str) -> Result<(), Error> {
+        let dir_path = self.get_dir_path();
+
+        debug!("Deleting object: {}/{}", dir_path.display(), object_key);
+
+        if !dir_path.exists() {
+            fs::create_dir_all(dir_path.clone())?;
+        }
+
+        let file_path = dir_path.join(object_key);
+
+        if file_path.exists() {
+            fs::remove_file(file_path)?;
+        }
+
+        Ok(())
     }
 }
 

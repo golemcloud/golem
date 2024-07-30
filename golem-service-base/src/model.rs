@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bincode::{Decode, Encode};
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
@@ -38,6 +39,12 @@ pub struct WorkerCreationResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
 pub struct ComponentName(pub String);
+
+impl Display for ComponentName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -163,7 +170,7 @@ impl From<ProtectedComponentId> for golem_api_grpc::proto::golem::component::Pro
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct Empty {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeResult {
     pub ok: Option<Box<Type>>,
     pub err: Option<Box<Type>>,
@@ -195,7 +202,7 @@ impl Serialize for TypeResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct NameTypePair {
     pub name: String,
     pub typ: Box<Type>,
@@ -225,7 +232,7 @@ impl Serialize for NameTypePair {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct NameOptionTypePair {
     pub name: String,
     pub typ: Option<Box<Type>>,
@@ -256,7 +263,7 @@ impl Serialize for NameOptionTypePair {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeVariant {
     pub cases: Vec<NameOptionTypePair>,
 }
@@ -280,7 +287,7 @@ impl Serialize for TypeVariant {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeOption {
     pub inner: Box<Type>,
 }
@@ -304,7 +311,7 @@ impl Serialize for TypeOption {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeEnum {
     pub cases: Vec<String>,
 }
@@ -328,7 +335,7 @@ impl Serialize for TypeEnum {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeFlags {
     pub cases: Vec<String>,
 }
@@ -352,7 +359,7 @@ impl Serialize for TypeFlags {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeRecord {
     pub cases: Vec<NameTypePair>,
 }
@@ -376,7 +383,7 @@ impl Serialize for TypeRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeTuple {
     pub items: Vec<Type>,
 }
@@ -400,7 +407,7 @@ impl Serialize for TypeTuple {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeList {
     pub inner: Box<Type>,
 }
@@ -424,7 +431,7 @@ impl Serialize for TypeList {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeStr;
 
 impl<'de> Deserialize<'de> for TypeStr {
@@ -454,7 +461,7 @@ impl Serialize for TypeStr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeChr;
 
 impl<'de> Deserialize<'de> for TypeChr {
@@ -484,7 +491,7 @@ impl Serialize for TypeChr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeF64;
 
 impl<'de> Deserialize<'de> for TypeF64 {
@@ -514,7 +521,7 @@ impl Serialize for TypeF64 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeF32;
 
 impl<'de> Deserialize<'de> for TypeF32 {
@@ -544,7 +551,7 @@ impl Serialize for TypeF32 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeU64;
 
 impl<'de> Deserialize<'de> for TypeU64 {
@@ -574,7 +581,7 @@ impl Serialize for TypeU64 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeS64;
 
 impl<'de> Deserialize<'de> for TypeS64 {
@@ -604,7 +611,7 @@ impl Serialize for TypeS64 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeU32;
 
 impl<'de> Deserialize<'de> for TypeU32 {
@@ -634,7 +641,7 @@ impl Serialize for TypeU32 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeS32;
 
 impl<'de> Deserialize<'de> for TypeS32 {
@@ -664,7 +671,7 @@ impl Serialize for TypeS32 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeU16;
 
 impl<'de> Deserialize<'de> for TypeU16 {
@@ -694,7 +701,7 @@ impl Serialize for TypeU16 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeS16;
 
 impl<'de> Deserialize<'de> for TypeS16 {
@@ -724,7 +731,7 @@ impl Serialize for TypeS16 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeU8;
 
 impl<'de> Deserialize<'de> for TypeU8 {
@@ -754,7 +761,7 @@ impl Serialize for TypeU8 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeS8;
 
 impl<'de> Deserialize<'de> for TypeS8 {
@@ -784,7 +791,7 @@ impl Serialize for TypeS8 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Object, Encode, Decode)]
 pub struct TypeBool;
 
 impl<'de> Deserialize<'de> for TypeBool {
@@ -814,7 +821,7 @@ impl Serialize for TypeBool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum, Encode, Decode)]
 pub enum ResourceMode {
     Borrowed,
     Owned,
@@ -838,7 +845,7 @@ impl From<ResourceMode> for AnalysedResourceMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct TypeHandle {
     resource_id: u64,
     mode: ResourceMode,
@@ -871,7 +878,7 @@ impl From<TypeHandle> for golem_wasm_rpc::protobuf::TypeHandle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, Encode, Decode)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum Type {
     Variant(TypeVariant),
@@ -1168,11 +1175,9 @@ impl From<Type> for golem_wasm_rpc::protobuf::Type {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct FunctionParameter {
     pub name: String,
-    //  TODO: Fix this in DB. Temp fix for now.
-    #[serde(rename = "tpe")]
     pub typ: Type,
 }
 
@@ -1184,7 +1189,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionParameter> for Fun
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            typ: value.tpe.ok_or("Missing tpe")?.try_into()?,
+            typ: value.typ.ok_or("Missing typ")?.try_into()?,
         })
     }
 }
@@ -1193,16 +1198,14 @@ impl From<FunctionParameter> for golem_api_grpc::proto::golem::component::Functi
     fn from(value: FunctionParameter) -> Self {
         Self {
             name: value.name,
-            tpe: Some(value.typ.into()),
+            typ: Some(value.typ.into()),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct FunctionResult {
     pub name: Option<String>,
-    // TODO: Fix this in DB. Temp fix for now.
-    #[serde(rename = "tpe")]
     pub typ: Type,
 }
 
@@ -1214,7 +1217,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionResult> for Functi
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             name: value.name,
-            typ: value.tpe.ok_or("Missing tpe")?.try_into()?,
+            typ: value.typ.ok_or("Missing typ")?.try_into()?,
         })
     }
 }
@@ -1223,12 +1226,12 @@ impl From<FunctionResult> for golem_api_grpc::proto::golem::component::FunctionR
     fn from(value: FunctionResult) -> Self {
         Self {
             name: value.name,
-            tpe: Some(value.typ.into()),
+            typ: Some(value.typ.into()),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct ExportInstance {
     pub name: String,
     pub functions: Vec<ExportFunction>,
@@ -1264,7 +1267,7 @@ impl From<ExportInstance> for golem_api_grpc::proto::golem::component::ExportIns
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct ExportFunction {
     pub name: String,
     pub parameters: Vec<FunctionParameter>,
@@ -1311,7 +1314,7 @@ impl From<ExportFunction> for golem_api_grpc::proto::golem::component::ExportFun
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, Encode, Decode)]
 #[oai(discriminator_name = "type", one_of = true)]
 pub enum Export {
     Instance(ExportInstance),
@@ -1370,7 +1373,20 @@ impl From<Export> for golem_api_grpc::proto::golem::component::Export {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Object,
+    Encode,
+    Decode,
+)]
 pub struct VersionedName {
     pub name: String,
     pub version: String,
@@ -1394,7 +1410,20 @@ impl From<VersionedName> for golem_api_grpc::proto::golem::component::VersionedN
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Object,
+    Encode,
+    Decode,
+)]
 pub struct ProducerField {
     pub name: String,
     pub values: Vec<VersionedName>,
@@ -1418,7 +1447,20 @@ impl From<ProducerField> for golem_api_grpc::proto::golem::component::ProducerFi
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Object,
+    Encode,
+    Decode,
+)]
 pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
@@ -1716,7 +1758,7 @@ impl From<Type> for golem_wasm_ast::analysis::AnalysedType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct LinearMemory {
     /// Initial size of the linear memory in bytes
     pub initial: u64,
@@ -1759,7 +1801,7 @@ impl From<LinearMemory> for golem_api_grpc::proto::golem::component::LinearMemor
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct ComponentMetadata {
     pub exports: Vec<Export>,
     pub producers: Vec<Producers>,
@@ -2771,6 +2813,7 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<u64, ResourceMetadata>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadata {
@@ -2796,6 +2839,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources: value
+                .owned_resources
+                .into_iter()
+                .map(|(k, v)| v.try_into().map(|v| (k, v)))
+                .collect::<Result<HashMap<_, _>, _>>()?,
         })
     }
 }
@@ -2818,6 +2866,11 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
+            owned_resources: value
+                .owned_resources
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
         }
     }
 }
@@ -2926,6 +2979,62 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                     ),
                 ),
             },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ResourceMetadata {
+    pub created_at: Timestamp,
+    pub indexed: Option<IndexedWorkerMetadata>,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::ResourceMetadata> for ResourceMetadata {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::ResourceMetadata,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            created_at: value.created_at.ok_or("Missing created_at")?.into(),
+            indexed: value.indexed.map(|i| i.into()),
+        })
+    }
+}
+
+impl From<ResourceMetadata> for golem_api_grpc::proto::golem::worker::ResourceMetadata {
+    fn from(value: ResourceMetadata) -> Self {
+        Self {
+            created_at: Some(value.created_at.into()),
+            indexed: value.indexed.map(|i| i.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct IndexedWorkerMetadata {
+    pub resource_name: String,
+    pub resource_params: Vec<String>,
+}
+
+impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedWorkerMetadata {
+    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+        Self {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+    fn from(value: IndexedWorkerMetadata) -> Self {
+        Self {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
         }
     }
 }
@@ -3183,7 +3292,7 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::WorkerExecutionE
     }
 }
 
-#[derive(Object)]
+#[derive(Object, Clone, Debug)]
 #[oai(rename_all = "camelCase")]
 pub struct GolemErrorBody {
     pub golem_error: GolemError,
@@ -3201,12 +3310,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerExecutionError> for Gol
     }
 }
 
-#[derive(Object, Serialize)]
+#[derive(Debug, Clone, Object, Serialize)]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
 }
 
-#[derive(Object, Serialize)]
+#[derive(Debug, Clone, Object, Serialize)]
 pub struct ErrorBody {
     pub error: String,
 }

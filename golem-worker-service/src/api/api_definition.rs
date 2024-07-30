@@ -1,21 +1,21 @@
 use std::result::Result;
 use std::sync::Arc;
 
-use golem_worker_service_base::api_definition::http::JsonOpenApiDefinition;
-use poem_openapi::param::{Path, Query};
-use poem_openapi::payload::Json;
-use poem_openapi::*;
-use tracing::{error, info};
-
+use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinition;
 use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
+use golem_worker_service_base::api_definition::http::JsonOpenApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
+use poem_openapi::param::{Path, Query};
+use poem_openapi::payload::Json;
+use poem_openapi::*;
+use tracing::{error, Instrument};
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<
@@ -42,17 +42,25 @@ impl RegisterApiDefinitionApi {
         &self,
         Json(openapi): Json<JsonOpenApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
-        let definition = get_api_definition(openapi.0).map_err(|e| {
-            error!("Invalid Spec {}", e);
-            ApiEndpointError::bad_request(e)
-        })?;
+        let record = recorded_http_api_request!("import_open_api",);
 
-        self.create_api(&definition).await?;
+        let response = {
+            let definition = get_api_definition(openapi.0).map_err(|e| {
+                error!("Invalid Spec {}", e);
+                ApiEndpointError::bad_request(e)
+            })?;
 
-        let definition: HttpApiDefinition =
-            definition.try_into().map_err(ApiEndpointError::internal)?;
+            self.create_api(&definition)
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(definition))
+            definition
+                .try_into()
+                .map_err(ApiEndpointError::internal)
+                .map(Json)
+        };
+
+        record.result(response)
     }
 
     #[oai(path = "/", method = "post", operation_id = "create_definition")]
@@ -60,20 +68,32 @@ impl RegisterApiDefinitionApi {
         &self,
         payload: Json<HttpApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
-        info!("Save API definition - id: {}", &payload.id);
+        let record = recorded_http_api_request!(
+            "create_definition",
+            api_definition_id = payload.0.id.to_string(),
+            version = payload.0.version.to_string(),
+            draft = payload.0.draft.to_string()
+        );
 
-        let definition: CoreHttpApiDefinition = payload
-            .0
-            .try_into()
-            .map_err(ApiEndpointError::bad_request)?;
+        let response = {
+            let definition: CoreHttpApiDefinition = payload
+                .0
+                .try_into()
+                .map_err(ApiEndpointError::bad_request)?;
 
-        self.create_api(&definition).await?;
+            self.create_api(&definition)
+                .instrument(record.span.clone())
+                .await?;
 
-        let definition: HttpApiDefinition =
-            definition.try_into().map_err(ApiEndpointError::internal)?;
+            definition
+                .try_into()
+                .map_err(ApiEndpointError::internal)
+                .map(Json)
+        };
 
-        Ok(Json(definition))
+        record.result(response)
     }
+
     #[oai(
         path = "/:id/:version",
         method = "put",
@@ -85,39 +105,43 @@ impl RegisterApiDefinitionApi {
         version: Path<ApiVersion>,
         payload: Json<HttpApiDefinition>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
-        info!("Update API definition - id: {}", &payload.id);
+        let record = recorded_http_api_request!(
+            "update_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string(),
+            draft = payload.0.draft.to_string()
+        );
 
-        let definition: CoreHttpApiDefinition = payload
-            .0
-            .try_into()
-            .map_err(ApiEndpointError::bad_request)?;
+        let response = {
+            let definition: CoreHttpApiDefinition = payload
+                .0
+                .try_into()
+                .map_err(ApiEndpointError::bad_request)?;
 
-        if id.0 != definition.id {
-            return Err(ApiEndpointError::bad_request("Unmatched url and body ids."));
-        }
+            if id.0 != definition.id {
+                Err(ApiEndpointError::bad_request("Unmatched url and body ids."))
+            } else if version.0 != definition.version {
+                Err(ApiEndpointError::bad_request(
+                    "Unmatched url and body versions.",
+                ))
+            } else {
+                self.definition_service
+                    .update(
+                        &definition,
+                        &DefaultNamespace::default(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .instrument(record.span.clone())
+                    .await?;
 
-        if version.0 != definition.version {
-            return Err(ApiEndpointError::bad_request(
-                "Unmatched url and body versions.",
-            ));
-        }
+                definition
+                    .try_into()
+                    .map_err(ApiEndpointError::internal)
+                    .map(Json)
+            }
+        };
 
-        self.definition_service
-            .update(
-                &definition,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await
-            .map_err(|e| {
-                error!("API Definition ID: {} - update error: {e:?}", definition.id);
-                e
-            })?;
-
-        let definition: HttpApiDefinition =
-            definition.try_into().map_err(ApiEndpointError::internal)?;
-
-        Ok(Json(definition))
+        record.result(response)
     }
 
     #[oai(
@@ -130,32 +154,39 @@ impl RegisterApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
-        let api_definition_id = id.0;
-
-        let api_version = version.0;
-
-        info!(
-            "Get API definition - id: {}, version: {}",
-            &api_definition_id, &api_version
+        let record = recorded_http_api_request!(
+            "get_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string()
         );
 
-        let data = self
-            .definition_service
-            .get(
-                &api_definition_id,
-                &api_version,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await?;
+        let response = {
+            let api_definition_id = id.0;
 
-        let data = data.ok_or(ApiEndpointError::not_found(format!(
-            "Can't find api definition with id {api_definition_id}, and version {api_version}"
-        )))?;
+            let api_version = version.0;
 
-        let value: HttpApiDefinition = data.try_into().map_err(ApiEndpointError::internal)?;
+            let data = self
+                .definition_service
+                .get(
+                    &api_definition_id,
+                    &api_version,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await?;
 
-        Ok(Json(value))
+            let definition = data.ok_or(ApiEndpointError::not_found(format!(
+                "Can't find api definition with id {api_definition_id}, and version {api_version}"
+            )))?;
+
+            definition
+                .try_into()
+                .map_err(ApiEndpointError::internal)
+                .map(Json)
+        };
+
+        record.result(response)
     }
 
     #[oai(
@@ -168,26 +199,34 @@ impl RegisterApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
     ) -> Result<Json<String>, ApiEndpointError> {
-        let api_definition_id = id.0;
-        let api_definition_version = version.0;
+        let record = recorded_http_api_request!(
+            "delete_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string()
+        );
 
-        info!("Delete API definition - id: {}", &api_definition_id);
+        let response = {
+            let api_definition_id = id.0;
+            let api_definition_version = version.0;
 
-        let deleted = self
-            .definition_service
-            .delete(
-                &api_definition_id,
-                &api_definition_version,
-                &DefaultNamespace::default(),
-                &EmptyAuthCtx::default(),
-            )
-            .await?;
+            let deleted = self
+                .definition_service
+                .delete(
+                    &api_definition_id,
+                    &api_definition_version,
+                    &DefaultNamespace::default(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await?;
 
-        if deleted.is_some() {
-            Ok(Json("API definition deleted".to_string()))
-        } else {
-            Ok(Json("API definition not found".to_string()))
-        }
+            if deleted.is_some() {
+                Ok(Json("API definition deleted".to_string()))
+            } else {
+                Ok(Json("API definition not found".to_string()))
+            }
+        };
+        record.result(response)
     }
 
     #[oai(path = "/", method = "get", operation_id = "list_definitions")]
@@ -195,23 +234,33 @@ impl RegisterApiDefinitionApi {
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
     ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
-        let data = if let Some(id) = api_definition_id_query.0 {
-            self.definition_service
-                .get_all_versions(&id, &DefaultNamespace::default(), &EmptyAuthCtx::default())
-                .await?
-        } else {
-            self.definition_service
-                .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
-                .await?
+        let record = recorded_http_api_request!(
+            "list_definitions",
+            api_definition_id = api_definition_id_query.0.as_ref().map(|id| id.to_string()),
+        );
+
+        let response = {
+            let data = if let Some(id) = api_definition_id_query.0 {
+                self.definition_service
+                    .get_all_versions(&id, &DefaultNamespace::default(), &EmptyAuthCtx::default())
+                    .instrument(record.span.clone())
+                    .await?
+            } else {
+                self.definition_service
+                    .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+                    .instrument(record.span.clone())
+                    .await?
+            };
+
+            let values = data
+                .into_iter()
+                .map(|d| d.try_into())
+                .collect::<Result<Vec<HttpApiDefinition>, _>>()
+                .map_err(ApiEndpointError::internal)?;
+
+            Ok(Json(values))
         };
-
-        let values = data
-            .into_iter()
-            .map(|d| d.try_into())
-            .collect::<Result<Vec<HttpApiDefinition>, _>>()
-            .map_err(ApiEndpointError::internal)?;
-
-        Ok(Json(values))
+        record.result(response)
     }
 }
 

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    env_vars, new_client, wait_for_startup, ComponentService,
+    new_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
 };
 use crate::components::rdb::Rdb;
-use crate::components::ChildProcessLogger;
+use crate::components::{ChildProcessLogger, GolemEnvVars};
 use async_trait::async_trait;
 
 use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
@@ -49,6 +49,35 @@ impl SpawnedComponentService {
         err_level: Level,
         shared_client: bool,
     ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            executable,
+            working_directory,
+            http_port,
+            grpc_port,
+            component_compilation_service_port,
+            rdb,
+            verbosity,
+            out_level,
+            err_level,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
+        executable: &Path,
+        working_directory: &Path,
+        http_port: u16,
+        grpc_port: u16,
+        component_compilation_service_port: Option<u16>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        shared_client: bool,
+    ) -> Self {
         info!("Starting golem-component-service process");
 
         if !executable.exists() {
@@ -57,13 +86,17 @@ impl SpawnedComponentService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(
-                http_port,
-                grpc_port,
-                component_compilation_service_port.map(|p| ("localhost", p)),
-                rdb,
-                verbosity,
-            ))
+            .envs(
+                env_vars
+                    .env_vars(
+                        http_port,
+                        grpc_port,
+                        component_compilation_service_port.map(|p| ("localhost", p)),
+                        rdb,
+                        verbosity,
+                    )
+                    .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

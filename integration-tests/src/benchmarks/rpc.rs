@@ -23,7 +23,6 @@ use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::data::Data;
 use integration_tests::benchmarks::{
     invoke_and_await, run_benchmark, setup_benchmark, warmup_workers, SimpleBenchmarkContext,
 };
@@ -166,16 +165,6 @@ impl Benchmark for Rpc {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        let calculate_iter: u64 = 200000;
-
-        let data = Data::generate_list(2000);
-
-        let values = data
-            .clone()
-            .into_iter()
-            .map(|d| d.into())
-            .collect::<Vec<Value>>();
-
         let shard_manager = benchmark_context.deps.shard_manager();
 
         let mut shard_manager_client = shard_manager.client().await;
@@ -201,28 +190,6 @@ impl Benchmark for Rpc {
             "golem:itrpc/rpc-api.{echo}",
             vec![Value::String("hello".to_string())],
             "worker-echo-invocation",
-        )
-        .await;
-
-        self.benchmark_rpc_invocation(
-            benchmark_context,
-            context,
-            &recorder,
-            &shard_manager_routing_table,
-            "golem:itrpc/rpc-api.{calculate}",
-            vec![Value::U64(calculate_iter)],
-            "worker-calculate-invocation",
-        )
-        .await;
-
-        self.benchmark_rpc_invocation(
-            benchmark_context,
-            context,
-            &recorder,
-            &shard_manager_routing_table,
-            "golem:itrpc/rpc-api.{process}",
-            vec![Value::List(values)],
-            "worker-process-invocation",
         )
         .await;
     }

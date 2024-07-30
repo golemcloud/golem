@@ -34,6 +34,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "get");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -78,6 +79,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "set");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -125,6 +127,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "delete");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self
@@ -161,6 +164,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "exists");
         let account_id = self.owned_worker_id.account_id();
         let bucket = self

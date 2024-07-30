@@ -10,11 +10,14 @@
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make cli-tests`: runs CLI tests only
 # - `cargo make sharding-tests`: runs sharding integration tests only
+# - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
+# - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
+# - `cargo make generate-configs`: generates configs from code defaults
 
 [config]
 default_to_workspace = false # by default, we run cargo commands on top level instead of per member
@@ -90,7 +93,7 @@ command = "cargo"
 args = [
     "build",
     "-p",
-    "golem-shard-manager",                                               # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
     "-p",
     "golem-worker-executor",
     "-p",
@@ -182,7 +185,7 @@ args = [
 
 [tasks.worker-executor-tests-group1]
 description = "Runs worker executor tests only (group 1/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration api -- --nocapture
 cargo test --package golem-worker-executor-base --test integration blobstore -- --nocapture
@@ -191,14 +194,14 @@ cargo test --package golem-worker-executor-base --test integration keyvalue -- -
 
 [tasks.worker-executor-tests-group2]
 description = "Runs worker executor tests only (group 2/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages -- --nocapture
 '''
 
 [tasks.worker-executor-tests-group3]
 description = "Runs worker executor tests only (group 3/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration transactions -- --nocapture
 cargo test --package golem-worker-executor-base --test integration wasi -- --nocapture
@@ -206,7 +209,7 @@ cargo test --package golem-worker-executor-base --test integration wasi -- --noc
 
 [tasks.worker-executor-tests-group4]
 description = "Runs worker executor tests only (group 4/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration scalability -- --nocapture
 cargo test --package golem-worker-executor-base --test integration hot_update -- --nocapture
@@ -215,7 +218,7 @@ cargo test --package golem-worker-executor-base --test integration rpc -- --noca
 
 [tasks.worker-executor-tests-group5]
 description = "Runs worker executor tests only (group 5/5)"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages2 -- --nocapture
 '''
@@ -251,6 +254,24 @@ args = [
     "--test-threads=1",
 ]
 
+[tasks.sharding-tests-debug]
+dependencies = ["build-bins"]
+script = '''
+rm -rf logs data
+mkdir -pv logs data
+
+export RUST_LOG=info,golem_test_framework::components=WARN
+export RUST_BACKTRACE=1
+export GOLEM__TRACING__FILE_DIR=../logs
+export GOLEM__TRACING__FILE_TRUNCATE=false
+export GOLEM__TRACING__FILE__ENABLED=true
+
+cargo test \
+--package integration-tests \
+--test sharding ${@} \
+-- --nocapture --test-threads=1
+'''
+
 [tasks.cli-tests]
 description = "Runs CLI tests only"
 dependencies = ["build-bins"]
@@ -264,6 +285,7 @@ args = [
     "integration",
     "--",
     "--nocapture",
+    "--test-threads=1"
 ]
 
 ## ** CHECK-OPENAPI **
@@ -475,35 +497,41 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
 
 script = '''
-mkdir -pv logs
+mkdir -pv data logs
 
 redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &
 redis_pid=$!
 
 export RUST_BACKTRACE=1
 
+export GOLEM__TRACING__FILE_DIR="${GOLEM__TRACING__FILE_DIR:=../logs}"
+export GOLEM__TRACING__FILE__ANSI="${GOLEM__TRACING__FILE__ANSI:=true}"
+export GOLEM__TRACING__FILE__ENABLED="${GOLEM__TRACING__FILE__ENABLED:=true}"
+export GOLEM__TRACING__FILE__JSON="${GOLEM__TRACING__FILE__JSON:=false}"
+export GOLEM__TRACING__STDOUT__ENABLED="${GOLEM__TRACING__STDOUT__ENABLED:=false}"
+
 pushd golem-shard-manager || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &> ../logs/shard-manager.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn GOLEM_SHARD_MANAGER_PORT=9002 ../target/debug/golem-shard-manager &
 shard_manager_pid=$!
 popd || exit
 
 pushd golem-component-compilation-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &> ../logs/component-compilation-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-compilation-service &
 component_compilation_service_pid=$!
 popd || exit
 
 pushd golem-component-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &> ../logs/component-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-component-service &
 component_service_pid=$!
 popd || exit
 
 pushd golem-worker-service || exit
-RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &> ../logs/worker-service.log &
+RUST_LOG=info,h2=warn,hyper=warn,tower=warn ../target/debug/golem-worker-service &
 worker_service_pid=$!
 popd || exit
 
 pushd golem-worker-executor || exit
-RUST_LOG=info ../target/debug/worker-executor &> ../logs/worker-executor.log &
+RUST_LOG=info ../target/debug/worker-executor &
 worker_executor_pid=$!
 popd || exit
 
@@ -531,4 +559,47 @@ kill $component_compilation_service_pid || true
 kill $shard_manager_pid || true
 kill $router_pid || true
 kill $redis_pid || true
+'''
+
+## ** GENERATE CONFIGS **
+
+[tasks.generate-configs]
+description = "Generates default and exmaple config files"
+dependencies = ["build-bins"]
+
+script = '''
+export RUST_BACKTRACE=1
+
+./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
+./target/debug/golem-shard-manager --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
+./target/debug/golem-component-compilation-service --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
+./target/debug/golem-component-compilation-service --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
+./target/debug/golem-component-service --dump-config-default-toml > golem-component-service/config/component-service.toml
+./target/debug/golem-component-service --dump-config-default-env-var > golem-component-service/config/component-service.sample.env
+./target/debug/golem-worker-service --dump-config-default-toml > golem-worker-service/config/worker-service.toml
+./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
+./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
+./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+'''
+
+## ** CHECK CONFIGS **
+
+[tasks.check-configs]
+description = "Generates configs from code and checks if it's committed"
+dependencies = [
+    "generate-configs"
+]
+
+script = '''
+git diff --exit-code \
+    golem-shard-manager/config/shard-manager.toml \
+    golem-shard-manager/config/shard-manager.sample.env \
+    golem-component-compilation-service/config/component-compilation-service.toml \
+    golem-component-compilation-service/config/component-compilation-service.sample.env \
+    golem-component-service/config/component-service.toml \
+    golem-component-service/config/component-service.sample.env \
+    golem-worker-service/config/worker-service.toml \
+    golem-worker-service/config/worker-service.sample.env \
+    golem-worker-executor/config/worker-executor.toml \
+    golem-worker-executor/config/worker-executor.sample.env
 '''

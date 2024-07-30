@@ -309,19 +309,15 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     type Error = String;
 
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
-        let response: String = value.response.0.to_string();
+        let response = Some(value.response.0.into());
 
-        let worker_id = rib::to_string(&value.worker_name).map_err(|e| e.to_string())?;
+        let worker_name = Some(value.worker_name.into());
 
-        let idempotency_key = if let Some(key) = &value.idempotency_key {
-            Some(rib::to_string(key).map_err(|e| e.to_string())?)
-        } else {
-            None
-        };
+        let idempotency_key = value.idempotency_key.map(|key| key.into());
 
         let result = grpc_apidefinition::WorkerBinding {
             component: Some(value.component_id.into()),
-            worker_id,
+            worker_name,
             idempotency_key,
             response,
         };
@@ -335,16 +331,19 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
 
     fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
         let response: crate::worker_binding::ResponseMapping = {
-            let r: Expr = value.response.parse()?;
+            let r: Expr = value.response.ok_or("response is missing")?.try_into()?;
             crate::worker_binding::ResponseMapping(r)
         };
 
-        let worker_name = value.worker_id.parse()?;
+        let worker_name = value
+            .worker_name
+            .ok_or("worker name is missing")?
+            .try_into()?;
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 
-        let idempotency_key = if let Some(key) = &value.idempotency_key {
-            Some(key.parse()?)
+        let idempotency_key = if let Some(key) = value.idempotency_key {
+            Some(key.try_into()?)
         } else {
             None
         };

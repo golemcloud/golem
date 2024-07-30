@@ -129,6 +129,8 @@ impl CliLive {
 
         let output = Command::new(&self.golem_cli_path)
             .env("GOLEM_CONFIG_DIR", self.config_dir.to_str().unwrap())
+            .env("GOLEM_CONNECT_TIMEOUT", "PT10S")
+            .env("GOLEM_READ_TIMEOUT", "PT5M")
             .arg(self.config.arg('F', "format"))
             .arg(self.format.to_string())
             .arg("-v")
@@ -183,6 +185,8 @@ impl Cli for CliLive {
 
         let mut child = Command::new(&self.golem_cli_path)
             .env("GOLEM_CONFIG_DIR", self.config_dir.to_str().unwrap())
+            .env("GOLEM_CONNECT_TIMEOUT", "PT10S")
+            .env("GOLEM_READ_TIMEOUT", "PT5M")
             .arg(self.config.arg('F', "format"))
             .arg(self.format.to_string())
             .args(args)

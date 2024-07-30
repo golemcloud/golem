@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -143,7 +157,11 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
                     .get_latest(id, auth_ctx)
                     .await
                     .map_err(|e| {
-                        error!("Error getting latest component: {:?}", e);
+                        error!(
+                            error = e.to_string(),
+                            component_id = id.to_string(),
+                            "Error getting latest component"
+                        );
                         id.clone()
                     })
             })
@@ -181,12 +199,7 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        info!(
-            "Creating API definition - namespace: {}, id: {}, version: {}",
-            namespace,
-            definition.id.clone(),
-            definition.version.clone()
-        );
+        info!(namespace = %namespace, "Create API definition");
 
         let exists = self
             .definition_repo
@@ -224,12 +237,7 @@ where
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        info!(
-            "Updating API definition - namespace: {}, id: {}, version: {}",
-            namespace,
-            definition.id.clone(),
-            definition.version.clone()
-        );
+        info!(namespace = %namespace, "Update API definition");
         let draft = self
             .definition_repo
             .get_draft(
@@ -275,10 +283,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
-        info!(
-            "Get API definition - namespace: {}, id: {}, version: {}",
-            namespace, id, version
-        );
+        info!(namespace = %namespace, "Get API definition");
         let value = self
             .definition_repo
             .get(&namespace.to_string(), id.0.as_str(), version.0.as_str())
@@ -302,10 +307,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
-        info!(
-            "Delete API definition - namespace: {}, id: {}, version: {}",
-            namespace, id, version
-        );
+        info!(namespace = %namespace, "Delete API definition");
 
         let deployments = self
             .deployment_repo
@@ -337,7 +339,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        info!("Get all API definitions - namespace: {}", namespace);
+        info!(namespace = %namespace, "Get all API definitions");
         let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
         let values: Vec<HttpApiDefinition> = records
@@ -357,10 +359,7 @@ where
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
-        info!(
-            "Get all API definitions versions - namespace: {}, id: {}",
-            namespace, id
-        );
+        info!(namespace = %namespace, "Get all API definitions versions");
 
         let records = self
             .definition_repo

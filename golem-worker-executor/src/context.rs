@@ -22,6 +22,7 @@ use golem_wasm_rpc::{Uri, Value};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -45,8 +46,10 @@ use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
-use golem_worker_executor_base::services::{worker_enumeration, HasAll};
-use golem_worker_executor_base::worker::{RecoveryDecision, Worker};
+use golem_worker_executor_base::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplogService,
+};
+use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
@@ -96,7 +99,7 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(this, worker_id).await
     }
 
-    async fn compute_latest_worker_status<T: HasAll<Context> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
@@ -108,7 +111,7 @@ impl ExternalOperations<Context> for Context {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Context> + Send),
-    ) -> Result<RecoveryDecision, GolemError> {
+    ) -> Result<RetryDecision, GolemError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -167,8 +170,8 @@ impl StatusManagement for Context {
         self.durable_ctx.check_interrupt()
     }
 
-    fn set_suspended(&self) {
-        self.durable_ctx.set_suspended()
+    async fn set_suspended(&self) -> Result<(), GolemError> {
+        self.durable_ctx.set_suspended().await
     }
 
     fn set_running(&self) {
@@ -205,7 +208,7 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision {
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         self.durable_ctx.on_invocation_failure(trap_type).await
     }
 
@@ -253,20 +256,26 @@ impl UpdateManagement for Context {
     }
 }
 
+#[async_trait]
 impl IndexedResourceStore for Context {
-    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64> {
+    fn get_indexed_resource(
+        &self,
+        resource_name: &str,
+        resource_params: &[String],
+    ) -> Option<WorkerResourceId> {
         self.durable_ctx
             .get_indexed_resource(resource_name, resource_params)
     }
 
-    fn store_indexed_resource(
+    async fn store_indexed_resource(
         &mut self,
         resource_name: &str,
         resource_params: &[String],
-        resource: u64,
+        resource: WorkerResourceId,
     ) {
         self.durable_ctx
             .store_indexed_resource(resource_name, resource_params, resource)
+            .await
     }
 
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
@@ -361,10 +370,16 @@ impl ResourceLimiterAsync for Context {
     async fn memory_growing(
         &mut self,
         _current: usize,
-        _desired: usize,
+        desired: usize,
         _maximum: Option<usize>,
     ) -> anyhow::Result<bool> {
-        Ok(true)
+        let current_known = self.durable_ctx.total_linear_memory_size();
+        let delta = (desired as u64).saturating_sub(current_known);
+        if delta > 0 {
+            Ok(self.durable_ctx.increase_memory(delta).await?)
+        } else {
+            Ok(true)
+        }
     }
 
     async fn table_growing(
@@ -377,20 +392,21 @@ impl ResourceLimiterAsync for Context {
     }
 }
 
+#[async_trait]
 impl ResourceStore for Context {
     fn self_uri(&self) -> Uri {
         self.durable_ctx.self_uri()
     }
 
-    fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource)
+    async fn add(&mut self, resource: ResourceAny) -> u64 {
+        self.durable_ctx.add(resource).await
     }
 
-    fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.get(resource_id)
+    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.get(resource_id).await
     }
 
-    fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
-        self.durable_ctx.borrow(resource_id)
+    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+        self.durable_ctx.borrow(resource_id).await
     }
 }

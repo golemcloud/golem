@@ -81,7 +81,7 @@ impl From<&Component> for ComponentView {
                     Export::Instance(ExportInstance { name, functions }) => {
                         let fs: Vec<String> = functions
                             .iter()
-                            .map(|f| show_exported_function(&format!("{name}/"), f))
+                            .map(|f| show_exported_function(&format!("{name}."), f))
                             .collect();
                         fs
                     }
@@ -168,7 +168,7 @@ fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
         let name = &f.name;
 
         DisplayNamedFunc {
-            name: format!("{prefix}{name}"),
+            name: format!("{prefix}{{{name}}}"),
             func: func_to_analysed(f),
         }
         .to_string()
@@ -191,11 +191,11 @@ fn custom_show_exported_function(prefix: &str, f: &ExportFunction) -> String {
     let res_str = results.join(", ");
 
     if results.is_empty() {
-        format!("{prefix}{name}({params})")
+        format!("{prefix}{{{name}}}({params})")
     } else if results.len() == 1 {
-        format!("{prefix}{name}({params}) -> {res_str}")
+        format!("{prefix}{{{name}}}({params}) -> {res_str}")
     } else {
-        format!("{prefix}{name}({params}) -> ({res_str})")
+        format!("{prefix}{{{name}}}({params}) -> ({res_str})")
     }
 }
 
@@ -289,7 +289,7 @@ mod tests {
         };
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "n() -> &handle<1>")
+        assert_eq!(repr, "{n}() -> &handle<1>")
     }
 
     #[test]
@@ -302,7 +302,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc()")
+        assert_eq!(repr, "{abc}()")
     }
 
     #[test]
@@ -321,7 +321,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n: handle<1>)")
+        assert_eq!(repr, "{abc}(n: handle<1>)")
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc() -> bool")
+        assert_eq!(repr, "{abc}() -> bool")
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc() -> handle<1>")
+        assert_eq!(repr, "{abc}() -> handle<1>")
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n1: bool, n2: bool) -> (bool, bool)")
+        assert_eq!(repr, "{abc}(n1: bool, n2: bool) -> (bool, bool)")
     }
 
     #[test]
@@ -421,12 +421,12 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n1: bool, n2: handle<1>) -> (bool, bool)")
+        assert_eq!(repr, "{abc}(n1: bool, n2: handle<1>) -> (bool, bool)")
     }
 
     fn ensure_same_export(typ: Type, expected: &str) {
-        let expected_wave = format!("wn() -> {expected}");
-        let expected_custom = format!("cn() -> tuple<handle<1>, {expected}>");
+        let expected_wave = format!("{{wn}}() -> {expected}");
+        let expected_custom = format!("{{cn}}() -> tuple<handle<1>, {expected}>");
 
         let wave_f = ExportFunction {
             name: "wn".to_string(),

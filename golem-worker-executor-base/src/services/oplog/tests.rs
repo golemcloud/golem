@@ -12,25 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::*;
+use assert2::check;
+use ctor::ctor;
+use nonempty_collections::nev;
+use tracing::{debug, info};
+use uuid::Uuid;
+
+use golem_common::config::RedisConfig;
+use golem_common::model::oplog::WorkerError;
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::ComponentId;
+use golem_common::redis::RedisPool;
+use golem_common::tracing::{init_tracing, TracingConfig};
+
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
 use crate::storage::blob::memory::InMemoryBlobStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
-use assert2::check;
-use golem_common::config::RedisConfig;
-use golem_common::model::oplog::WorkerError;
-use golem_common::model::regions::OplogRegion;
-use golem_common::model::ComponentId;
-use golem_common::redis::RedisPool;
-use nonempty_collections::nev;
-use tracing::{debug, info};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
-use uuid::Uuid;
+
+use super::*;
+
+struct Tracing;
+
+impl Tracing {
+    pub fn init() -> Self {
+        init_tracing(&TracingConfig::test("op-log-tests"), |_output| {
+            golem_common::tracing::filter::boxed::debug_env_with_directives(Vec::new())
+        });
+        Self
+    }
+}
+
+#[ctor]
+pub static TRACING: Tracing = Tracing::init();
 
 fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
@@ -170,6 +186,27 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
         } => OplogEntry::PendingWorkerInvocation {
             timestamp: rounded_ts(timestamp),
             invocation,
+        },
+        OplogEntry::GrowMemory { timestamp, delta } => OplogEntry::GrowMemory {
+            timestamp: rounded_ts(timestamp),
+            delta,
+        },
+        OplogEntry::CreateResource { timestamp, id } => OplogEntry::CreateResource {
+            timestamp: rounded_ts(timestamp),
+            id,
+        },
+        OplogEntry::DropResource { timestamp, id } => OplogEntry::DropResource {
+            timestamp: rounded_ts(timestamp),
+            id,
+        },
+        OplogEntry::DescribeResource {
+            timestamp,
+            id,
+            indexed_resource,
+        } => OplogEntry::DescribeResource {
+            timestamp: rounded_ts(timestamp),
+            id,
+            indexed_resource,
         },
     }
 }
@@ -475,8 +512,6 @@ async fn multilayer_transfers_entries_after_limit_reached(
     expected_3: u64,
     use_blob: bool,
 ) {
-    init_logging();
-
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = if use_redis {
         let pool = RedisPool::configured(&RedisConfig::default())
             .await
@@ -566,17 +601,6 @@ async fn multilayer_transfers_entries_after_limit_reached(
     check!(all_entries.values().cloned().collect::<Vec<_>>() == entries);
 }
 
-fn init_logging() {
-    let ansi_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(true)
-        .with_filter(
-            EnvFilter::builder()
-                .with_default_directive("debug".parse().unwrap())
-                .from_env_lossy(),
-        );
-    let _ = tracing_subscriber::registry().with(ansi_layer).try_init();
-}
-
 #[tokio::test]
 async fn read_from_archive() {
     read_from_archive_impl(false).await;
@@ -588,8 +612,6 @@ async fn blob_read_from_archive() {
 }
 
 async fn read_from_archive_impl(use_blob: bool) {
-    init_logging();
-
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
@@ -676,8 +698,6 @@ async fn blob_empty_layer_gets_deleted() {
 }
 
 async fn empty_layer_gets_deleted_impl(use_blob: bool) {
-    init_logging();
-
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
@@ -775,8 +795,6 @@ async fn blob_scheduled_archive() {
 }
 
 async fn scheduled_archive_impl(use_blob: bool) {
-    init_logging();
-
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(

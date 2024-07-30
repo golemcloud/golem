@@ -14,17 +14,18 @@
 
 use std::time::Duration;
 
+use crate::empty_worker_metadata;
+use crate::service::worker::WorkerService;
 use futures::StreamExt;
 use golem_common::model::ComponentId;
+use golem_common::recorded_http_api_request;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::WorkerId;
-use golem_worker_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::{proxy_worker_connection, ConnectWorkerStream};
 use poem::web::websocket::WebSocket;
 use poem::web::Data;
 use poem::*;
-
-use crate::empty_worker_metadata;
-use crate::service::worker::WorkerService;
+use tracing::Instrument;
 
 #[derive(Clone)]
 pub struct ConnectService {
@@ -80,17 +81,26 @@ async fn get_worker_stream(
         Err(err) => return Err((http::StatusCode::BAD_REQUEST, err).into_response()),
     };
 
-    let worker_stream = service
+    let record = recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
+
+    let result = service
         .worker_service
         .connect(
             &worker_id,
             empty_worker_metadata(),
             &EmptyAuthCtx::default(),
         )
-        .await
-        .map_err(|e| (http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .instrument(record.span.clone())
+        .await;
 
-    Ok((worker_id, worker_stream))
+    match result {
+        Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
+        Err(error) => {
+            let error = error.to_string();
+            record.fail(error.clone(), &("InternalError"));
+            Err((http::StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
+        }
+    }
 }
 
 fn get_worker_id(req: &Request) -> Result<WorkerId, String> {

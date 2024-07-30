@@ -21,6 +21,7 @@ message WorkerMetadata {
   optional string last_error = 11;
   uint64 component_size = 12;
   uint64 total_linear_memory_size = 13;
+  map<uint64, ResourceMetadata> owned_resources = 14;
 }
 
 message UpdateRecord {
@@ -41,4 +42,14 @@ message FailedUpdate {
 }
 
 message SuccessfulUpdate {
+}
+
+message ResourceMetadata {
+  google.protobuf.Timestamp created_at = 1;
+  optional IndexedResourceMetadata indexed = 2;
+}
+
+message IndexedResourceMetadata {
+  string resource_name = 1;
+  repeated string resource_params = 2;
 }

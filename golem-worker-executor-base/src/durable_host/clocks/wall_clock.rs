@@ -24,6 +24,7 @@ use wasmtime_wasi::bindings::clocks::wall_clock::{Datetime, Host};
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("clocks::wall_clock", "now");
         Durability::<Ctx, SerializableDateTime, SerializableError>::wrap(
             self,
@@ -35,6 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("clocks::wall_clock", "resolution");
         Durability::<Ctx, SerializableDateTime, SerializableError>::wrap(
             self,

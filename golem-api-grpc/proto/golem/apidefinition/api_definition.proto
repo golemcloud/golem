@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.apidefinition;
 
 import "golem/component/component_id.proto";
+import "golem/rib/expr.proto";
 
 message ApiDefinition {
   ApiDefinitionId id = 1;
@@ -45,7 +46,7 @@ enum HttpMethod {
 
 message WorkerBinding {
   golem.component.ComponentId component = 1;
-  string worker_id = 2;
-  string response = 3;
-  optional string idempotency_key = 4;
+  golem.rib.Expr worker_name = 2;
+  golem.rib.Expr response = 3;
+  optional golem.rib.Expr idempotency_key = 4;
 }

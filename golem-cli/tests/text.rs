@@ -164,11 +164,11 @@ fn text_component_add(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -205,7 +205,7 @@ fn text_component_update(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Updated component with ID {}. New version: 1. Component size is 72129 bytes.",
+            "Updated component with ID {}. New version: 1. Component size is 71830 bytes.",
             component.component_id
         )
     );
@@ -216,11 +216,11 @@ fn text_component_update(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -256,7 +256,7 @@ fn text_component_get(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Component with ID {}. Version: 0. Component size is 72129 bytes.",
+            "Component with ID {}. Version: 0. Component size is 71830 bytes.",
             component.component_id
         )
     );
@@ -267,11 +267,11 @@ fn text_component_get(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -307,7 +307,7 @@ fn text_component_list(
         +--------------------------------------+-------------------------------+---------+-------+---------------+
         | ID                                   | Name                          | Version | Size  | Exports count |
         +--------------------------------------+-------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 72129 |             2 |
+        | {} | {} |       0 | 71830 |             2 |
         +--------------------------------------+-------------------------------+---------+-------+---------------+
         ",
         component.component_id,
@@ -471,7 +471,7 @@ fn text_worker_list(
         &component_id,
         &cfg.arg('f', "filter"),
         &format!("name = {worker_name}"),
-        &cfg.arg('p', "precise"),
+        "--precise",
         "true",
     ])?;
 
@@ -502,20 +502,26 @@ fn text_example_list(
     let res = cli.with_format(Format::Text).run_string(&[
         "list-examples",
         &cfg.arg('l', "language"),
-        "C#",
+        "zig",
     ])?;
 
     let expected = formatdoc!(
         "
-            +------------+----------+-------+--------------------+
-            | Name       | Language | Tier  | Description        |
-            +------------+----------+-------+--------------------+
-            | cs-minimal | C#       | tier3 | A simple stateless |
-            |            |          |       | Golem function     |
-            |            |          |       | written in C# with |
-            |            |          |       | no dependencies on |
-            |            |          |       | external services  |
-            +------------+----------+-------+--------------------+
+            +---------------------+----------+-------+----------------------+
+            | Name                | Language | Tier  | Description          |
+            +---------------------+----------+-------+----------------------+
+            | zig-default         | Zig      | tier1 | A stateful Golem     |
+            |                     |          |       | worker written in    |
+            |                     |          |       | Zig with full access |
+            |                     |          |       | to WASI and the      |
+            |                     |          |       | Golem runtime APIs   |
+            +---------------------+----------+-------+----------------------+
+            | zig-default-minimal | Zig      | tier1 | A simple stateful    |
+            |                     |          |       | Golem worker written |
+            |                     |          |       | in Zig with no       |
+            |                     |          |       | dependencies on      |
+            |                     |          |       | external services    |
+            +---------------------+----------+-------+----------------------+
             "
     );
 

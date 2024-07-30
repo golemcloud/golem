@@ -1,5 +1,3 @@
-use std::fmt::{Display, Formatter};
-
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -7,6 +5,10 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::config::RetryConfig;
@@ -70,6 +72,62 @@ impl From<OplogIndex> for u64 {
     }
 }
 
+#[derive(Clone)]
+pub struct AtomicOplogIndex(Arc<AtomicU64>);
+
+impl AtomicOplogIndex {
+    pub fn from_u64(value: u64) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value)))
+    }
+
+    pub fn get(&self) -> OplogIndex {
+        OplogIndex(self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    pub fn set(&self, value: OplogIndex) {
+        self.0.store(value.0, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn from_oplog_index(value: OplogIndex) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value.0)))
+    }
+
+    /// Gets the previous oplog index
+    pub fn previous(&self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the next oplog index
+    pub fn next(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
+    /// having `count` elements.
+    pub fn range_end(&self, count: u64) {
+        self.0
+            .fetch_sub(count - 1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl Display for AtomicOplogIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+impl From<AtomicOplogIndex> for u64 {
+    fn from(value: AtomicOplogIndex) -> Self {
+        value.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl From<AtomicOplogIndex> for OplogIndex {
+    fn from(value: AtomicOplogIndex) -> Self {
+        OplogIndex::from_u64(value.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadId(pub Uuid);
 
@@ -110,6 +168,47 @@ impl<'de> BorrowDecode<'de> for PayloadId {
         let mut bytes = [0u8; 16];
         decoder.reader().read(&mut bytes)?;
         Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct WorkerResourceId(pub u64);
+
+impl WorkerResourceId {
+    pub const INITIAL: WorkerResourceId = WorkerResourceId(0);
+
+    pub fn next(&self) -> WorkerResourceId {
+        WorkerResourceId(self.0 + 1)
+    }
+}
+
+impl Display for WorkerResourceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct IndexedResourceKey {
+    pub resource_name: String,
+    pub resource_params: Vec<String>,
+}
+
+impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+    fn from(value: IndexedResourceKey) -> Self {
+        golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+        IndexedResourceKey {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
     }
 }
 
@@ -215,6 +314,24 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         target_version: ComponentVersion,
         details: Option<String>,
+    },
+    /// Increased total linear memory size
+    GrowMemory { timestamp: Timestamp, delta: u64 },
+    /// Created a resource instance
+    CreateResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+    },
+    /// Dropped a resource instance
+    DropResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+    },
+    /// Adds additional information for a created resource instance
+    DescribeResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+        indexed_resource: IndexedResourceKey,
     },
 }
 
@@ -346,12 +463,83 @@ impl OplogEntry {
         }
     }
 
+    pub fn grow_memory(delta: u64) -> OplogEntry {
+        OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta,
+        }
+    }
+
+    pub fn create_resource(id: WorkerResourceId) -> OplogEntry {
+        OplogEntry::CreateResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+        }
+    }
+
+    pub fn drop_resource(id: WorkerResourceId) -> OplogEntry {
+        OplogEntry::DropResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+        }
+    }
+
+    pub fn describe_resource(
+        id: WorkerResourceId,
+        indexed_resource: IndexedResourceKey,
+    ) -> OplogEntry {
+        OplogEntry::DescribeResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+            indexed_resource,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
 
     pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+    }
+
+    /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
+    /// is not a RemoteWrite entry which does not belong to the batched remote write started at `idx`.
+    pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
+        match self {
+            OplogEntry::ImportedFunctionInvoked {
+                wrapped_function_type,
+                ..
+            } => match wrapped_function_type {
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
+                    if *begin_index == idx =>
+                {
+                    debug!("writeremotebatched matching idx");
+                    true
+                }
+                WrappedFunctionType::ReadLocal => {
+                    debug!("readlocal");
+                    true
+                }
+                WrappedFunctionType::WriteLocal => {
+                    debug!("writelocal");
+                    true
+                }
+                WrappedFunctionType::ReadRemote => {
+                    debug!("readremote");
+                    true
+                }
+                _ => {
+                    debug!("writeremote or a different batched write remote ({wrapped_function_type:?} vs {idx})");
+                    false
+                }
+            },
+            OplogEntry::ExportedFunctionCompleted { .. } => false,
+            _ => {
+                debug!("non side-effecting entry");
+                true
+            }
+        }
     }
 
     /// True if the oplog entry is a "hint" that should be skipped during replay
@@ -366,6 +554,10 @@ impl OplogEntry {
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
                 | OplogEntry::FailedUpdate { .. }
+                | OplogEntry::GrowMemory { .. }
+                | OplogEntry::CreateResource { .. }
+                | OplogEntry::DropResource { .. }
+                | OplogEntry::DescribeResource { .. }
         )
     }
 
@@ -389,7 +581,11 @@ impl OplogEntry {
             | OplogEntry::PendingWorkerInvocation { timestamp, .. }
             | OplogEntry::PendingUpdate { timestamp, .. }
             | OplogEntry::SuccessfulUpdate { timestamp, .. }
-            | OplogEntry::FailedUpdate { timestamp, .. } => *timestamp,
+            | OplogEntry::FailedUpdate { timestamp, .. }
+            | OplogEntry::GrowMemory { timestamp, .. }
+            | OplogEntry::CreateResource { timestamp, .. }
+            | OplogEntry::DropResource { timestamp, .. }
+            | OplogEntry::DescribeResource { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -437,10 +633,23 @@ pub enum OplogPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WrappedFunctionType {
+    /// The side-effect reads from the worker's local state (for example local file system,
+    /// random generator, etc.)
     ReadLocal,
+    /// The side-effect writes to the worker's local state (for example local file system)
     WriteLocal,
+    /// The side-effect reads from external state (for example a key-value store)
     ReadRemote,
+    /// The side-effect manipulates external state (for example an RPC call)
     WriteRemote,
+    /// The side-effect manipulates external state through multiple invoked functions (for example
+    /// a HTTP request where reading the response involves multiple host function calls)
+    ///
+    /// On the first invocation of the batch, the parameter should be `None` - this triggers
+    /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
+    /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
+    /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+    WriteRemoteBatched(Option<OplogIndex>),
 }
 
 /// Describes the error that occurred in the worker
@@ -448,6 +657,7 @@ pub enum WrappedFunctionType {
 pub enum WorkerError {
     Unknown(String),
     StackOverflow,
+    OutOfMemory,
 }
 
 impl Display for WorkerError {
@@ -455,6 +665,7 @@ impl Display for WorkerError {
         match self {
             WorkerError::Unknown(message) => write!(f, "{}", message),
             WorkerError::StackOverflow => write!(f, "Stack overflow"),
+            WorkerError::OutOfMemory => write!(f, "Out of memory"),
         }
     }
 }

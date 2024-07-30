@@ -33,7 +33,7 @@ use golem_api_grpc::proto::golem::worker::{
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
-use crate::components::wait_for_startup_grpc;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 
 pub mod docker;
 pub mod forwarding;
@@ -198,35 +198,59 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout).await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    custom_request_port: u16,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
+#[async_trait]
+pub trait WorkerServiceEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        custom_request_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
 
-    let vars: &[(&str, &str)] = &[
-        ("RUST_LOG"                                   , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
-        ("RUST_BACKTRACE"                             , "1"),
-        ("GOLEM__COMPONENT_SERVICE__HOST"             , &component_service.private_host()),
-        ("GOLEM__COMPONENT_SERVICE__PORT"             , &component_service.private_grpc_port().to_string()),
-        ("GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN"     , "5C832D93-FF85-4A8F-9803-513950FDFDB1"),
-        ("ENVIRONMENT"                                , "local"),
-        ("GOLEM__ENVIRONMENT"                         , "ittest"),
-        ("GOLEM__ROUTING_TABLE__HOST"                 , &shard_manager.private_host()),
-        ("GOLEM__ROUTING_TABLE__PORT"                 , &shard_manager.private_grpc_port().to_string()),
-        ("GOLEM__CUSTOM_REQUEST_PORT"                 , &custom_request_port.to_string()),
-        ("GOLEM__WORKER_GRPC_PORT"                    , &grpc_port.to_string()),
-        ("GOLEM__PORT"                                , &http_port.to_string()),
-
-    ];
-
-    let mut vars: HashMap<String, String> =
-        HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    vars.extend(rdb.info().env("golem_worker").clone());
-    vars
+#[async_trait]
+impl WorkerServiceEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        custom_request_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        EnvVarBuilder::golem_service(verbosity)
+            .with(
+                "GOLEM__COMPONENT_SERVICE__HOST",
+                component_service.private_host(),
+            )
+            .with(
+                "GOLEM__COMPONENT_SERVICE__PORT",
+                component_service.private_grpc_port().to_string(),
+            )
+            .with_str(
+                "GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN",
+                "5C832D93-FF85-4A8F-9803-513950FDFDB1",
+            )
+            .with_str("ENVIRONMENT", "local")
+            .with_str("GOLEM__ENVIRONMENT", "ittest")
+            .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.private_host())
+            .with(
+                "GOLEM__ROUTING_TABLE__PORT",
+                shard_manager.private_grpc_port().to_string(),
+            )
+            .with(
+                "GOLEM__CUSTOM_REQUEST_PORT",
+                custom_request_port.to_string(),
+            )
+            .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
+            .with("GOLEM__PORT", http_port.to_string())
+            .with_all(rdb.info().env("golem_worker"))
+            .build()
+    }
 }

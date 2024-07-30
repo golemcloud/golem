@@ -21,8 +21,12 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
+use tracing::Instrument;
 
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::metrics::api::{
+    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
+};
 
 pub struct ConnectWorkerStream {
     receiver: mpsc::Receiver<Result<LogEvent, Status>>,
@@ -39,6 +43,8 @@ impl ConnectWorkerStream {
         let cancel = CancellationToken::new();
 
         tokio::spawn({
+            record_new_grpc_api_active_stream();
+
             let cancel = cancel.clone();
 
             let forward_loop = {
@@ -46,11 +52,15 @@ impl ConnectWorkerStream {
                 async move {
                     while let Some(message) = streaming.next().await {
                         if let Err(error) = sender.send(message).await {
-                            tracing::info!("Failed to forward WorkerStream: {error}");
+                            tracing::error!(
+                                error = error.to_string(),
+                                "Failed to forward WorkerStream"
+                            );
                             break;
                         }
                     }
                 }
+                .in_current_span()
             };
 
             async move {
@@ -61,9 +71,11 @@ impl ConnectWorkerStream {
                     _ = forward_loop => {
                         tracing::info!("WorkerStream forward loop finished");
                     }
-                };
+                }
                 sender.closed().await;
+                record_closed_grpc_api_active_stream();
             }
+            .in_current_span()
         });
 
         Self { receiver, cancel }

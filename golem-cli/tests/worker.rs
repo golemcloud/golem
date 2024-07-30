@@ -39,6 +39,11 @@ fn make(
             worker_invoke_no_params,
         ),
         Trial::test_in_context(
+            format!("worker_invoke_drop{suffix}"),
+            ctx.clone(),
+            worker_invoke_drop,
+        ),
+        Trial::test_in_context(
             format!("worker_invoke_json_params{suffix}"),
             ctx.clone(),
             worker_invoke_json_params,
@@ -288,6 +293,68 @@ fn worker_invoke_and_await_wave_params(
             "
         )
     );
+
+    Ok(())
+}
+
+fn worker_invoke_drop(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_id = make_component_from_file(
+        deps,
+        &format!("{name} worker_invoke_drop"),
+        &cli,
+        "counters.wasm",
+    )?
+    .component_id;
+
+    let worker_name = format!("{name}_worker_invoke_and_await");
+    let cfg = &cli.config;
+    let _: WorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('e', "env"),
+        "TEST_ENV=test-value",
+        "test-arg",
+    ])?;
+    let args_key: IdempotencyKey = IdempotencyKey::fresh();
+    let result = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "rpc:counters/api.{[constructor]counter}",
+        &cfg.arg('j', "parameters"),
+        "[\"counter1\"]",
+        &cfg.arg('k', "idempotency-key"),
+        &args_key.0,
+    ])?;
+    let args_key1: IdempotencyKey = IdempotencyKey::fresh();
+    cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "rpc:counters/api.{[drop]counter}",
+        &cfg.arg('j', "parameters"),
+        &result.to_string(),
+        &cfg.arg('k', "idempotency-key"),
+        &args_key1.0,
+    ])?;
 
     Ok(())
 }
@@ -628,7 +695,7 @@ fn worker_list(
             format!("name = {}", worker_id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
-            &cfg.arg('p', "precise"),
+            "--precise",
             "true",
         ])?;
 
@@ -668,7 +735,7 @@ fn worker_list(
         format!("name like {}_worker", name).as_str(),
         &cfg.arg('n', "count"),
         (workers_count - result.workers.len()).to_string().as_str(),
-        &cfg.arg('P', "cursor"),
+        &cfg.arg('S', "cursor"),
         &cursor,
     ])?;
 
@@ -687,7 +754,7 @@ fn worker_list(
             format!("name like {}_worker", name).as_str(),
             &cfg.arg('n', "count"),
             workers_count.to_string().as_str(),
-            &cfg.arg('P', "cursor"),
+            &cfg.arg('S', "cursor"),
             &cursor2,
         ])?;
         assert_eq!(result3.workers.len(), 0);
@@ -723,7 +790,7 @@ fn worker_update(
             &component_id,
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
-            &cfg.arg('p', "precise"),
+            "--precise",
             "true",
         ])
     };

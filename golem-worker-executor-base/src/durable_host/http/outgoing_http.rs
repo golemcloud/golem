@@ -22,7 +22,7 @@ use wasmtime_wasi_http::{HttpError, HttpResult};
 
 use golem_common::model::oplog::WrappedFunctionType;
 
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::{DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
@@ -33,11 +33,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         request: Resource<HostOutgoingRequest>,
         options: Option<Resource<types::RequestOptions>>,
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
+        let _permit = self
+            .begin_async_host_function()
+            .await
+            .map_err(HttpError::trap)?;
         record_host_function_call("http::outgoing_handler", "handle");
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
             .state
-            .begin_function(&WrappedFunctionType::WriteRemote)
+            .begin_function(&WrappedFunctionType::WriteRemoteBatched(None))
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
@@ -48,10 +52,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 // For that we need to store begin_index and associate it with the response handle.
                 let handle = future_incoming_response.rep();
                 self.state.open_function_table.insert(handle, begin_index);
+                self.state.open_http_requests.insert(
+                    handle,
+                    HttpRequestState {
+                        close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
+                        root_handle: handle,
+                    },
+                );
             }
             Err(_) => {
                 self.state
-                    .end_function(&WrappedFunctionType::WriteRemote, begin_index)
+                    .end_function(&WrappedFunctionType::WriteRemoteBatched(None), begin_index)
                     .await
                     .map_err(|err| HttpError::trap(anyhow!(err)))?;
             }

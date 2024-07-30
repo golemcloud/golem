@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
-use golem_wasm_rpc::wasmtime::EncodingError;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use golem_api_grpc::proto::golem;
-use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use bincode::{Decode, Encode};
+use golem_wasm_rpc::wasmtime::EncodingError;
+use serde::{Deserialize, Serialize};
 use tonic::Status;
+
+use golem_api_grpc::proto::golem;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 
 use crate::model::InterruptKind;
 
@@ -115,6 +117,10 @@ impl GolemError {
         GolemError::WorkerNotFound { worker_id }
     }
 
+    pub fn worker_already_exists(worker_id: WorkerId) -> Self {
+        GolemError::WorkerAlreadyExists { worker_id }
+    }
+
     pub fn component_download_failed(
         component_id: ComponentId,
         component_version: u64,
@@ -156,35 +162,6 @@ impl GolemError {
     pub fn unknown(details: impl Into<String>) -> Self {
         GolemError::Unknown {
             details: details.into(),
-        }
-    }
-
-    pub fn kind(&self) -> &'static str {
-        match self {
-            GolemError::InvalidRequest { .. } => "InvalidRequest",
-            GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
-            GolemError::WorkerNotFound { .. } => "WorkerNotFound",
-            GolemError::WorkerCreationFailed { .. } => "WorkerCreationFailed",
-            GolemError::FailedToResumeWorker { .. } => "FailedToResumeWorker",
-            GolemError::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
-            GolemError::ComponentParseFailed { .. } => "ComponentParseFailed",
-            GolemError::GetLatestVersionOfComponentFailed { .. } => {
-                "GetLatestVersionOfComponentFailed"
-            }
-            GolemError::PromiseNotFound { .. } => "PromiseNotFound",
-            GolemError::PromiseDropped { .. } => "PromiseDropped",
-            GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
-            GolemError::Interrupted { .. } => "Interrupted",
-            GolemError::ParamTypeMismatch => "ParamTypeMismatch",
-            GolemError::NoValueInMessage => "NoValueInMessage",
-            GolemError::ValueMismatch { .. } => "ValueMismatch",
-            GolemError::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
-            GolemError::InvalidShardId { .. } => "InvalidShardId",
-            GolemError::InvalidAccount => "InvalidAccount",
-            GolemError::Runtime { .. } => "Runtime",
-            GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
-            GolemError::PreviousInvocationExited => "PreviousInvocationExited",
-            GolemError::Unknown { .. } => "Unknown",
         }
     }
 }
@@ -312,6 +289,37 @@ impl Error for GolemError {
             GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
+        }
+    }
+}
+
+impl TraceErrorKind for GolemError {
+    fn trace_error_kind(&self) -> &'static str {
+        match self {
+            GolemError::InvalidRequest { .. } => "InvalidRequest",
+            GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
+            GolemError::WorkerNotFound { .. } => "WorkerNotFound",
+            GolemError::WorkerCreationFailed { .. } => "WorkerCreationFailed",
+            GolemError::FailedToResumeWorker { .. } => "FailedToResumeWorker",
+            GolemError::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
+            GolemError::ComponentParseFailed { .. } => "ComponentParseFailed",
+            GolemError::GetLatestVersionOfComponentFailed { .. } => {
+                "GetLatestVersionOfComponentFailed"
+            }
+            GolemError::PromiseNotFound { .. } => "PromiseNotFound",
+            GolemError::PromiseDropped { .. } => "PromiseDropped",
+            GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
+            GolemError::Interrupted { .. } => "Interrupted",
+            GolemError::ParamTypeMismatch => "ParamTypeMismatch",
+            GolemError::NoValueInMessage => "NoValueInMessage",
+            GolemError::ValueMismatch { .. } => "ValueMismatch",
+            GolemError::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
+            GolemError::InvalidShardId { .. } => "InvalidShardId",
+            GolemError::InvalidAccount => "InvalidAccount",
+            GolemError::Runtime { .. } => "Runtime",
+            GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
+            GolemError::PreviousInvocationExited => "PreviousInvocationExited",
+            GolemError::Unknown { .. } => "Unknown",
         }
     }
 }
@@ -742,3 +750,14 @@ impl From<EncodingError> for GolemError {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
+pub struct WorkerOutOfMemory;
+
+impl Display for WorkerOutOfMemory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Worker cannot acquire more memory")
+    }
+}
+
+impl Error for WorkerOutOfMemory {}

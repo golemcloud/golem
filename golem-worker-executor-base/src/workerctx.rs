@@ -20,6 +20,7 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
@@ -41,8 +42,10 @@ use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
-use crate::worker::{RecoveryDecision, Worker};
+use crate::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
+};
+use crate::worker::{RetryDecision, Worker};
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -217,7 +220,7 @@ pub trait StatusManagement {
     fn check_interrupt(&self) -> Option<InterruptKind>;
 
     /// Sets the worker status to suspended
-    fn set_suspended(&self);
+    async fn set_suspended(&self) -> Result<(), GolemError>;
 
     /// Sets the worker status to running
     fn set_running(&self);
@@ -254,7 +257,7 @@ pub trait InvocationHooks {
     ) -> Result<(), GolemError>;
 
     /// Called when a worker invocation fails
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RecoveryDecision;
+    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision;
 
     /// Called when a worker invocation succeeds
     /// Arguments:
@@ -303,13 +306,18 @@ pub trait UpdateManagement {
 /// Note that the parameters are passed as unparsed WAVE strings instead of their parsed `Value`
 /// representation - the string representation is easier to hash and allows us to reduce the number
 /// of times we need to parse the parameters.
+#[async_trait]
 pub trait IndexedResourceStore {
-    fn get_indexed_resource(&self, resource_name: &str, resource_params: &[String]) -> Option<u64>;
-    fn store_indexed_resource(
+    fn get_indexed_resource(
+        &self,
+        resource_name: &str,
+        resource_params: &[String],
+    ) -> Option<WorkerResourceId>;
+    async fn store_indexed_resource(
         &mut self,
         resource_name: &str,
         resource_params: &[String],
-        resource: u64,
+        resource: WorkerResourceId,
     );
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]);
 }
@@ -330,7 +338,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     ) -> Option<LastError>;
 
     /// Gets a best-effort current worker status without activating the worker
-    async fn compute_latest_worker_status<T: HasAll<Ctx> + Send + Sync>(
+    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
         this: &T,
         owned_worker_id: &OwnedWorkerId,
         metadata: &Option<WorkerMetadata>,
@@ -344,7 +352,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         worker_id: &WorkerId,
         instance: &wasmtime::component::Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RecoveryDecision, GolemError>;
+    ) -> Result<RetryDecision, GolemError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(

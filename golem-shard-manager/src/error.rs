@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 use golem_api_grpc::proto::golem;
+use golem_common::metrics::api::TraceErrorKind;
 use tonic::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -113,5 +114,28 @@ impl From<tonic::transport::Error> for ShardManagerError {
 impl From<std::io::Error> for ShardManagerError {
     fn from(value: std::io::Error) -> Self {
         ShardManagerError::Unknown(format!("{value}"))
+    }
+}
+
+pub struct ShardManagerTraceErrorKind<'a>(pub &'a golem::shardmanager::ShardManagerError);
+
+impl<'a> Debug for ShardManagerTraceErrorKind<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<'a> TraceErrorKind for ShardManagerTraceErrorKind<'a> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(error) => match error {
+                golem::shardmanager::shard_manager_error::Error::InvalidRequest(_) => {
+                    "InvalidRequest"
+                }
+                golem::shardmanager::shard_manager_error::Error::Timeout(_) => "Timeout",
+                golem::shardmanager::shard_manager_error::Error::Unknown(_) => "Unknown",
+            },
+        }
     }
 }

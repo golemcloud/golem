@@ -16,9 +16,11 @@ use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use golem_wasm_rpc::Value;
+use reqwest::{Client, Url};
 use tokio::task::JoinSet;
 use tracing::warn;
 
+use crate::benchmarks::data::Data;
 use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
 use golem_test_framework::config::{CliParams, CliTestDependencies};
 use golem_test_framework::dsl::benchmark::{
@@ -277,6 +279,81 @@ pub async fn invoke_and_await(
                 timeouts += 1;
                 println!("Invocation timed out, retrying: {:?}", e);
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RustServiceClient {
+    client: Client,
+    base_url: Url,
+}
+
+impl RustServiceClient {
+    pub fn new(url: &str) -> Self {
+        let base_url = Url::parse(url).unwrap();
+        let client = Client::builder().connection_verbose(true).build().unwrap();
+
+        Self { client, base_url }
+    }
+
+    pub async fn calculate(&self, input: u64) -> u64 {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("calculate")
+            .push(&input.to_string());
+
+        let request = self.client.get(url.clone());
+
+        let response = request
+            .send()
+            .await
+            .expect("calculate - unexpected response");
+
+        let status = response.status().as_u16();
+        match status {
+            200 => response
+                .json::<u64>()
+                .await
+                .expect("calculate - unexpected response"),
+            _ => panic!("calculate - unexpected response: {status}"),
+        }
+    }
+
+    pub async fn process(&self, input: Vec<Data>) -> Vec<Data> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut().unwrap().push("process");
+
+        let mut request = self.client.post(url.clone());
+
+        request = request.json(&input);
+
+        let response = request.send().await.expect("process - unexpected response");
+
+        let status = response.status().as_u16();
+        match status {
+            200 => response
+                .json::<Vec<Data>>()
+                .await
+                .expect("process - unexpected response"),
+            _ => panic!("process - unexpected response: {status}"),
+        }
+    }
+
+    pub async fn echo(&self, input: &str) -> String {
+        let mut url = self.base_url.clone();
+
+        url.path_segments_mut().unwrap().push("echo").push(input);
+
+        let request = self.client.get(url.clone());
+
+        let response = request.send().await.expect("echo - unexpected response");
+
+        let status = response.status().as_u16();
+        match status {
+            200 => response.text().await.expect("echo - unexpected response"),
+            _ => panic!("echo - unexpected response: {status}"),
         }
     }
 }

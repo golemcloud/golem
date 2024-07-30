@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::components::component_service::{
-    env_vars, new_client, wait_for_startup, ComponentService,
+    new_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
 };
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
 use crate::components::rdb::Rdb;
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use async_trait::async_trait;
@@ -59,15 +60,42 @@ impl K8sComponentService {
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
     ) -> Self {
-        info!("Starting Golem Component Service pod");
-
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            verbosity,
             component_compilation_service,
             rdb,
-            verbosity,
-        );
+            timeout,
+            service_annotations,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        verbosity: Level,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
+    ) -> Self {
+        info!("Starting Golem Component Service pod");
+
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_compilation_service,
+                rdb,
+                verbosity,
+            )
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

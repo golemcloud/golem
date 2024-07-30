@@ -61,7 +61,7 @@ impl RedisPool {
             config.retries.max_attempts,
             config.retries.min_delay.as_millis() as u32,
             config.retries.max_delay.as_millis() as u32,
-            config.retries.multiplier,
+            config.retries.multiplier.round() as u32,
         );
         let pool = FredRedisPool::new(redis_config, None, None, Some(policy), config.pool_size)?;
 
@@ -697,7 +697,7 @@ impl<'a> RedisLabelledApi<'a> {
         )?;
         let info: HashMap<&str, &str> =
             HashMap::from_iter(info.lines().filter_map(|line| line.trim().split_once(':')));
-        debug!("Redis replication info: {:?}", info);
+        debug!(info = format!("{:?}", info), "Redis replication info");
         let connected_slaves = info
             .get("connected_slaves")
             .and_then(|s| s.parse().ok())

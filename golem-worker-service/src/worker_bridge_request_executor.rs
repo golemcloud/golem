@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::worker_bridge_execution::{
     WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
@@ -32,15 +32,15 @@ mod internal {
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
     use golem_common::model::CallingConvention;
+    use golem_service_base::auth::EmptyAuthCtx;
     use golem_service_base::model::WorkerId;
     use golem_wasm_rpc::json::get_json_from_typed_value;
-    use golem_worker_service_base::auth::EmptyAuthCtx;
     use serde_json::Value;
 
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
     };
-    use tracing::info;
+    use tracing::{debug, info};
 
     pub(crate) async fn execute(
         default_executor: &UnauthorisedWorkerRequestExecutor,
@@ -67,9 +67,23 @@ mod internal {
             .map(|k| k.to_string())
             .unwrap_or("N/A".to_string());
 
+        // TODO: check if these are already added from span
         info!(
-            "Executing request for component: {}, worker: {}, idempotency key: {}, invocation params: {:?}",
-            component_id, worker_name.clone(), idempotency_key_str, invoke_parameters
+            component_id = component_id.to_string(),
+            worker_name,
+            function_name = worker_request_params.function_name.to_string(),
+            idempotency_key = idempotency_key_str,
+            "Executing request",
+        );
+
+        // TODO: check if these are already added from span
+        debug!(
+            component_id = component_id.to_string(),
+            worker_name,
+            function_name = worker_request_params.function_name.to_string(),
+            idempotency_key = idempotency_key_str,
+            invocation_params = format!("{:?}", invoke_parameters),
+            "Invocation parameters"
         );
 
         let mut invoke_parameters_values = vec![];

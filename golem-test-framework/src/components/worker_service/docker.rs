@@ -12,22 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::ComponentService;
-use crate::components::rdb::Rdb;
-use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{env_vars, new_client, WorkerService};
-use crate::components::{DOCKER, NETWORK};
-use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use async_trait::async_trait;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
+use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
+
+use crate::components::component_service::ComponentService;
+use crate::components::docker::KillContainer;
+use crate::components::rdb::Rdb;
+use crate::components::shard_manager::ShardManager;
+use crate::components::worker_service::{new_client, WorkerService, WorkerServiceEnvVars};
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
+
 pub struct DockerWorkerService {
     container: Container<'static, GolemWorkerServiceImage>,
+    keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
     public_custom_request_port: u16,
@@ -46,18 +51,42 @@ impl DockerWorkerService {
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
         shared_client: bool,
+        keep_container: bool,
     ) -> Self {
-        info!("Starting golem-worker-service container");
-
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            Self::CUSTOM_REQUEST_PORT,
+        Self::new_base(
+            Box::new(GolemEnvVars()),
             component_service,
             shard_manager,
             rdb,
             verbosity,
-        );
+            shared_client,
+            keep_container,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerServiceEnvVars + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+        shared_client: bool,
+        keep_container: bool,
+    ) -> Self {
+        info!("Starting golem-worker-service container");
+
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                Self::CUSTOM_REQUEST_PORT,
+                component_service,
+                shard_manager,
+                rdb,
+                verbosity,
+            )
+            .await;
 
         let image = RunnableImage::from(GolemWorkerServiceImage::new(
             Self::GRPC_PORT,
@@ -87,6 +116,7 @@ impl DockerWorkerService {
             } else {
                 None
             },
+            keep_container,
         }
     }
 }
@@ -133,7 +163,7 @@ impl WorkerService for DockerWorkerService {
     }
 
     fn kill(&self) {
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 }
 

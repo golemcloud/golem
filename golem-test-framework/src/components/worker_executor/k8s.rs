@@ -19,8 +19,11 @@ use crate::components::k8s::{
 };
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor::{env_vars, new_client, wait_for_startup, WorkerExecutor};
+use crate::components::worker_executor::{
+    new_client, wait_for_startup, WorkerExecutor, WorkerExecutorEnvVars,
+};
 use crate::components::worker_service::WorkerService;
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use async_trait::async_trait;
@@ -63,19 +66,52 @@ impl K8sWorkerExecutor {
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
         shared_client: bool,
     ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            idx,
+            verbosity,
+            redis,
+            component_service,
+            shard_manager,
+            worker_service,
+            timeout,
+            service_annotations,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        idx: usize,
+        verbosity: Level,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
+    ) -> Self {
         info!("Starting Golem Worker Executor {idx} pod");
 
         let name = &format!("golem-worker-executor-{idx}");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_service,
-            shard_manager,
-            worker_service,
-            redis,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_service,
+                shard_manager,
+                worker_service,
+                redis,
+                verbosity,
+            )
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

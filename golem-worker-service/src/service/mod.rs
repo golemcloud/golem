@@ -5,8 +5,8 @@ use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition;
@@ -77,7 +77,7 @@ impl Services {
                     max_attempts: 0, // we want to invalidate the routing table asap
                     min_delay: Duration::from_millis(100),
                     max_delay: Duration::from_secs(2),
-                    multiplier: 2,
+                    multiplier: 2.0,
                 },
                 connect_timeout: Duration::from_secs(10),
             },

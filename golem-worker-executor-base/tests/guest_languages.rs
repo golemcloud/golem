@@ -113,6 +113,7 @@ async fn tinygo_example() {
 
 #[tokio::test]
 #[tracing::instrument]
+#[ignore] // Temporarily ignored, see https://github.com/golemcloud/golem/issues/709
 async fn tinygo_http_client() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
@@ -187,6 +188,7 @@ async fn tinygo_http_client() {
 
 #[tokio::test]
 #[tracing::instrument]
+#[ignore] // Building with the latest Grain compiler fails in "WebAssembly Translation error"
 async fn grain_example_1() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();

@@ -24,6 +24,7 @@ use wasmtime_wasi::bindings::random::random::Host;
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("random::random", "get_random_bytes");
         Durability::<Ctx, Vec<u8>, SerializableError>::wrap(
             self,
@@ -37,6 +38,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_random_u64(&mut self) -> anyhow::Result<u64> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("random::random", "get_random_u64");
         Durability::<Ctx, u64, SerializableError>::wrap(
             self,

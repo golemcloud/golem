@@ -1,11 +1,24 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::api_definition::http::HttpApiDefinition;
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use sqlx::{Database, Pool, Row};
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
@@ -192,7 +205,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        sqlx::query(
+        let result = sqlx::query(
             "DELETE FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
         )
         .bind(namespace)
@@ -200,7 +213,8 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         .bind(version)
         .execute(self.db_pool.deref())
         .await?;
-        Ok(true)
+
+        Ok(result.rows_affected() > 0)
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
@@ -325,7 +339,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        sqlx::query(
+        let result = sqlx::query(
             "DELETE FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
         )
         .bind(namespace)
@@ -333,7 +347,8 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(version)
         .execute(self.db_pool.deref())
         .await?;
-        Ok(true)
+
+        Ok(result.rows_affected() > 0)
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
@@ -360,137 +375,44 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
     }
 }
 
-pub struct InMemoryApiDefinitionRepo {
-    registry: Mutex<HashMap<(String, String, String), ApiDefinitionRecord>>,
-}
-
-impl Default for InMemoryApiDefinitionRepo {
-    fn default() -> Self {
-        Self {
-            registry: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-#[async_trait]
-impl ApiDefinitionRepo for InMemoryApiDefinitionRepo {
-    async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let key = (
-            definition.namespace.clone(),
-            definition.id.clone(),
-            definition.version.clone(),
-        );
-        let mut registry = self.registry.lock().unwrap();
-        if let std::collections::hash_map::Entry::Vacant(e) = registry.entry(key.clone()) {
-            e.insert(definition.clone());
-            Ok(())
-        } else {
-            Err(RepoError::Internal(
-                "ApiDefinition already exists".to_string(),
-            ))
-        }
-    }
-
-    async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        let key = (
-            definition.namespace.clone(),
-            definition.id.clone(),
-            definition.version.clone(),
-        );
-        let mut registry = self.registry.lock().unwrap();
-        registry.insert(key.clone(), definition.clone());
-        Ok(())
-    }
-
-    async fn set_not_draft(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<(), RepoError> {
-        match self.get(namespace, id, version).await? {
-            Some(v) if v.draft => {
-                let mut registry = self.registry.lock().unwrap();
-                let key = (namespace.to_string(), id.to_string(), version.to_string());
-                registry.entry(key.clone()).and_modify(|v| v.draft = false);
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    async fn get(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        let key = (namespace.to_string(), id.to_string(), version.to_string());
-        let registry = self.registry.lock().unwrap();
-        Ok(registry.get(&key).cloned())
-    }
-
-    async fn get_draft(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<Option<bool>, RepoError> {
-        let value = self.get(namespace, id, version).await?;
-        Ok(value.map(|v| v.draft))
-    }
-
-    async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        let key = (namespace.to_string(), id.to_string(), version.to_string());
-        let mut registry = self.registry.lock().unwrap();
-        let result = registry.remove(&key);
-        Ok(result.is_some())
-    }
-
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let registry = self.registry.lock().unwrap();
-        let result: Vec<ApiDefinitionRecord> = registry
-            .iter()
-            .filter(|(k, _)| k.0 == *namespace)
-            .map(|(_, v)| v.clone())
-            .collect();
-        Ok(result)
-    }
-
-    async fn get_all_versions(
-        &self,
-        namespace: &str,
-        id: &str,
-    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        let registry = self.registry.lock().unwrap();
-        let result = registry
-            .iter()
-            .filter(|(k, _)| k.0 == *namespace && k.1 == *id)
-            .map(|(_, v)| v.clone())
-            .collect();
-        Ok(result)
-    }
-}
-
 pub mod record_data_serde {
-    use bincode::{Decode, Encode};
-    use bytes::Bytes;
-    use golem_common::serialization::serialize_with_version;
+    use crate::api_definition::http::Route;
+    use bytes::{BufMut, Bytes, BytesMut};
+    use golem_api_grpc::proto::golem::apidefinition::{HttpApiDefinition, HttpRoute};
+    use prost::Message;
+
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize<T: Encode>(routes: &T) -> Result<Bytes, String> {
-        serialize_with_version(routes, SERIALIZATION_VERSION_V1)
+    pub fn serialize(value: &[Route]) -> Result<Bytes, String> {
+        let routes: Vec<HttpRoute> = value
+            .iter()
+            .cloned()
+            .map(HttpRoute::try_from)
+            .collect::<Result<Vec<HttpRoute>, String>>()?;
+
+        let proto_value: HttpApiDefinition = HttpApiDefinition { routes };
+
+        let mut bytes = BytesMut::new();
+        bytes.put_u8(SERIALIZATION_VERSION_V1);
+        bytes.extend_from_slice(&proto_value.encode_to_vec());
+        Ok(bytes.freeze())
     }
 
-    pub fn deserialize<T: Decode>(bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<Vec<Route>, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let (routes, _) = bincode::decode_from_slice(data, bincode::config::standard())
+                let proto_value: HttpApiDefinition = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                Ok(routes)
+                let value = proto_value
+                    .routes
+                    .into_iter()
+                    .map(Route::try_from)
+                    .collect::<Result<Vec<Route>, String>>()?;
+
+                Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),
         }

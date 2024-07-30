@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use futures_util::TryStreamExt;
-use std::sync::Arc;
-
-use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
 use golem_common::model::ComponentId;
+use golem_component_service_base::service::component::{
+    ComponentError as ComponentServiceError, ComponentService,
+};
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::model::*;
 use poem::error::ReadBodyError;
 use poem::Body;
@@ -25,8 +26,14 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::*;
+use std::fmt::Debug;
+use std::sync::Arc;
+use tracing::Instrument;
 
-#[derive(ApiResponse)]
+use golem_common::metrics::api::TraceErrorKind;
+use golem_common::recorded_http_api_request;
+
+#[derive(ApiResponse, Debug, Clone)]
 pub enum ComponentError {
     #[oai(status = 400)]
     BadRequest(Json<ErrorsBody>),
@@ -40,6 +47,19 @@ pub enum ComponentError {
     AlreadyExists(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for ComponentError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            ComponentError::BadRequest(_) => "BadRequest",
+            ComponentError::NotFound(_) => "NotFound",
+            ComponentError::AlreadyExists(_) => "AlreadyExists",
+            ComponentError::LimitExceeded(_) => "LimitExceeded",
+            ComponentError::Unauthorized(_) => "Unauthorized",
+            ComponentError::InternalError(_) => "InternalError",
+        }
+    }
 }
 
 #[derive(Multipart)]
@@ -95,17 +115,31 @@ impl From<std::io::Error> for ComponentError {
 }
 
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Component)]
 impl ComponentApi {
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
-        let data = payload.component.into_vec().await?;
-        let component_name = payload.name;
-        let response = self.component_service.create(&component_name, data).await?;
-        Ok(Json(response))
+        let record =
+            recorded_http_api_request!("create_component", component_name = payload.name.0);
+        let response = {
+            let data = payload.component.into_vec().await?;
+            let component_name = payload.name;
+            self.component_service
+                .create(
+                    &ComponentId::new_v4(),
+                    &component_name,
+                    data,
+                    &DefaultNamespace::default(),
+                )
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|response| Json(response.into()))
+        };
+        record.result(response)
     }
 
     #[oai(
@@ -118,9 +152,20 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
     ) -> Result<Json<Component>> {
-        let data = wasm.0.into_vec().await?;
-        let response = self.component_service.update(&component_id.0, data).await?;
-        Ok(Json(response))
+        let record = recorded_http_api_request!(
+            "update_component",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let data = wasm.0.into_vec().await?;
+            self.component_service
+                .update(&component_id.0, data, &DefaultNamespace::default())
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|response| Json(response.into()))
+        };
+        record.result(response)
     }
 
     #[oai(
@@ -133,13 +178,23 @@ impl ComponentApi {
         component_id: Path<ComponentId>,
         version: Query<Option<u64>>,
     ) -> Result<Binary<Body>> {
-        let bytes = self
+        let record = recorded_http_api_request!(
+            "download_component",
+            component_id = component_id.0.to_string(),
+            version = version.0.map(|v| v.to_string())
+        );
+        let response = self
             .component_service
-            .download_stream(&component_id.0, version.0)
-            .await?;
-        Ok(Binary(Body::from_bytes_stream(bytes.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        }))))
+            .download_stream(&component_id.0, version.0, &DefaultNamespace::default())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|bytes| {
+                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })))
+            });
+        record.result(response)
     }
 
     #[oai(
@@ -151,8 +206,20 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
     ) -> Result<Json<Vec<Component>>> {
-        let response = self.component_service.get(&component_id.0).await?;
-        Ok(Json(response))
+        let record = recorded_http_api_request!(
+            "get_component_metadata_all_versions",
+            component_id = component_id.0.to_string()
+        );
+
+        let response = self
+            .component_service
+            .get(&component_id.0, &DefaultNamespace::default())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|response| Json(response.into_iter().map(|c| c.into()).collect()));
+
+        record.result(response)
     }
 
     #[oai(
@@ -165,31 +232,38 @@ impl ComponentApi {
         #[oai(name = "component_id")] component_id: Path<ComponentId>,
         #[oai(name = "version")] version: Path<String>,
     ) -> Result<Json<Component>> {
-        let version_int = match version.0.parse::<u64>() {
-            Ok(v) => v,
-            Err(_) => {
-                return Err(ComponentError::BadRequest(Json(ErrorsBody {
+        let record = recorded_http_api_request!(
+            "get_component_metadata",
+            component_id = component_id.0.to_string(),
+            version = version.0,
+        );
+
+        let response = {
+            let version_int = version.0.parse::<u64>().map_err(|_| {
+                ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec!["Invalid version".to_string()],
-                })))
-            }
+                }))
+            })?;
+
+            let versioned_component_id = VersionedComponentId {
+                component_id: component_id.0,
+                version: version_int,
+            };
+
+            self.component_service
+                .get_by_version(&versioned_component_id, &DefaultNamespace::default())
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .and_then(|response| match response {
+                    Some(component) => Ok(Json(component.into())),
+                    None => Err(ComponentError::NotFound(Json(ErrorBody {
+                        error: "Component not found".to_string(),
+                    }))),
+                })
         };
 
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.0,
-            version: version_int,
-        };
-
-        let response = self
-            .component_service
-            .get_by_version(&versioned_component_id)
-            .await?;
-
-        match response {
-            Some(component) => Ok(Json(component)),
-            None => Err(ComponentError::NotFound(Json(ErrorBody {
-                error: "Component not found".to_string(),
-            }))),
-        }
+        record.result(response)
     }
 
     #[oai(
@@ -201,17 +275,25 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
     ) -> Result<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "get_latest_component_metadata",
+            component_id = component_id.0.to_string()
+        );
+
         let response = self
             .component_service
-            .get_latest_version(&component_id.0)
-            .await?;
+            .get_latest_version(&component_id.0, &DefaultNamespace::default())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .and_then(|response| match response {
+                Some(component) => Ok(Json(component.into())),
+                None => Err(ComponentError::NotFound(Json(ErrorBody {
+                    error: "Component not found".to_string(),
+                }))),
+            });
 
-        match response {
-            Some(component) => Ok(Json(component)),
-            None => Err(ComponentError::NotFound(Json(ErrorBody {
-                error: "Component not found".to_string(),
-            }))),
-        }
+        record.result(response)
     }
 
     #[oai(path = "/", method = "get", operation_id = "get_components")]
@@ -219,11 +301,19 @@ impl ComponentApi {
         &self,
         #[oai(name = "component-name")] component_name: Query<Option<ComponentName>>,
     ) -> Result<Json<Vec<Component>>> {
+        let record = recorded_http_api_request!(
+            "get_components",
+            component_name = component_name.0.as_ref().map(|n| n.0.clone())
+        );
+
         let response = self
             .component_service
-            .find_by_name(component_name.0)
-            .await?;
+            .find_by_name(component_name.0, &DefaultNamespace::default())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|components| Json(components.into_iter().map(|c| c.into()).collect()));
 
-        Ok(Json(response))
+        record.result(response)
     }
 }

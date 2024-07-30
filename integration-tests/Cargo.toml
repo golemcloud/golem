@@ -81,8 +81,24 @@ name = "benchmark_throughput"
 path = "src/benchmarks/throughput.rs"
 
 [[bin]]
+name = "benchmark_throughput_cpu_intensive"
+path = "src/benchmarks/throughput_cpu_intensive.rs"
+
+[[bin]]
+name = "benchmark_throughput_large_input"
+path = "src/benchmarks/throughput_large_input.rs"
+
+[[bin]]
 name = "benchmark_rpc"
 path = "src/benchmarks/rpc.rs"
+
+[[bin]]
+name = "benchmark_rpc_cpu_intensive"
+path = "src/benchmarks/rpc_cpu_intensive.rs"
+
+[[bin]]
+name = "benchmark_rpc_large_input"
+path = "src/benchmarks/rpc_large_input.rs"
 
 [[bin]]
 name = "benchmark_large_initial_memory"

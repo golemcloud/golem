@@ -86,7 +86,7 @@ pub mod golem {
                 /// The maximum delay between retries
                 pub max_delay: Duration,
                 /// Multiplier applied to the delay on each retry to implement exponential backoff
-                pub multiplier: u32,
+                pub multiplier: f64,
             }
             impl ::core::fmt::Debug for RetryPolicy {
                 fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
@@ -818,7 +818,7 @@ pub mod golem {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// Create a new promise
-            pub fn golem_create_promise() -> PromiseId {
+            pub fn create_promise() -> PromiseId {
                 unsafe {
                     #[repr(align(8))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
@@ -827,7 +827,7 @@ pub mod golem {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@0.2.0")]
                     extern "C" {
-                        #[link_name = "golem-create-promise"]
+                        #[link_name = "create-promise"]
                         fn wit_import(_: *mut u8);
                     }
 
@@ -860,7 +860,7 @@ pub mod golem {
             #[allow(unused_unsafe, clippy::all)]
             /// Suspends execution until the given promise gets completed, and returns the payload passed to
             /// the promise completion.
-            pub fn golem_await_promise(promise_id: &PromiseId) -> _rt::Vec<u8> {
+            pub fn await_promise(promise_id: &PromiseId) -> _rt::Vec<u8> {
                 unsafe {
                     #[repr(align(4))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
@@ -885,7 +885,7 @@ pub mod golem {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@0.2.0")]
                     extern "C" {
-                        #[link_name = "golem-await-promise"]
+                        #[link_name = "await-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64, _: *mut u8);
                     }
 
@@ -910,7 +910,7 @@ pub mod golem {
             #[allow(unused_unsafe, clippy::all)]
             /// Completes the given promise with the given payload. Returns true if the promise was completed, false
             /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
-            pub fn golem_complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
+            pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
                 unsafe {
                     let PromiseId {
                         worker_id: worker_id0,
@@ -935,7 +935,7 @@ pub mod golem {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@0.2.0")]
                     extern "C" {
-                        #[link_name = "golem-complete-promise"]
+                        #[link_name = "complete-promise"]
                         fn wit_import(
                             _: i64,
                             _: i64,
@@ -973,7 +973,7 @@ pub mod golem {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// Deletes the given promise
-            pub fn golem_delete_promise(promise_id: &PromiseId) {
+            pub fn delete_promise(promise_id: &PromiseId) {
                 unsafe {
                     let PromiseId {
                         worker_id: worker_id0,
@@ -995,7 +995,7 @@ pub mod golem {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@0.2.0")]
                     extern "C" {
-                        #[link_name = "golem-delete-promise"]
+                        #[link_name = "delete-promise"]
                         fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
                     }
 
@@ -1165,12 +1165,12 @@ pub mod golem {
                     let l1 = *ptr0.add(0).cast::<i32>();
                     let l2 = *ptr0.add(8).cast::<i64>();
                     let l3 = *ptr0.add(16).cast::<i64>();
-                    let l4 = *ptr0.add(24).cast::<i32>();
+                    let l4 = *ptr0.add(24).cast::<f64>();
                     RetryPolicy {
                         max_attempts: l1 as u32,
                         min_delay: l2 as u64,
                         max_delay: l3 as u64,
-                        multiplier: l4 as u32,
+                        multiplier: l4,
                     }
                 }
             }
@@ -1190,18 +1190,18 @@ pub mod golem {
                     #[link(wasm_import_module = "golem:api/host@0.2.0")]
                     extern "C" {
                         #[link_name = "set-retry-policy"]
-                        fn wit_import(_: i32, _: i64, _: i64, _: i32);
+                        fn wit_import(_: i32, _: i64, _: i64, _: f64);
                     }
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    fn wit_import(_: i32, _: i64, _: i64, _: i32) {
+                    fn wit_import(_: i32, _: i64, _: i64, _: f64) {
                         unreachable!()
                     }
                     wit_import(
                         _rt::as_i32(max_attempts0),
                         _rt::as_i64(min_delay0),
                         _rt::as_i64(max_delay0),
-                        _rt::as_i32(multiplier0),
+                        _rt::as_f64(multiplier0),
                     );
                 }
             }
@@ -1371,6 +1371,212 @@ pub mod golem {
                         _rt::as_i64(target_version),
                         mode.clone() as i32,
                     );
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get current worker metadata
+            pub fn get_self_metadata() -> WorkerMetadata {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 64]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 64]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-self-metadata"]
+                        fn wit_import(_: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = *ptr0.add(0).cast::<i64>();
+                    let l2 = *ptr0.add(8).cast::<i64>();
+                    let l3 = *ptr0.add(16).cast::<*mut u8>();
+                    let l4 = *ptr0.add(20).cast::<usize>();
+                    let len5 = l4;
+                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                    let l6 = *ptr0.add(24).cast::<*mut u8>();
+                    let l7 = *ptr0.add(28).cast::<usize>();
+                    let base11 = l6;
+                    let len11 = l7;
+                    let mut result11 = _rt::Vec::with_capacity(len11);
+                    for i in 0..len11 {
+                        let base = base11.add(i * 8);
+                        let e11 = {
+                            let l8 = *base.add(0).cast::<*mut u8>();
+                            let l9 = *base.add(4).cast::<usize>();
+                            let len10 = l9;
+                            let bytes10 = _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                            _rt::string_lift(bytes10)
+                        };
+                        result11.push(e11);
+                    }
+                    _rt::cabi_dealloc(base11, len11 * 8, 4);
+                    let l12 = *ptr0.add(32).cast::<*mut u8>();
+                    let l13 = *ptr0.add(36).cast::<usize>();
+                    let base20 = l12;
+                    let len20 = l13;
+                    let mut result20 = _rt::Vec::with_capacity(len20);
+                    for i in 0..len20 {
+                        let base = base20.add(i * 16);
+                        let e20 = {
+                            let l14 = *base.add(0).cast::<*mut u8>();
+                            let l15 = *base.add(4).cast::<usize>();
+                            let len16 = l15;
+                            let bytes16 = _rt::Vec::from_raw_parts(l14.cast(), len16, len16);
+                            let l17 = *base.add(8).cast::<*mut u8>();
+                            let l18 = *base.add(12).cast::<usize>();
+                            let len19 = l18;
+                            let bytes19 = _rt::Vec::from_raw_parts(l17.cast(), len19, len19);
+
+                            (_rt::string_lift(bytes16), _rt::string_lift(bytes19))
+                        };
+                        result20.push(e20);
+                    }
+                    _rt::cabi_dealloc(base20, len20 * 16, 4);
+                    let l21 = i32::from(*ptr0.add(40).cast::<u8>());
+                    let l22 = *ptr0.add(48).cast::<i64>();
+                    let l23 = *ptr0.add(56).cast::<i64>();
+                    WorkerMetadata {
+                        worker_id: WorkerId {
+                            component_id: ComponentId {
+                                uuid: Uuid {
+                                    high_bits: l1 as u64,
+                                    low_bits: l2 as u64,
+                                },
+                            },
+                            worker_name: _rt::string_lift(bytes5),
+                        },
+                        args: result11,
+                        env: result20,
+                        status: WorkerStatus::_lift(l21 as u8),
+                        component_version: l22 as u64,
+                        retry_count: l23 as u64,
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Get worker metadata
+            pub fn get_worker_metadata(worker_id: &WorkerId) -> Option<WorkerMetadata> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 72]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 72]);
+                    let WorkerId {
+                        component_id: component_id0,
+                        worker_name: worker_name0,
+                    } = worker_id;
+                    let ComponentId { uuid: uuid1 } = component_id0;
+                    let Uuid {
+                        high_bits: high_bits2,
+                        low_bits: low_bits2,
+                    } = uuid1;
+                    let vec3 = worker_name0;
+                    let ptr3 = vec3.as_ptr().cast::<u8>();
+                    let len3 = vec3.len();
+                    let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "golem:api/host@0.2.0")]
+                    extern "C" {
+                        #[link_name = "get-worker-metadata"]
+                        fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(
+                        _rt::as_i64(high_bits2),
+                        _rt::as_i64(low_bits2),
+                        ptr3.cast_mut(),
+                        len3,
+                        ptr4,
+                    );
+                    let l5 = i32::from(*ptr4.add(0).cast::<u8>());
+                    match l5 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let l6 = *ptr4.add(8).cast::<i64>();
+                                let l7 = *ptr4.add(16).cast::<i64>();
+                                let l8 = *ptr4.add(24).cast::<*mut u8>();
+                                let l9 = *ptr4.add(28).cast::<usize>();
+                                let len10 = l9;
+                                let bytes10 = _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+                                let l11 = *ptr4.add(32).cast::<*mut u8>();
+                                let l12 = *ptr4.add(36).cast::<usize>();
+                                let base16 = l11;
+                                let len16 = l12;
+                                let mut result16 = _rt::Vec::with_capacity(len16);
+                                for i in 0..len16 {
+                                    let base = base16.add(i * 8);
+                                    let e16 = {
+                                        let l13 = *base.add(0).cast::<*mut u8>();
+                                        let l14 = *base.add(4).cast::<usize>();
+                                        let len15 = l14;
+                                        let bytes15 =
+                                            _rt::Vec::from_raw_parts(l13.cast(), len15, len15);
+
+                                        _rt::string_lift(bytes15)
+                                    };
+                                    result16.push(e16);
+                                }
+                                _rt::cabi_dealloc(base16, len16 * 8, 4);
+                                let l17 = *ptr4.add(40).cast::<*mut u8>();
+                                let l18 = *ptr4.add(44).cast::<usize>();
+                                let base25 = l17;
+                                let len25 = l18;
+                                let mut result25 = _rt::Vec::with_capacity(len25);
+                                for i in 0..len25 {
+                                    let base = base25.add(i * 16);
+                                    let e25 = {
+                                        let l19 = *base.add(0).cast::<*mut u8>();
+                                        let l20 = *base.add(4).cast::<usize>();
+                                        let len21 = l20;
+                                        let bytes21 =
+                                            _rt::Vec::from_raw_parts(l19.cast(), len21, len21);
+                                        let l22 = *base.add(8).cast::<*mut u8>();
+                                        let l23 = *base.add(12).cast::<usize>();
+                                        let len24 = l23;
+                                        let bytes24 =
+                                            _rt::Vec::from_raw_parts(l22.cast(), len24, len24);
+
+                                        (_rt::string_lift(bytes21), _rt::string_lift(bytes24))
+                                    };
+                                    result25.push(e25);
+                                }
+                                _rt::cabi_dealloc(base25, len25 * 16, 4);
+                                let l26 = i32::from(*ptr4.add(48).cast::<u8>());
+                                let l27 = *ptr4.add(56).cast::<i64>();
+                                let l28 = *ptr4.add(64).cast::<i64>();
+
+                                WorkerMetadata {
+                                    worker_id: WorkerId {
+                                        component_id: ComponentId {
+                                            uuid: Uuid {
+                                                high_bits: l6 as u64,
+                                                low_bits: l7 as u64,
+                                            },
+                                        },
+                                        worker_name: _rt::string_lift(bytes10),
+                                    },
+                                    args: result16,
+                                    env: result25,
+                                    status: WorkerStatus::_lift(l26 as u8),
+                                    component_version: l27 as u64,
+                                    retry_count: l28 as u64,
+                                }
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
                 }
             }
         }
@@ -4070,13 +4276,6 @@ pub mod exports {
                     }
                     _rt::cabi_dealloc(base6, len6 * 24, 4);
                 }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_not_durable_cabi<T: Guest>() {
-                    #[cfg(target_arch = "wasm32")]
-                    _rt::run_ctors_once();
-                    T::not_durable();
-                }
                 pub trait Guest {
                     fn initialize_cart(user_id: _rt::String);
                     fn add_item(item: ProductItem);
@@ -4084,51 +4283,46 @@ pub mod exports {
                     fn update_item_quantity(product_id: _rt::String, quantity: u32);
                     fn checkout() -> CheckoutResult;
                     fn get_cart_contents() -> _rt::Vec<ProductItem>;
-                    fn not_durable();
                 }
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-                          ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+                            ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-                            #[export_name = "golem:it/api#initialize-cart"]
-                            unsafe extern "C" fn export_initialize_cart(arg0: *mut u8,arg1: usize,) {
-                              $($path_to_types)*::_export_initialize_cart_cabi::<$ty>(arg0, arg1)
-                            }
-                            #[export_name = "golem:it/api#add-item"]
-                            unsafe extern "C" fn export_add_item(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,arg4: f32,arg5: i32,) {
-                              $($path_to_types)*::_export_add_item_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
-                            }
-                            #[export_name = "golem:it/api#remove-item"]
-                            unsafe extern "C" fn export_remove_item(arg0: *mut u8,arg1: usize,) {
-                              $($path_to_types)*::_export_remove_item_cabi::<$ty>(arg0, arg1)
-                            }
-                            #[export_name = "golem:it/api#update-item-quantity"]
-                            unsafe extern "C" fn export_update_item_quantity(arg0: *mut u8,arg1: usize,arg2: i32,) {
-                              $($path_to_types)*::_export_update_item_quantity_cabi::<$ty>(arg0, arg1, arg2)
-                            }
-                            #[export_name = "golem:it/api#checkout"]
-                            unsafe extern "C" fn export_checkout() -> *mut u8 {
-                              $($path_to_types)*::_export_checkout_cabi::<$ty>()
-                            }
-                            #[export_name = "cabi_post_golem:it/api#checkout"]
-                            unsafe extern "C" fn _post_return_checkout(arg0: *mut u8,) {
-                              $($path_to_types)*::__post_return_checkout::<$ty>(arg0)
-                            }
-                            #[export_name = "golem:it/api#get-cart-contents"]
-                            unsafe extern "C" fn export_get_cart_contents() -> *mut u8 {
-                              $($path_to_types)*::_export_get_cart_contents_cabi::<$ty>()
-                            }
-                            #[export_name = "cabi_post_golem:it/api#get-cart-contents"]
-                            unsafe extern "C" fn _post_return_get_cart_contents(arg0: *mut u8,) {
-                              $($path_to_types)*::__post_return_get_cart_contents::<$ty>(arg0)
-                            }
-                            #[export_name = "golem:it/api#not-durable"]
-                            unsafe extern "C" fn export_not_durable() {
-                              $($path_to_types)*::_export_not_durable_cabi::<$ty>()
-                            }
-                          };);
-                        }
+                              #[export_name = "golem:it/api#initialize-cart"]
+                              unsafe extern "C" fn export_initialize_cart(arg0: *mut u8,arg1: usize,) {
+                                $($path_to_types)*::_export_initialize_cart_cabi::<$ty>(arg0, arg1)
+                              }
+                              #[export_name = "golem:it/api#add-item"]
+                              unsafe extern "C" fn export_add_item(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,arg4: f32,arg5: i32,) {
+                                $($path_to_types)*::_export_add_item_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
+                              }
+                              #[export_name = "golem:it/api#remove-item"]
+                              unsafe extern "C" fn export_remove_item(arg0: *mut u8,arg1: usize,) {
+                                $($path_to_types)*::_export_remove_item_cabi::<$ty>(arg0, arg1)
+                              }
+                              #[export_name = "golem:it/api#update-item-quantity"]
+                              unsafe extern "C" fn export_update_item_quantity(arg0: *mut u8,arg1: usize,arg2: i32,) {
+                                $($path_to_types)*::_export_update_item_quantity_cabi::<$ty>(arg0, arg1, arg2)
+                              }
+                              #[export_name = "golem:it/api#checkout"]
+                              unsafe extern "C" fn export_checkout() -> *mut u8 {
+                                $($path_to_types)*::_export_checkout_cabi::<$ty>()
+                              }
+                              #[export_name = "cabi_post_golem:it/api#checkout"]
+                              unsafe extern "C" fn _post_return_checkout(arg0: *mut u8,) {
+                                $($path_to_types)*::__post_return_checkout::<$ty>(arg0)
+                              }
+                              #[export_name = "golem:it/api#get-cart-contents"]
+                              unsafe extern "C" fn export_get_cart_contents() -> *mut u8 {
+                                $($path_to_types)*::_export_get_cart_contents_cabi::<$ty>()
+                              }
+                              #[export_name = "cabi_post_golem:it/api#get-cart-contents"]
+                              unsafe extern "C" fn _post_return_get_cart_contents(arg0: *mut u8,) {
+                                $($path_to_types)*::__post_return_get_cart_contents::<$ty>(arg0)
+                              }
+                            };);
+                          }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
                 #[repr(align(4))]
@@ -4444,19 +4638,19 @@ mod _rt {
 #[doc(hidden)]
 
 macro_rules! __export_shopping_cart_impl {
-                  ($ty:ident) => (self::export!($ty with_types_in self););
-                  ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
-                  $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
-                  )
-                }
+                    ($ty:ident) => (self::export!($ty with_types_in self););
+                    ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
+                    $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
+                    )
+                  }
 #[doc(inline)]
 pub(crate) use __export_shopping_cart_impl as export;
 
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:shopping-cart:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3940] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe0\x1d\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3966] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfa\x1d\x01A\x02\x01\
 A\x0d\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
@@ -4487,13 +4681,13 @@ n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x
 \x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
 \x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\x01!wasi:clocks/m\
 onotonic-clock@0.2.0\x05\x03\x02\x03\0\x01\x03uri\x02\x03\0\x02\x08duration\x01B\
-a\x02\x03\x02\x01\x04\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08duration\
+f\x02\x03\x02\x01\x04\x04\0\x03uri\x03\0\0\x02\x03\x02\x01\x05\x04\0\x08duration\
 \x03\0\x02\x01w\x04\0\x0boplog-index\x03\0\x04\x01w\x04\0\x11component-version\x03\
 \0\x06\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x08\x01r\x01\x04u\
 uid\x09\x04\0\x0ccomponent-id\x03\0\x0a\x01r\x02\x0ccomponent-id\x0b\x0bworker-n\
 ames\x04\0\x09worker-id\x03\0\x0c\x01r\x02\x09worker-id\x0d\x09oplog-idx\x05\x04\
 \0\x0apromise-id\x03\0\x0e\x01r\x04\x0cmax-attemptsy\x09min-delay\x03\x09max-del\
-ay\x03\x0amultipliery\x04\0\x0cretry-policy\x03\0\x10\x01q\x03\x0fpersist-nothin\
+ay\x03\x0amultiplieru\x04\0\x0cretry-policy\x03\0\x10\x01q\x03\x0fpersist-nothin\
 g\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\
 \x03\0\x12\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x14\
 \x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04les\
@@ -4513,32 +4707,33 @@ rker-any-filter\x03\0,\x01ps\x01o\x02ss\x01p/\x01r\x06\x09worker-id\x0d\x04args.
 adata\x03\01\x04\0\x0bget-workers\x03\x01\x01k-\x01i3\x01@\x03\x0ccomponent-id\x0b\
 \x06filter4\x07precise\x7f\05\x04\0\x18[constructor]get-workers\x016\x01h3\x01p2\
 \x01k8\x01@\x01\x04self7\09\x04\0\x1c[method]get-workers.get-next\x01:\x01@\0\0\x0f\
-\x04\0\x14golem-create-promise\x01;\x01p}\x01@\x01\x0apromise-id\x0f\0<\x04\0\x13\
-golem-await-promise\x01=\x01@\x02\x0apromise-id\x0f\x04data<\0\x7f\x04\0\x16gole\
-m-complete-promise\x01>\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x14golem-delete-p\
-romise\x01?\x01@\x01\x0dfunction-names\0\x01\x04\0\x0cget-self-uri\x01@\x01@\0\0\
-\x05\x04\0\x0fget-oplog-index\x01A\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-\
-oplog-index\x01B\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01C\x04\0\x14\
-mark-begin-operation\x01A\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operatio\
-n\x01D\x01@\0\0\x11\x04\0\x10get-retry-policy\x01E\x01@\x01\x10new-retry-policy\x11\
-\x01\0\x04\0\x10set-retry-policy\x01F\x01@\0\0\x13\x04\0\x1bget-oplog-persistenc\
-e-level\x01G\x01@\x01\x15new-persistence-level\x13\x01\0\x04\0\x1bset-oplog-pers\
-istence-level\x01H\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01I\x01@\x01\x0ai\
-dempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01J\x01@\0\0\x09\x04\0\x18gen\
-erate-idempotency-key\x01K\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mo\
-de\x15\x01\0\x04\0\x0dupdate-worker\x01L\x03\x01\x14golem:api/host@0.2.0\x05\x06\
-\x01B\x17\x01r\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cprodu\
-ct-item\x03\0\0\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\x09timesta\
-mpw\x04\0\x05order\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\
-\0\x05\x01q\x02\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\
-\0\x07\x01@\x01\x07user-ids\x01\0\x04\0\x0finitialize-cart\x01\x09\x01@\x01\x04i\
-tem\x01\x01\0\x04\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0br\
-emove-item\x01\x0b\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-it\
-em-quantity\x01\x0c\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11\
-get-cart-contents\x01\x0e\x01@\0\x01\0\x04\0\x0bnot-durable\x01\x0f\x04\x01\x0cg\
-olem:it/api\x05\x07\x04\x01\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dsho\
-pping-cart\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070\
-.208.1\x10wit-bindgen-rust\x060.25.0";
+\x04\0\x0ecreate-promise\x01;\x01p}\x01@\x01\x0apromise-id\x0f\0<\x04\0\x0dawait\
+-promise\x01=\x01@\x02\x0apromise-id\x0f\x04data<\0\x7f\x04\0\x10complete-promis\
+e\x01>\x01@\x01\x0apromise-id\x0f\x01\0\x04\0\x0edelete-promise\x01?\x01@\x01\x0d\
+function-names\0\x01\x04\0\x0cget-self-uri\x01@\x01@\0\0\x05\x04\0\x0fget-oplog-\
+index\x01A\x01@\x01\x09oplog-idx\x05\x01\0\x04\0\x0fset-oplog-index\x01B\x01@\x01\
+\x08replicas}\x01\0\x04\0\x0coplog-commit\x01C\x04\0\x14mark-begin-operation\x01\
+A\x01@\x01\x05begin\x05\x01\0\x04\0\x12mark-end-operation\x01D\x01@\0\0\x11\x04\0\
+\x10get-retry-policy\x01E\x01@\x01\x10new-retry-policy\x11\x01\0\x04\0\x10set-re\
+try-policy\x01F\x01@\0\0\x13\x04\0\x1bget-oplog-persistence-level\x01G\x01@\x01\x15\
+new-persistence-level\x13\x01\0\x04\0\x1bset-oplog-persistence-level\x01H\x01@\0\
+\0\x7f\x04\0\x14get-idempotence-mode\x01I\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\
+\x14set-idempotence-mode\x01J\x01@\0\0\x09\x04\0\x18generate-idempotency-key\x01\
+K\x01@\x03\x09worker-id\x0d\x0etarget-version\x07\x04mode\x15\x01\0\x04\0\x0dupd\
+ate-worker\x01L\x01@\0\02\x04\0\x11get-self-metadata\x01M\x01k2\x01@\x01\x09work\
+er-id\x0d\0\xce\0\x04\0\x13get-worker-metadata\x01O\x03\x01\x14golem:api/host@0.\
+2.0\x05\x06\x01B\x15\x01r\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\
+\0\x0cproduct-item\x03\0\0\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\
+\x09timestampw\x04\0\x05order\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-con\
+firmation\x03\0\x05\x01q\x02\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheck\
+out-result\x03\0\x07\x01@\x01\x07user-ids\x01\0\x04\0\x0finitialize-cart\x01\x09\
+\x01@\x01\x04item\x01\x01\0\x04\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\
+\0\x04\0\x0bremove-item\x01\x0b\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\
+\x14update-item-quantity\x01\x0c\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\
+\x02\x04\0\x11get-cart-contents\x01\x0e\x04\x01\x0cgolem:it/api\x05\x07\x04\x01\x16\
+golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dshopping-cart\x03\0\0\0G\x09produc\
+ers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060\
+.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

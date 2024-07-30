@@ -12,20 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_compilation_service::{env_vars, ComponentCompilationService};
-use crate::components::{DOCKER, NETWORK};
-use async_trait::async_trait;
-
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use async_trait::async_trait;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
-
-use crate::components::component_service::ComponentService;
 use tracing::{info, Level};
+
+use crate::components::component_compilation_service::{
+    ComponentCompilationService, ComponentCompilationServiceEnvVars,
+};
+use crate::components::component_service::ComponentService;
+use crate::components::docker::KillContainer;
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 
 pub struct DockerComponentCompilationService {
     container: Container<'static, GolemComponentCompilationServiceImage>,
+    keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
 }
@@ -37,16 +41,34 @@ impl DockerComponentCompilationService {
 
     pub async fn new(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        keep_container: bool,
+        verbosity: Level,
+    ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            component_service,
+            keep_container,
+            verbosity,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentCompilationServiceEnvVars + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        keep_container: bool,
         verbosity: Level,
     ) -> Self {
         info!("Starting golem-component-compilation-service container");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_service,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_service,
+                verbosity,
+            )
+            .await;
 
         let image = RunnableImage::from(GolemComponentCompilationServiceImage::new(
             Self::GRPC_PORT,
@@ -62,6 +84,7 @@ impl DockerComponentCompilationService {
 
         Self {
             container,
+            keep_container,
             public_http_port,
             public_grpc_port,
         }
@@ -95,7 +118,7 @@ impl ComponentCompilationService for DockerComponentCompilationService {
     }
 
     fn kill(&self) {
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 }
 

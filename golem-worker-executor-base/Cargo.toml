@@ -46,7 +46,8 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
-golem-wit = { version = "0.3.0" }
+golem-wit = { version = "0.4.0" }
+hex = "0.4.3"
 http = { workspace = true }
 http_02 = { workspace = true }
 http-body = "1.0.0"                                 # keep in sync with wasmtime
@@ -62,6 +63,7 @@ metrohash = "1.0.6"
 nonempty-collections = "0.2.5"
 prometheus = { workspace = true }
 prost = { workspace = true }
+rand = { workspace = true }
 ringbuf = "0.3.3"
 rustls = { workspace = true }
 serde = { workspace = true }

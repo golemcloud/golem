@@ -27,6 +27,7 @@ exclude = [
     "test-components/clock-service",
     "test-components/clocks",
     "test-components/directories",
+    "test-components/durability-overhead",
     "test-components/environment-service",
     "test-components/failing-component",
     "test-components/file-service",
@@ -89,8 +90,8 @@ fred = { version = "9.0.3", features = [
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.3.1"
-golem-wasm-rpc = { version = "0.0.33", default-features = false, features = ["host"] }
+golem-wasm-ast = "0.3.2"
+golem-wasm-rpc = { version = "0.0.35", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
 http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"
@@ -133,8 +134,16 @@ reqwest = { version = "0.12.5", features = [
 rustls = { version = "0.23.10" }
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
+serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = { version = "0.9.33 " }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
 strum = "0.26.1"
 strum_macros = "0.26.1"
 tap = "1.0.1"
@@ -155,17 +164,20 @@ tokio-postgres = "0.7.10"
 tokio-rustls = { version = "0.26.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7.10"
+toml = "0.8.14"
 tonic = "0.11.0"
 tonic-reflection = "0.11.0"
 tonic-health = "0.11.0"
 tracing = { version = "0.1.40", features = ["log"] }
 tracing-opentelemetry = "0.24.0"
+tracing-serde = "0.1.3"
 tracing-subscriber = { version = "0.3.18", features = [
     "env-filter",
     "fmt",
     "std",
     "json",
 ] }
+tracing-test = "0.2.5"
 url = "2.5.0"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 warp = "0.3.6"
