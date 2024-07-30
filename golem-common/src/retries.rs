@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rand::{thread_rng, Rng};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
-
-use rand::{thread_rng, Rng};
 use tracing::{error, info, warn, Level};
 
 use crate::config::RetryConfig;
 use crate::metrics::external_calls::{
     record_external_call_failure, record_external_call_retry, record_external_call_success,
 };
+use crate::retriable_error::IsRetriableError;
 
 /// Returns the delay to be waited before the next retry attempt.
 /// To be called after a failed attempt, with the number of attempts so far.
@@ -158,6 +158,24 @@ where
 
         tokio::time::sleep(delay).await;
     }
+}
+
+pub async fn with_retriable_errors<In, F, R, E>(
+    target_label: &'static str,
+    op_label: &'static str,
+    op_id: Option<String>,
+    config: &RetryConfig,
+    i: &In,
+    action: F,
+) -> Result<R, E>
+where
+    E: std::error::Error + IsRetriableError,
+    F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
+{
+    with_retries(target_label, op_label, op_id, config, i, action, |error| {
+        error.is_retriable()
+    })
+    .await
 }
 
 #[cfg(test)]

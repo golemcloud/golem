@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tonic::transport::Channel;
 use tonic::Response;
@@ -28,10 +29,9 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
-use golem_common::retries::with_retries;
+use golem_common::retries::{with_retriable_errors, with_retries};
 
-use crate::error::ShardManagerError;
-use crate::healthcheck::HealthCheckError;
+use crate::error::{HealthCheckError, ShardManagerError};
 use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
 use crate::shard_manager_config::WorkerExecutorServiceConfig;
 
@@ -61,9 +61,9 @@ pub async fn revoke_shards(
         .unassignments
         .iter()
         .map(|(pod, shard_ids)| {
-            let worker_executor = worker_executors.clone();
+            let worker_executors = worker_executors.clone();
             Box::pin(async move {
-                match worker_executor.revoke_shards(pod, shard_ids).await {
+                match worker_executors.revoke_shards(pod, shard_ids).await {
                     Ok(_) => None,
                     Err(_) => Some((pod.clone(), shard_ids.clone())),
                 }
@@ -86,9 +86,9 @@ pub async fn assign_shards(
         .assignments
         .iter()
         .map(|(pod, shard_ids)| {
-            let instance_server_service = worker_executors.clone();
+            let worker_executors = worker_executors.clone();
             Box::pin(async move {
-                match instance_server_service.assign_shards(pod, shard_ids).await {
+                match worker_executors.assign_shards(pod, shard_ids).await {
                     Ok(_) => None,
                     Err(_) => Some((pod.clone(), shard_ids.clone())),
                 }
@@ -119,17 +119,13 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "Assigning shards",
         );
 
-        with_retries(
+        with_retriable_errors(
             "worker_executor",
             "assign_shards",
             Some(format!("{pod}")),
             &self.config.retries,
             &(pod, shard_ids),
             |(pod, shard_ids)| Box::pin(self.assign_shards_internal(pod, shard_ids)),
-            |_err| {
-                // TODO: match on error once it has sources
-                true
-            },
         )
         .await
     }
@@ -144,17 +140,13 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "Revoking shards",
         );
 
-        with_retries(
+        with_retriable_errors(
             "worker_executor",
             "revoke_shards",
             Some(format!("{pod}")),
             &self.config.retries,
             &(pod, shard_ids),
             |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
-            |_err| {
-                // TODO: match on error once it has sources
-                true
-            },
         )
         .await
     }
@@ -179,7 +171,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
                         Err(status) => Err(HealthCheckError::GrpcError(status)),
                     }
                 }
-                Err(err) => Err(HealthCheckError::GrpcConnectError(err)),
+                Err(err) => Err(HealthCheckError::GrpcTransportError(err)),
             },
             Err(_) => Err(HealthCheckError::GrpcOther("connect timeout")),
         }
@@ -219,8 +211,8 @@ impl WorkerExecutorServiceDefault {
             }),
         )
         .await
-        .map_err(|e| ShardManagerError::unknown(e.to_string()))?
-        .map_err(|_| ShardManagerError::timeout("assign_shards"))?;
+        .map_err(|_: Elapsed| ShardManagerError::Timeout)?
+        .map_err(ShardManagerError::GrpcError)?;
 
         match assign_shards_response.into_inner() {
             golem::workerexecutor::AssignShardsResponse {
@@ -229,12 +221,12 @@ impl WorkerExecutorServiceDefault {
             golem::workerexecutor::AssignShardsResponse {
                 result:
                     Some(golem::workerexecutor::assign_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::unknown(format!(
-                "unknown : {:#?}",
+            } => Err(ShardManagerError::WorkerExecutionError(format!(
+                "{:?}",
                 failure
-            ))),
+            ))), // TODO: can we do better then debug format?
             golem::workerexecutor::AssignShardsResponse { result: None } => {
-                Err(ShardManagerError::unknown("unknown"))
+                Err(ShardManagerError::NoResult)
             }
         }
     }
@@ -260,8 +252,8 @@ impl WorkerExecutorServiceDefault {
             }),
         )
         .await
-        .map_err(|e| ShardManagerError::unknown(e.to_string()))?
-        .map_err(|_| ShardManagerError::timeout("revoke_shards"))?;
+        .map_err(|_: Elapsed| ShardManagerError::Timeout)?
+        .map_err(ShardManagerError::GrpcError)?;
 
         match revoke_shards_response.into_inner() {
             golem::workerexecutor::RevokeShardsResponse {
@@ -270,12 +262,12 @@ impl WorkerExecutorServiceDefault {
             golem::workerexecutor::RevokeShardsResponse {
                 result:
                     Some(golem::workerexecutor::revoke_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::unknown(format!(
-                "unknown : {:#?}",
+            } => Err(ShardManagerError::WorkerExecutionError(format!(
+                "{:?}",
                 failure
-            ))),
+            ))), // TODO: can we do better then debug format?
             golem::workerexecutor::RevokeShardsResponse { result: None } => {
-                Err(ShardManagerError::unknown("unknown"))
+                Err(ShardManagerError::NoResult)
             }
         }
     }

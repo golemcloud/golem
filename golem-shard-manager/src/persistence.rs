@@ -47,13 +47,13 @@ impl PersistenceService for PersistenceServiceDefault {
         let value = self
             .pool
             .serialize(&shard_manager_state)
-            .map_err(|e| ShardManagerError::unknown(e.to_string()))?;
+            .map_err(ShardManagerError::SerializationError)?;
 
         self.pool
             .with("persistence", "write")
             .set(key, value, None, None, false)
             .await
-            .map_err(|e| ShardManagerError::unknown(e.to_string()))
+            .map_err(ShardManagerError::RedisError)
     }
 
     async fn read(&self) -> Result<(RoutingTable, Rebalance), ShardManagerError> {
@@ -64,14 +64,14 @@ impl PersistenceService for PersistenceServiceDefault {
             .with("persistence", "read")
             .get(key)
             .await
-            .map_err(|e| ShardManagerError::unknown(e.to_string()))?;
+            .map_err(ShardManagerError::RedisError)?;
 
         match value {
             Some(value) => {
                 let shard_manager_state: ShardManagerState = self
                     .pool
                     .deserialize(&value)
-                    .map_err(|e| ShardManagerError::unknown(e.to_string()))?;
+                    .map_err(ShardManagerError::SerializationError)?;
                 Ok((
                     shard_manager_state.get_routing_table(),
                     shard_manager_state.get_rebalance(),

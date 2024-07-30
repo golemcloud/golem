@@ -1,26 +1,16 @@
-use crate::model::Pod;
-use crate::worker_executor::WorkerExecutorService;
-use async_trait::async_trait;
-use golem_common::config::RetryConfig;
-use golem_common::retries::with_retries;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-#[derive(thiserror::Error, Debug)]
-pub enum HealthCheckError {
-    #[error("gRPC: error status: {0}")]
-    GrpcError(tonic::Status),
-    #[error("gRPC: connect error: {0}")]
-    GrpcConnectError(#[source] tonic::transport::Error),
-    #[error("gRPC: {0}")]
-    GrpcOther(&'static str),
-    #[error("K8s: connect error: {0}")]
-    K8sConnectError(#[source] kube::Error),
-    #[error("K8s: {0}")]
-    K8sOther(&'static str),
-}
+use async_trait::async_trait;
+
+use golem_common::config::RetryConfig;
+use golem_common::retries::with_retriable_errors;
+
+use crate::error::HealthCheckError;
+use crate::model::Pod;
+use crate::worker_executor::WorkerExecutorService;
 
 #[async_trait]
 pub trait HealthCheck {
@@ -62,17 +52,13 @@ where
         &'a Pod,
     ) -> Pin<Box<dyn Future<Output = Result<(), HealthCheckError>> + 'a + Send>>,
 {
-    with_retries(
+    with_retriable_errors(
         target,
         "healtcheck",
         Some(format!("{pod}")),
         retry_config,
         pod,
         implementation,
-        |_| {
-            // TODO: recheck for which errors should not be retried
-            true
-        },
     )
     .await
     .is_ok()
@@ -114,11 +100,13 @@ impl HealthCheck for GrpcHealthCheck {
 
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes {
-    use crate::healthcheck::{health_check_with_retries, HealthCheck, HealthCheckError};
     use async_trait::async_trait;
-    use golem_common::config::RetryConfig;
     use k8s_openapi::api::core::v1::{Pod, PodStatus};
     use kube::{Api, Client};
+
+    use golem_common::config::RetryConfig;
+
+    use crate::healthcheck::{health_check_with_retries, HealthCheck, HealthCheckError};
 
     #[derive(Clone)]
     pub struct KubernetesHealthCheck {

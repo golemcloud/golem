@@ -12,24 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
-use async_trait::async_trait;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+
+use anyhow::anyhow;
+use async_trait::async_trait;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use tonic::transport::Channel;
-use tonic::{Code, Status};
+use tonic::Status;
 use tracing::{debug, error, info, warn, Instrument};
 
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::{Pod, ShardId};
+use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_service_base::model::{
     GolemError, GolemErrorInvalidShardId, GolemErrorUnknown, WorkerId,
@@ -433,51 +434,6 @@ impl CallWorkerExecutorErrorWithContext {
         CallWorkerExecutorErrorWithContext {
             error: CallWorkerExecutorError::FailedToConnectToPod(status),
             pod: Some(pod),
-        }
-    }
-}
-
-trait IsRetriableError {
-    fn is_retriable(&self) -> bool;
-}
-
-impl IsRetriableError for Status {
-    fn is_retriable(&self) -> bool {
-        match self.code() {
-            Code::Ok
-            | Code::Cancelled
-            | Code::InvalidArgument
-            | Code::NotFound
-            | Code::AlreadyExists
-            | Code::PermissionDenied
-            | Code::FailedPrecondition
-            | Code::OutOfRange
-            | Code::Unimplemented
-            | Code::DataLoss
-            | Code::Unauthenticated => false,
-            Code::Unknown
-            | Code::DeadlineExceeded
-            | Code::ResourceExhausted
-            | Code::Aborted
-            | Code::Internal
-            | Code::Unavailable => true,
-        }
-    }
-}
-
-impl IsRetriableError for RoutingTableError {
-    fn is_retriable(&self) -> bool {
-        match &self {
-            RoutingTableError::ShardManagerGrpcError(status) => status.is_retriable(),
-            RoutingTableError::ShardManagerError(error) => match &error.error {
-                Some(error) => match error {
-                    Error::InvalidRequest(_) => false,
-                    Error::Timeout(_) => true,
-                    Error::Unknown(_) => true,
-                },
-                None => true,
-            },
-            RoutingTableError::NoResult => true,
         }
     }
 }

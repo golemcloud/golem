@@ -25,17 +25,36 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::ShardManagerError;
 use golem_common::cache::*;
 use golem_common::client::GrpcClient;
 use golem_common::model::RoutingTable;
+use golem_common::retriable_error::IsRetriableError;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
     ShardManagerGrpcError(Status),
     ShardManagerError(ShardManagerError),
     NoResult,
+}
+
+impl IsRetriableError for RoutingTableError {
+    fn is_retriable(&self) -> bool {
+        match &self {
+            RoutingTableError::ShardManagerGrpcError(status) => status.is_retriable(),
+            RoutingTableError::ShardManagerError(error) => match &error.error {
+                Some(error) => match error {
+                    Error::InvalidRequest(_) => false,
+                    Error::Timeout(_) => true,
+                    Error::Unknown(_) => true,
+                },
+                None => true,
+            },
+            RoutingTableError::NoResult => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

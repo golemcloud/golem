@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bincode::{Decode, Encode};
 use core::cmp::Ordering;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::{fmt, vec};
-
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 use tonic::transport::Endpoint;
-use tracing::warn;
+use tracing::{error, warn};
 
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
@@ -79,11 +78,30 @@ impl Pod {
             ip: source_ip,
         };
 
-        let resolved = pod.address()?.map(|sa| sa.ip()).collect::<Vec<_>>();
-        if !resolved.contains(&source_ip) {
-            warn!("Host mismatch between registration message and resolved message source. Provided: {resolved:?}; source: {source_ip:?}");
+        match pod.address() {
+            Ok(resolved_addresses) => {
+                let resolved_addresses = resolved_addresses.map(|sa| sa.ip()).collect::<Vec<_>>();
+
+                if !resolved_addresses.contains(&source_ip) {
+                    warn!(
+                        pod= ?pod,
+                        resolved_adresses = ?resolved_addresses,
+                        source_ip = ?source_ip,
+                        "Host mismatch between registration message and resolved message source"
+                    );
+                }
+
+                Ok(pod)
+            }
+            Err(error) => {
+                error!(
+                    pod=?pod,
+                    error=error.to_string(),
+                    "Failed to resolve message source");
+
+                Err(ShardManagerError::FailedAddressResolveForPod)
+            }
         }
-        Ok(pod)
     }
 }
 
