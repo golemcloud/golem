@@ -448,6 +448,10 @@ async fn drop_resource<Ctx: WorkerCtx>(
                 })
             }
         }
+        // Apparently the validation is a success at call site since the
+        // metadata expects Val::String rather than Value::Handle
+        // In this case, we make sure to accept even if the user passed
+        // a string representing a resource
         Value::String(str) => {
                     let parts: Vec<&str> = str.split('/').collect();
                     if parts.len() >= 2 {
@@ -456,7 +460,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
                                 let uri = parts[0..(parts.len() - 1)].join("/");
 
                                 if uri == self_uri.value {
-                                    Ok(*resource_id)
+                                    Ok(resource_id)
                                 } else {
                                     dbg!("at this point 2. {:?}", parsed_function_name);
 
