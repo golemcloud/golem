@@ -3,7 +3,6 @@ use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey};
 use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
-use golem_wasm_rpc::Value;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;

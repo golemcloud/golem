@@ -257,6 +257,9 @@ mod tests {
             PreciseJson::Result(_) => {
                 unimplemented!("Result not implemented")
             }
+            PreciseJson::Handle { .. } => {
+                unimplemented!("Map not implemented")
+            }
         }
     }
 

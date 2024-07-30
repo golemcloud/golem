@@ -23,10 +23,10 @@ use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
+use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult,
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResultTyped, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,

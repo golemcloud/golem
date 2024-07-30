@@ -26,9 +26,9 @@ use golem_api_grpc::proto::golem::worker::{
     DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeRequest, InvokeResponse, InvokeResultTyped, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::{
     worker_error, worker_execution_error, InvokeResult, WorkerError as GrpcWorkerError,

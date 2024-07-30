@@ -1977,7 +1977,7 @@ async fn counter_resource_test_1() {
         .await
         .unwrap();
 
-    let result2 = executor
+    let _ = executor
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[method]counter.inc-by}",
