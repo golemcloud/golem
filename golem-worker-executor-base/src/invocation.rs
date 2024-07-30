@@ -433,7 +433,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
         });
     }
 
-    let resource = match function_input.first().unwrap() {
+    let resource_id = match function_input.first().unwrap() {
         Value::Handle { uri, resource_id } => {
             if uri == &self_uri {
                 Ok(*resource_id)
@@ -452,6 +452,10 @@ async fn drop_resource<Ctx: WorkerCtx>(
         // metadata expects Val::String rather than Value::Handle
         // In this case, we make sure to accept even if the user passed
         // a string representing a resource
+        // TODO; The conversion from string to resource is handled in wasm-rpc
+        // however, its hard to reuse just this functionality.
+        // Find why metadata expects a String, and `Val::Handle` inside worker-executor
+        // Find ways to reuse it properly
         Value::String(str) => {
                     let parts: Vec<&str> = str.split('/').collect();
                     if parts.len() >= 2 {
@@ -513,8 +517,9 @@ async fn drop_resource<Ctx: WorkerCtx>(
             .drop_indexed_resource(resource, resource_params);
     }
 
-    if let Some(resource) = store.data_mut().get(resource).await {
+    if let Some(resource) = store.data_mut().get(resource_id).await {
         debug!("Dropping resource {resource:?} in {context}");
+        dbg!("Dropping resource {:?} {:?}", resource.clone(), context.clone());
         store.data_mut().borrow_fuel().await?;
 
         let result = resource.resource_drop_async(&mut store).await;
@@ -526,11 +531,17 @@ async fn drop_resource<Ctx: WorkerCtx>(
             .await?;
 
         match result {
-            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, vec![])),
+            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, vec![Value::Handle {
+                uri: store.data().self_uri(),
+                resource_id,
+            }])),
             Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
         }
     } else {
-        Ok(InvokeResult::from_success(0, vec![]))
+        Ok(InvokeResult::from_success(0, vec![Value::Handle {
+            uri: store.data().self_uri(),
+            resource_id,
+        }]))
     }
 }
 
