@@ -52,9 +52,9 @@ pub enum PreciseJsonConversionError {
     InvalidTypeAnnotation(String),
 }
 
-impl Into<JsonValue> for PreciseJson {
-    fn into(self) -> JsonValue {
-        match self {
+impl From<PreciseJson> for JsonValue {
+    fn from(val: PreciseJson) -> Self {
+        match val {
             PreciseJson::Bool(b) => JsonValue::Object(serde_json::Map::from_iter(vec![(
                 "bool".to_string(),
                 JsonValue::Bool(b),
@@ -417,7 +417,7 @@ impl TryFrom<JsonValue> for PreciseJson {
                                             };
                                             Ok(handle)
                                         }
-                                        Err(err) => {
+                                        Err(_) => {
                                             Err(PreciseJsonConversionError::InvalidValue("Failed to parse resource-id section of the handle value".to_string()))
                                         }
                                     }
