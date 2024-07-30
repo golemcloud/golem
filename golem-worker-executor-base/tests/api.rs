@@ -2010,7 +2010,6 @@ async fn counter_resource_test_1() {
 
     drop(executor);
 
-    check!(1 == 2);
     check!(result1 == Ok(vec![Value::U64(5)]));
     check!(
         result2
