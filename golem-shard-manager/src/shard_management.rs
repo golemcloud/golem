@@ -47,7 +47,7 @@ impl ShardManagement {
     ) -> Result<Self, ShardManagerError> {
         let routing_table = persistence_service.read().await.unwrap();
 
-        info!("Starting initial healthcheck");
+        info!("Initial healthcheck started");
 
         let mut pods = routing_table.get_pods();
         let unhealthy_pods = get_unhealthy_pods(health_check, &pods).await;
