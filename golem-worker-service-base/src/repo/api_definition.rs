@@ -205,7 +205,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        sqlx::query(
+        let result = sqlx::query(
             "DELETE FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
         )
         .bind(namespace)
@@ -213,7 +213,8 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         .bind(version)
         .execute(self.db_pool.deref())
         .await?;
-        Ok(true)
+
+        Ok(result.rows_affected() > 0)
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
@@ -338,7 +339,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
     }
 
     async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        sqlx::query(
+        let result = sqlx::query(
             "DELETE FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
         )
         .bind(namespace)
@@ -346,7 +347,8 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(version)
         .execute(self.db_pool.deref())
         .await?;
-        Ok(true)
+
+        Ok(result.rows_affected() > 0)
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
