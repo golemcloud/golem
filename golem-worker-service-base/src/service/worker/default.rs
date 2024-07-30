@@ -23,10 +23,8 @@ use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
-use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey as ProtoIdempotencyKey, InvocationContext,
-};
-use golem_api_grpc::proto::golem::worker::{InvokeResultTyped as ProtoInvokeResult, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult};
+use golem_api_grpc::proto::golem::worker::{InvokeResultTyped, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::{
     self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
@@ -116,7 +114,7 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<ProtoInvokeResult>;
+    ) -> WorkerResult<InvokeResult>;
 
     // Accepts Json parameters as input
     async fn invoke_function_json(
@@ -454,7 +452,7 @@ where
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<ProtoInvokeResult> {
+    ) -> WorkerResult<InvokeResult> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let calling_convention = *calling_convention;
@@ -487,7 +485,7 @@ where
                                  },
                              )),
                     } => {
-                        Ok(ProtoInvokeResult { result: output })
+                        Ok(InvokeResult { result: output })
                     },
                     workerexecutor::InvokeAndAwaitWorkerResponse {
                         result:
@@ -1070,8 +1068,8 @@ where
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<ProtoInvokeResult> {
-        Ok(ProtoInvokeResult::default())
+    ) -> WorkerResult<InvokeResult> {
+        Ok(InvokeResult::default())
     }
 
     async fn invoke_function_json(

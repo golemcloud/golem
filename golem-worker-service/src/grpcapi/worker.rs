@@ -539,7 +539,7 @@ impl WorkerGrpcApi {
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
-    ) -> Result<InvokeResultTyped, GrpcWorkerError> {
+    ) -> Result<InvokeResult, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
 
         let params = request
