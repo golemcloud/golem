@@ -336,7 +336,7 @@ fn worker_invoke_drop(
         &args_key.0,
     ])?;
     dbg!(result.clone());
-   // let args_key: IdempotencyKey = IdempotencyKey::fresh();
+    let args_key1: IdempotencyKey = IdempotencyKey::fresh();
     cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -349,7 +349,7 @@ fn worker_invoke_drop(
         &cfg.arg('j', "parameters"),
         &result.to_string(),
         &cfg.arg('k', "idempotency-key"),
-        &args_key.0,
+        &args_key1.0,
     ])?;
 
     Ok(())
