@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
     WorkerError, WorkerId,
 };
-use golem_api_grpc::proto::golem::workerexecutor::CreateWorkerRequest;
+use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;
 use tonic::transport::Channel;
@@ -107,7 +107,7 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor create-worker call"
             )),
-            Some(workerexecutor::create_worker_response::Result::Success(_)) => {
+            Some(workerexecutor::v1::create_worker_response::Result::Success(_)) => {
                 Ok(LaunchNewWorkerResponse {
                     result: Some(worker::launch_new_worker_response::Result::Success(
                         LaunchNewWorkerSuccessResponse {
@@ -117,7 +117,7 @@ impl WorkerService for ForwardingWorkerService {
                     )),
                 })
             }
-            Some(workerexecutor::create_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::create_worker_response::Result::Failure(error)) => {
                 Ok(LaunchNewWorkerResponse {
                     result: Some(worker::launch_new_worker_response::Result::Error(
                         WorkerError {
@@ -137,7 +137,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .delete_worker(workerexecutor::DeleteWorkerRequest {
+            .delete_worker(workerexecutor::v1::DeleteWorkerRequest {
                 worker_id: request.worker_id,
                 account_id: Some(
                     AccountId {
@@ -153,12 +153,12 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor delete-worker call"
             )),
-            Some(workerexecutor::delete_worker_response::Result::Success(_)) => {
+            Some(workerexecutor::v1::delete_worker_response::Result::Success(_)) => {
                 Ok(DeleteWorkerResponse {
                     result: Some(worker::delete_worker_response::Result::Success(Empty {})),
                 })
             }
-            Some(workerexecutor::delete_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::delete_worker_response::Result::Failure(error)) => {
                 Ok(DeleteWorkerResponse {
                     result: Some(worker::delete_worker_response::Result::Error(WorkerError {
                         error: Some(worker::worker_error::Error::InternalError(error)),
@@ -176,7 +176,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .get_worker_metadata(workerexecutor::GetWorkerMetadataRequest {
+            .get_worker_metadata(workerexecutor::v1::GetWorkerMetadataRequest {
                 worker_id: Some(request.worker_id.ok_or(anyhow!("Worker ID is required"))?),
                 account_id: Some(
                     AccountId {
@@ -192,14 +192,14 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor get-worker-metadata call"
             )),
-            Some(workerexecutor::get_worker_metadata_response::Result::Success(metadata)) => {
+            Some(workerexecutor::v1::get_worker_metadata_response::Result::Success(metadata)) => {
                 Ok(GetWorkerMetadataResponse {
                     result: Some(worker::get_worker_metadata_response::Result::Success(
                         metadata,
                     )),
                 })
             }
-            Some(workerexecutor::get_worker_metadata_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(error)) => {
                 Ok(GetWorkerMetadataResponse {
                     result: Some(worker::get_worker_metadata_response::Result::Error(
                         WorkerError {
@@ -216,7 +216,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .invoke_worker(workerexecutor::InvokeWorkerRequest {
+            .invoke_worker(workerexecutor::v1::InvokeWorkerRequest {
                 worker_id: request.worker_id,
                 idempotency_key: request.idempotency_key,
                 name: request.function,
@@ -243,12 +243,12 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor invoke call"
             )),
-            Some(workerexecutor::invoke_worker_response::Result::Success(empty)) => {
+            Some(workerexecutor::v1::invoke_worker_response::Result::Success(empty)) => {
                 Ok(InvokeResponse {
                     result: Some(worker::invoke_response::Result::Success(empty)),
                 })
             }
-            Some(workerexecutor::invoke_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::invoke_worker_response::Result::Failure(error)) => {
                 Ok(InvokeResponse {
                     result: Some(worker::invoke_response::Result::Error(WorkerError {
                         error: Some(worker::worker_error::Error::InternalError(error)),
@@ -266,7 +266,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .invoke_and_await_worker(workerexecutor::InvokeAndAwaitWorkerRequest {
+            .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
                 worker_id: request.worker_id,
                 idempotency_key: request.idempotency_key,
                 name: request.function,
@@ -294,7 +294,7 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor invoke call"
             )),
-            Some(workerexecutor::invoke_and_await_worker_response::Result::Success(result)) => {
+            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Success(result)) => {
                 Ok(InvokeAndAwaitResponse {
                     result: Some(worker::invoke_and_await_response::Result::Success(
                         InvokeResult {
@@ -303,7 +303,7 @@ impl WorkerService for ForwardingWorkerService {
                     )),
                 })
             }
-            Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(error)) => {
                 Ok(InvokeAndAwaitResponse {
                     result: Some(worker::invoke_and_await_response::Result::Error(
                         WorkerError {
@@ -323,7 +323,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .connect_worker(workerexecutor::ConnectWorkerRequest {
+            .connect_worker(workerexecutor::v1::ConnectWorkerRequest {
                 worker_id: request.worker_id,
                 account_id: Some(
                     AccountId {
@@ -348,7 +348,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .resume_worker(workerexecutor::ResumeWorkerRequest {
+            .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
                 worker_id: request.worker_id,
                 account_id: Some(
                     AccountId {
@@ -364,12 +364,12 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor delete-worker call"
             )),
-            Some(workerexecutor::resume_worker_response::Result::Success(_)) => {
+            Some(workerexecutor::v1::resume_worker_response::Result::Success(_)) => {
                 Ok(ResumeWorkerResponse {
                     result: Some(worker::resume_worker_response::Result::Success(Empty {})),
                 })
             }
-            Some(workerexecutor::resume_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::resume_worker_response::Result::Failure(error)) => {
                 Ok(ResumeWorkerResponse {
                     result: Some(worker::resume_worker_response::Result::Error(WorkerError {
                         error: Some(worker::worker_error::Error::InternalError(error)),
@@ -387,7 +387,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .interrupt_worker(workerexecutor::InterruptWorkerRequest {
+            .interrupt_worker(workerexecutor::v1::InterruptWorkerRequest {
                 worker_id: request.worker_id,
                 recover_immediately: request.recover_immediately,
                 account_id: Some(
@@ -404,12 +404,12 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor delete-worker call"
             )),
-            Some(workerexecutor::interrupt_worker_response::Result::Success(_)) => {
+            Some(workerexecutor::v1::interrupt_worker_response::Result::Success(_)) => {
                 Ok(InterruptWorkerResponse {
                     result: Some(worker::interrupt_worker_response::Result::Success(Empty {})),
                 })
             }
-            Some(workerexecutor::interrupt_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::interrupt_worker_response::Result::Failure(error)) => {
                 Ok(InterruptWorkerResponse {
                     result: Some(worker::interrupt_worker_response::Result::Error(
                         WorkerError {
@@ -429,7 +429,7 @@ impl WorkerService for ForwardingWorkerService {
             .worker_executor
             .client()
             .await?
-            .update_worker(workerexecutor::UpdateWorkerRequest {
+            .update_worker(workerexecutor::v1::UpdateWorkerRequest {
                 worker_id: request.worker_id,
                 target_version: request.target_version,
                 mode: request.mode,
@@ -447,12 +447,12 @@ impl WorkerService for ForwardingWorkerService {
             None => Err(anyhow!(
                 "No response from golem-worker-executor delete-worker call"
             )),
-            Some(workerexecutor::update_worker_response::Result::Success(_)) => {
+            Some(workerexecutor::v1::update_worker_response::Result::Success(_)) => {
                 Ok(UpdateWorkerResponse {
                     result: Some(worker::update_worker_response::Result::Success(Empty {})),
                 })
             }
-            Some(workerexecutor::update_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::update_worker_response::Result::Failure(error)) => {
                 Ok(UpdateWorkerResponse {
                     result: Some(worker::update_worker_response::Result::Error(WorkerError {
                         error: Some(worker::worker_error::Error::InternalError(error)),

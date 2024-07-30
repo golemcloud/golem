@@ -19,7 +19,7 @@ import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_execution_error.proto";
 import public "wasm/rpc/val.proto";
 
-package golem.workerexecutor;
+package golem.workerexecutor.v1;
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);

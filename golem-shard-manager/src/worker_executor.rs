@@ -26,7 +26,7 @@ use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tracing::info;
 
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
@@ -195,7 +195,7 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
-        let assign_shards_request = golem::workerexecutor::AssignShardsRequest {
+        let assign_shards_request = golem::workerexecutor::v1::AssignShardsRequest {
             shard_ids: shard_ids
                 .clone()
                 .into_iter()
@@ -215,17 +215,17 @@ impl WorkerExecutorServiceDefault {
         .map_err(ShardManagerError::GrpcError)?;
 
         match assign_shards_response.into_inner() {
-            golem::workerexecutor::AssignShardsResponse {
-                result: Some(golem::workerexecutor::assign_shards_response::Result::Success(_)),
+            golem::workerexecutor::v1::AssignShardsResponse {
+                result: Some(golem::workerexecutor::v1::assign_shards_response::Result::Success(_)),
             } => Ok(()),
-            golem::workerexecutor::AssignShardsResponse {
+            golem::workerexecutor::v1::AssignShardsResponse {
                 result:
-                    Some(golem::workerexecutor::assign_shards_response::Result::Failure(failure)),
+                    Some(golem::workerexecutor::v1::assign_shards_response::Result::Failure(failure)),
             } => Err(ShardManagerError::WorkerExecutionError(format!(
                 "{:?}",
                 failure
             ))), // TODO: can we do better then debug format?
-            golem::workerexecutor::AssignShardsResponse { result: None } => {
+            golem::workerexecutor::v1::AssignShardsResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
             }
         }
@@ -236,7 +236,7 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
-        let revoke_shards_request = golem::workerexecutor::RevokeShardsRequest {
+        let revoke_shards_request = golem::workerexecutor::v1::RevokeShardsRequest {
             shard_ids: shard_ids
                 .clone()
                 .into_iter()
@@ -256,17 +256,17 @@ impl WorkerExecutorServiceDefault {
         .map_err(ShardManagerError::GrpcError)?;
 
         match revoke_shards_response.into_inner() {
-            golem::workerexecutor::RevokeShardsResponse {
-                result: Some(golem::workerexecutor::revoke_shards_response::Result::Success(_)),
+            golem::workerexecutor::v1::RevokeShardsResponse {
+                result: Some(golem::workerexecutor::v1::revoke_shards_response::Result::Success(_)),
             } => Ok(()),
-            golem::workerexecutor::RevokeShardsResponse {
+            golem::workerexecutor::v1::RevokeShardsResponse {
                 result:
-                    Some(golem::workerexecutor::revoke_shards_response::Result::Failure(failure)),
+                    Some(golem::workerexecutor::v1::revoke_shards_response::Result::Failure(failure)),
             } => Err(ShardManagerError::WorkerExecutionError(format!(
                 "{:?}",
                 failure
             ))), // TODO: can we do better then debug format?
-            golem::workerexecutor::RevokeShardsResponse { result: None } => {
+            golem::workerexecutor::v1::RevokeShardsResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
             }
         }

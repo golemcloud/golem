@@ -28,7 +28,7 @@ use redis::Commands;
 use golem_api_grpc::proto::golem::worker::{
     worker_execution_error, ComponentParseFailed, LogEvent,
 };
-use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
+use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,

@@ -21,7 +21,7 @@ use prometheus::Registry;
 use tracing::info;
 
 use config::ServerConfig;
-use golem_api_grpc::proto::golem::componentcompilation::component_compilation_service_server::ComponentCompilationServiceServer;
+use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor_base::services::golem_config::BlobStorageConfig;
 use golem_worker_executor_base::storage::blob::s3::S3BlobStorage;

@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};

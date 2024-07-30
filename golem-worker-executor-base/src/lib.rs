@@ -29,7 +29,7 @@ pub mod workerctx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
 use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
