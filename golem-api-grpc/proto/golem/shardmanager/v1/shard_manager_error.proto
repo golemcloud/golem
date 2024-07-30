@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import "golem/common/error_body.proto";
 
-package golem.shardmanager;
+package golem.shardmanager.v1;
 
 message ShardManagerError {
   oneof error {

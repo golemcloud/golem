@@ -18,7 +18,7 @@ use golem_wasm_rpc::Value;
 use tokio::task::JoinSet;
 
 use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::GetRoutingTableRequest;
+use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
@@ -177,9 +177,9 @@ impl Benchmark for RpcCpuIntensive {
             .expect("Unable to fetch the routing table from shard-manager-service");
 
         let shard_manager_routing_table: RoutingTable = match routing_table.into_inner() {
-            shardmanager::GetRoutingTableResponse {
+            shardmanager::v1::GetRoutingTableResponse {
                 result:
-                    Some(shardmanager::get_routing_table_response::Result::Success(routing_table)),
+                    Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
             } => routing_table.into(),
             _ => panic!("Unable to fetch the routing table from shard-manager-service"),
         };
