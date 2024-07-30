@@ -139,7 +139,7 @@ impl ShardManagement {
 
                 for pod in removed_pods {
                     current_routing_table.remove_pod(&pod);
-                    info!(pod= ?pod, "Pod removed");
+                    info!(pod= %pod, "Pod removed");
                 }
 
                 let mut send_full_assignment = Vec::new();
@@ -147,11 +147,11 @@ impl ShardManagement {
                     if current_routing_table.has_pod(&pod) {
                         // This pod has already an assignment - we have to send the full list of assigned shards to it
                         send_full_assignment.push(pod.clone());
-                        info!(pod= ?pod, "Pod returned");
+                        info!(pod= %pod, "Pod returned");
                     } else {
                         // New pod, adding with empty assignment
                         current_routing_table.add_pod(&pod);
-                        info!(pod= ?pod, "Pod added");
+                        info!(pod= %pod, "Pod added");
                     }
                 }
                 let mut rebalance =
