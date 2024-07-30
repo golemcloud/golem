@@ -174,6 +174,9 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 
     let function = find_function(&mut store, instance, &parsed)?;
 
+    dbg!(full_function_name.clone());
+    dbg!(function);
+
     if was_live_before {
         store
             .data_mut()
@@ -215,6 +218,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 
     let mut call_result = match function {
         Some(function) => {
+            dbg!("is this here? {}", full_function_name.clone());
             invoke(
                 &mut store,
                 function,
@@ -225,6 +229,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
             .await
         }
         None => {
+            dbg!("or is this here? {}", full_function_name.clone());
             // Special function: drop
             drop_resource(&mut store, &parsed, &function_input, &context).await
         }
@@ -426,6 +431,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
             details: format!("unexpected parameter count for drop {context}"),
         });
     }
+
     let resource = match function_input.first().unwrap() {
         Value::Handle { uri, resource_id } => {
             if uri == &self_uri {
