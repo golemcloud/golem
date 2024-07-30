@@ -469,7 +469,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
                                     })
                                 }
                             }
-                            Err(err) => {
+                            Err(_) => {
                                 Err(GolemError::ValueMismatch {
                                     details: format!(
                                         "Drop failed. Input function parameter failed to be parsed to a resource {} {}",
