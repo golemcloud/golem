@@ -345,6 +345,8 @@ fn worker_invoke_drop(
     };
 
     let handle_json = format!("[{{\"handle\" : \"{}\"}}]", handle_str);
+    let args_key1: IdempotencyKey = IdempotencyKey::fresh();
+
     cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -357,7 +359,7 @@ fn worker_invoke_drop(
         &cfg.arg('j', "parameters"),
         handle_json.as_str(),
         &cfg.arg('k', "idempotency-key"),
-        &args_key.0,
+        &args_key1.0,
     ])?;
 
     Ok(())

@@ -1051,7 +1051,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<RetryDecision, GolemError> {
-        debug!("Starting prepare_instance");
+        dbg!("Starting prepare_instance");
         let start = Instant::now();
         let mut count = 0;
 
@@ -1248,11 +1248,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         // The update finalization has the right to override the Err result with an explicit retry request
         if final_decision != RetryDecision::None {
-            debug!("Retrying prepare_instance after failed update attempt");
+            dbg!("Retrying prepare_instance after failed update attempt");
             Ok(final_decision)
         } else {
             store.as_context_mut().data_mut().set_suspended().await?;
-            debug!("Finished prepare_instance");
+            dbg!("Finished prepare_instance");
             result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
         }
     }

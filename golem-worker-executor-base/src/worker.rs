@@ -1268,7 +1268,7 @@ impl RunningWorker {
         oom_retry_count: u64,
     ) {
         loop {
-            debug!("Invocation queue loop creating the instance");
+            dbg!("Invocation queue loop creating the instance");
 
             let (instance, store) = match Self::create_instance(parent.clone()).await {
                 Ok((instance, store)) => {
@@ -1289,7 +1289,7 @@ impl RunningWorker {
                 }
             };
 
-            debug!("Invocation queue loop preparing the instance");
+            dbg!("Invocation queue loop preparing the instance");
 
             let mut final_decision = {
                 let mut store = store.lock().await;
@@ -1311,7 +1311,7 @@ impl RunningWorker {
 
                 match prepare_result {
                     Ok(decision) => {
-                        debug!("Recovery decision from prepare_instance: {decision:?}");
+                        dbg!("Recovery decision from prepare_instance: {decision:?}");
                         decision
                     }
                     Err(err) => {
@@ -1328,7 +1328,7 @@ impl RunningWorker {
 
 
             if final_decision == RetryDecision::None {
-                debug!("Invocation queue loop started");
+                dbg!("Invocation queue loop started");
 
                 // Exits when RunningWorker is dropped
                 waiting_for_command.store(true, Ordering::Release);
@@ -1352,6 +1352,7 @@ impl RunningWorker {
                                     function_input,
                                     calling_convention,
                                 } => {
+                                    dbg!(full_function_name.clone());
                                     let span = span!(
                                         Level::INFO,
                                         "invocation",
@@ -1389,6 +1390,8 @@ impl RunningWorker {
                                             true, // We are always in live mode at this point
                                         )
                                         .await;
+
+                                        dbg!(result.clone());
 
                                         match result {
                                             Ok(InvokeResult::Succeeded {
