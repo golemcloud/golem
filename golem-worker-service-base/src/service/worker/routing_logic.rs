@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
+use async_trait::async_trait;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
-use anyhow::anyhow;
-use async_trait::async_trait;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use tonic::transport::Channel;
