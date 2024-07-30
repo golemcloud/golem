@@ -445,12 +445,19 @@ where
                 ))
             })?;
 
+        let function_results: Vec<AnalysedFunctionResult> = function_type
+            .results
+            .iter()
+            .map(|x| x.clone().into())
+            .collect();
+
+        let expected_parameters =
+            Self::get_expected_function_parameters(&function_name, &function_type);
+
         let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                *calling_convention,
-            )
+            .validate_function_parameters(expected_parameters, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,
@@ -463,12 +470,6 @@ where
                 auth_ctx,
             )
             .await?;
-
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
 
         results_val
             .result
@@ -510,11 +511,9 @@ where
                     component_details.function_names().join(", ")
                 ))
             })?;
+        let expected = Self::get_expected_function_parameters(&function_name, &function_type);
         let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                *calling_convention,
-            )
+            .validate_function_parameters(expected, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         let worker_id = worker_id.clone();
