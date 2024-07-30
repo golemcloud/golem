@@ -459,8 +459,6 @@ async fn drop_resource<Ctx: WorkerCtx>(
                                 if uri == self_uri.value {
                                     Ok(resource_id)
                                 } else {
-                                    dbg!("at this point 2. {:?}", parsed_function_name);
-
                                     Err(GolemError::ValueMismatch {
                                         details: format!(
                                             "trying to drop handle for on wrong worker ({} vs {}) {}",

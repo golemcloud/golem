@@ -447,8 +447,6 @@ where
             .validate_function_parameters(expected_parameters, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
-        dbg!(function_name.clone());
-        dbg!(params_val.clone());
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,
@@ -555,8 +553,6 @@ where
                 }
             }
         ).await?;
-
-        dbg!(invoke_response.clone());
 
         Ok(invoke_response)
     }
