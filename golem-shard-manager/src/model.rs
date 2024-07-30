@@ -84,9 +84,9 @@ impl Pod {
 
                 if !resolved_addresses.contains(&source_ip) {
                     warn!(
-                        pod= ?pod,
+                        pod= %pod,
                         resolved_adresses = ?resolved_addresses,
-                        source_ip = ?source_ip,
+                        source_ip = %source_ip,
                         "Host mismatch between registration message and resolved message source"
                     );
                 }
