@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
-use golem_common::retries::{with_retriable_errors, with_retries};
+use golem_common::retries::with_retriable_errors;
 
 use crate::error::{HealthCheckError, ShardManagerError};
 use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
