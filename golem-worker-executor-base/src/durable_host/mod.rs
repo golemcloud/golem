@@ -56,6 +56,8 @@ use golem_common::model::{
     WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
@@ -104,6 +106,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
 use golem_common::retries::get_delay;
+use golem_service_base::exports;
+use golem_service_base::typechecker::TypeCheckOut;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -815,18 +819,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
             if self.state.snapshotting_mode.is_none() {
-                let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
-                    output.iter().map(|value| value.clone().into()).collect();
-
                 self.state
                     .oplog
-                    .add_exported_function_completed(&proto_output, consumed_fuel)
+                    .add_exported_function_completed(&output, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1050,7 +1051,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<RetryDecision, GolemError> {
-        debug!("Starting prepare_instance");
+        dbg!("Starting prepare_instance");
         let start = Instant::now();
         let mut count = 0;
 
@@ -1113,18 +1114,75 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 output,
                                 consumed_fuel,
                             }) => {
-                                if let Err(err) = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_invocation_success(
-                                        &full_function_name,
-                                        &function_input,
-                                        consumed_fuel,
-                                        output,
-                                    )
-                                    .await
-                                {
-                                    break Err(err);
+                                let component_metadata =
+                                    store.as_context().data().component_metadata();
+
+                                match exports::function_by_name(
+                                    &component_metadata.exports,
+                                    &full_function_name,
+                                ) {
+                                    Ok(value) => {
+                                        if let Some(value) = value {
+                                            let function_results: Vec<AnalysedFunctionResult> =
+                                                value
+                                                    .results
+                                                    .into_iter()
+                                                    .map(|t| t.into())
+                                                    .collect();
+
+                                            let result = output
+                                                .validate_function_result(
+                                                    function_results,
+                                                    calling_convention
+                                                        .unwrap_or(CallingConvention::Component),
+                                                )
+                                                .map_err(|e| GolemError::ValueMismatch {
+                                                    details: e.join(", "),
+                                                })?;
+                                            if let Err(err) = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_success(
+                                                    &full_function_name,
+                                                    &function_input,
+                                                    consumed_fuel,
+                                                    result,
+                                                )
+                                                .await
+                                            {
+                                                break Err(err);
+                                            }
+                                        } else {
+                                            let trap_type = TrapType::Error(WorkerError::Unknown(format!(
+                                                "Function {full_function_name} not found"
+                                            )));
+
+                                            let _ = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_failure(&trap_type)
+                                                .await;
+
+                                            break Err(GolemError::invalid_request(format!(
+                                                "Function {full_function_name} not found"
+                                            )));
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let trap_type = TrapType::Error(WorkerError::Unknown(format!(
+                                            "Function {full_function_name} not found: {err}"
+                                        )));
+
+                                        let _ = store
+                                            .as_context_mut()
+                                            .data_mut()
+                                            .on_invocation_failure(&trap_type)
+                                            .await;
+
+                                        break Err(GolemError::invalid_request(format!(
+                                            "Function {full_function_name} not found: {err}"
+                                        )));
+                                    }
                                 }
                                 count += 1;
                                 continue;
@@ -1190,11 +1248,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         // The update finalization has the right to override the Err result with an explicit retry request
         if final_decision != RetryDecision::None {
-            debug!("Retrying prepare_instance after failed update attempt");
+            dbg!("Retrying prepare_instance after failed update attempt");
             Ok(final_decision)
         } else {
             store.as_context_mut().data_mut().set_suspended().await?;
-            debug!("Finished prepare_instance");
+            dbg!("Finished prepare_instance");
             result.map_err(|err| GolemError::failed_to_resume_worker(worker_id.clone(), err))
         }
     }

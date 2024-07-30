@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 import public "golem/common/account_id.proto";
+import public "golem/common/json_value.proto";
 import public "golem/worker/calling_convention.proto";
 import public "golem/common/empty.proto";
 import public "golem/worker/idempotency_key.proto";
@@ -17,13 +18,16 @@ import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_execution_error.proto";
+
 import public "wasm/rpc/val.proto";
+import public "wasm/rpc/type_annotated_value.proto";
 
 package golem.workerexecutor;
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
   rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeAndAwaitWorkerTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
   rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
@@ -97,6 +101,7 @@ message CreateWorkerResponse {
   }
 }
 
+
 message InvokeAndAwaitWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   string name = 2;
@@ -108,6 +113,7 @@ message InvokeAndAwaitWorkerRequest {
   optional golem.worker.InvocationContext context = 8;
 }
 
+
 message InvokeAndAwaitWorkerResponse {
   oneof result {
     InvokeAndAwaitWorkerSuccess success = 1;
@@ -115,9 +121,21 @@ message InvokeAndAwaitWorkerResponse {
   }
 }
 
+message InvokeAndAwaitWorkerResponseTyped {
+  oneof result {
+    InvokeAndAwaitWorkerSuccessTyped success = 1;
+    golem.worker.WorkerExecutionError failure = 2;
+  }
+}
+
 message InvokeAndAwaitWorkerSuccess {
   repeated wasm.rpc.Val output = 1;
 }
+
+message InvokeAndAwaitWorkerSuccessTyped {
+  wasm.rpc.TypeAnnotatedValue output = 1;
+}
+
 
 message InvokeWorkerRequest {
   golem.worker.WorkerId worker_id = 1;

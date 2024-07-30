@@ -16,7 +16,9 @@ use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{TypeAnnotatedValue, Value};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::type_annotated_value_from_str;
+use golem_wasm_rpc::Value;
 use semver::{BuildMetadata, Prerelease};
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -413,8 +415,8 @@ impl ParsedFunctionReference {
             } else {
                 let mut result = Vec::new();
                 for (raw_param, param_type) in raw_params.iter().zip(types.iter()) {
-                    let type_annotated_value =
-                        wasm_wave::from_str::<TypeAnnotatedValue>(param_type, raw_param)
+                    let type_annotated_value: TypeAnnotatedValue =
+                        type_annotated_value_from_str(param_type, raw_param)
                             .map_err(|err| err.to_string())?;
                     let value = type_annotated_value.try_into()?;
                     result.push(value);
@@ -601,7 +603,7 @@ impl Display for ParsedFunctionName {
             .site
             .interface_name()
             .map_or(self.function.function_name(), |interface| {
-                format!("{}.{{{}}}", interface, self.function.to_string())
+                format!("{}.{{{}}}", interface, self.function)
             });
         write!(f, "{}", function_name)
     }

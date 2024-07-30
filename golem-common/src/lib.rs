@@ -14,11 +14,13 @@
 
 pub mod cache;
 pub mod client;
+pub mod component_metadata;
 pub mod config;
 pub mod grpc;
 pub mod metrics;
 pub mod model;
 pub mod newtype;
+pub mod precise_json;
 pub mod redis;
 pub mod retries;
 pub mod serialization;

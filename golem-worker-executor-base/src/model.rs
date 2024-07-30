@@ -17,7 +17,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 use bincode::{Decode, Encode};
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
 
@@ -291,7 +291,7 @@ pub enum LookupResult {
     New,
     Pending,
     Interrupted,
-    Complete(Result<Vec<Value>, GolemError>),
+    Complete(Result<TypeAnnotatedValue, GolemError>),
 }
 
 #[cfg(test)]

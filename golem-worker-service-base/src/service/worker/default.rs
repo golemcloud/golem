@@ -15,10 +15,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedFunctionResult};
 use golem_wasm_rpc::json::get_json_from_typed_value;
-use golem_wasm_rpc::protobuf::Val as ProtoVal;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
 use serde_json::Value;
 use tonic::transport::Channel;
@@ -38,17 +37,15 @@ use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
+use golem_common::precise_json::PreciseJson;
 use golem_service_base::model::{
-    ExportFunction, FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId,
-    WorkerMetadata,
+    FunctionResult, GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };
 use golem_service_base::routing_table::HasRoutingTableService;
-use golem_service_base::typechecker::{TypeCheckIn, TypeCheckOut};
 use golem_service_base::{
     model::{Component, GolemError},
     routing_table::RoutingTableService,
 };
-use rib::ParsedFunctionName;
 
 use crate::service::component::ComponentService;
 
@@ -85,30 +82,31 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
-    async fn invoke_and_await_function(
+    // Accepts Json Params and Returns Json (with no type information)
+    async fn invoke_and_await_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value>;
 
-    async fn invoke_and_await_function_typed_value(
+    // Accepts Json Params and Returns TypeAnnotatedValue (a Json with more type Info)
+    async fn invoke_and_await_function_typed(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypedResult>;
+    ) -> WorkerResult<TypeAnnotatedValue>;
 
+    // Accepts a Vec<Val> and returns a Vec<Val> (with no type information)
     async fn invoke_and_await_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -118,20 +116,20 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult>;
 
-    async fn invoke_function(
+    // Accepts Json parameters as input
+    async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<PreciseJson>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
+    // Accepts Vec<Val> as input
     async fn invoke_function_proto(
         &self,
         worker_id: &WorkerId,
@@ -140,7 +138,6 @@ pub trait WorkerService<AuthCtx> {
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn complete_promise(
@@ -230,30 +227,6 @@ impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
             worker_executor_clients,
             component_service,
             routing_table_service,
-        }
-    }
-
-    fn get_expected_function_parameters(
-        function_name: &str,
-        function_type: &ExportFunction,
-    ) -> Vec<AnalysedFunctionParameter> {
-        let is_indexed = ParsedFunctionName::parse(function_name)
-            .ok()
-            .map(|parsed| parsed.function().is_indexed_resource())
-            .unwrap_or(false);
-        if is_indexed {
-            function_type
-                .parameters
-                .iter()
-                .skip(1)
-                .map(|x| x.clone().into())
-                .collect()
-        } else {
-            function_type
-                .parameters
-                .iter()
-                .map(|x| x.clone().into())
-                .collect()
         }
     }
 }
@@ -375,19 +348,19 @@ where
         Ok(())
     }
 
-    async fn invoke_and_await_function(
+    // Accepts Json Params and Returns Json (with no type information)
+    async fn invoke_and_await_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
-        let typed_value = self
-            .invoke_and_await_function_typed_value(
+        let result = self
+            .invoke_and_await_function_typed(
                 worker_id,
                 idempotency_key,
                 function_name,
@@ -395,79 +368,81 @@ where
                 calling_convention,
                 invocation_context,
                 metadata,
-                auth_ctx,
             )
             .await?;
 
-        Ok(get_json_from_typed_value(&typed_value.result))
+        let json = get_json_from_typed_value(&result);
+
+        Ok(json)
     }
 
-    async fn invoke_and_await_function_typed_value(
+    async fn invoke_and_await_function_typed(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<PreciseJson>,
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypedResult> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        let worker_id = worker_id.clone();
+        let worker_id_clone = worker_id.clone();
+        let function_name_clone = function_name.clone();
+        let calling_convention = *calling_convention;
 
-        let function_type = component_details
-            .metadata
-            .function_by_name(&function_name)
-            .map_err(|err| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to parse the function name: {}",
-                    err
-                ))
-            })?
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
-                    &function_name,
-                    component_details.function_names().join(", ")
-                ))
-            })?;
+        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
+            .into_iter()
+            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
+            .collect::<Vec<_>>();
 
-        let function_results: Vec<AnalysedFunctionResult> = function_type
-            .results
-            .iter()
-            .map(|x| x.clone().into())
-            .collect();
+        let invoke_response = self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Invoking function on {}: {}", worker_id_clone, function_name);
+                Box::pin(worker_executor_client.invoke_and_await_worker_typed(
+                    InvokeAndAwaitWorkerRequest {
+                        worker_id: Some(worker_id_clone.clone().into()),
+                        name: function_name.clone(),
+                        input: params_.clone(),
+                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
+                        calling_convention: calling_convention.into(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone()
+                    }
+                )
+                )
+            },
+            move |response| {
+                match response.into_inner() {
+                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result:
+                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Success(
+                                 workerexecutor::InvokeAndAwaitWorkerSuccessTyped {
+                                     output: Some(output),
+                                 },
+                             )),
+                    } => {
+                        info!("Invoked function on {}: {}", worker_id, function_name_clone);
+                        output.type_annotated_value.ok_or("Empty response".into())
+                    },
+                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result:
+                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Failure(err)),
+                    } => {
+                        error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
+                        Err(err.into())
+                    },
+                    workerexecutor::InvokeAndAwaitWorkerResponseTyped { .. } => {
+                        error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
+                        Err("Empty response".into())
+                    }
+                }
+            }
+        ).await?;
 
-        let expected_parameters =
-            Self::get_expected_function_parameters(&function_name, &function_type);
-
-        let params_val = params
-            .validate_function_parameters(expected_parameters, *calling_convention)
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-
-        let results_val = self
-            .invoke_and_await_function_proto(
-                worker_id,
-                idempotency_key.map(|k| k.into()),
-                function_name,
-                params_val,
-                calling_convention,
-                invocation_context,
-                metadata,
-                auth_ctx,
-            )
-            .await?;
-
-        results_val
-            .result
-            .ok_or(WorkerServiceError::TypeChecker("Empty result".to_string()))
-            .map(|result| TypedResult {
-                result: result,
-                function_result_types: function_type.results,
-            })
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))
+        Ok(invoke_response)
     }
 
     async fn invoke_and_await_function_proto(
@@ -479,32 +454,7 @@ where
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
-        let function_type = component_details
-            .metadata
-            .function_by_name(&function_name)
-            .map_err(|err| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to parse the function name: {}",
-                    err
-                ))
-            })?
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
-                    &function_name,
-                    component_details.function_names().join(", ")
-                ))
-            })?;
-        let expected = Self::get_expected_function_parameters(&function_name, &function_type);
-        let params_val = params
-            .validate_function_parameters(expected, *calling_convention)
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let calling_convention = *calling_convention;
@@ -517,7 +467,7 @@ where
                         InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
                             name: function_name.clone(),
-                            input: params_val.clone(),
+                            input: params.clone(),
                             idempotency_key: idempotency_key.clone(),
                             calling_convention: calling_convention.into(),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -557,52 +507,49 @@ where
         Ok(invoke_response)
     }
 
-    async fn invoke_function(
+    async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Value,
+        params: Vec<PreciseJson>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
-        let function_type = component_details
-            .metadata
-            .function_by_name(&function_name)
-            .map_err(|err| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to parse the function name: {}",
-                    err
+        let worker_id = worker_id.clone();
+
+        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
+            .into_iter()
+            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
+            .collect::<Vec<_>>();
+
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                let worker_id = worker_id.clone();
+                Box::pin(worker_executor_client.invoke_worker(
+                    workerexecutor::InvokeWorkerRequest {
+                        worker_id: Some(worker_id.into()),
+                        name: function_name.clone(),
+                        input: params_.clone(),
+                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    },
                 ))
-            })?
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
-                    &function_name,
-                    component_details.function_names().join(", ")
-                ))
-            })?;
-        let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                CallingConvention::Component,
-            )
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-        self.invoke_function_proto(
-            worker_id,
-            idempotency_key.map(|k| k.into()),
-            function_name.clone(),
-            params_val,
-            invocation_context,
-            metadata,
-            auth_ctx,
+            },
+            |response| match response.into_inner() {
+                workerexecutor::InvokeWorkerResponse {
+                    result: Some(workerexecutor::invoke_worker_response::Result::Success(_)),
+                } => Ok(()),
+                workerexecutor::InvokeWorkerResponse {
+                    result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
+            },
         )
         .await?;
-
         Ok(())
     }
 
@@ -614,34 +561,7 @@ where
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
-        let component_details = self
-            .try_get_component_for_worker(worker_id, metadata.clone(), auth_ctx)
-            .await?;
-        let function_type = component_details
-            .metadata
-            .function_by_name(&function_name)
-            .map_err(|err| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to parse the function name: {}",
-                    err
-                ))
-            })?
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Failed to find the function {}, Available functions: {}",
-                    &function_name,
-                    component_details.function_names().join(", ")
-                ))
-            })?;
-        let params_val = params
-            .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
-                CallingConvention::Component,
-            )
-            .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
-
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
@@ -653,7 +573,7 @@ where
                         worker_id: Some(worker_id.into()),
                         idempotency_key: idempotency_key.clone(),
                         name: function_name.clone(),
-                        input: params_val.clone(),
+                        input: params.clone(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
@@ -1112,38 +1032,33 @@ where
         Ok(())
     }
 
-    async fn invoke_and_await_function(
+    async fn invoke_and_await_function_json(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Value,
+        _params: Vec<PreciseJson>,
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Value> {
         Ok(Value::default())
     }
 
-    async fn invoke_and_await_function_typed_value(
+    async fn invoke_and_await_function_typed(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Value,
+        _params: Vec<PreciseJson>,
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<TypedResult> {
-        Ok(TypedResult {
-            result: TypeAnnotatedValue::Tuple {
-                value: vec![],
-                typ: vec![],
-            },
-            function_result_types: vec![],
-        })
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+            value: vec![],
+            typ: vec![],
+        }))
     }
 
     async fn invoke_and_await_function_proto(
@@ -1155,20 +1070,18 @@ where
         _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ProtoInvokeResult> {
         Ok(ProtoInvokeResult::default())
     }
 
-    async fn invoke_function(
+    async fn invoke_function_json(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Value,
+        _params: Vec<PreciseJson>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
     }
@@ -1181,7 +1094,6 @@ where
         _params: Vec<ProtoVal>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
     }
@@ -1274,49 +1186,5 @@ where
             worker_name: worker_id.worker_name.to_json_string(),
         };
         Err(WorkerServiceError::WorkerNotFound(worker_id))
-    }
-}
-
-// TODO; Not needed once TypeAnnotatedValue is in wasm-rpc proto files
-mod internal {
-    use golem_wasm_rpc::TypeAnnotatedValue;
-    use golem_api_grpc::proto::golem::worker::type_annotated_value::Value as ProtoTypeAnnotatedvalue;
-
-    fn conver_to_type_annotated_value(type_annotated_value: ProtoTypeAnnotatedvalue) -> TypeAnnotatedValue {
-        match type_annotated_value {
-            ProtoTypeAnnotatedvalue::Tuple(t) => TypeAnnotatedValue::Tuple {
-                value: t.value.into_iter().map(conver_to_type_annotated_value).collect(),
-                typ: t.typ.into_iter().map(conver_to_type_annotated_value).collect(),
-            },
-            ProtoTypeAnnotatedvalue::ListValue(l) => TypeAnnotatedValue::List {
-                value: l.value.into_iter().map(conver_to_type_annotated_value).collect(),
-                typ: l.typ.into_iter().map(conver_to_type_annotated_value).collect(),
-            },
-
-            ProtoTypeAnnotatedvalue::RecordValue(s) => TypeAnnotatedValue::Record {
-                value: s.value.into_iter().map(|(k, v)| (k, conver_to_type_annotated_value(v))).collect(),
-                typ: s.typ.into_iter().map(conver_to_type_annotated_value).collect(),
-            },
-            ProtoTypeAnnotatedvalue::FlagsValue(f) => TypeAnnotatedValue::Flags {
-                values: f.values,
-                typ: f.typ
-            },
-            ProtoTypeAnnotatedvalue::OptionValue(o) => TypeAnnotatedValue::Option {
-                value: o.value.map(|v| Box::new(conver_to_type_annotated_value(*v))),
-                typ: o.typ.map(|v| Box::new(conver_to_type_annotated_value(*v))),
-            },
-            ProtoTypeAnnotatedvalue::BoolValue(value) => TypeAnnotatedValue::Bool(value),
-            ProtoTypeAnnotatedvalue::U8Value(value) => TypeAnnotatedValue::U8(value),
-            ProtoTypeAnnotatedvalue::U16Value(value) => TypeAnnotatedValue::U16(value),
-            ProtoTypeAnnotatedvalue::U32Value(value) => TypeAnnotatedValue::U32(value),
-            ProtoTypeAnnotatedvalue::U64Value(value) => TypeAnnotatedValue::U64(value),
-            ProtoTypeAnnotatedvalue::S8Value(value) => TypeAnnotatedValue::S8(value),
-            ProtoTypeAnnotatedvalue::S16Value(value) => TypeAnnotatedValue::S16(value),
-            ProtoTypeAnnotatedvalue::S32Value(value) => TypeAnnotatedValue::S32(value),
-            ProtoTypeAnnotatedvalue::S64Value(value) => TypeAnnotatedValue::S64(value),
-            ProtoTypeAnnotatedvalue::F32Value(value) => TypeAnnotatedValue::F32(value),
-            ProtoTypeAnnotatedvalue::F64Value(value) => TypeAnnotatedValue::F64(value),
-
-        }
     }
 }

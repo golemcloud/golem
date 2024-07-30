@@ -7,9 +7,12 @@ mod math_op_evaluator;
 pub(crate) mod path;
 mod pattern_match_evaluator;
 
+mod internal;
+
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_json_from_typed_value;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedOption;
 
 use crate::primitive::{GetPrimitive, Primitive};
 use getter::GetError;
@@ -263,12 +266,7 @@ impl Evaluator for DefaultEvaluator {
                     eval_result
                         .get_value()
                         .map_or(Ok(ExprEvaluationResult::Unit), |value| {
-                            let typ = AnalysedType::from(&value);
-
-                            let result = TypeAnnotatedValue::Record {
-                                value: vec![(str.to_string(), value)],
-                                typ: vec![(str.to_string(), typ)],
-                            };
+                            let result = internal::create_singleton_record(str, &value)?;
 
                             input.merge_variables(&result);
 
@@ -312,16 +310,7 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    let sequence = match result.first() {
-                        Some(value) => TypeAnnotatedValue::List {
-                            values: result.clone(),
-                            typ: AnalysedType::from(value),
-                        },
-                        None => TypeAnnotatedValue::List {
-                            values: result.clone(),
-                            typ: AnalysedType::Tuple(vec![]),
-                        }, // Support optional type in List
-                    };
+                    let sequence = internal::create_list(result)?;
 
                     Ok(sequence.into())
                 }
@@ -343,16 +332,9 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    let types: Vec<(String, AnalysedType)> = values
-                        .iter()
-                        .map(|(key, value)| (key.clone(), AnalysedType::from(value)))
-                        .collect();
+                    let record = internal::create_record(values)?;
 
-                    Ok(TypeAnnotatedValue::Record {
-                        value: values,
-                        typ: types,
-                    }
-                    .into())
+                    Ok(record.into())
                 }
 
                 Expr::Concat(exprs) => {
@@ -402,20 +384,18 @@ impl Evaluator for DefaultEvaluator {
                             let expr_result = Box::pin(go(expr, input, executor)).await?;
 
                             if let Some(value) = expr_result.get_value() {
-                                let analysed_type = AnalysedType::from(&value);
-                                Ok(TypeAnnotatedValue::Option {
-                                    value: Some(Box::new(value)),
-                                    typ: analysed_type,
-                                }
-                                .into())
+                                let optional_value = internal::create_option(value)?;
+                                Ok(optional_value.into())
                             } else {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a option", rib::to_string(expr).unwrap())))
                             }
                         }
-                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option {
-                            value: None,
-                            typ: AnalysedType::Str,
-                        })),
+                        None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option(
+                            Box::new(TypedOption {
+                                value: None,
+                                typ: Some((&AnalysedType::Str).into()),
+                            }),
+                        ))),
                     }
                 }
 
@@ -425,14 +405,8 @@ impl Evaluator for DefaultEvaluator {
                             let expr_result = Box::pin(go(expr, input, executor)).await?;
 
                             if let Some(value) = expr_result.get_value() {
-                                let analysed_type = AnalysedType::from(&value);
-
-                                Ok(TypeAnnotatedValue::Result {
-                                    value: Ok(Some(Box::new(value))),
-                                    ok: Some(Box::new(analysed_type)),
-                                    error: None,
-                                }
-                                .into())
+                                let result = internal::create_ok_result(value)?;
+                                Ok(result.into())
                             } else {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
                             }
@@ -441,14 +415,9 @@ impl Evaluator for DefaultEvaluator {
                             let eval_result = Box::pin(go(expr, input, executor)).await?;
 
                             if let Some(value) = eval_result.get_value() {
-                                let analysed_type = AnalysedType::from(&value);
+                                let result = internal::create_error_result(value)?;
 
-                                Ok(TypeAnnotatedValue::Result {
-                                    value: Err(Some(Box::new(value))),
-                                    ok: None,
-                                    error: Some(Box::new(analysed_type)),
-                                }
-                                .into())
+                                Ok(result.into())
                             } else {
                                 Err(EvaluationError::Message(format!("The text {} is evaluated to unit and cannot be part of a result", rib::to_string(expr).unwrap())))
                             }
@@ -472,19 +441,16 @@ impl Evaluator for DefaultEvaluator {
                         }
                     }
 
-                    let typ: &Vec<AnalysedType> = &result.iter().map(AnalysedType::from).collect();
+                    let tuple = internal::create_tuple(result)?;
 
-                    Ok(TypeAnnotatedValue::Tuple {
-                        value: result,
-                        typ: typ.clone(),
-                    }
-                    .into())
+                    Ok(tuple.into())
                 }
 
-                Expr::Flags(flags) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Flags {
-                    values: flags.clone(),
-                    typ: flags.clone(),
-                })),
+                Expr::Flags(flags) => {
+                    let result = internal::create_flags(flags.clone());
+
+                    Ok(ExprEvaluationResult::Value(result))
+                }
             }
         }
 
@@ -493,98 +459,16 @@ impl Evaluator for DefaultEvaluator {
     }
 }
 
-mod internal {
-    use crate::evaluator::getter::Getter;
-    use crate::evaluator::path::Path;
-    use crate::evaluator::EvaluationContext;
-    use crate::evaluator::EvaluationError;
-    use crate::primitive::GetPrimitive;
-    use crate::worker_bridge_execution::{
-        RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor,
-    };
-    use golem_common::model::{ComponentId, IdempotencyKey};
-    use golem_wasm_rpc::TypeAnnotatedValue;
-    use rib::ParsedFunctionName;
-    use std::str::FromStr;
-    use std::sync::Arc;
-
-    pub(crate) async fn call_worker_function(
-        runtime: &EvaluationContext,
-        function_name: &ParsedFunctionName,
-        json_params: Vec<TypeAnnotatedValue>,
-        executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
-    ) -> Result<RefinedWorkerResponse, EvaluationError> {
-        let variables = runtime.clone().variables.ok_or(EvaluationError::Message(
-            "No variables found in the context".to_string(),
-        ))?;
-
-        let worker_variables = variables.get(&Path::from_key("worker")).map_err(|_| {
-            EvaluationError::Message("No worker variables found in the context".to_string())
-        })?;
-
-        let worker_name_typed = worker_variables.get(&Path::from_key("name")).map_err(|_| {
-            EvaluationError::Message("No worker name found in the context".to_string())
-        })?;
-
-        let worker_name = worker_name_typed
-            .get_primitive()
-            .ok_or(EvaluationError::Message(
-                "Worker name is not a string".to_string(),
-            ))?
-            .as_string();
-
-        let idempotency_key = worker_variables
-            .get(&Path::from_key("idempotency-key"))
-            .ok()
-            .and_then(|v| v.get_primitive())
-            .map(|p| IdempotencyKey::new(p.as_string()));
-
-        let component_id = worker_variables
-            .get(&Path::from_key("component_id"))
-            .map_err(|_| {
-                EvaluationError::Message("No component_id found in the context".to_string())
-            })?;
-
-        let component_id_string = component_id
-            .get_primitive()
-            .ok_or(EvaluationError::Message(
-                "Component_id is not a string".to_string(),
-            ))?
-            .as_string();
-
-        let component_id = ComponentId::from_str(component_id_string.as_str())
-            .map_err(|err| EvaluationError::Message(err.to_string()))?;
-
-        let worker_request = WorkerRequest {
-            component_id,
-            worker_name,
-            function_name: function_name.clone(),
-            function_params: json_params,
-            idempotency_key,
-        };
-
-        let worker_response = executor.execute(worker_request).await.map_err(|err| {
-            EvaluationError::Message(format!("Failed to execute worker function: {}", err))
-        })?;
-
-        let refined_worker_response = worker_response.refined().map_err(|err| {
-            EvaluationError::Message(format!("Failed to refine worker response: {}", err))
-        })?;
-
-        Ok(refined_worker_response)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
     use std::str::FromStr;
 
-    use golem_service_base::model::FunctionResult;
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::get_typed_value_from_json;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedVariant};
     use http::{HeaderMap, Uri};
     use rib::Expr;
     use serde_json::{json, Value};
@@ -592,7 +476,9 @@ mod tests {
     use crate::api_definition::http::AllPathPatterns;
     use crate::evaluator::evaluator_context::EvaluationContext;
     use crate::evaluator::getter::GetError;
-    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult};
+    use crate::evaluator::{
+        internal, DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult,
+    };
     use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerResponse};
     use test_utils::*;
@@ -673,12 +559,12 @@ mod tests {
     }
 
     trait WorkerBridgeExt {
-        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse;
+        fn to_refined_worker_response(&self) -> RefinedWorkerResponse;
     }
 
     impl WorkerBridgeExt for WorkerResponse {
-        fn to_test_worker_bridge_response(&self) -> RefinedWorkerResponse {
-            RefinedWorkerResponse::SingleResult(self.result.result.clone())
+        fn to_refined_worker_response(&self) -> RefinedWorkerResponse {
+            RefinedWorkerResponse::SingleResult(self.result.clone())
         }
     }
 
@@ -774,7 +660,6 @@ mod tests {
         let expr = rib::from_string("${request.body.address.street} ${request.body.address.city}")
             .unwrap();
 
-        dbg!(expr.clone());
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
         let result = noop_executor
             .evaluate_with_request_details(&expr, &resolved_request)
@@ -1011,14 +896,7 @@ mod tests {
             get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
                 .unwrap();
         let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
-            TypeAnnotatedValue::Tuple {
-                typ: vec![AnalysedType::from(&result_as_typed_value)],
-                value: vec![result_as_typed_value],
-            },
-            vec![FunctionResult {
-                name: None,
-                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]).into(),
-            }],
+            internal::create_tuple(vec![result_as_typed_value.clone()]).unwrap(),
         ))
         .unwrap();
 
@@ -1040,7 +918,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let worker_response =
-            get_worker_response(Value::Null.to_string().as_str()).to_test_worker_bridge_response();
+            get_worker_response(Value::Null.to_string().as_str()).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { some(value) => "personal-id", none => "not found" }}"#,
@@ -1075,7 +953,7 @@ mod tests {
                         }
                     }"#,
         )
-        .to_test_worker_bridge_response();
+        .to_refined_worker_response();
 
         let expr1 = rib::from_string(
             r#"${if request.path.id == "foo" then "bar" else match worker.response { ok(value) => value.id, err(msg) => "empty" }}"#,
@@ -1108,7 +986,7 @@ mod tests {
             request_details_from_request_path_variables(uri, path_pattern);
 
         let error_response_with_request_variables = new_resolved_variables_from_request_path;
-        let error_worker_response = error_worker_response.to_test_worker_bridge_response();
+        let error_worker_response = error_worker_response.to_refined_worker_response();
 
         let expr3 = rib::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
@@ -1151,7 +1029,7 @@ mod tests {
                         }
                     }"#,
         )
-        .to_test_worker_bridge_response();
+        .to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { ok(value) => "personal-id", err(msg) => "not found" }}"#,
@@ -1179,7 +1057,7 @@ mod tests {
                         }
                     }"#,
         )
-        .to_test_worker_bridge_response();
+        .to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { ok(value) => value, err(msg) => "not found" }}"#,
@@ -1189,11 +1067,9 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response)
             .await;
 
-        let expected_result = TypeAnnotatedValue::Record {
-            value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
-            typ: vec![("id".to_string(), AnalysedType::Str)],
-        };
-
+        let expected_result =
+            internal::create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string()))
+                .unwrap();
         assert_eq!(result, Ok(expected_result));
     }
 
@@ -1215,7 +1091,7 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("pId".to_string())));
     }
@@ -1238,7 +1114,7 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
         assert_eq!(result, Ok(TypeAnnotatedValue::Str("id1".to_string())));
     }
@@ -1261,12 +1137,11 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
-        let expected = TypeAnnotatedValue::Option {
-            value: Some(Box::new(TypeAnnotatedValue::Str("id1".to_string()))),
-            typ: AnalysedType::Str,
-        };
+
+        let expected = internal::create_option(TypeAnnotatedValue::Str("id1".to_string())).unwrap();
+
         assert_eq!(result, Ok(expected));
     }
 
@@ -1287,12 +1162,11 @@ mod tests {
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
-        let expected = TypeAnnotatedValue::Option {
-            value: None,
-            typ: AnalysedType::Str,
-        };
+
+        let expected = test_utils::create_none(&AnalysedType::Str);
+
         assert_eq!(result, Ok(expected));
     }
 
@@ -1312,15 +1186,11 @@ mod tests {
             rib::from_string("${match worker.response { ok(value) => some(none), none => none }}")
                 .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
-        let expected = TypeAnnotatedValue::Option {
-            value: Some(Box::new(TypeAnnotatedValue::Option {
-                typ: AnalysedType::Str,
-                value: None,
-            })),
-            typ: AnalysedType::Option(Box::new(AnalysedType::Str)),
-        };
+
+        let internal_opt = test_utils::create_none(&AnalysedType::Str);
+        let expected = internal::create_option(internal_opt).unwrap();
         assert_eq!(result, Ok(expected));
     }
 
@@ -1341,13 +1211,9 @@ mod tests {
             rib::from_string("${match worker.response { ok(value) => ok(1), none => err(2) }}")
                 .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
-        let expected = TypeAnnotatedValue::Result {
-            value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
-            ok: Some(Box::new(AnalysedType::U64)),
-            error: None,
-        };
+        let expected = internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap();
         assert_eq!(result, Ok(expected));
     }
 
@@ -1368,14 +1234,11 @@ mod tests {
             rib::from_string("${match worker.response { ok(value) => ok(1), err(msg) => err(2) }}")
                 .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
-        let expected = TypeAnnotatedValue::Result {
-            value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
-            error: Some(Box::new(AnalysedType::U64)),
-            ok: None,
-        };
+        let expected = internal::create_error_result(TypeAnnotatedValue::U64(2)).unwrap();
+
         assert_eq!(result, Ok(expected));
     }
 
@@ -1396,16 +1259,11 @@ mod tests {
             rib::from_string("${match worker.response { ok(_) => ok(1), err(_) => err(2) }}")
                 .unwrap();
 
-        dbg!(expr.clone());
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
-        let expected = TypeAnnotatedValue::Result {
-            value: Err(Some(Box::new(TypeAnnotatedValue::U64(2)))),
-            error: Some(Box::new(AnalysedType::U64)),
-            ok: None,
-        };
+        let expected = internal::create_error_result(TypeAnnotatedValue::U64(2)).unwrap();
         assert_eq!(result, Ok(expected));
     }
 
@@ -1429,7 +1287,7 @@ mod tests {
         )
             .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await
             .unwrap();
 
@@ -1457,35 +1315,38 @@ mod tests {
     async fn test_evaluation_with_pattern_match_variant_positive() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let worker_response = WorkerResponse::new(
-            TypeAnnotatedValue::Variant {
+        let worker_response =
+            WorkerResponse::new(TypeAnnotatedValue::Variant(Box::new(TypedVariant {
                 case_name: "Foo".to_string(),
-                case_value: Some(Box::new(TypeAnnotatedValue::Record {
-                    typ: vec![("id".to_string(), AnalysedType::Str)],
-                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+                case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(
+                        internal::create_singleton_record(
+                            "id",
+                            &TypeAnnotatedValue::Str("pId".to_string()),
+                        )
+                        .unwrap(),
+                    ),
                 })),
-                typ: vec![(
-                    "Foo".to_string(),
-                    Some(AnalysedType::Record(vec![(
-                        "id".to_string(),
-                        AnalysedType::Str,
-                    )])),
-                )],
-            },
-            vec![],
-        );
+                typ: Some(TypeVariant {
+                    cases: vec![NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]))
+                                .into(),
+                        ),
+                    }],
+                }),
+            })));
 
         let expr =
             rib::from_string("${match worker.response { Foo(value) => ok(value.id) }}").unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, &worker_response.to_test_worker_bridge_response())
+            .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
-        let expected = TypeAnnotatedValue::Result {
-            value: Ok(Some(Box::new(TypeAnnotatedValue::Str("pId".to_string())))),
-            error: None,
-            ok: Some(Box::new(AnalysedType::Str)),
-        };
+        let expected =
+            internal::create_ok_result(TypeAnnotatedValue::Str("pId".to_string())).unwrap();
+
         assert_eq!(result, Ok(expected));
     }
 
@@ -1493,33 +1354,47 @@ mod tests {
     async fn test_evaluation_with_pattern_match_variant_nested_with_some() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let output = TypeAnnotatedValue::Variant {
+        let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
-            case_value: Some(Box::new(TypeAnnotatedValue::Option {
-                value: Some(Box::new(TypeAnnotatedValue::Record {
-                    typ: vec![("id".to_string(), AnalysedType::Str)],
-                    value: vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
-                })),
-                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]),
+            case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(
+                    internal::create_option(
+                        internal::create_singleton_record(
+                            "id",
+                            &TypeAnnotatedValue::Str("pId".to_string()),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                ),
             })),
-            typ: vec![
-                (
-                    "Foo".to_string(),
-                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
-                        ("id".to_string(), AnalysedType::Str),
-                    ])))),
-                ),
-                (
-                    "Bar".to_string(),
-                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
-                        ("id".to_string(), AnalysedType::Str),
-                    ])))),
-                ),
-            ],
-        };
+            typ: Some(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )]))))
+                                .into(),
+                        ),
+                    },
+                    NameOptionTypePair {
+                        name: "Bar".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )]))))
+                                .into(),
+                        ),
+                    },
+                ],
+            }),
+        }));
 
-        let worker_bridge_response =
-            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(some(value)) => value.id, err(msg) => "not found" }}"#,
@@ -1541,8 +1416,7 @@ mod tests {
 
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response =
-            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
@@ -1563,8 +1437,7 @@ mod tests {
 
         let output = get_complex_variant_typed_value();
 
-        let worker_bridge_response =
-            WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_bridge_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(ok(some(value))) => value.id, err(msg) => "not found" }}"#,
@@ -1585,29 +1458,41 @@ mod tests {
     async fn test_evaluation_with_pattern_match_variant_nested_with_none() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let output = TypeAnnotatedValue::Variant {
+        let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
-            case_value: Some(Box::new(TypeAnnotatedValue::Option {
-                value: None,
-                typ: AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]),
+            case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(test_utils::create_none(&AnalysedType::Record(vec![(
+                    "id".to_string(),
+                    AnalysedType::Str,
+                )]))),
             })),
-            typ: vec![
-                (
-                    "Foo".to_string(),
-                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
-                        ("id".to_string(), AnalysedType::Str),
-                    ])))),
-                ),
-                (
-                    "Bar".to_string(),
-                    Some(AnalysedType::Option(Box::new(AnalysedType::Record(vec![
-                        ("id".to_string(), AnalysedType::Str),
-                    ])))),
-                ),
-            ],
-        };
+            typ: Some(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )]))))
+                                .into(),
+                        ),
+                    },
+                    NameOptionTypePair {
+                        name: "Bar".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
+                                "id".to_string(),
+                                AnalysedType::Str,
+                            )]))))
+                                .into(),
+                        ),
+                    },
+                ],
+            }),
+        }));
 
-        let worker_response = WorkerResponse::new(output, vec![]).to_test_worker_bridge_response();
+        let worker_response = WorkerResponse::new(output).to_refined_worker_response();
 
         let expr = rib::from_string(
             r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
@@ -1632,24 +1517,10 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Record {
-            typ: vec![(
-                "a".to_string(),
-                AnalysedType::Result {
-                    ok: Some(Box::new(AnalysedType::U64)),
-                    error: None,
-                },
-            )],
-            value: vec![(
-                "a".to_string(),
-                TypeAnnotatedValue::Result {
-                    ok: Some(Box::new(AnalysedType::U64)),
-                    error: None,
-                    value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
-                },
-            )],
-        }));
+        let inner_record_ok = internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap();
+        let record = internal::create_record(vec![("a".to_string(), inner_record_ok)]).unwrap();
 
+        let expected = Ok(ExprEvaluationResult::Value(record));
         assert_eq!(result, expected);
     }
 
@@ -1663,25 +1534,13 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Record {
-            typ: vec![(
-                "a".to_string(),
-                AnalysedType::Result {
-                    error: Some(Box::new(AnalysedType::U64)),
-                    ok: None,
-                },
-            )],
-            value: vec![(
-                "a".to_string(),
-                TypeAnnotatedValue::Result {
-                    ok: None,
-                    error: Some(Box::new(AnalysedType::U64)),
-                    value: Err(Some(Box::new(TypeAnnotatedValue::U64(1)))),
-                },
-            )],
-        }));
+        let inner_result = internal::create_error_result(TypeAnnotatedValue::U64(1)).unwrap();
 
-        assert_eq!(result, expected);
+        let expected = ExprEvaluationResult::Value(
+            internal::create_record(vec![("a".to_string(), inner_result)]).unwrap(),
+        );
+
+        assert_eq!(result, Ok(expected));
     }
 
     #[tokio::test]
@@ -1694,14 +1553,14 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::List {
-            typ: AnalysedType::U64,
-            values: vec![
-                TypeAnnotatedValue::U64(1),
-                TypeAnnotatedValue::U64(2),
-                TypeAnnotatedValue::U64(3),
-            ],
-        }));
+        let list = internal::create_list(vec![
+            TypeAnnotatedValue::U64(1),
+            TypeAnnotatedValue::U64(2),
+            TypeAnnotatedValue::U64(3),
+        ])
+        .unwrap();
+
+        let expected = Ok(ExprEvaluationResult::Value(list));
 
         assert_eq!(result, expected);
     }
@@ -1716,23 +1575,16 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Tuple {
-            typ: vec![
-                AnalysedType::Option(Box::new(AnalysedType::U64)),
-                AnalysedType::U64,
-                AnalysedType::U64,
-            ],
-            value: vec![
-                TypeAnnotatedValue::Option {
-                    value: Some(Box::new(TypeAnnotatedValue::U64(1))),
-                    typ: AnalysedType::U64,
-                },
-                TypeAnnotatedValue::U64(2),
-                TypeAnnotatedValue::U64(3),
-            ],
-        }));
+        let optional_value = internal::create_option(TypeAnnotatedValue::U64(1)).unwrap();
 
-        assert_eq!(result, expected);
+        let expected = internal::create_tuple(vec![
+            optional_value,
+            TypeAnnotatedValue::U64(2),
+            TypeAnnotatedValue::U64(3),
+        ])
+        .unwrap();
+
+        assert_eq!(result, Ok(ExprEvaluationResult::Value(expected)));
     }
 
     #[tokio::test]
@@ -1745,10 +1597,9 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Flags {
-            typ: vec!["A".to_string(), "B".to_string(), "C".to_string()],
-            values: vec!["A".to_string(), "B".to_string(), "C".to_string()],
-        }));
+        let flags = internal::create_flags(vec!["A".to_string(), "B".to_string(), "C".to_string()]);
+
+        let expected = Ok(ExprEvaluationResult::Value(flags));
 
         assert_eq!(result, expected);
     }
@@ -1763,24 +1614,13 @@ mod tests {
             .evaluate(&expr, &EvaluationContext::empty())
             .await;
 
-        let expected = Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::List {
-            typ: AnalysedType::Result {
-                ok: Some(Box::new(AnalysedType::U64)),
-                error: None,
-            },
-            values: vec![
-                TypeAnnotatedValue::Result {
-                    ok: Some(Box::new(AnalysedType::U64)),
-                    error: None,
-                    value: Ok(Some(Box::new(TypeAnnotatedValue::U64(1)))),
-                },
-                TypeAnnotatedValue::Result {
-                    ok: Some(Box::new(AnalysedType::U64)),
-                    error: None,
-                    value: Ok(Some(Box::new(TypeAnnotatedValue::U64(2)))),
-                },
-            ],
-        }));
+        let list = internal::create_list(vec![
+            internal::create_ok_result(TypeAnnotatedValue::U64(1)).unwrap(),
+            internal::create_ok_result(TypeAnnotatedValue::U64(2)).unwrap(),
+        ])
+        .unwrap();
+
+        let expected = Ok(ExprEvaluationResult::Value(list));
 
         assert_eq!(result, expected);
     }
@@ -1797,7 +1637,6 @@ mod tests {
           ";
 
         let expr = rib::from_string(format!("${{{}}}", program)).unwrap();
-        dbg!(expr.clone());
 
         let result = noop_executor
             .evaluate(&expr, &EvaluationContext::empty())
@@ -1811,67 +1650,77 @@ mod tests {
     mod test_utils {
         use crate::api_definition::http::{AllPathPatterns, PathPattern, VarInfo};
         use crate::evaluator::tests::{EvaluatorTestExt, WorkerBridgeExt};
-        use crate::evaluator::DefaultEvaluator;
+        use crate::evaluator::{internal, DefaultEvaluator};
         use crate::http::router::RouterPattern;
         use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
         use golem_wasm_ast::analysis::AnalysedType;
         use golem_wasm_rpc::json::get_typed_value_from_json;
-        use golem_wasm_rpc::TypeAnnotatedValue;
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::protobuf::{
+            NameOptionTypePair, TypeVariant, TypedOption, TypedVariant,
+        };
         use http::{HeaderMap, Uri};
         use serde_json::{json, Value};
         use std::collections::HashMap;
 
+        pub(crate) fn create_none(typ: &AnalysedType) -> TypeAnnotatedValue {
+            TypeAnnotatedValue::Option(Box::new(TypedOption {
+                value: None,
+                typ: Some(typ.into()),
+            }))
+        }
+
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
-            TypeAnnotatedValue::Variant {
-                case_name: "Foo".to_string(),
-                case_value: Some(Box::new(TypeAnnotatedValue::Option {
-                    value: Some(Box::new(TypeAnnotatedValue::Result {
-                        value: Ok(Some(Box::new(TypeAnnotatedValue::Record {
-                            typ: vec![("id".to_string(), AnalysedType::Str)],
-                            value: vec![(
-                                "id".to_string(),
-                                TypeAnnotatedValue::Str("pId".to_string()),
-                            )],
-                        }))),
-                        ok: Some(Box::new(AnalysedType::Record(vec![(
-                            "id".to_string(),
-                            AnalysedType::Str,
-                        )]))),
-                        error: None,
-                    })),
-                    typ: AnalysedType::Result {
-                        ok: Some(Box::new(AnalysedType::Record(vec![(
-                            "id".to_string(),
-                            AnalysedType::Str,
-                        )]))),
-                        error: None,
+            let record = internal::create_singleton_record(
+                "id",
+                &TypeAnnotatedValue::Str("pId".to_string()),
+            )
+            .unwrap();
+
+            let result = internal::create_ok_result(record).unwrap();
+
+            let optional = internal::create_option(result).unwrap();
+
+            let variant_type = TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "Foo".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Result {
+                                ok: Some(Box::new(AnalysedType::Record(vec![(
+                                    "id".to_string(),
+                                    AnalysedType::Str,
+                                )]))),
+                                error: None,
+                            })))
+                                .into(),
+                        ),
                     },
-                })),
-                typ: vec![
-                    (
-                        "Foo".to_string(),
-                        Some(AnalysedType::Option(Box::new(AnalysedType::Result {
-                            ok: Some(Box::new(AnalysedType::Record(vec![(
-                                "id".to_string(),
-                                AnalysedType::Str,
-                            )]))),
-                            error: None,
-                        }))),
-                    ),
-                    (
-                        "Bar".to_string(),
-                        Some(AnalysedType::Option(Box::new(AnalysedType::Result {
-                            ok: Some(Box::new(AnalysedType::Record(vec![(
-                                "id".to_string(),
-                                AnalysedType::Str,
-                            )]))),
-                            error: None,
-                        }))),
-                    ),
+                    NameOptionTypePair {
+                        name: "Bar".to_string(),
+                        typ: Some(
+                            (&AnalysedType::Option(Box::new(AnalysedType::Result {
+                                ok: Some(Box::new(AnalysedType::Record(vec![(
+                                    "id".to_string(),
+                                    AnalysedType::Str,
+                                )]))),
+                                error: None,
+                            })))
+                                .into(),
+                        ),
+                    },
                 ],
-            }
+            };
+
+            TypeAnnotatedValue::Variant(Box::new(TypedVariant {
+                case_name: "Foo".to_string(),
+                case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(optional),
+                })),
+                typ: Some(variant_type),
+            }))
         }
 
         pub(crate) fn get_err_worker_response() -> WorkerResponse {
@@ -1887,7 +1736,7 @@ mod tests {
             )
             .unwrap();
 
-            WorkerResponse::new(worker_response_value, vec![])
+            WorkerResponse::new(worker_response_value)
         }
 
         pub(crate) fn get_worker_response(input: &str) -> WorkerResponse {
@@ -1895,7 +1744,7 @@ mod tests {
 
             let expected_type = infer_analysed_type(&value);
             let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
-            WorkerResponse::new(result_as_typed_value, vec![])
+            WorkerResponse::new(result_as_typed_value)
         }
 
         pub(crate) fn resolved_variables_from_request_body(
@@ -1952,7 +1801,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
@@ -1962,7 +1811,7 @@ mod tests {
             let value2 = noop_executor
                 .evaluate_with_worker_response(
                     &expr2,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
@@ -1975,7 +1824,7 @@ mod tests {
         async fn expr_to_string_round_trip_match_expr_append() {
             let noop_executor = DefaultEvaluator::noop();
 
-            let worker_response = get_err_worker_response().to_test_worker_bridge_response();
+            let worker_response = get_err_worker_response().to_refined_worker_response();
 
             let expr1_string =
                 r#"append-${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
@@ -2009,7 +1858,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();
@@ -2019,7 +1868,7 @@ mod tests {
             let value2 = noop_executor
                 .evaluate_with_worker_response(
                     &expr2,
-                    &worker_response.to_test_worker_bridge_response(),
+                    &worker_response.to_refined_worker_response(),
                 )
                 .await
                 .unwrap();

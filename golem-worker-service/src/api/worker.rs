@@ -3,6 +3,7 @@ use crate::service::{component::ComponentService, worker::WorkerService};
 use golem_common::model::{
     CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
 };
+use golem_common::precise_json::PreciseJson;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -13,6 +14,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
+
 use tracing::Instrument;
 
 pub struct WorkerApi {
@@ -133,17 +135,37 @@ impl WorkerApi {
             function = function.0
         );
 
+        let json_values = params.0.params.as_array().ok_or_else(|| {
+            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid parameters".to_string()],
+            }))
+        })?;
+
+        let mut precise_jsons = vec![];
+
+        for json_value in json_values {
+            let precise_json = PreciseJson::try_from(json_value.clone());
+
+            match precise_json {
+                Ok(precise_json) => precise_jsons.push(precise_json),
+                Err(err) => {
+                    return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                        errors: vec![format!("Invalid function parameters {}", err)],
+                    })))
+                }
+            }
+        }
+
         let response = self
             .worker_service
-            .invoke_and_await_function(
+            .invoke_and_await_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                precise_jsons,
                 &calling_convention,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await
@@ -175,16 +197,36 @@ impl WorkerApi {
             function = function.0
         );
 
+        let json_values = params.0.params.as_array().ok_or_else(|| {
+            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid parameters".to_string()],
+            }))
+        })?;
+
+        let mut precise_jsons = vec![];
+
+        for json_value in json_values {
+            let precise_json = PreciseJson::try_from(json_value.clone());
+
+            match precise_json {
+                Ok(precise_json) => precise_jsons.push(precise_json),
+                Err(err) => {
+                    return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                        errors: vec![format!("Invalid function parameters {}", err)],
+                    })))
+                }
+            }
+        }
+
         let response = self
             .worker_service
-            .invoke_function(
+            .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                precise_jsons.clone(),
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await

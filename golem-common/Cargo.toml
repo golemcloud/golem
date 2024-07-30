@@ -39,6 +39,7 @@ rand = { workspace = true }
 range-set-blaze = "0.1.16"
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
