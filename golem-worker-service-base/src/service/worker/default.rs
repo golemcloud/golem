@@ -434,6 +434,8 @@ where
                 ))
             })?;
 
+        dbg!(function_type.clone());
+
         let function_results: Vec<AnalysedFunctionResult> = function_type
             .results
             .iter()
@@ -441,13 +443,20 @@ where
             .collect();
 
         dbg!(function_results.clone());
-        
+
+        let hello = Self::get_expected_function_parameters(&function_name, &function_type);
+
+        dbg!(hello.clone());
+
         let params_val = params
             .validate_function_parameters(
-                Self::get_expected_function_parameters(&function_name, &function_type),
+                hello,
                 *calling_convention,
             )
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
+
+        dbg!(function_name.clone());
+        dbg!(params_val.clone());
         let results_val = self
             .invoke_and_await_function_proto(
                 worker_id,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::str::FromStr;
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
@@ -437,6 +438,8 @@ async fn drop_resource<Ctx: WorkerCtx>(
             if uri == &self_uri {
                 Ok(*resource_id)
             } else {
+                dbg!("at this point 2. {:?}", parsed_function_name);
+
                 Err(GolemError::ValueMismatch {
                     details: format!(
                         "trying to drop handle for on wrong worker ({} vs {}) {}",
@@ -445,9 +448,52 @@ async fn drop_resource<Ctx: WorkerCtx>(
                 })
             }
         }
-        _ => Err(GolemError::ValueMismatch {
-            details: format!("unexpected function input for drop calling convention for {context}"),
-        }),
+        Value::String(str) => {
+                    let parts: Vec<&str> = str.split('/').collect();
+                    if parts.len() >= 2 {
+                        match u64::from_str(parts[parts.len() - 1]) {
+                            Ok(resource_id) => {
+                                let uri = parts[0..(parts.len() - 1)].join("/");
+
+                                if uri == self_uri.value {
+                                    Ok(*resource_id)
+                                } else {
+                                    dbg!("at this point 2. {:?}", parsed_function_name);
+
+                                    Err(GolemError::ValueMismatch {
+                                        details: format!(
+                                            "trying to drop handle for on wrong worker ({} vs {}) {}",
+                                            uri, self_uri.value, context
+                                        ),
+                                    })
+                                }
+                            }
+                            Err(err) => {
+                                Err(GolemError::ValueMismatch {
+                                    details: format!(
+                                        "Drop failed {} {}",
+                                        self_uri.value, context
+                                    ),
+                                })
+                            }
+                        }
+                    } else {
+                        Err(GolemError::ValueMismatch {
+                            details: format!(
+                                "Drop failed {} {}",
+                                self_uri.value, context
+                            ),
+                        })
+                    }
+
+        }
+        _ => {
+            let result = Err(GolemError::ValueMismatch {
+                details: format!("unexpected function input for drop calling convention for {context}"),
+            });
+            dbg!("at this point. {:?} {:?}", parsed_function_name, result.clone());
+            result
+        },
     }?;
 
     if let ParsedFunctionReference::IndexedResourceDrop {
