@@ -304,8 +304,13 @@ fn worker_invoke_drop(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component_from_file(deps, &format!("{name} worker_invoke_drop"), &cli, "counters.wasm")?.component_id;
+    let component_id = make_component_from_file(
+        deps,
+        &format!("{name} worker_invoke_drop"),
+        &cli,
+        "counters.wasm",
+    )?
+    .component_id;
 
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
@@ -335,7 +340,6 @@ fn worker_invoke_drop(
         &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;
-    dbg!(result.clone());
     let args_key1: IdempotencyKey = IdempotencyKey::fresh();
     cli.run_json(&[
         "worker",

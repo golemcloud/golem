@@ -449,10 +449,7 @@ where
         dbg!(hello.clone());
 
         let params_val = params
-            .validate_function_parameters(
-                hello,
-                *calling_convention,
-            )
+            .validate_function_parameters(hello, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         dbg!(function_name.clone());
@@ -470,9 +467,7 @@ where
             )
             .await?;
 
-
         dbg!(results_val.clone());
-
 
         results_val
             .result
@@ -517,10 +512,7 @@ where
         let expected = Self::get_expected_function_parameters(&function_name, &function_type);
         dbg!(expected.clone());
         let params_val = params
-            .validate_function_parameters(
-                expected,
-                *calling_convention,
-            )
+            .validate_function_parameters(expected, *calling_convention)
             .map_err(|err| WorkerServiceError::TypeChecker(err.join(", ")))?;
 
         dbg!(params_val.clone());

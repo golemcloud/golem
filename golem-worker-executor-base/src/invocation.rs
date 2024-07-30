@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str::FromStr;
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
 use golem_common::model::{CallingConvention, WorkerId, WorkerStatus};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
+use std::str::FromStr;
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
@@ -438,8 +438,6 @@ async fn drop_resource<Ctx: WorkerCtx>(
             if uri == &self_uri {
                 Ok(*resource_id)
             } else {
-                dbg!("at this point 2. {:?}", parsed_function_name);
-
                 Err(GolemError::ValueMismatch {
                     details: format!(
                         "trying to drop handle for on wrong worker ({} vs {}) {}",
@@ -457,9 +455,9 @@ async fn drop_resource<Ctx: WorkerCtx>(
         // Find why metadata expects a String, and `Val::Handle` inside worker-executor
         // Find ways to reuse it properly
         Value::String(str) => {
-                    let parts: Vec<&str> = str.split('/').collect();
-                    if parts.len() >= 2 {
-                        match u64::from_str(parts[parts.len() - 1]) {
+            let parts: Vec<&str> = str.split('/').collect();
+            if parts.len() >= 2 {
+                match u64::from_str(parts[parts.len() - 1]) {
                             Ok(resource_id) => {
                                 let uri = parts[0..(parts.len() - 1)].join("/");
 
@@ -479,29 +477,24 @@ async fn drop_resource<Ctx: WorkerCtx>(
                             Err(err) => {
                                 Err(GolemError::ValueMismatch {
                                     details: format!(
-                                        "Drop failed {} {}",
+                                        "Drop failed. Input function parameter failed to be parsed to a resource {} {}",
                                         self_uri.value, context
                                     ),
                                 })
                             }
                         }
-                    } else {
-                        Err(GolemError::ValueMismatch {
+            } else {
+                Err(GolemError::ValueMismatch {
                             details: format!(
-                                "Drop failed {} {}",
+                                "Drop failed. Input function parameter is devoid of enough information to be converted to a resource {} {}",
                                 self_uri.value, context
                             ),
                         })
-                    }
-
+            }
         }
-        _ => {
-            let result = Err(GolemError::ValueMismatch {
-                details: format!("unexpected function input for drop calling convention for {context}"),
-            });
-            dbg!("at this point. {:?} {:?}", parsed_function_name, result.clone());
-            result
-        },
+        _ => Err(GolemError::ValueMismatch {
+            details: format!("unexpected function input for drop calling convention for {context}"),
+        }),
     }?;
 
     if let ParsedFunctionReference::IndexedResourceDrop {
@@ -519,7 +512,6 @@ async fn drop_resource<Ctx: WorkerCtx>(
 
     if let Some(resource) = store.data_mut().get(resource_id).await {
         debug!("Dropping resource {resource:?} in {context}");
-        dbg!("Dropping resource {:?} {:?}", resource.clone(), context.clone());
         store.data_mut().borrow_fuel().await?;
 
         let result = resource.resource_drop_async(&mut store).await;
@@ -531,17 +523,23 @@ async fn drop_resource<Ctx: WorkerCtx>(
             .await?;
 
         match result {
-            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, vec![Value::Handle {
-                uri: store.data().self_uri(),
-                resource_id,
-            }])),
+            Ok(_) => Ok(InvokeResult::from_success(
+                consumed_fuel,
+                vec![Value::Handle {
+                    uri: store.data().self_uri(),
+                    resource_id,
+                }],
+            )),
             Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
         }
     } else {
-        Ok(InvokeResult::from_success(0, vec![Value::Handle {
-            uri: store.data().self_uri(),
-            resource_id,
-        }]))
+        Ok(InvokeResult::from_success(
+            0,
+            vec![Value::Handle {
+                uri: store.data().self_uri(),
+                resource_id,
+            }],
+        ))
     }
 }
 

@@ -1380,8 +1380,6 @@ impl RunningWorker {
                                         )
                                         .await;
 
-                                        dbg!(result.clone());
-
                                         match result {
                                             Ok(InvokeResult::Succeeded {
                                                 output,
