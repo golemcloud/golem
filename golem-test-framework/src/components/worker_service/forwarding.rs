@@ -19,7 +19,14 @@ use crate::components::component_service::ComponentService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::{ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, InvokeResult, InvokeResultTyped, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, LogEvent, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerId};
+use golem_api_grpc::proto::golem::worker::{
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, InvokeResult,
+    InvokeResultTyped, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, LogEvent, ResumeWorkerRequest, ResumeWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerId,
+};
 use golem_api_grpc::proto::golem::workerexecutor::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;

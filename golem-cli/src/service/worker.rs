@@ -27,13 +27,13 @@ use golem_client::model::{
     InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator, Type, WorkerFilter,
     WorkerNameFilter,
 };
+use golem_common::precise_json::PreciseJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use uuid::Uuid;
-use golem_common::precise_json::PreciseJson;
 
 #[async_trait]
 pub trait WorkerService {

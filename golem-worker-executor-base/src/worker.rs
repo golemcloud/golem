@@ -431,9 +431,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
-            LookupResult::Complete(output) => {
-                Ok(Some(output))
-            },
+            LookupResult::Complete(output) => Ok(Some(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
@@ -1265,7 +1263,7 @@ impl RunningWorker {
         oom_retry_count: u64,
     ) {
         loop {
-            dbg!("Invocation queue loop creating the instance");
+            debug!("Invocation queue loop creating the instance");
 
             let (instance, store) = match Self::create_instance(parent.clone()).await {
                 Ok((instance, store)) => {
@@ -1286,7 +1284,7 @@ impl RunningWorker {
                 }
             };
 
-            dbg!("Invocation queue loop preparing the instance");
+            debug!("Invocation queue loop preparing the instance");
 
             let mut final_decision = {
                 let mut store = store.lock().await;
@@ -1308,7 +1306,7 @@ impl RunningWorker {
 
                 match prepare_result {
                     Ok(decision) => {
-                        dbg!("Recovery decision from prepare_instance: {decision:?}");
+                        debug!("Recovery decision from prepare_instance: {decision:?}");
                         decision
                     }
                     Err(err) => {
@@ -1323,9 +1321,8 @@ impl RunningWorker {
                 }
             };
 
-
             if final_decision == RetryDecision::None {
-                dbg!("Invocation queue loop started");
+                debug!("Invocation queue loop started");
 
                 // Exits when RunningWorker is dropped
                 waiting_for_command.store(true, Ordering::Release);
@@ -1349,7 +1346,6 @@ impl RunningWorker {
                                     function_input,
                                     calling_convention,
                                 } => {
-                                    dbg!(full_function_name.clone());
                                     let span = span!(
                                         Level::INFO,
                                         "invocation",
@@ -1388,8 +1384,6 @@ impl RunningWorker {
                                         )
                                         .await;
 
-                                        dbg!(result.clone());
-
                                         match result {
                                             Ok(InvokeResult::Succeeded {
                                                 output,
@@ -1403,8 +1397,6 @@ impl RunningWorker {
                                                     &full_function_name,
                                                 );
 
-                                                debug!( "{:?}", &full_function_name);
-
                                                 match function_results {
                                                     Ok(Some(export_function)) => {
                                                         let function_results = export_function
@@ -1413,8 +1405,6 @@ impl RunningWorker {
                                                             .map(|t| t.into())
                                                             .collect();
 
-                                                        debug!( "{:?}", &function_results);
-                                                        debug!("{:?}", output.clone());
                                                         let result = output
                                                             .validate_function_result(
                                                                 function_results,
@@ -1461,7 +1451,6 @@ impl RunningWorker {
                                                     }
 
                                                     Ok(None) => {
-                                                        debug!("is this here?");
                                                         store
                                                             .data_mut()
                                                             .on_invocation_failure(
@@ -1479,7 +1468,6 @@ impl RunningWorker {
                                                     }
 
                                                     Err(result) => {
-                                                        debug!("is this here?2");
                                                         store
                                                             .data_mut()
                                                             .on_invocation_failure(

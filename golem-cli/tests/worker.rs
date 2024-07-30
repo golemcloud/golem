@@ -3,13 +3,13 @@ use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey};
 use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
 use golem_test_framework::config::TestDependencies;
+use golem_wasm_rpc::Value;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Duration;
-use golem_wasm_rpc::Value;
 
 fn make(
     suffix: &str,
@@ -305,8 +305,13 @@ fn worker_invoke_drop(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component_from_file(deps, &format!("{name} worker_invoke_drop"), &cli, "counters.wasm")?.component_id;
+    let component_id = make_component_from_file(
+        deps,
+        &format!("{name} worker_invoke_drop"),
+        &cli,
+        "counters.wasm",
+    )?
+    .component_id;
 
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
