@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_rwlock::RwLock;
+use itertools::Itertools;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
@@ -125,8 +126,8 @@ impl ShardManagement {
 
             let (new_pods, removed_pods) = updates.lock().await.reset();
             debug!(
-                new_pods=?new_pods,
-                removed_pods=?removed_pods,
+                new_pods=new_pods.iter().join(", "),
+                removed_pods=removed_pods.iter().join(", "),
                 "Shard management loop woken up",
             );
 
@@ -170,7 +171,7 @@ impl ShardManagement {
                 rebalance
             };
 
-            debug!(rebalance=?rebalance, "Applying rebalance plan");
+            debug!(rebalance=%rebalance, "Applying rebalance plan");
             Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await;
 
             routing_table.write().await.rebalance(rebalance);

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::{ShardAssignment, ShardId, WorkerId};
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
@@ -52,8 +53,8 @@ impl ShardService for ShardServiceDefault {
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>) {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
         debug!(
-            shard_ids = format!("{:?}", shard_assignment.shard_ids),
-            shard_ids_to_assign = format!("{:?}", shard_ids),
+            shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+            shard_ids_to_assign = shard_ids.iter().join(", "),
             "ShardService.assign_shards"
         );
         shard_assignment.assign_shards(shard_ids);
@@ -76,8 +77,8 @@ impl ShardService for ShardServiceDefault {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
         debug!(
             number_of_shards,
-            shard_ids = format!("{:?}", shard_assignment.shard_ids),
-            shard_ids_to_assign = format!("{:?}", shard_ids),
+            shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+            shard_ids_to_assign = shard_ids.iter().join(", "),
             "ShardService.register"
         );
         shard_assignment.register(number_of_shards, shard_ids);
@@ -88,8 +89,8 @@ impl ShardService for ShardServiceDefault {
     fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) {
         let mut shard_assignment = self.shard_assignment.write().unwrap();
         debug!(
-            shard_ids = format!("{:?}", shard_assignment.shard_ids),
-            shard_ids_to_revoke = format!("{:?}", shard_ids),
+            shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+            shard_ids_to_revoke = shard_ids.iter().join(", "),
             "ShardService.revoke_shards"
         );
         shard_assignment.revoke_shards(shard_ids);

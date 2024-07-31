@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
 use core::cmp::Ordering;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::{fmt, vec};
+
+use bincode::{Decode, Encode};
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use tonic::transport::Endpoint;
 use tracing::{error, warn};
 
@@ -85,7 +87,7 @@ impl Pod {
                 if !resolved_addresses.contains(&source_ip) {
                     warn!(
                         pod= %pod,
-                        resolved_adresses = ?resolved_addresses,
+                        resolved_adresses = resolved_addresses.iter().join(", "),
                         source_ip = %source_ip,
                         "Host mismatch between registration message and resolved message source"
                     );
@@ -95,7 +97,7 @@ impl Pod {
             }
             Err(error) => {
                 error!(
-                    pod=?pod,
+                    pod=%pod,
                     error=error.to_string(),
                     "Failed to resolve message source");
 

@@ -25,6 +25,7 @@ futures = { workspace = true }
 http = { workspace = true }
 http_02 = { workspace = true }
 humantime-serde = { workspace = true }
+itertools = { workspace = true }
 k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 prometheus = { workspace = true }
