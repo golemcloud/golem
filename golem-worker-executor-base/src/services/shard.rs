@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{ShardAssignment, ShardId, WorkerId};
-use itertools::Itertools;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
+
+use itertools::Itertools;
 use tracing::debug;
+
+use golem_common::model::{ShardAssignment, ShardId, WorkerId};
 
 use crate::error::GolemError;
 use crate::metrics::sharding::*;
