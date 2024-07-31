@@ -25,9 +25,8 @@ use assert2::check;
 use http_02::{Response, StatusCode};
 use redis::Commands;
 
-use golem_api_grpc::proto::golem::worker::{
-    worker_execution_error, ComponentParseFailed, LogEvent,
-};
+use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
+use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
