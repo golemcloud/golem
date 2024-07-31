@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package wasm.rpc;
+import "wasm/rpc/type.proto";
+
+message TypeAnnotatedValue {
+    oneof type_annotated_value {
+        bool bool = 1;
+        int32 s8 = 2;
+        uint32 u8 = 3;
+        int32 s16 = 4;
+        uint32 u16 = 5;
+        int32 s32 = 6;
+        uint32 u32 = 7;
+        int64 s64 = 8;
+        uint64 u64 = 9;
+        float f32 = 10;
+        double f64 = 11;
+        int32 char = 12;
+        string str = 13;
+        TypedList list = 14;
+        TypedTuple tuple = 15;
+        TypedRecord record = 16;
+        TypedFlags flags = 17;
+        TypedVariant variant = 18;
+        TypedEnum enum = 19;
+        TypedOption option = 20;
+        TypedResult result = 21;
+        TypedHandle handle = 22;
+    }
+}
+
+message TypedList {
+    Type typ = 1;
+    repeated TypeAnnotatedValue values = 2;
+}
+
+message TypedTuple {
+    repeated Type typ = 1;
+    repeated TypeAnnotatedValue value = 2;
+}
+
+message TypedRecord {
+    repeated NameTypePair typ = 1;
+    repeated NameValuePair value = 2;
+}
+
+message TypedFlags {
+    repeated string typ = 1;
+    repeated string values = 2;
+}
+
+message TypedVariant {
+    TypeVariant typ = 1;
+    string case_name = 2;
+    TypeAnnotatedValue case_value = 3;
+}
+
+message TypedEnum {
+    repeated string typ = 1;
+    string value = 2;
+}
+
+message TypedOption {
+    Type typ = 1;
+    optional TypeAnnotatedValue value = 2;
+}
+
+message TypedResult {
+    Type ok = 1;
+    Type error = 2;
+    oneof result_value {
+        TypeAnnotatedValue ok_value = 3;
+        TypeAnnotatedValue error_value = 4;
+    }
+}
+
+message TypedHandle {
+    TypeHandle typ = 1;
+    string uri = 2;
+    uint64 resource_id = 3;
+}
+
+message NameValuePair {
+    string name = 1;
+    TypeAnnotatedValue value = 2;
+}
