@@ -747,7 +747,7 @@ impl ComponentServiceLocalFileSystem {
         tokio::fs::read(component_metadata_local).await.ok()
     }
 
-    pub async fn get_component_metadata_file(component_path: &PathBuf) -> Option<PathBuf> {
+    pub async fn get_component_metadata_file(component_path: &Path) -> Option<PathBuf> {
         let mut target_dir = Path::new("../target").to_path_buf();
         let component_file = component_path
             .file_name()
