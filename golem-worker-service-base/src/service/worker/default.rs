@@ -428,10 +428,10 @@ where
             },
             move |response| {
                 match response.into_inner() {
-                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Success(
-                                 workerexecutor::InvokeAndAwaitWorkerSuccessTyped {
+                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
                                      output: Some(output),
                                  },
                              )),
@@ -439,14 +439,14 @@ where
                         info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         output.type_annotated_value.ok_or("Empty response".into())
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Failure(err)),
+                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
                     } => {
                         error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponseTyped { .. } => {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
                         error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
@@ -476,7 +476,7 @@ where
             move |worker_executor_client| {
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
-                        InvokeAndAwaitWorkerRequest {
+                    workerexecutor::v1::InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
                             name: function_name.clone(),
                             input: params.clone(),
@@ -540,7 +540,7 @@ where
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
-                    workerexecutor::InvokeWorkerRequest {
+                    workerexecutor::v1::InvokeWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         name: function_name.clone(),
                         input: params_.clone(),
@@ -552,13 +552,13 @@ where
                 ))
             },
             |response| match response.into_inner() {
-                workerexecutor::InvokeWorkerResponse {
-                    result: Some(workerexecutor::invoke_worker_response::Result::Success(_)),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::InvokeWorkerResponse {
-                    result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
