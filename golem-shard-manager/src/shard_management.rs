@@ -19,7 +19,7 @@ use async_rwlock::RwLock;
 use itertools::Itertools;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::error::ShardManagerError;
 use crate::healthcheck::{get_unhealthy_pods, HealthCheck};
@@ -95,14 +95,14 @@ impl ShardManagement {
 
     /// Registers a new pod to be added
     pub async fn register_pod(&self, pod: Pod) {
-        debug!("Registering pod: {pod}");
+        debug!(pod=%pod, "Registering pod");
         self.updates.lock().await.add_new_pod(pod);
         self.change.notify_one();
     }
 
     /// Marks a pod to be removed
     pub async fn unregister_pod(&self, pod: Pod) {
-        debug!("Unregistering pod: {pod}");
+        debug!(pod=%pod, "Unregistering pod");
         self.updates.lock().await.remove_pod(pod);
         self.change.notify_one();
     }
@@ -126,8 +126,8 @@ impl ShardManagement {
 
             let (new_pods, removed_pods) = updates.lock().await.reset();
             debug!(
-                new_pods=new_pods.iter().join(", "),
-                removed_pods=removed_pods.iter().join(", "),
+                new_pods = new_pods.iter().join(", "),
+                removed_pods = removed_pods.iter().join(", "),
                 "Shard management loop woken up",
             );
 
@@ -189,8 +189,8 @@ impl ShardManagement {
         info!("Shard manager beginning rebalance...");
 
         info!(
-            "Executing shard unassignments: {}",
-            rebalance.get_unassignments()
+            unassignments = %rebalance.get_unassignments(),
+            "Executing shard unassignments",
         );
         let failed_unassignments =
             revoke_shards(worker_executors.clone(), rebalance.get_unassignments()).await;
@@ -199,11 +199,16 @@ impl ShardManagement {
             .flat_map(|(_, shard_ids)| shard_ids.clone())
             .collect();
         rebalance.remove_shards(&failed_shards);
-        info!("The following shards could not be unassigned and have been removed from rebalance: {:?}", failed_shards);
+        if !failed_shards.is_empty() {
+            warn!(
+                failed_shards = failed_shards.iter().join(", "),
+                "Some shards could not be unassigned and have been removed from rebalance"
+            );
+        }
 
         info!(
-            "Executing shard assignments: {}",
-            rebalance.get_assignments()
+            assignments=%rebalance.get_assignments(),
+            "Executing shard assignments",
         );
         assign_shards(worker_executors.clone(), rebalance.get_assignments()).await;
     }
