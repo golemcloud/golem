@@ -24,6 +24,7 @@ pub struct WorkerServiceBaseConfig {
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
+    pub worker_executor_retries: RetryConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +63,13 @@ impl Default for WorkerServiceBaseConfig {
             custom_request_port: 9006,
             worker_grpc_port: 9007,
             routing_table: RoutingTableConfig::default(),
+            worker_executor_retries: RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_secs(3),
+                multiplier: 10.0,
+                max_jitter_factor: Some(0.15),
+            },
         }
     }
 }

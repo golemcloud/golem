@@ -22,6 +22,7 @@ pub mod model;
 pub mod newtype;
 pub mod precise_json;
 pub mod redis;
+pub mod retriable_error;
 pub mod retries;
 pub mod serialization;
 pub mod tracing;

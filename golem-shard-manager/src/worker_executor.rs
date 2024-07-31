@@ -12,23 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::ShardManagerError;
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
-use crate::shard_manager_config::WorkerExecutorServiceConfig;
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use tokio::time::error::Elapsed;
+use tokio::time::timeout;
+use tonic::transport::Channel;
+use tonic::Response;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tonic_health::pb::health_client::HealthClient;
+use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
+use tracing::info;
+
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::ShardId;
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::timeout;
-use tonic::transport::Channel;
-use tonic_health::pb::health_check_response::ServingStatus;
-use tonic_health::pb::health_client::HealthClient;
-use tonic_health::pb::HealthCheckRequest;
-use tracing::{debug, info, warn};
+use golem_common::retries::with_retriable_errors;
+
+use crate::error::{HealthCheckError, ShardManagerError};
+use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
+use crate::shard_manager_config::WorkerExecutorServiceConfig;
 
 #[async_trait]
 pub trait WorkerExecutorService {
@@ -38,7 +43,7 @@ pub trait WorkerExecutorService {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
 
-    async fn health_check(&self, pod: &Pod) -> bool;
+    async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError>;
 
     async fn revoke_shards(
         &self,
@@ -56,9 +61,9 @@ pub async fn revoke_shards(
         .unassignments
         .iter()
         .map(|(pod, shard_ids)| {
-            let worker_executor = worker_executors.clone();
+            let worker_executors = worker_executors.clone();
             Box::pin(async move {
-                match worker_executor.revoke_shards(pod, shard_ids).await {
+                match worker_executors.revoke_shards(pod, shard_ids).await {
                     Ok(_) => None,
                     Err(_) => Some((pod.clone(), shard_ids.clone())),
                 }
@@ -81,9 +86,9 @@ pub async fn assign_shards(
         .assignments
         .iter()
         .map(|(pod, shard_ids)| {
-            let instance_server_service = worker_executors.clone();
+            let worker_executors = worker_executors.clone();
             Box::pin(async move {
-                match instance_server_service.assign_shards(pod, shard_ids).await {
+                match worker_executors.assign_shards(pod, shard_ids).await {
                     Ok(_) => None,
                     Err(_) => Some((pod.clone(), shard_ids.clone())),
                 }
@@ -110,36 +115,19 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            "Assigning shards: {}",
-            pod_shard_assignments_to_string(pod, shard_ids.iter())
+            assigned_shards = pod_shard_assignments_to_string(pod, shard_ids.iter()),
+            "Assigning shards",
         );
 
-        let retry_max_attempts = self.config.retries.max_attempts;
-        let retry_min_delay = self.config.retries.min_delay;
-        let retry_max_delay = self.config.retries.max_delay;
-        let retry_multiplier = self.config.retries.multiplier;
-
-        let mut attempts = 0;
-        let mut delay = retry_min_delay;
-
-        loop {
-            match self.assign_shards_internal(pod, shard_ids).await {
-                Ok(shard_ids) => return Ok(shard_ids),
-                Err(e) => {
-                    if attempts >= retry_max_attempts {
-                        return Err(e);
-                    }
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay = std::cmp::min(
-                        Duration::from_millis(
-                            ((delay.as_millis() as f64) * retry_multiplier) as u64,
-                        ),
-                        retry_max_delay,
-                    );
-                }
-            }
-        }
+        with_retriable_errors(
+            "worker_executor",
+            "assign_shards",
+            Some(format!("{pod}")),
+            &self.config.retries,
+            &(pod, shard_ids),
+            |(pod, shard_ids)| Box::pin(self.assign_shards_internal(pod, shard_ids)),
+        )
+        .await
     }
 
     async fn revoke_shards(
@@ -148,40 +136,23 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            "Revoking shards: {}",
-            pod_shard_assignments_to_string(pod, shard_ids.iter())
+            revoked_shards = pod_shard_assignments_to_string(pod, shard_ids.iter()),
+            "Revoking shards",
         );
 
-        let retry_max_attempts = self.config.retries.max_attempts;
-        let retry_min_delay = self.config.retries.min_delay;
-        let retry_max_delay = self.config.retries.max_delay;
-        let retry_multiplier = self.config.retries.multiplier;
-
-        let mut attempts = 0;
-        let mut delay = retry_min_delay;
-
-        loop {
-            match self.revoke_shards_internal(pod, shard_ids).await {
-                Ok(shard_ids) => return Ok(shard_ids),
-                Err(e) => {
-                    if attempts >= retry_max_attempts {
-                        return Err(e);
-                    }
-                    tokio::time::sleep(delay).await;
-                    attempts += 1;
-                    delay = std::cmp::min(
-                        Duration::from_millis(
-                            ((delay.as_millis() as f64) * retry_multiplier) as u64,
-                        ),
-                        retry_max_delay,
-                    );
-                }
-            }
-        }
+        with_retriable_errors(
+            "worker_executor",
+            "revoke_shards",
+            Some(format!("{pod}")),
+            &self.config.retries,
+            &(pod, shard_ids),
+            |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
+        )
+        .await
     }
 
-    async fn health_check(&self, pod: &Pod) -> bool {
-        debug!("Health checking pod {pod}");
+    async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
+        // NOTE: retries are handled in healthcheck.rs
         let endpoint = pod.endpoint();
         let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
         match conn {
@@ -192,23 +163,17 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
                     };
                     match HealthClient::new(conn).check(request).await {
                         Ok(response) => {
-                            response.into_inner().status == ServingStatus::Serving as i32
+                            let status = health_check_serving_status(response);
+                            (status == ServingStatus::Serving)
+                                .then_some(())
+                                .ok_or_else(|| HealthCheckError::GrpcOther(status.as_str_name()))
                         }
-                        Err(err) => {
-                            warn!("Health request returned with an error: {:?}", err);
-                            false
-                        }
+                        Err(status) => Err(HealthCheckError::GrpcError(status)),
                     }
                 }
-                Err(err) => {
-                    warn!("Failed to connect to pod {pod}: {:?}", err);
-                    false
-                }
+                Err(err) => Err(HealthCheckError::GrpcTransportError(err)),
             },
-            Err(_) => {
-                warn!("Connection to pod {pod} timed out");
-                false
-            }
+            Err(_) => Err(HealthCheckError::GrpcOther("connect timeout")),
         }
     }
 }
@@ -246,8 +211,8 @@ impl WorkerExecutorServiceDefault {
             }),
         )
         .await
-        .map_err(|e| ShardManagerError::unknown(e.to_string()))?
-        .map_err(|_| ShardManagerError::timeout("assign_shards"))?;
+        .map_err(|_: Elapsed| ShardManagerError::Timeout)?
+        .map_err(ShardManagerError::GrpcError)?;
 
         match assign_shards_response.into_inner() {
             golem::workerexecutor::AssignShardsResponse {
@@ -256,12 +221,12 @@ impl WorkerExecutorServiceDefault {
             golem::workerexecutor::AssignShardsResponse {
                 result:
                     Some(golem::workerexecutor::assign_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::unknown(format!(
-                "unknown : {:#?}",
+            } => Err(ShardManagerError::WorkerExecutionError(format!(
+                "{:?}",
                 failure
-            ))),
+            ))), // TODO: can we do better then debug format?
             golem::workerexecutor::AssignShardsResponse { result: None } => {
-                Err(ShardManagerError::unknown("unknown"))
+                Err(ShardManagerError::NoResult)
             }
         }
     }
@@ -287,8 +252,8 @@ impl WorkerExecutorServiceDefault {
             }),
         )
         .await
-        .map_err(|e| ShardManagerError::unknown(e.to_string()))?
-        .map_err(|_| ShardManagerError::timeout("revoke_shards"))?;
+        .map_err(|_: Elapsed| ShardManagerError::Timeout)?
+        .map_err(ShardManagerError::GrpcError)?;
 
         match revoke_shards_response.into_inner() {
             golem::workerexecutor::RevokeShardsResponse {
@@ -297,13 +262,21 @@ impl WorkerExecutorServiceDefault {
             golem::workerexecutor::RevokeShardsResponse {
                 result:
                     Some(golem::workerexecutor::revoke_shards_response::Result::Failure(failure)),
-            } => Err(ShardManagerError::unknown(format!(
-                "unknown : {:#?}",
+            } => Err(ShardManagerError::WorkerExecutionError(format!(
+                "{:?}",
                 failure
-            ))),
+            ))), // TODO: can we do better then debug format?
             golem::workerexecutor::RevokeShardsResponse { result: None } => {
-                Err(ShardManagerError::unknown("unknown"))
+                Err(ShardManagerError::NoResult)
             }
         }
     }
+}
+
+fn health_check_serving_status(response: Response<HealthCheckResponse>) -> ServingStatus {
+    response
+        .into_inner()
+        .status
+        .try_into()
+        .unwrap_or(ServingStatus::Unknown)
 }

@@ -386,6 +386,7 @@ pub struct RetryConfig {
     #[serde(with = "humantime_serde")]
     pub max_delay: Duration,
     pub multiplier: f64,
+    pub max_jitter_factor: Option<f64>,
 }
 
 impl Default for RetryConfig {
@@ -401,6 +402,7 @@ impl RetryConfig {
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(1),
             multiplier: 3.0,
+            max_jitter_factor: Some(0.15),
         }
     }
 
@@ -410,6 +412,7 @@ impl RetryConfig {
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(2),
             multiplier: 2.0,
+            max_jitter_factor: Some(0.15),
         }
     }
 }

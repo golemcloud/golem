@@ -33,6 +33,7 @@ use golem_api_grpc::proto::golem::workerexecutor::{
     InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
+use golem_common::config::RetryConfig;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
@@ -213,6 +214,10 @@ pub struct WorkerRequestMetadata {
 #[derive(Clone)]
 pub struct WorkerServiceDefault<AuthCtx> {
     worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
+    // NOTE: unlike other retries, reaching max_attempts for the worker executor
+    //       (with retryable errors) does not end the retry loop,
+    //       rather it emits a warn log and resets the retry state.
+    worker_executor_retries: RetryConfig,
     component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
 }
@@ -220,11 +225,13 @@ pub struct WorkerServiceDefault<AuthCtx> {
 impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
     pub fn new(
         worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
+        worker_executor_retries: RetryConfig,
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     ) -> Self {
         Self {
             worker_executor_clients,
+            worker_executor_retries,
             component_service,
             routing_table_service,
         }
@@ -240,6 +247,10 @@ impl<AuthCtx> HasRoutingTableService for WorkerServiceDefault<AuthCtx> {
 impl<AuthCtx> HasWorkerExecutorClients for WorkerServiceDefault<AuthCtx> {
     fn worker_executor_clients(&self) -> &MultiTargetGrpcClient<WorkerExecutorClient<Channel>> {
         &self.worker_executor_clients
+    }
+
+    fn worker_executor_retry_config(&self) -> &RetryConfig {
+        &self.worker_executor_retries
     }
 }
 
