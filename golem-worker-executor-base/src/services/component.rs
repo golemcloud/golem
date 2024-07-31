@@ -638,15 +638,10 @@ impl ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         path: &PathBuf,
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
-        // check if component metadata is already available in a corresponding `json` file
+        // check if component metadata is already available in a corresponding `json` file in a target directory
         // otherwise, try to analyse the component file.
-        let mut path_buf = path.clone();
-        path_buf.set_extension("json");
-
-        let optional_metadata_bytes = tokio::fs::read(path_buf).await.ok();
-
         let component_metadata_opt: Option<golem_service_base::model::ComponentMetadata> =
-            optional_metadata_bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            Self::read_component_metadata_from_local_file(path).and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
         if let Some(golem_service_base::model::ComponentMetadata {
             memories, exports, ..
@@ -743,6 +738,20 @@ impl ComponentServiceLocalFileSystem {
             memories,
             exports,
         })
+    }
+
+    async fn read_component_metadata_from_local_file(component_path: &PathBuf) -> Option<Vec<u8>> {
+        let component_metadata_local = Self::get_component_metadata_file(component_path).await?;
+        tokio::fs::read(component_metadata_local).await.ok()
+    }
+
+    pub async fn get_component_metadata_file(component_path: &PathBuf) -> Option<PathBuf> {
+        let mut target_dir = Path::new("../target").to_path_buf();
+        let component_file = component_path.file_name().and_then(|os_str| os_str.to_str())?;
+        target_dir.push(component_file);
+        // We expect the component metadata to be in the same directory as the component file with extension as json
+        target_dir.set_extension("json");
+        Some(target_dir)
     }
 }
 

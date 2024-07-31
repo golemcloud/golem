@@ -169,6 +169,8 @@ pub trait TestDsl {
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
+
+        info!("{:?}", source_path.clone());
         let component_id = self
             .component_service()
             .get_or_add_component(&source_path)
@@ -1058,15 +1060,17 @@ async fn log_and_save_component_metadata(path: &Path, component_id: &ComponentId
 
     let json_data = serde_json::to_string(&component_metadata).unwrap();
 
-    // Writing the metadata to a path corresponding to component-id
+    // Write metadata to a path corresponding to component-id
     // This step is important for the following reason:
     // * this way it will perfectly simulate downloading the metadata from the component service even in the case of local-component-file tests.
     // * The test simulates what happens if you invoke an old wasm in component service (that has valid metadata but cannot be loaded anymore)
     // * The path is used to see if the metadata already exists for component analysis when it comes to local file
-    let new_path =
-        PathBuf::from("data/components/").join(Path::new(&format!("{component_id}-0.json")));
-
-    tokio::fs::write(&new_path, json_data).await.unwrap()
+    // See ComponentServiceLocalFileSystem::get_component_metadata_file
+    let component_name = path.file_name().unwrap().to_str().unwrap();
+    let mut current_dir = Path::new("../target").to_path_buf();
+    current_dir.push(component_name);
+    current_dir.set_extension("json");
+    tokio::fs::write(&current_dir, json_data).await.unwrap()
 }
 
 #[async_trait]

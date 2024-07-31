@@ -47,3 +47,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+log = { version = "0.4.22", features = [] }

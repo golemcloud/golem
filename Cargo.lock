@@ -3705,6 +3705,7 @@ dependencies = [
  "kill_tree",
  "kube",
  "kube-derive",
+ "log",
  "once_cell",
  "postgres",
  "redis",
