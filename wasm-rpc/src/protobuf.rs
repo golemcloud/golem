@@ -674,15 +674,12 @@ impl TryFrom<type_annotated_value::TypeAnnotatedValue> for Value {
                                 let value = v.try_into()?;
                                 Ok(Value::Result(Ok(Some(Box::new(value)))))
                             }
-                            None => {
-                                Ok(Value::Result(Ok(None)))
-                            }
+                            None => Ok(Value::Result(Ok(None))),
                         }
                     }
 
                     ResultValue::ErrorValue(err_value) => {
-                        let type_annotated_value =
-                            err_value.type_annotated_value;
+                        let type_annotated_value = err_value.type_annotated_value;
 
                         match type_annotated_value {
                             Some(v) => {
@@ -690,9 +687,7 @@ impl TryFrom<type_annotated_value::TypeAnnotatedValue> for Value {
                                 Ok(Value::Result(Err(Some(Box::new(value)))))
                             }
 
-                            None => {
-                                Ok(Value::Result(Err(None)))
-                            }
+                            None => Ok(Value::Result(Err(None))),
                         }
                     }
                 }
