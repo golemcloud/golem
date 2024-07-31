@@ -95,11 +95,7 @@ impl ShardManagerServiceImpl {
         source_ip: Option<SocketAddr>,
         request: golem::shardmanager::RegisterRequest,
     ) -> Result<(), ShardManagerError> {
-        let source_ip = source_ip
-            .ok_or(ShardManagerError::invalid_request(
-                "could not get source IP",
-            ))?
-            .ip();
+        let source_ip = source_ip.ok_or(ShardManagerError::NoSourceIpForPod)?.ip();
 
         let pod = Pod::from_register_request(source_ip, request)?;
         info!("Shard Manager received request to register pod: {}", pod);
