@@ -1,4 +1,5 @@
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedRecord;
 pub(crate) trait Merge {
     fn merge(&mut self, other: &Self) -> &mut Self;
 }
@@ -7,21 +8,21 @@ impl Merge for TypeAnnotatedValue {
     fn merge(&mut self, other: &Self) -> &mut Self {
         match (&mut *self, other) {
             (
-                TypeAnnotatedValue::Record { value, typ },
-                TypeAnnotatedValue::Record {
+                TypeAnnotatedValue::Record(TypedRecord { value, typ }),
+                TypeAnnotatedValue::Record(TypedRecord {
                     value: other_value,
                     typ: other_typ,
-                },
+                }),
             ) => {
                 let mut new_value = value.clone();
                 let mut types = typ.clone();
 
-                for (key, value) in other_value {
-                    new_value.push((key.clone(), value.clone()));
+                for key_value in other_value {
+                    new_value.push(key_value.clone());
                 }
 
-                for (key, value) in other_typ {
-                    types.push((key.clone(), value.clone()));
+                for key_value in other_typ {
+                    types.push(key_value.clone());
                 }
 
                 *value = new_value;

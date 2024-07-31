@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
+use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
@@ -1809,6 +1810,11 @@ pub struct ComponentMetadata {
 }
 
 impl ComponentMetadata {
+    pub fn from_data(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
+        let raw = RawComponentMetadata::from_data(data)?;
+        Ok(raw.into())
+    }
+
     pub fn instances(&self) -> Vec<ExportInstance> {
         let mut instances = vec![];
         for export in self.exports.clone() {
@@ -1876,6 +1882,30 @@ impl ComponentMetadata {
     /// Gets the sum of the maximum memory sizes, if all are bounded
     pub fn total_maximum_memory(&self) -> Option<u64> {
         self.memories.iter().map(|m| m.maximum).sum()
+    }
+}
+
+impl From<RawComponentMetadata> for ComponentMetadata {
+    fn from(value: RawComponentMetadata) -> Self {
+        let producers = value
+            .producers
+            .into_iter()
+            .map(|producers| producers.into())
+            .collect::<Vec<_>>();
+
+        let exports = value
+            .exports
+            .into_iter()
+            .map(|export| export.into())
+            .collect::<Vec<_>>();
+
+        let memories = value.memories.into_iter().map(LinearMemory::from).collect();
+
+        ComponentMetadata {
+            exports,
+            producers,
+            memories,
+        }
     }
 }
 
@@ -3344,16 +3374,6 @@ pub struct Component {
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
-}
-
-impl Component {
-    pub fn function_names(&self) -> Vec<String> {
-        self.metadata
-            .exports
-            .iter()
-            .flat_map(|x| x.function_names())
-            .collect::<Vec<_>>()
-    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {

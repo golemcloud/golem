@@ -1,5 +1,5 @@
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedTuple;
 
 use crate::worker_bridge_execution::WorkerResponse;
 
@@ -25,58 +25,81 @@ impl RefinedWorkerResponse {
     pub(crate) fn from_worker_response(
         worker_response: &WorkerResponse,
     ) -> Result<RefinedWorkerResponse, String> {
-        let result = &worker_response.result.result;
-        let function_result_types = &worker_response.result.function_result_types;
-
-        if function_result_types.iter().all(|r| r.name.is_none()) {
-            match result {
-                TypeAnnotatedValue::Tuple { value, .. } => {
-                    if value.len() == 1 {
-                        Ok(RefinedWorkerResponse::SingleResult(value[0].clone()))
-                    } else if value.is_empty() {
-                        Ok(RefinedWorkerResponse::Unit)
-                    } else {
-                        Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple with 1 element if results are unnamed. Obtained {:?}", AnalysedType::from(result)))
-                    }
-                }
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Tuple if results are unnamed. Obtained {:?}", AnalysedType::from(ty))),
+        let result = &worker_response.result;
+        match result {
+            TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.is_empty() => {
+                Ok(RefinedWorkerResponse::Unit)
             }
-        } else {
-            match &worker_response.result.result {
-                TypeAnnotatedValue::Record { .. } => {
-                    Ok(RefinedWorkerResponse::MultipleResults(worker_response.result.result.clone()))
-                }
-
-                // See wasm-rpc implementations for more details
-                ty => Err(format!("Internal Error. WorkerBridge expects the result from worker to be a Record if results are named. Obtained {:?}", AnalysedType::from(ty))),
+            TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.len() == 1 => {
+                let inner = value[0]
+                    .clone()
+                    .type_annotated_value
+                    .ok_or("Internal Error. Unexpected empty result")?;
+                Ok(RefinedWorkerResponse::SingleResult(inner))
             }
+            ty => Ok(RefinedWorkerResponse::MultipleResults(ty.clone())),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::service::worker::TypedResult;
-    use golem_service_base::model::{FunctionResult, Type, TypeU32};
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord, TypedTuple};
 
     use crate::worker_bridge_execution::refined_worker_response::RefinedWorkerResponse;
     use crate::worker_bridge_execution::WorkerResponse;
+    use golem_wasm_rpc::protobuf::Type;
+
+    fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
+        let mut name_type_pairs = vec![];
+        let mut name_value_pairs = vec![];
+
+        for (key, value) in values.iter() {
+            let typ = Type::try_from(value).unwrap();
+
+            name_type_pairs.push(NameTypePair {
+                name: key.to_string(),
+                typ: Some(typ),
+            });
+
+            name_value_pairs.push(NameValuePair {
+                name: key.to_string(),
+                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(value.clone()),
+                }),
+            });
+        }
+
+        TypeAnnotatedValue::Record(TypedRecord {
+            typ: name_type_pairs,
+            value: name_value_pairs,
+        })
+    }
+
+    fn create_tuple(value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
+        let mut types = vec![];
+
+        for value in value.iter() {
+            let typ = value.try_into().unwrap();
+            types.push(typ);
+        }
+
+        TypeAnnotatedValue::Tuple(TypedTuple {
+            value: value
+                .into_iter()
+                .map(|result| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(result.clone()),
+                })
+                .collect(),
+            typ: types,
+        })
+    }
 
     #[test]
     fn test_refined_worker_response_from_worker_response() {
         let worker_response = WorkerResponse {
-            result: TypedResult {
-                result: TypeAnnotatedValue::Tuple {
-                    value: vec![TypeAnnotatedValue::U32(1)],
-                    typ: vec![AnalysedType::U32],
-                },
-                function_result_types: vec![FunctionResult {
-                    name: None,
-                    typ: Type::U32(TypeU32),
-                }],
-            },
+            result: create_tuple(vec![TypeAnnotatedValue::U32(1)]),
         };
 
         let refined_worker_response =
@@ -87,13 +110,7 @@ mod tests {
         );
 
         let worker_response = WorkerResponse {
-            result: TypedResult {
-                result: TypeAnnotatedValue::Tuple {
-                    value: vec![],
-                    typ: vec![],
-                },
-                function_result_types: vec![],
-            },
+            result: create_tuple(vec![]),
         };
 
         let refined_worker_response =
@@ -101,26 +118,17 @@ mod tests {
         assert_eq!(refined_worker_response, RefinedWorkerResponse::Unit);
 
         let worker_response = WorkerResponse {
-            result: TypedResult {
-                result: TypeAnnotatedValue::Record {
-                    typ: vec![("foo".to_string(), AnalysedType::U32)],
-                    value: vec![("foo".to_string(), TypeAnnotatedValue::U32(1))],
-                },
-                function_result_types: vec![FunctionResult {
-                    name: Some("name".to_string()),
-                    typ: Type::U32(TypeU32),
-                }],
-            },
+            result: create_record(vec![("foo".to_string(), TypeAnnotatedValue::U32(1))]),
         };
 
         let refined_worker_response =
             RefinedWorkerResponse::from_worker_response(&worker_response).unwrap();
         assert_eq!(
             refined_worker_response,
-            RefinedWorkerResponse::MultipleResults(TypeAnnotatedValue::Record {
-                typ: vec![("foo".to_string(), AnalysedType::U32)],
-                value: vec![("foo".to_string(), TypeAnnotatedValue::U32(1))],
-            })
+            RefinedWorkerResponse::MultipleResults(create_record(vec![(
+                "foo".to_string(),
+                TypeAnnotatedValue::U32(1)
+            )]))
         );
     }
 }

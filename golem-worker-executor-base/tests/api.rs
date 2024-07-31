@@ -1976,6 +1976,7 @@ async fn counter_resource_test_1() {
         )
         .await
         .unwrap();
+
     let _ = executor
         .invoke_and_await(
             &worker_id,
@@ -2011,6 +2012,7 @@ async fn counter_resource_test_1() {
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(5)]));
+
     check!(
         result2
             == Ok(vec![Value::List(vec![Value::Tuple(vec![
