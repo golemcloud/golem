@@ -41,7 +41,7 @@ use golem_common::model::{
 };
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::select;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
@@ -170,13 +170,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
 
-        info!("{:?}", source_path.clone());
         let component_id = self
             .component_service()
             .get_or_add_component(&source_path)
             .await;
 
-        let _ = log_and_save_component_metadata(&source_path, &component_id).await;
+        let _ = log_and_save_component_metadata(&source_path).await;
 
         component_id
     }
@@ -1054,7 +1053,7 @@ fn dump_component_info(path: &Path) -> golem_service_base::model::ComponentMetad
     component_metadata
 }
 
-async fn log_and_save_component_metadata(path: &Path, component_id: &ComponentId) {
+async fn log_and_save_component_metadata(path: &Path) {
     let component_metadata: golem_service_base::model::ComponentMetadata =
         dump_component_info(path);
 
