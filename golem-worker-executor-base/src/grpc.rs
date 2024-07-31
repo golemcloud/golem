@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use gethostname::gethostname;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
@@ -27,6 +28,7 @@ use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 
+use crate::error::*;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
@@ -34,6 +36,7 @@ use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::Worker
 use golem_api_grpc::proto::golem::workerexecutor::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
     UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
@@ -51,7 +54,6 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
-use crate::error::*;
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
@@ -542,35 +544,65 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_and_await_worker_internal(
+    async fn invoke_and_await_worker_internal_proto<Req: GrpcInvokeRequest>(
         &self,
-        request: &golem::workerexecutor::InvokeAndAwaitWorkerRequest,
-    ) -> Result<golem::workerexecutor::InvokeAndAwaitWorkerSuccess, GolemError> {
+        request: &Req,
+    ) -> Result<Vec<Val>, GolemError> {
+        let result = self.invoke_and_await_worker_internal_typed(request).await?;
+        let value = golem_wasm_rpc::Value::try_from(result)
+            .map_err(|e| GolemError::unknown(e.to_string()))?;
+
+        match value {
+            golem_wasm_rpc::Value::Tuple(tuple) => {
+                Ok(tuple.into_iter().map(|v| v.into()).collect())
+            }
+
+            golem_wasm_rpc::Value::Record(record) => {
+                Ok(record.into_iter().map(|v| v.into()).collect())
+            }
+
+            v => Err(GolemError::Unknown {
+                details: format!(
+                    "Values retrieved after invocation is expected. Retrivee {:?}",
+                    v
+                )
+                .to_string(),
+            }),
+        }
+    }
+
+    async fn invoke_and_await_worker_internal_typed<Req: GrpcInvokeRequest>(
+        &self,
+        request: &Req,
+    ) -> Result<TypeAnnotatedValue, GolemError> {
         let full_function_name = request.name();
 
-        let proto_function_input: Vec<Val> = request.input();
-        let function_input = proto_function_input
-            .iter()
-            .map(|val| val.clone().try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
+        let worker = self.get_or_create(request).await?;
 
         let calling_convention = request.calling_convention();
-        let worker = self.get_or_create(request).await?;
+
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
 
+        let params_val = request.input();
+
+        let function_input = params_val
+            .into_iter()
+            .map(|val| val.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
+
         let values = worker
             .invoke_and_await(
                 idempotency_key,
-                calling_convention.into(),
+                calling_convention,
                 full_function_name,
                 function_input,
             )
             .await?;
-        let output = values.into_iter().map(|val| val.into()).collect();
-        Ok(golem::workerexecutor::InvokeAndAwaitWorkerSuccess { output })
+
+        Ok(values)
     }
 
     async fn get_or_create<Req: GrpcInvokeRequest>(
@@ -617,19 +649,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), GolemError> {
         let full_function_name = request.name();
 
-        let proto_function_input: Vec<Val> = request.input();
-        let function_input = proto_function_input
+        let calling_convention = request.calling_convention();
+
+        let worker = self.get_or_create(request).await?;
+
+        let idempotency_key = request
+            .idempotency_key()?
+            .unwrap_or(IdempotencyKey::fresh());
+
+        let function_input = request
+            .input()
             .iter()
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
-
-        let calling_convention = request.calling_convention();
-
-        let worker = self.get_or_create(request).await?;
-        let idempotency_key = request
-            .idempotency_key()?
-            .unwrap_or(IdempotencyKey::fresh());
 
         worker
             .invoke(
@@ -1238,7 +1271,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_and_await_worker(
         &self,
-        request: Request<golem::workerexecutor::InvokeAndAwaitWorkerRequest>,
+        request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::InvokeAndAwaitWorkerResponse>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
@@ -1249,19 +1282,66 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             account_id = proto_account_id_string(&request.account_id),
         );
 
-        match self.invoke_and_await_worker_internal(&request).instrument(record.span.clone()).await {
-            Ok(result) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::InvokeAndAwaitWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::invoke_and_await_worker_response::Result::Success(result),
-                    ),
-                },
-            ))),
+        match self.invoke_and_await_worker_internal_proto(&request).instrument(record.span.clone()).await {
+            Ok(output) => {
+                let result = InvokeAndAwaitWorkerSuccess { output };
+
+                record.succeed(Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponse {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response::Result::Success(result),
+                        ),
+                    },
+                )))
+            },
             Err(err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::InvokeAndAwaitWorkerResponse {
                         result: Some(
                             golem::workerexecutor::invoke_and_await_worker_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn invoke_and_await_worker_typed(
+        &self,
+        request: Request<InvokeAndAwaitWorkerRequest>,
+    ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_and_await_worker_json_typed",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            calling_convention = request.calling_convention,
+            account_id = proto_account_id_string(&request.account_id),
+        );
+
+        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
+            Ok(type_annotated_value) => {
+
+                let result = golem::workerexecutor::InvokeAndAwaitWorkerSuccessTyped { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(type_annotated_value),
+                })};
+
+                record.succeed(Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response_typed::Result::Success(result),
+                        ),
+                    },
+                )))
+            },
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                        result: Some(
+                            golem::workerexecutor::invoke_and_await_worker_response_typed::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),

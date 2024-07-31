@@ -1,10 +1,7 @@
-use crate::service::worker::TypedResult;
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest};
 use async_trait::async_trait;
 
-use golem_service_base::model::FunctionResult;
-
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 
 #[async_trait]
@@ -18,17 +15,12 @@ pub trait WorkerRequestExecutor {
 // The result of a worker execution from worker-bridge,
 // which is a combination of function metadata and the type-annotated-value representing the actual result
 pub struct WorkerResponse {
-    pub result: TypedResult,
+    pub result: TypeAnnotatedValue,
 }
 
 impl WorkerResponse {
-    pub fn new(result: TypeAnnotatedValue, function_result_types: Vec<FunctionResult>) -> Self {
-        WorkerResponse {
-            result: TypedResult {
-                result,
-                function_result_types,
-            },
-        }
+    pub fn new(result: TypeAnnotatedValue) -> Self {
+        WorkerResponse { result }
     }
 }
 
