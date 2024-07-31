@@ -12,108 +12,113 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Debug;
+
+use std::fmt::Formatter;
 
 use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::shardmanager::shard_manager_error;
 use golem_common::metrics::api::TraceErrorKind;
-use tonic::Status;
+use golem_common::retriable_error::IsRetriableError;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(thiserror::Error, Debug)]
 pub enum ShardManagerError {
-    InvalidRequest { details: String },
-    Timeout { details: String },
-    Unknown(String),
+    #[error("No source IP for pod")]
+    NoSourceIpForPod,
+    #[error("Failed to resolve address for pod")]
+    FailedAddressResolveForPod,
+    #[error("Timeout")]
+    Timeout,
+    #[error("gRPC: error status: {0}")]
+    GrpcError(tonic::Status),
+    #[error("No result")]
+    NoResult,
+    #[error("Worker execution error: {0}")]
+    WorkerExecutionError(String),
+    #[error("Persistence serialization error {0}")]
+    SerializationError(String),
+    #[error("Redis error {0}")]
+    RedisError(fred::error::RedisError),
 }
 
-impl ShardManagerError {
-    pub fn invalid_request(details: impl Into<String>) -> Self {
-        ShardManagerError::InvalidRequest {
-            details: details.into(),
-        }
-    }
-
-    pub fn timeout(details: impl Into<String>) -> Self {
-        ShardManagerError::Timeout {
-            details: details.into(),
-        }
-    }
-
-    pub fn unknown(details: impl Into<String>) -> Self {
-        ShardManagerError::Unknown(details.into())
-    }
-}
-
-impl Display for ShardManagerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl IsRetriableError for ShardManagerError {
+    fn is_retriable(&self) -> bool {
         match self {
-            ShardManagerError::InvalidRequest { details } => {
-                write!(f, "Invalid request: {}", details)
-            }
-            ShardManagerError::Timeout { details } => write!(f, "Timeout: {}", details),
-            ShardManagerError::Unknown(s) => write!(f, "Unknown error: {}", s),
+            ShardManagerError::NoSourceIpForPod => false,
+            ShardManagerError::FailedAddressResolveForPod => false,
+            ShardManagerError::Timeout => true,
+            ShardManagerError::GrpcError(status) => status.is_retriable(),
+            ShardManagerError::NoResult => true,
+            ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
+            ShardManagerError::SerializationError(_) => false,
+            ShardManagerError::RedisError(_) => false,
         }
-    }
-}
-
-impl From<anyhow::Error> for ShardManagerError {
-    fn from(value: anyhow::Error) -> Self {
-        // TODO: downcast to specific errors
-        ShardManagerError::Unknown(format!("{value}"))
-    }
-}
-
-impl From<ShardManagerError> for tonic::Status {
-    fn from(value: ShardManagerError) -> Self {
-        Status::internal(format!("{value}"))
     }
 }
 
 impl From<ShardManagerError> for golem::shardmanager::ShardManagerError {
     fn from(value: ShardManagerError) -> golem::shardmanager::ShardManagerError {
-        match value {
-            ShardManagerError::InvalidRequest { details } => {
-                golem::shardmanager::ShardManagerError {
-                    error: Some(
-                        golem::shardmanager::shard_manager_error::Error::InvalidRequest(
-                            golem::common::ErrorBody { error: details },
-                        ),
-                    ),
-                }
+        let error = |cons: fn(golem::common::ErrorBody) -> shard_manager_error::Error,
+                     error: String| {
+            golem::shardmanager::ShardManagerError {
+                error: Some(cons(golem::common::ErrorBody { error })),
             }
-            ShardManagerError::Timeout { details } => golem::shardmanager::ShardManagerError {
-                error: Some(golem::shardmanager::shard_manager_error::Error::Timeout(
-                    golem::common::ErrorBody { error: details },
-                )),
-            },
-            ShardManagerError::Unknown(s) => golem::shardmanager::ShardManagerError {
-                error: Some(golem::shardmanager::shard_manager_error::Error::Unknown(
-                    golem::common::ErrorBody { error: s },
-                )),
-            },
+        };
+
+        match value {
+            ShardManagerError::NoSourceIpForPod => error(
+                shard_manager_error::Error::InvalidRequest,
+                "NoSourceIpForPod".to_string(),
+            ),
+            ShardManagerError::FailedAddressResolveForPod => error(
+                shard_manager_error::Error::Unknown,
+                "FailedAddressResolveForPod".to_string(),
+            ),
+            ShardManagerError::Timeout => {
+                error(shard_manager_error::Error::Timeout, "Timeout".to_string())
+            }
+            ShardManagerError::GrpcError(status) => {
+                error(shard_manager_error::Error::Unknown, status.to_string())
+            }
+            ShardManagerError::NoResult => {
+                error(shard_manager_error::Error::Unknown, "NoResult".to_string())
+            }
+            ShardManagerError::WorkerExecutionError(details) => {
+                error(shard_manager_error::Error::Unknown, details)
+            }
+            ShardManagerError::SerializationError(details) => {
+                error(shard_manager_error::Error::Unknown, details)
+            }
+            ShardManagerError::RedisError(err) => {
+                error(shard_manager_error::Error::Unknown, err.to_string())
+            }
         }
     }
 }
 
-impl Error for ShardManagerError {
-    fn description(&self) -> &str {
+#[derive(thiserror::Error, Debug)]
+pub enum HealthCheckError {
+    #[error("gRPC: error status: {0}")]
+    GrpcError(tonic::Status),
+    #[error("gRPC: transport error: {0}")]
+    GrpcTransportError(#[source] tonic::transport::Error),
+    #[error("gRPC: {0}")]
+    GrpcOther(&'static str),
+    #[error("K8s: connect error: {0}")]
+    K8sConnectError(#[source] kube::Error),
+    #[error("K8s: {0}")]
+    K8sOther(&'static str),
+}
+
+impl IsRetriableError for HealthCheckError {
+    fn is_retriable(&self) -> bool {
         match self {
-            ShardManagerError::InvalidRequest { .. } => "Invalid request",
-            ShardManagerError::Timeout { .. } => "Timeout",
-            ShardManagerError::Unknown { .. } => "Unknown error",
+            HealthCheckError::GrpcError(status) => status.is_retriable(),
+            HealthCheckError::GrpcTransportError(_) => true,
+            HealthCheckError::GrpcOther(_) => true,
+            HealthCheckError::K8sConnectError(_) => true,
+            HealthCheckError::K8sOther(_) => true,
         }
-    }
-}
-
-impl From<tonic::transport::Error> for ShardManagerError {
-    fn from(value: tonic::transport::Error) -> Self {
-        ShardManagerError::Unknown(format!("{value}"))
-    }
-}
-
-impl From<std::io::Error> for ShardManagerError {
-    fn from(value: std::io::Error) -> Self {
-        ShardManagerError::Unknown(format!("{value}"))
     }
 }
 
