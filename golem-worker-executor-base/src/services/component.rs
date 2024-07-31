@@ -742,7 +742,7 @@ impl ComponentServiceLocalFileSystem {
         })
     }
 
-    async fn read_component_metadata_from_local_file(component_path: &PathBuf) -> Option<Vec<u8>> {
+    async fn read_component_metadata_from_local_file(component_path: &Path) -> Option<Vec<u8>> {
         let component_metadata_local = Self::get_component_metadata_file(component_path).await?;
         tokio::fs::read(component_metadata_local).await.ok()
     }
