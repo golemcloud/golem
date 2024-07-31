@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display, Formatter};
 
 use crate::service::http::http_api_definition_validator::RouteValidationError;
-use golem_api_grpc::proto::golem::apidefinition::{api_definition_error, ApiDefinitionError};
+use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_service_base::model::ErrorBody;
@@ -152,7 +152,7 @@ mod conversion {
     use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
         apidefinition,
-        apidefinition::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
+        apidefinition::v1::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
         common::ErrorBody,
     };
     use poem_openapi::payload::Json;
@@ -232,7 +232,7 @@ mod conversion {
                     let errors = e
                         .errors
                         .into_iter()
-                        .map(|r| apidefinition::RouteValidationError {
+                        .map(|r| apidefinition::v1::RouteValidationError {
                             method: r.method.to_string(),
                             path: r.path.to_string(),
                             component: Some(r.component.into()),

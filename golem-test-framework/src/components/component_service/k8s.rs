@@ -24,7 +24,7 @@ use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};

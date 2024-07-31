@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use http::Uri;
 use tonic::transport::Channel;
 
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::{
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};

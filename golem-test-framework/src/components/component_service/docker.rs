@@ -21,7 +21,7 @@ use testcontainers::{Container, Image, RunnableImage};
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 
 use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
 use crate::components::docker::KillContainer;

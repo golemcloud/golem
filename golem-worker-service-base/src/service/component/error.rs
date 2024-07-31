@@ -43,9 +43,9 @@ impl From<tonic::transport::Error> for ComponentServiceError {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::component::ComponentError> for ComponentServiceError {
-    fn from(error: golem_api_grpc::proto::golem::component::ComponentError) -> Self {
-        use golem_api_grpc::proto::golem::component::component_error::Error;
+impl From<golem_api_grpc::proto::golem::component::v1::ComponentError> for ComponentServiceError {
+    fn from(error: golem_api_grpc::proto::golem::component::v1::ComponentError) -> Self {
+        use golem_api_grpc::proto::golem::component::v1::component_error::Error;
         match error.error {
             Some(Error::BadRequest(errors)) => ComponentServiceError::BadRequest(errors.errors),
             Some(Error::Unauthorized(error)) => ComponentServiceError::Unauthorized(error.error),

@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package golem.apidefinition;
+package golem.apidefinition.v1;
 
 import "golem/common/empty.proto";
-import "golem/apidefinition/api_definition_error.proto";
+import "golem/apidefinition/v1/api_definition_error.proto";
 import "golem/apidefinition/api_definition.proto";
 
 service ApiDefinitionService {

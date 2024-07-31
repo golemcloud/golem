@@ -27,12 +27,12 @@ use crate::services::golem_config::{
 use crate::storage::blob::BlobStorage;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::{
-    download_component_response, get_component_metadata_response, DownloadComponentRequest,
-    GetLatestComponentRequest, GetVersionedComponentRequest,
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::{
+    download_component_response, get_component_metadata_response, ComponentError,
+    DownloadComponentRequest, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
-use golem_api_grpc::proto::golem::component::{ComponentError, LinearMemory};
+use golem_api_grpc::proto::golem::component::LinearMemory;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::component_metadata::RawComponentMetadata;

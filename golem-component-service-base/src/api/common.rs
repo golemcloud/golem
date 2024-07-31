@@ -1,4 +1,4 @@
-use golem_api_grpc::proto::golem::component::{component_error, ComponentError};
+use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
 use golem_common::metrics::api::TraceErrorKind;
 use std::fmt::{Debug, Formatter};
 
@@ -29,7 +29,7 @@ impl<'a> TraceErrorKind for ComponentTraceErrorKind<'a> {
 mod conversion {
     use crate::service::component;
     use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
-    use golem_api_grpc::proto::golem::component::{component_error, ComponentError};
+    use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
 
     impl From<component::ComponentError> for ComponentError {
         fn from(value: component::ComponentError) -> Self {
