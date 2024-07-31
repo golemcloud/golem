@@ -336,11 +336,21 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[constructor]counter}",
         &cfg.arg('j', "parameters"),
-        "[\"counter1\"]",
+        "[{\"str\": \"counter1\"}]",
         &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;
+    let handle_str = match result {
+        serde_json::Value::Array(vec) => match vec[0].clone() {
+            serde_json::Value::String(str) => str,
+            _ => panic!("Expected handle string"),
+        },
+        _ => panic!("Expected handle string"),
+    };
+
+    let handle_json = format!("[{{\"handle\" : \"{}\"}}]", handle_str);
     let args_key1: IdempotencyKey = IdempotencyKey::fresh();
+
     cli.run_json(&[
         "worker",
         "invoke-and-await",
@@ -351,7 +361,7 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[drop]counter}",
         &cfg.arg('j', "parameters"),
-        &result.to_string(),
+        handle_json.as_str(),
         &cfg.arg('k', "idempotency-key"),
         &args_key1.0,
     ])?;
