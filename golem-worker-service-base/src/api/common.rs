@@ -94,7 +94,7 @@ impl ApiEndpointError {
     }
 }
 
-pub struct WorkerTraceErrorKind<'a>(pub &'a worker::WorkerError);
+pub struct WorkerTraceErrorKind<'a>(pub &'a worker::v1::WorkerError);
 
 impl<'a> Debug for WorkerTraceErrorKind<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -107,12 +107,12 @@ impl<'a> TraceErrorKind for WorkerTraceErrorKind<'a> {
         match &self.0.error {
             None => "None",
             Some(error) => match error {
-                worker::worker_error::Error::BadRequest(_) => "BadRequest",
-                worker::worker_error::Error::Unauthorized(_) => "Unauthorized",
-                worker::worker_error::Error::LimitExceeded(_) => "LimitExceeded",
-                worker::worker_error::Error::NotFound(_) => "NotFound",
-                worker::worker_error::Error::AlreadyExists(_) => "AlreadyExists",
-                worker::worker_error::Error::InternalError(_) => "InternalError",
+                worker::v1::worker_error::Error::BadRequest(_) => "BadRequest",
+                worker::v1::worker_error::Error::Unauthorized(_) => "Unauthorized",
+                worker::v1::worker_error::Error::LimitExceeded(_) => "LimitExceeded",
+                worker::v1::worker_error::Error::NotFound(_) => "NotFound",
+                worker::v1::worker_error::Error::AlreadyExists(_) => "AlreadyExists",
+                worker::v1::worker_error::Error::InternalError(_) => "InternalError",
             },
         }
     }

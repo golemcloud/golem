@@ -297,7 +297,7 @@ impl Deps {
 
     async fn invoke_and_await_workers(
         workers: &[WorkerId],
-    ) -> Result<(), worker::worker_error::Error> {
+    ) -> Result<(), worker::v1::worker_error::Error> {
         let mut tasks = JoinSet::new();
         for worker_id in workers {
             tasks.spawn({

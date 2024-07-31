@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
 use golem_common::model::{AccountId, ComponentId, WorkerId};
@@ -61,7 +61,7 @@ impl From<WorkerServiceError> for GrpcWorkerError {
 impl From<WorkerServiceError> for worker_error::Error {
     fn from(error: WorkerServiceError) -> Self {
         use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
-        use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
+        use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 
         match error {
             error @ (WorkerServiceError::ComponentNotFound(_)

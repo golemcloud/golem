@@ -19,16 +19,18 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
-use golem_api_grpc::proto::golem::worker::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
+use golem_api_grpc::proto::golem::worker::v1::{
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response, log_event,
-    resume_worker_response, update_worker_response, worker_execution_error, CallingConvention,
-    ConnectWorkerRequest, DeleteWorkerRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeParameters, InvokeRequest, LaunchNewWorkerRequest, LogEvent,
-    ResumeWorkerRequest, StdErrLog, StdOutLog, UpdateMode, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response,
+    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
+    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeRequest,
+    LaunchNewWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError, WorkerExecutionError,
+};
+use golem_api_grpc::proto::golem::worker::{
+    log_event, CallingConvention, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,

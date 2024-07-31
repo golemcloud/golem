@@ -1,7 +1,8 @@
 use tonic::Status;
 
-use golem_api_grpc::proto::golem::worker::{
-    self, worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
+use golem_api_grpc::proto::golem::worker::v1::{
+    worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 
 // The dependents of golem-worker-service-base is expected
@@ -89,7 +90,7 @@ impl From<ComponentServiceError> for worker_error::Error {
                 worker_error::Error::BadRequest(ErrorsBody { errors })
             }
             ComponentServiceError::Internal(error) => {
-                worker_error::Error::InternalError(worker::WorkerExecutionError {
+                worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),
                     })),

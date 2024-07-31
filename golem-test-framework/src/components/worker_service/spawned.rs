@@ -21,7 +21,7 @@ use crate::components::worker_service::{
 use crate::components::{ChildProcessLogger, GolemEnvVars};
 use async_trait::async_trait;
 
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
