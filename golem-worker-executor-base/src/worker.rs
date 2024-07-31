@@ -22,6 +22,7 @@ use std::time::Duration;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
+use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -45,6 +46,9 @@ use golem_common::model::{
     WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
+use golem_service_base::exports;
+use golem_service_base::typechecker::TypeCheckOut;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
@@ -53,7 +57,7 @@ use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
-use wasmtime::{Store, UpdateDeadline};
+use wasmtime::{AsContext, Store, UpdateDeadline};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -423,7 +427,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
-    ) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError> {
+    ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
@@ -450,7 +454,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
-    ) -> Result<Vec<Value>, GolemError> {
+    ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
             .invoke(
                 idempotency_key.clone(),
@@ -574,7 +578,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: Vec<Value>,
+        result: TypeAnnotatedValue,
         oplog_index: OplogIndex,
     ) {
         let mut map = self.invocation_results.write().unwrap();
@@ -1385,17 +1389,98 @@ impl RunningWorker {
                                                 output,
                                                 consumed_fuel,
                                             }) => {
-                                                store
-                                                    .data_mut()
-                                                    .on_invocation_success(
-                                                        &full_function_name,
-                                                        &function_input,
-                                                        consumed_fuel,
-                                                        output,
-                                                    )
-                                                    .await
-                                                    .unwrap(); // TODO: handle this error
-                                                false // do not break
+                                                let component_metadata =
+                                                    store.as_context().data().component_metadata();
+
+                                                let function_results = exports::function_by_name(
+                                                    &component_metadata.exports,
+                                                    &full_function_name,
+                                                );
+
+                                                match function_results {
+                                                    Ok(Some(export_function)) => {
+                                                        let function_results = export_function
+                                                            .results
+                                                            .into_iter()
+                                                            .map(|t| t.into())
+                                                            .collect();
+
+                                                        let result = output
+                                                            .validate_function_result(
+                                                                function_results,
+                                                                calling_convention,
+                                                            )
+                                                            .map_err(|e| {
+                                                                GolemError::ValueMismatch {
+                                                                    details: e.join(", "),
+                                                                }
+                                                            });
+
+                                                        match result {
+                                                            Ok(result) => {
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_success(
+                                                                        &full_function_name,
+                                                                        &function_input,
+                                                                        consumed_fuel,
+                                                                        result,
+                                                                    )
+                                                                    .await
+                                                                    .unwrap(); // TODO: handle this error
+                                                                false // do not break
+                                                            }
+                                                            Err(error) => {
+                                                                let trap_type =
+                                                                    TrapType::from_error::<Ctx>(
+                                                                        &anyhow!(error),
+                                                                    );
+
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_failure(
+                                                                        &trap_type,
+                                                                    )
+                                                                    .await;
+
+                                                                final_decision =
+                                                                    RetryDecision::None;
+                                                                true // break
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Ok(None) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(
+                                                                &TrapType::Error(
+                                                                    WorkerError::Unknown(
+                                                                        "Function not found"
+                                                                            .to_string(),
+                                                                    ),
+                                                                ),
+                                                            )
+                                                            .await;
+
+                                                        final_decision = RetryDecision::None;
+                                                        true // break
+                                                    }
+
+                                                    Err(result) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(
+                                                                &TrapType::Error(
+                                                                    WorkerError::Unknown(result),
+                                                                ),
+                                                            )
+                                                            .await;
+
+                                                        final_decision = RetryDecision::None;
+                                                        true // break
+                                                    }
+                                                }
                                             }
                                             _ => {
                                                 let trap_type = match result {
@@ -1618,7 +1703,7 @@ impl RunningWorker {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<Vec<Value>, TrapType>,
+        result: Result<TypeAnnotatedValue, TrapType>,
         oplog_idx: OplogIndex,
     },
     Lazy {
@@ -1640,14 +1725,9 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
-                    let values: Vec<golem_wasm_rpc::protobuf::Val> = oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
-                    let values = values
-                        .into_iter()
-                        .map(|val| {
-                            val.try_into()
-                                .expect("failed to decode serialized protobuf value")
-                        })
-                        .collect();
+                    let values: TypeAnnotatedValue =
+                        oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+
                     Ok(values)
                 }
                 OplogEntry::Error { error, .. } => Err(TrapType::Error(error)),
@@ -1677,6 +1757,22 @@ pub enum RetryDecision {
 enum WorkerCommand {
     Invocation,
     Interrupt(InterruptKind),
+}
+
+pub async fn get_component_metadata<Ctx: WorkerCtx>(
+    worker: &Arc<Worker<Ctx>>,
+) -> Result<ComponentMetadata, GolemError> {
+    let component_id = worker.owned_worker_id.component_id();
+    let worker_metadata = worker.get_metadata().await?;
+
+    let component_version = worker_metadata.last_known_status.component_version;
+
+    let component_metadata = worker
+        .component_service()
+        .get_metadata(&component_id, Some(component_version))
+        .await?;
+
+    Ok(component_metadata)
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.

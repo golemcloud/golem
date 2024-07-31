@@ -20,6 +20,10 @@ mocks = []
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
+
+# Avoid this dependency and simply move type checkers into worker executor base ensuring we don't r
+# randomly download component metadata and typechecks
+golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 

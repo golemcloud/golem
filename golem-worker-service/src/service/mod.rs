@@ -28,11 +28,9 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
-use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
 use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
-use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault, ApiDeploymentServiceNoop,
@@ -56,7 +54,6 @@ pub struct Services {
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
-    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -103,10 +100,6 @@ impl Services {
 
         let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
-        );
-
-        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
-            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
         );
 
         let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
@@ -169,7 +162,6 @@ impl Services {
             http_definition_lookup_service,
             worker_to_http_service,
             component_service,
-            worker_metadata_fetcher,
             api_definition_validator_service,
         })
     }
@@ -195,10 +187,6 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
-        let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> = Arc::new(
-            DefaultWorkerComponentMetadataFetcher::new(worker_service.clone()),
-        );
-
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
                 + Sync
@@ -218,7 +206,6 @@ impl Services {
             http_definition_lookup_service,
             worker_to_http_service,
             component_service,
-            worker_metadata_fetcher,
             api_definition_validator_service,
         }
     }

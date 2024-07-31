@@ -5,7 +5,9 @@ use crate::primitive::GetPrimitive;
 use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::get_typed_value_from_json;
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+use golem_wasm_rpc::protobuf::{Type, TypeAnnotatedValue as RootTypeAnnotatedValue};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -50,10 +52,10 @@ impl TypedHttRequestDetails {
     pub fn empty() -> TypedHttRequestDetails {
         TypedHttRequestDetails {
             typed_path_key_values: TypedPathKeyValues(TypedKeyValueCollection::default()),
-            typed_request_body: TypedRequestBody(TypeAnnotatedValue::Record {
+            typed_request_body: TypedRequestBody(TypeAnnotatedValue::Record(TypedRecord {
                 value: vec![],
                 typ: vec![],
-            }),
+            })),
             typed_query_values: TypedQueryKeyValues(TypedKeyValueCollection::default()),
             typed_header_values: TypedHeaderValues(TypedKeyValueCollection::default()),
         }
@@ -73,27 +75,49 @@ impl TypedHttRequestDetails {
         let typed_query_values: TypeAnnotatedValue = self.typed_query_values.clone().0.into();
         let merged_type_annotated_value = typed_path_values.merge(&typed_query_values).clone();
 
-        TypeAnnotatedValue::Record {
+        TypeAnnotatedValue::Record(TypedRecord {
             typ: vec![
-                (
-                    "path".to_string(),
-                    AnalysedType::from(&merged_type_annotated_value),
-                ),
-                ("body".to_string(), (&self.typed_request_body.0).into()),
-                (
-                    "headers".to_string(),
-                    self.typed_header_values.0.clone().into(),
-                ),
+                NameTypePair {
+                    name: "path".to_string(),
+                    typ: Type::try_from(&merged_type_annotated_value).ok(),
+                },
+                NameTypePair {
+                    name: "body".to_string(),
+                    typ: Type::try_from(&self.typed_request_body.0).ok(),
+                },
+                NameTypePair {
+                    name: "headers".to_string(),
+                    typ: {
+                        let typ: AnalysedType = self.typed_header_values.0.clone().into();
+                        Some((&typ).into())
+                    },
+                },
             ],
             value: vec![
-                ("path".to_string(), merged_type_annotated_value),
-                ("body".to_string(), self.typed_request_body.clone().0),
-                (
-                    "headers".to_string(),
-                    self.typed_header_values.clone().0.into(),
-                ),
+                NameValuePair {
+                    name: "path".to_string(),
+                    value: Some(RootTypeAnnotatedValue {
+                        type_annotated_value: Some(merged_type_annotated_value),
+                    }),
+                },
+                NameValuePair {
+                    name: "body".to_string(),
+                    value: Some({
+                        RootTypeAnnotatedValue {
+                            type_annotated_value: Some(self.typed_request_body.0.clone()),
+                        }
+                    }),
+                },
+                NameValuePair {
+                    name: "headers".to_string(),
+                    value: Some({
+                        RootTypeAnnotatedValue {
+                            type_annotated_value: Some(self.typed_header_values.clone().0.into()),
+                        }
+                    }),
+                },
             ],
-        }
+        })
     }
 
     fn from_input_http_request(
@@ -211,7 +235,11 @@ impl From<TypedKeyValueCollection> for AnalysedType {
         let mut typ: Vec<(String, AnalysedType)> = vec![];
 
         for record in &typed_key_value_collection.fields {
-            typ.push((record.name.clone(), AnalysedType::from(&record.value)));
+            typ.push((
+                record.name.clone(),
+                AnalysedType::try_from(&record.value)
+                    .expect("Internal error: Failed to retrieve type from Type Annotated Value"),
+            ));
         }
 
         AnalysedType::Record(typ)
@@ -220,15 +248,28 @@ impl From<TypedKeyValueCollection> for AnalysedType {
 
 impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
     fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
-        let mut typ: Vec<(String, AnalysedType)> = vec![];
-        let mut value: Vec<(String, TypeAnnotatedValue)> = vec![];
+        let mut typ: Vec<NameTypePair> = vec![];
+        let mut value: Vec<NameValuePair> = vec![];
 
         for record in typed_key_value_collection.fields {
-            typ.push((record.name.clone(), AnalysedType::from(&record.value)));
-            value.push((record.name, record.value));
+            typ.push(NameTypePair {
+                name: record.name.clone(),
+                typ: Some(
+                    Type::try_from(&record.value).expect(
+                        "Internal error: Failed to retrieve type from Type Annotated Value",
+                    ),
+                ),
+            });
+
+            value.push(NameValuePair {
+                name: record.name.clone(),
+                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(record.value),
+                }),
+            });
         }
 
-        TypeAnnotatedValue::Record { typ, value }
+        TypeAnnotatedValue::Record(TypedRecord { typ, value })
     }
 }
 
@@ -241,7 +282,7 @@ pub struct TypedKeyValue {
 mod internal {
 
     use crate::primitive::{Number, Primitive};
-    use golem_wasm_rpc::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     pub(crate) fn get_typed_value_from_primitive(value: impl AsRef<str>) -> TypeAnnotatedValue {
         let primitive = Primitive::from(value.as_ref().to_string());

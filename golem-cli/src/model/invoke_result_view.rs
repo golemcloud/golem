@@ -2,7 +2,8 @@ use crate::model::component::{function_result_types, Component};
 use crate::model::wave::{type_to_analysed, type_wave_compatible};
 use crate::model::GolemError;
 use golem_client::model::{InvokeResult, Type};
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::type_annotated_value_to_string;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
 use tracing::{debug, info};
@@ -68,7 +69,7 @@ impl InvokeResultView {
     fn try_wave_format(json: &Value, typ: &Type) -> Result<String, GolemError> {
         let parsed = Self::try_parse_single(json, typ)?;
 
-        match wasm_wave::to_string(&parsed) {
+        match type_annotated_value_to_string(&parsed) {
             Ok(res) => Ok(res),
             Err(err) => {
                 info!("Failed to format parsed value as wave: {err:?}");

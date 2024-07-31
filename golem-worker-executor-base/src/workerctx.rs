@@ -16,6 +16,7 @@ use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
@@ -271,7 +272,7 @@ pub trait InvocationHooks {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError>;
 }
 
