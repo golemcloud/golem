@@ -12,23 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::backtrace::Backtrace;
 use std::fs::OpenOptions;
 use std::io::stdout;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::env_config_provider;
-use crate::tracing::format::JsonFlattenSpanFormatter;
 use figment::providers::Serialized;
 use figment::Figment;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
+
+use crate::config::env_config_provider;
+use crate::tracing::format::JsonFlattenSpanFormatter;
 
 pub enum Output {
     Stdout,
@@ -390,6 +392,12 @@ where
     }
 
     tracing_subscriber::registry().with(layers).init();
+
+    std::panic::set_hook({
+        Box::new(|panic_info| {
+            error!(panic_info = %panic_info, panic_backtrace=%Backtrace::force_capture() , "panic");
+        })
+    });
 
     if config.dtor_friendly {
         println!("Tracing initialized, config: {:?}", config);
