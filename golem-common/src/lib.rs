@@ -16,6 +16,8 @@ pub mod cache;
 pub mod client;
 pub mod component_metadata;
 pub mod config;
+
+pub mod exports;
 pub mod grpc;
 pub mod metrics;
 pub mod model;

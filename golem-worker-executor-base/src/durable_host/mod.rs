@@ -101,13 +101,13 @@ mod sync_helper;
 
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
+use crate::function_result_interpreter::interpret_function_results;
 use crate::services::component::ComponentMetadata;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
+use golem_common::exports;
 use golem_common::retries::get_delay;
-use golem_service_base::exports;
-use golem_service_base::typechecker::TypeCheckOut;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -1130,15 +1130,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     .map(|t| t.into())
                                                     .collect();
 
-                                            let result = output
-                                                .validate_function_result(
-                                                    function_results,
-                                                    calling_convention
-                                                        .unwrap_or(CallingConvention::Component),
-                                                )
-                                                .map_err(|e| GolemError::ValueMismatch {
-                                                    details: e.join(", "),
-                                                })?;
+                                            let result = interpret_function_results(
+                                                output,
+                                                function_results,
+                                                calling_convention
+                                                    .unwrap_or(CallingConvention::Component),
+                                            )
+                                            .map_err(|e| GolemError::ValueMismatch {
+                                                details: e.join(", "),
+                                            })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
                                                 .data_mut()

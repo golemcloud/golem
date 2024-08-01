@@ -37,10 +37,10 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::component_metadata::RawComponentMetadata;
 use golem_common::config::RetryConfig;
+use golem_common::exports::Export;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
-use golem_service_base::model::Export;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
@@ -450,7 +450,7 @@ async fn get_metadata_via_grpc(
                             let vec: Vec<Result<Export, String>> = export
                                 .into_iter()
                                 .map(|proto_export| {
-                                    golem_service_base::model::Export::try_from(proto_export)
+                                    golem_common::exports::Export::try_from(proto_export)
                                 })
                                 .collect();
                             vec.into_iter().collect()
@@ -640,12 +640,12 @@ impl ComponentServiceLocalFileSystem {
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
         // check if component metadata is already available in a corresponding `json` file in a target directory
         // otherwise, try to analyse the component file.
-        let component_metadata_opt: Option<golem_service_base::model::ComponentMetadata> =
+        let component_metadata_opt: Option<golem_common::component_metadata::ComponentMetadata> =
             Self::read_component_metadata_from_local_file(path)
                 .await
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-        if let Some(golem_service_base::model::ComponentMetadata {
+        if let Some(golem_common::component_metadata::ComponentMetadata {
             memories, exports, ..
         }) = component_metadata_opt
         {
@@ -660,13 +660,13 @@ impl ComponentServiceLocalFileSystem {
             Ok((linear_memories, exports))
         } else {
             let component_bytes = &tokio::fs::read(&path).await?;
-            let raw_component_metadata =
-                RawComponentMetadata::from_data(component_bytes).map_err(|reason| {
-                    GolemError::GetLatestVersionOfComponentFailed {
-                        component_id: component_id.clone(),
-                        reason: reason.to_string(),
-                    }
-                })?;
+            let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)
+                .map_err(|reason| {
+                GolemError::GetLatestVersionOfComponentFailed {
+                    component_id: component_id.clone(),
+                    reason: reason.to_string(),
+                }
+            })?;
 
             let exports = raw_component_metadata
                 .exports

@@ -26,8 +26,9 @@ use tracing::{error, info};
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
+use golem_common::component_metadata::ComponentMetadata;
 use golem_service_base::model::{
-    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
 };
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;

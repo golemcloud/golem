@@ -1,15 +1,21 @@
+use async_trait::async_trait;
 use golem_wasm_rpc::protobuf::type_annotated_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use golem_wasm_rpc::Uri;
+use poem_openapi::types::{ParseFromJSON, ToJSON};
+use poem_openapi::{registry, types};
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value as JsonValue;
-use std::str::FromStr;
+use serde_json::Value;
+use std::collections::HashMap;
 
 use thiserror::Error;
 
+// This is different to wasm_rpc::Value mainly for the type `Record` that it holds `Keys`
+// TODO; Evaluate the need of having the record know about keys, before moving this to wasm-rpc
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum PreciseJson {
     Bool(bool),
     S8(i8),
@@ -27,7 +33,7 @@ pub enum PreciseJson {
     // List have the possibility of holding heterogeneous types here, but easy for users to understand this encoding
     List(Vec<PreciseJson>),
     Tuple(Vec<PreciseJson>),
-    Record(Vec<(String, PreciseJson)>),
+    Record(HashMap<String, PreciseJson>),
     Variant {
         case_idx: u32,
         case_value: Box<PreciseJson>,
@@ -42,6 +48,57 @@ pub enum PreciseJson {
     },
 }
 
+impl types::Type for PreciseJson {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "OpenApiDefinition".into()
+    }
+
+    fn schema_ref() -> registry::MetaSchemaRef {
+        registry::MetaSchemaRef::Inline(Box::new(registry::MetaSchema::ANY))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl ToJSON for PreciseJson {
+    fn to_json(&self) -> Option<Value> {
+        serde_json::to_value(self).ok()
+    }
+}
+
+#[async_trait]
+impl ParseFromJSON for PreciseJson {
+    fn parse_from_json(value: Option<serde_json::Value>) -> types::ParseResult<Self> {
+        match value {
+            Some(value) => match serde_json::from_value::<PreciseJson>(value) {
+                Ok(precise_json) => Ok(precise_json),
+                Err(e) => Err(types::ParseError::<Self>::custom(format!(
+                    "Failed to parse PreciseJson: {}",
+                    e
+                ))),
+            },
+
+            _ => Err(poem_openapi::types::ParseError::<Self>::custom(
+                "Precise JSON missing".to_string(),
+            )),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum PreciseJsonConversionError {
     #[error("Missing field `{0}`")]
@@ -50,398 +107,6 @@ pub enum PreciseJsonConversionError {
     InvalidValue(String),
     #[error("Invalid type annotation: {0}")]
     InvalidTypeAnnotation(String),
-}
-
-impl From<PreciseJson> for JsonValue {
-    fn from(val: PreciseJson) -> Self {
-        match val {
-            PreciseJson::Bool(b) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "bool".to_string(),
-                JsonValue::Bool(b),
-            )])),
-            PreciseJson::S8(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "s8".to_string(),
-                JsonValue::Number((n as i64).into()),
-            )])),
-            PreciseJson::U8(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "u8".to_string(),
-                JsonValue::Number((n as u64).into()),
-            )])),
-            PreciseJson::S16(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "s16".to_string(),
-                JsonValue::Number((n as i64).into()),
-            )])),
-            PreciseJson::U16(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "u16".to_string(),
-                JsonValue::Number((n as u64).into()),
-            )])),
-            PreciseJson::S32(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "s32".to_string(),
-                JsonValue::Number((n as i64).into()),
-            )])),
-            PreciseJson::U32(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "u32".to_string(),
-                JsonValue::Number((n as u64).into()),
-            )])),
-            PreciseJson::S64(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "s64".to_string(),
-                JsonValue::Number(n.into()),
-            )])),
-            PreciseJson::U64(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "u64".to_string(),
-                JsonValue::Number(n.into()),
-            )])),
-            PreciseJson::F32(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "f32".to_string(),
-                JsonValue::Number(serde_json::Number::from_f64(n as f64).unwrap()),
-            )])),
-            PreciseJson::F64(n) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "f64".to_string(),
-                JsonValue::Number(serde_json::Number::from_f64(n).unwrap()),
-            )])),
-            PreciseJson::Chr(c) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "chr".to_string(),
-                JsonValue::String(c.to_string()),
-            )])),
-            PreciseJson::Str(s) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "str".to_string(),
-                JsonValue::String(s),
-            )])),
-            PreciseJson::List(lst) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "list".to_string(),
-                JsonValue::Array(lst.into_iter().map(|v| v.into()).collect()),
-            )])),
-            PreciseJson::Tuple(tpl) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "tuple".to_string(),
-                JsonValue::Array(tpl.into_iter().map(|v| v.into()).collect()),
-            )])),
-            PreciseJson::Record(rec) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "record".to_string(),
-                JsonValue::Object(rec.into_iter().map(|(k, v)| (k, v.into())).collect()),
-            )])),
-            PreciseJson::Variant {
-                case_idx,
-                case_value,
-            } => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "variant".to_string(),
-                JsonValue::Object(serde_json::Map::from_iter(vec![
-                    ("case_idx".to_string(), JsonValue::Number(case_idx.into())),
-                    ("case_value".to_string(), (*case_value).into()),
-                ])),
-            )])),
-            PreciseJson::Enum(e) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "enum".to_string(),
-                JsonValue::Number(e.into()),
-            )])),
-            PreciseJson::Flags(flags) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "flags".to_string(),
-                JsonValue::Array(flags.into_iter().map(JsonValue::Bool).collect()),
-            )])),
-            PreciseJson::Option(opt) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "option".to_string(),
-                match opt {
-                    Some(boxed) => (*boxed).into(),
-                    None => JsonValue::Null,
-                },
-            )])),
-            PreciseJson::Result(res) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                "result".to_string(),
-                match res {
-                    Ok(boxed) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                        "ok".to_string(),
-                        (*boxed).into(),
-                    )])),
-                    Err(boxed) => JsonValue::Object(serde_json::Map::from_iter(vec![(
-                        "err".to_string(),
-                        (*boxed).into(),
-                    )])),
-                },
-            )])),
-            PreciseJson::Handle { uri, resource_id } => {
-                JsonValue::Object(serde_json::Map::from_iter(vec![(
-                    "handle".to_string(),
-                    JsonValue::String(format!("{}/{}", uri, resource_id)),
-                )]))
-            }
-        }
-    }
-}
-
-impl TryFrom<JsonValue> for PreciseJson {
-    type Error = PreciseJsonConversionError;
-
-    fn try_from(value: JsonValue) -> Result<Self, Self::Error> {
-        match value {
-            JsonValue::Object(obj) => {
-                if obj.len() != 1 {
-                    return Err(PreciseJsonConversionError::InvalidTypeAnnotation(format!(
-                        "Expected a single key, found {} keys",
-                        obj.len()
-                    )));
-                }
-
-                let (key, value) = obj.into_iter().next().unwrap();
-                match key.as_str() {
-                    "bool" => match value {
-                        JsonValue::Bool(b) => Ok(PreciseJson::Bool(b)),
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected boolean value".to_string(),
-                        )),
-                    },
-                    "s8" => match value {
-                        JsonValue::Number(n) if n.is_i64() => {
-                            Ok(PreciseJson::S8(n.as_i64().unwrap() as i8))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected s8 value".to_string(),
-                        )),
-                    },
-                    "u8" => match value {
-                        JsonValue::Number(n) if n.is_u64() => {
-                            Ok(PreciseJson::U8(n.as_u64().unwrap() as u8))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected u8 value".to_string(),
-                        )),
-                    },
-                    "s16" => match value {
-                        JsonValue::Number(n) if n.is_i64() => {
-                            Ok(PreciseJson::S16(n.as_i64().unwrap() as i16))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected s16 value".to_string(),
-                        )),
-                    },
-                    "u16" => match value {
-                        JsonValue::Number(n) if n.is_u64() => {
-                            Ok(PreciseJson::U16(n.as_u64().unwrap() as u16))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected u16 value".to_string(),
-                        )),
-                    },
-                    "s32" => match value {
-                        JsonValue::Number(n) if n.is_i64() => {
-                            Ok(PreciseJson::S32(n.as_i64().unwrap() as i32))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected s32 value".to_string(),
-                        )),
-                    },
-                    "u32" => match value {
-                        JsonValue::Number(n) if n.is_u64() => {
-                            Ok(PreciseJson::U32(n.as_u64().unwrap() as u32))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected u32 value".to_string(),
-                        )),
-                    },
-                    "s64" => match value {
-                        JsonValue::Number(n) if n.is_i64() => {
-                            Ok(PreciseJson::S64(n.as_i64().unwrap()))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected s64 value".to_string(),
-                        )),
-                    },
-                    "u64" => match value {
-                        JsonValue::Number(n) if n.is_u64() => {
-                            Ok(PreciseJson::U64(n.as_u64().unwrap()))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected u64 value".to_string(),
-                        )),
-                    },
-                    "f32" => match value {
-                        JsonValue::Number(n) if n.is_f64() => {
-                            Ok(PreciseJson::F32(n.as_f64().unwrap() as f32))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected f32 value".to_string(),
-                        )),
-                    },
-                    "f64" => match value {
-                        JsonValue::Number(n) if n.is_f64() => {
-                            Ok(PreciseJson::F64(n.as_f64().unwrap()))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected f64 value".to_string(),
-                        )),
-                    },
-                    "chr" => match value {
-                        JsonValue::String(s) if s.chars().count() == 1 => {
-                            Ok(PreciseJson::Chr(s.chars().next().unwrap()))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected single character".to_string(),
-                        )),
-                    },
-                    "str" => match value {
-                        JsonValue::String(s) => Ok(PreciseJson::Str(s)),
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected string value".to_string(),
-                        )),
-                    },
-                    "list" => match value {
-                        JsonValue::Array(arr) => {
-                            let elems: Result<Vec<PreciseJson>, _> =
-                                arr.into_iter().map(PreciseJson::try_from).collect();
-                            elems.map(PreciseJson::List)
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected list value".to_string(),
-                        )),
-                    },
-                    "tuple" => match value {
-                        JsonValue::Array(arr) => {
-                            let elems: Result<Vec<PreciseJson>, _> =
-                                arr.into_iter().map(PreciseJson::try_from).collect();
-                            elems.map(PreciseJson::Tuple)
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected tuple value".to_string(),
-                        )),
-                    },
-                    "record" => match value {
-                        JsonValue::Object(record) => {
-                            let record_elems: Result<Vec<(String, PreciseJson)>, _> = record
-                                .into_iter()
-                                .map(|(k, v)| PreciseJson::try_from(v).map(|p| (k, p)))
-                                .collect();
-                            record_elems.map(PreciseJson::Record)
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected record value".to_string(),
-                        )),
-                    },
-                    "variant" => match value {
-                        JsonValue::Object(variant) => {
-                            let case_idx = variant
-                                .get("case_idx")
-                                .and_then(|v| v.as_number().and_then(|n| n.as_i64()))
-                                .ok_or_else(|| {
-                                    PreciseJsonConversionError::MissingField("case_idx".to_string())
-                                })
-                                .and_then(|idx| {
-                                    u32::try_from(idx).map_err(|_| {
-                                        PreciseJsonConversionError::InvalidValue(
-                                            "Invalid index for variant".to_string(),
-                                        )
-                                    })
-                                })?;
-
-                            let case_value = variant
-                                .get("case_value")
-                                .ok_or(PreciseJsonConversionError::MissingField(
-                                    "case_value".to_string(),
-                                ))
-                                .and_then(|v| PreciseJson::try_from(v.clone()))?;
-                            Ok(PreciseJson::Variant {
-                                case_idx,
-                                case_value: Box::new(case_value),
-                            })
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected variant value".to_string(),
-                        )),
-                    },
-                    "enum" => match value {
-                        JsonValue::Number(n) if n.is_u64() => {
-                            Ok(PreciseJson::Enum(n.as_u64().unwrap() as u32))
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected enum value".to_string(),
-                        )),
-                    },
-                    "flags" => match value {
-                        JsonValue::Array(arr) => {
-                            let flags: Result<Vec<bool>, _> = arr
-                                .into_iter()
-                                .map(|v| match v {
-                                    JsonValue::Bool(b) => Ok(b),
-                                    _ => Err(PreciseJsonConversionError::InvalidValue(
-                                        "Expected boolean value in flags".to_string(),
-                                    )),
-                                })
-                                .collect();
-                            flags.map(PreciseJson::Flags)
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected flags value".to_string(),
-                        )),
-                    },
-                    "option" => match value {
-                        JsonValue::Null => Ok(PreciseJson::Option(None)),
-                        _ => {
-                            let boxed = Box::new(PreciseJson::try_from(value)?);
-                            Ok(PreciseJson::Option(Some(boxed)))
-                        }
-                    },
-                    "result" => match value {
-                        JsonValue::Object(result) => {
-                            if result.len() != 1 {
-                                return Err(PreciseJsonConversionError::InvalidValue(
-                                    "Expected result object with exactly one field".to_string(),
-                                ));
-                            }
-                            let (k, v) = result.into_iter().next().unwrap();
-                            match k.as_str() {
-                                "ok" => {
-                                    Ok(PreciseJson::Result(Ok(Box::new(PreciseJson::try_from(v)?))))
-                                }
-                                "err" => Ok(PreciseJson::Result(Err(Box::new(
-                                    PreciseJson::try_from(v)?,
-                                )))),
-                                _ => Err(PreciseJsonConversionError::InvalidValue(
-                                    "Expected result key to be 'Ok' or 'Err'".to_string(),
-                                )),
-                            }
-                        }
-                        _ => Err(PreciseJsonConversionError::InvalidValue(
-                            "Expected result key to be 'Ok' or 'Err'".to_string(),
-                        )),
-                    },
-                    "handle" => {
-                        match value.as_str() {
-                            Some(str) => {
-                                // not assuming much about the url format, just checking it ends with a /<resource-id-u64>
-                                let parts: Vec<&str> = str.split('/').collect();
-                                if parts.len() >= 2 {
-                                    match u64::from_str(parts[parts.len() - 1]) {
-                                        Ok(resource_id) => {
-                                            let uri = parts[0..(parts.len() - 1)].join("/");
-
-                                            let handle = PreciseJson::Handle {
-                                                uri,
-                                                resource_id
-                                            };
-                                            Ok(handle)
-                                        }
-                                        Err(_) => {
-                                            Err(PreciseJsonConversionError::InvalidValue("Failed to parse resource-id section of the handle value".to_string()))
-                                        }
-                                    }
-                                } else {
-                                    Err(PreciseJsonConversionError::InvalidValue(
-                                        "Expected function parameter type is Handle, represented by a worker-url/resource-id string".to_string(),
-                                    ))
-                                }
-                            }
-                            None => Err(PreciseJsonConversionError::InvalidValue(
-                                "Expected function parameter type is Handle, represented by a worker-url/resource-id string".to_string()
-                            )),
-                        }
-                    }
-                    _ => Err(PreciseJsonConversionError::InvalidValue(
-                        "Expected result object".to_string(),
-                    )),
-                }
-            }
-            _ => Err(PreciseJsonConversionError::InvalidValue(
-                "Expected object".to_string(),
-            )),
-        }
-    }
 }
 
 impl From<PreciseJson> for golem_wasm_rpc::Value {
@@ -467,9 +132,7 @@ impl From<PreciseJson> for golem_wasm_rpc::Value {
                 t.into_iter().map(golem_wasm_rpc::Value::from).collect(),
             ),
             PreciseJson::Record(r) => golem_wasm_rpc::Value::Record(
-                r.into_iter()
-                    .map(|(_, v)| golem_wasm_rpc::Value::from(v))
-                    .collect(),
+                r.into_values().map(golem_wasm_rpc::Value::from).collect(),
             ),
             PreciseJson::Variant {
                 case_idx,
@@ -628,29 +291,46 @@ mod typed_json_tests {
 
     #[test]
     fn test_precise_json_u32() {
-        let json_value = json!({ "u32": 1 });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value = json!({ "type": "U32", "value" : 1 });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
         assert_eq!(precise_json, PreciseJson::U32(1));
     }
 
     #[test]
     fn test_precise_json_bool() {
-        let json_value = json!({ "bool": true });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value = json!({ "type" : "Bool", "value": true });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(precise_json, PreciseJson::Bool(true));
     }
 
     #[test]
     fn test_precise_json_str() {
-        let json_value = json!({ "str": "hello" });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value = json!({ "type" : "Str", "value" : "hello" });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(precise_json, PreciseJson::Str("hello".to_string()));
     }
 
     #[test]
     fn test_precise_json_list() {
-        let json_value = json!({ "list": [{ "u32": 1 }, { "str": "hello" }] });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value = json!({  "type" : "List", "value": [{ "type": "U32", "value" : 1 }, { "type": "Str", "value" : "hello" }] });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(
             precise_json,
             PreciseJson::List(vec![
@@ -662,26 +342,32 @@ mod typed_json_tests {
 
     #[test]
     fn test_precise_json_record() {
-        let json_value = json!({ "record": { "foo": { "u32": 2 }, "bar": { "u64": 10 } } });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
-        assert_eq!(
-            precise_json,
-            PreciseJson::Record(vec![
-                ("bar".to_string(), PreciseJson::U64(10)),
-                ("foo".to_string(), PreciseJson::U32(2)),
-            ])
-        );
+        let json_value = json!({  "type":  "Record", "value": { "foo": { "type": "U32", "value": 2 }, "bar": { "type": "U64", "value" : 10 } } });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let mut map = HashMap::new();
+        map.insert("bar".to_string(), PreciseJson::U64(10));
+        map.insert("foo".to_string(), PreciseJson::U32(2));
+
+        assert_eq!(precise_json, PreciseJson::Record(map));
     }
 
     #[test]
     fn test_precise_json_variant() {
         let json_value = json!({
-            "variant": {
+            "type" : "Variant",
+            "value": {
                 "case_idx": 1,
-                "case_value": { "u32": 42 }
+                "case_value": { "type": "U32", "value" : 42 }
             }
         });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(
             precise_json,
             PreciseJson::Variant {
@@ -693,10 +379,15 @@ mod typed_json_tests {
 
     #[test]
     fn test_precise_json_result_ok() {
-        let json_value = json!({
-            "result": { "ok": { "str": "success" } }
-        });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value =
+            json!({"type": "Result", "value":{"Ok":{"type": "Str", "value": "success"}}});
+
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(
             precise_json,
             PreciseJson::Result(Ok(Box::new(PreciseJson::Str("success".to_string()))))
@@ -705,10 +396,14 @@ mod typed_json_tests {
 
     #[test]
     fn test_precise_json_result_err() {
-        let json_value = json!({
-            "result": { "err": { "str": "failure" } }
-        });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value =
+            json!({"type": "Result", "value":{"Err":{"type": "Str", "value": "failure"}}});
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(
             precise_json,
             PreciseJson::Result(Err(Box::new(PreciseJson::Str("failure".to_string()))))
@@ -717,18 +412,42 @@ mod typed_json_tests {
 
     #[test]
     fn test_precise_json_option_none() {
-        let json_value = json!({ "option": null });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value = json!({ "type": "Option", "value" : null });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(precise_json, PreciseJson::Option(None));
     }
 
     #[test]
     fn test_precise_json_option_some() {
-        let json_value = json!({ "option": { "u32": 42 } });
-        let precise_json = PreciseJson::try_from(json_value).unwrap();
+        let json_value = json!({ "type": "Option", "value" : {"type" : "U32", "value" : 42} });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        let written_json_str = serde_json::to_string(&precise_json).unwrap();
+
+        assert_eq!(written_json_str, json_value.to_string());
+
         assert_eq!(
             precise_json,
             PreciseJson::Option(Some(Box::new(PreciseJson::U32(42))))
+        );
+    }
+
+    #[test]
+    fn test_precise_json_handle() {
+        let json_value = json!({ "type": "Handle", "value": { "uri": "http://example.com", "resource_id": 42 } });
+        let precise_json: PreciseJson = serde_json::from_value(json_value.clone()).unwrap();
+
+        assert_eq!(
+            precise_json,
+            PreciseJson::Handle {
+                uri: "http://example.com".to_string(),
+                resource_id: 42
+            }
         );
     }
 }
