@@ -21,33 +21,42 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::fmt::Display;
 use std::str::FromStr;
+use golem_wasm_ast::analysis::AnalysedType;
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+enum InferredType {
+    AnalysedType(AnalysedType),
+    OneOf(Vec<InferredType>), // literal 1 --> u32 or u8?
+    AllOf(Vec<InferredType>),
+    Unknown
+}
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
-    Let(String, Box<Expr>),
-    SelectField(Box<Expr>, String),
-    SelectIndex(Box<Expr>, usize),
-    Sequence(Vec<Expr>),
-    Record(Vec<(String, Box<Expr>)>),
-    Tuple(Vec<Expr>),
-    Literal(String),
-    Number(Number),
-    Flags(Vec<String>),
-    Identifier(String),
-    Boolean(bool),
-    Concat(Vec<Expr>),
-    Multiple(Vec<Expr>),
-    Not(Box<Expr>),
-    GreaterThan(Box<Expr>, Box<Expr>),
-    GreaterThanOrEqualTo(Box<Expr>, Box<Expr>),
-    LessThanOrEqualTo(Box<Expr>, Box<Expr>),
-    EqualTo(Box<Expr>, Box<Expr>),
-    LessThan(Box<Expr>, Box<Expr>),
-    Cond(Box<Expr>, Box<Expr>, Box<Expr>),
-    PatternMatch(Box<Expr>, Vec<MatchArm>),
-    Option(Option<Box<Expr>>),
-    Result(Result<Box<Expr>, Box<Expr>>),
-    Call(ParsedFunctionName, Vec<Expr>),
+    Let(String, Box<Expr>, InferredType),
+    SelectField(Box<Expr>, String, InferredType),
+    SelectIndex(Box<Expr>, usize, InferredType),
+    Sequence(Vec<Expr>, InferredType),
+    Record(Vec<(String, Box<Expr>)>, InferredType),
+    Tuple(Vec<Expr>, InferredType),
+    Literal(String, InferredType),
+    Number(Number, InferredType),
+    Flags(Vec<String>, InferredType),
+    Identifier(String, InferredType),
+    Boolean(bool, InferredType),
+    Concat(Vec<Expr>, InferredType),
+    Multiple(Vec<Expr>, InferredType),
+    Not(Box<Expr>, InferredType),
+    GreaterThan(Box<Expr>, Box<Expr>, InferredType),
+    GreaterThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
+    LessThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
+    EqualTo(Box<Expr>, Box<Expr>, InferredType),
+    LessThan(Box<Expr>, Box<Expr>, InferredType),
+    Cond(Box<Expr>, Box<Expr>, Box<Expr>, InferredType),
+    PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
+    Option(Option<Box<Expr>>, InferredType),
+    Result(Result<Box<Expr>, Box<Expr>>, InferredType),
+    Call(ParsedFunctionName, Vec<crate::Expr>, InferredType),
 }
 
 impl Expr {
