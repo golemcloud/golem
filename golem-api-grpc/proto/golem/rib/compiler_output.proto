@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.rib;
+
+import "golem/rib/rib_input.proto";
+import "golem/rib/rib_byte_code.proto";
+
+message CompilerOutput {
+    RibByteCode byte_code = 1;
+    RibInputType rib_input = 2;
+}

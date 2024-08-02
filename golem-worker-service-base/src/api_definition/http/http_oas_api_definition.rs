@@ -82,6 +82,7 @@ mod internal {
     use rib::Expr;
     use serde_json::Value;
 
+    use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
@@ -166,15 +167,30 @@ mod internal {
         })
     }
 
-    pub(crate) fn get_component_id(worker_bridge_info: &Value) -> Result<ComponentId, String> {
-        let component_id = worker_bridge_info
+    pub(crate) fn get_component_id(
+        worker_bridge_info: &Value,
+    ) -> Result<VersionedComponentId, String> {
+        let component_id_str = worker_bridge_info
             .get("component-id")
             .ok_or("No component-id found")?
             .as_str()
             .ok_or("component-id is not a string")?;
-        Ok(ComponentId(
-            Uuid::parse_str(component_id).map_err(|err| err.to_string())?,
-        ))
+
+        let version_str = worker_bridge_info
+            .get("component-version")
+            .ok_or("No component-version found")?
+            .as_str()
+            .ok_or("component-version is not a string")?;
+
+        let component_id =
+            ComponentId(Uuid::parse_str(component_id_str).map_err(|err| err.to_string())?);
+
+        let version = version_str.parse::<u64>().map_err(|err| err.to_string())?;
+
+        Ok(VersionedComponentId {
+            component_id,
+            version,
+        })
     }
 
     pub(crate) fn get_response_mapping(
@@ -258,41 +274,38 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::Concat(vec![
-                        Expr::Literal("worker-".to_string()),
-                        Expr::SelectField(
-                            Box::new(Expr::SelectField(
-                                Box::new(Expr::Identifier("request".to_string())),
+                    worker_name: Expr::concat(vec![
+                        Expr::literal("worker-".to_string()),
+                        Expr::select_field(
+                            Expr::select_field(
+                                Expr::identifier("request".to_string()),
                                 "body".to_string()
-                            )),
+                            ),
                             "user".to_string()
                         )
                     ]),
-                    component_id: ComponentId(Uuid::nil()),
-                    idempotency_key: Some(Expr::Literal("test-key".to_string())),
-                    response: ResponseMapping(Expr::Record(
+                    component_id: golem_service_base::model::VersionedComponentId {
+                        component_id: ComponentId(Uuid::nil()),
+                        version: 0
+                    },
+                    idempotency_key: Some(Expr::literal("test-key".to_string())),
+                    response: ResponseMapping(Expr::record(
                         vec![
                             (
                                 "headers".to_string(),
-                                Box::new(Expr::Record(vec![
-                                    (
-                                        "ContentType".to_string(),
-                                        Box::new(Expr::Literal("json".to_string())),
-                                    ),
-                                    (
-                                        "user-id".to_string(),
-                                        Box::new(Expr::Literal("foo".to_string())),
-                                    )
-                                ])),
+                                Expr::record(vec![
+                                    ("ContentType".to_string(), Expr::literal("json".to_string()),),
+                                    ("user-id".to_string(), Expr::literal("foo".to_string()),)
+                                ]),
                             ),
                             (
                                 "body".to_string(),
-                                Box::new(Expr::SelectField(
-                                    Box::new(Expr::Identifier("worker".to_string())),
+                                Expr::select_field(
+                                    Expr::identifier("worker".to_string()),
                                     "response".to_string(),
-                                )),
+                                ),
                             ),
-                            ("status".to_string(), Box::new(Expr::unsigned_integer(200))),
+                            ("status".to_string(), Expr::number(200f64)),
                         ]
                         .into_iter()
                         .collect()

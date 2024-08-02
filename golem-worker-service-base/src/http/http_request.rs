@@ -49,10 +49,11 @@ impl ApiInputPath {
 }
 
 pub mod router {
+    use crate::api_definition::http::CompiledRoute;
+    use crate::worker_binding::CompiledGolemWorkerBinding;
     use crate::{
-        api_definition::http::{PathPattern, QueryInfo, Route, VarInfo},
+        api_definition::http::{PathPattern, QueryInfo, VarInfo},
         http::router::{Router, RouterPattern},
-        worker_binding::GolemWorkerBinding,
     };
 
     #[derive(Debug, Clone)]
@@ -60,10 +61,10 @@ pub mod router {
         // size is the index of all path patterns.
         pub path_params: Vec<(VarInfo, usize)>,
         pub query_params: Vec<QueryInfo>,
-        pub binding: GolemWorkerBinding,
+        pub binding: CompiledGolemWorkerBinding,
     }
 
-    pub fn build(routes: Vec<Route>) -> Router<RouteEntry> {
+    pub fn build(routes: Vec<CompiledRoute>) -> Router<RouteEntry> {
         let mut router = Router::new();
 
         for route in routes {
@@ -108,20 +109,26 @@ mod tests {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
+    use rib::{GetLiteralValue, RibInterpreterResult};
     use serde_json::Value;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::api_definition::http::HttpApiDefinition;
-    use crate::evaluator::getter::Getter;
-    use crate::evaluator::path::Path;
-    use crate::evaluator::{DefaultEvaluator, EvaluationError, Evaluator, ExprEvaluationResult};
+    use crate::api_definition::http::{
+        CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
+    };
+    use crate::getter::Getter;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::merge::Merge;
-    use crate::primitive::GetPrimitive;
-    use crate::worker_binding::{RequestDetails, WorkerBindingResolver};
+    use crate::path::Path;
+    use crate::worker_binding::{
+        RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch,
+    };
     use crate::worker_bridge_execution::to_response::ToResponse;
     use crate::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
+    };
+    use crate::worker_service_rib_interpreter::{
+        DefaultEvaluator, EvaluationError, WorkerServiceRibInterpreter,
     };
 
     struct TestWorkerRequestExecutor {}
@@ -167,7 +174,7 @@ mod tests {
 
         for (key, value) in values.iter() {
             let typ = Type::try_from(value)
-                .map_err(|_| EvaluationError::Message("Failed to get type".to_string()))?;
+                .map_err(|_| EvaluationError("Failed to get type".to_string()))?;
             name_type_pairs.push(NameTypePair {
                 name: key.to_string(),
                 typ: Some(typ),
@@ -217,13 +224,26 @@ mod tests {
         });
 
         if let Some(idempotency_key) = optional_idempotency_key {
-            required = required.merge(&idempotency_key).clone();
+            required = match required {
+                TypeAnnotatedValue::Record(type_record) => {
+                    let mut record = type_record.clone();
+                    record.value.push(NameValuePair {
+                        name: "idempotency_key".to_string(),
+                        value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                            type_annotated_value: Some(idempotency_key),
+                        }),
+                    });
+
+                    TypeAnnotatedValue::Record(record)
+                }
+                _ => panic!("Failed to create record"),
+            }
         }
 
         required
     }
 
-    fn get_test_evaluator() -> Arc<dyn Evaluator + Sync + Send> {
+    fn get_test_evaluator() -> Arc<dyn WorkerServiceRibInterpreter + Sync + Send> {
         Arc::new(DefaultEvaluator::from_worker_request_executor(Arc::new(
             TestWorkerRequestExecutor {},
         )))
@@ -236,29 +256,41 @@ mod tests {
         function_params: Value,
     }
 
-    impl ToResponse<TestResponse> for ExprEvaluationResult {
+    impl ToResponse<TestResponse> for EvaluationError {
+        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+            panic!("{}", self.to_string())
+        }
+    }
+
+    impl ToResponse<TestResponse> for RibInputTypeMismatch {
+        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+            panic!("{}", self.to_string())
+        }
+    }
+
+    impl ToResponse<TestResponse> for RibInterpreterResult {
         fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
             let function_name = self
-                .get_value()
+                .get_val()
                 .map(|x| x.get(&Path::from_key("function_name")).unwrap())
                 .unwrap()
-                .get_primitive()
+                .get_literal()
                 .unwrap()
                 .as_string();
 
             let function_params = {
                 let params = self
-                    .get_value()
+                    .get_val()
                     .map(|x| x.get(&Path::from_key("function_params")).unwrap())
                     .unwrap();
                 params.to_json_value()
             };
 
             let worker_name = self
-                .get_value()
+                .get_val()
                 .map(|x| x.get(&Path::from_key("name")).unwrap())
                 .unwrap()
-                .get_primitive()
+                .get_literal()
                 .unwrap()
                 .as_string();
 
@@ -270,24 +302,25 @@ mod tests {
         }
     }
 
-    impl ToResponse<TestResponse> for EvaluationError {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
-            panic!("{}", self.to_string())
-        }
-    }
-
     async fn execute(
         api_request: &InputHttpRequest,
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
+        let compiled = CompiledHttpApiDefinition::from_http_api_definition(
+            api_specification,
+            &ComponentMetadataDictionary {
+                metadata: HashMap::new(),
+            },
+        )
+        .unwrap();
 
         let resolved_route = api_request
-            .resolve(vec![api_specification.clone()])
+            .resolve_worker_binding(vec![compiled])
             .await
             .unwrap();
 
-        resolved_route.execute_with(&evaluator).await
+        resolved_route.interpret_response_mapping(&evaluator).await
     }
 
     #[tokio::test]
@@ -922,7 +955,17 @@ mod tests {
                 function_params,
             );
 
-            let resolved_route = api_request.resolve(vec![api_specification]).await;
+            let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
+                &api_specification,
+                &ComponentMetadataDictionary {
+                    metadata: HashMap::new(),
+                },
+            )
+            .unwrap();
+
+            let resolved_route = api_request
+                .resolve_worker_binding(vec![compiled_api_spec])
+                .await;
 
             let result = resolved_route.map(|x| x.worker_detail);
 
@@ -956,7 +999,18 @@ mod tests {
                 expression,
             );
 
-            let resolved_route = api_request.resolve(vec![api_specification]).await.unwrap();
+            let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
+                &api_specification,
+                &ComponentMetadataDictionary {
+                    metadata: HashMap::new(),
+                },
+            )
+            .unwrap();
+
+            let resolved_route = api_request
+                .resolve_worker_binding(vec![compiled_api_spec])
+                .await
+                .unwrap();
 
             assert_eq!(
                 resolved_route.worker_detail.idempotency_key,

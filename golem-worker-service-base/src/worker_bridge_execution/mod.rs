@@ -2,10 +2,8 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 mod content_type_mapper;
-mod refined_worker_response;
 pub mod to_response;
 mod worker_request_executor;
-pub use refined_worker_response::*;
 use rib::ParsedFunctionName;
 pub use worker_request_executor::*;
 

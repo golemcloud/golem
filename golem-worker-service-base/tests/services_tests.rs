@@ -222,7 +222,10 @@ mod tests {
         let definitions = definition_service
             .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 4);
         assert!(
             definitions.contains(&def2draft)
@@ -237,7 +240,10 @@ mod tests {
         let definitions = definition_service
             .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 4);
         assert!(
             definitions.contains(&def2)
@@ -249,7 +255,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
@@ -260,7 +269,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 1);
         assert!(definitions.contains(&def4));
@@ -283,7 +295,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 3);
         assert!(
@@ -298,7 +313,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
@@ -482,7 +500,10 @@ mod tests {
                 &EmptyAuthCtx::default(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2));
 
@@ -517,7 +538,10 @@ mod tests {
                 &EmptyAuthCtx::default(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2_upd));
 

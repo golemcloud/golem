@@ -38,7 +38,7 @@ pub fn call<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
                 sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
             ),
         )
-            .map(|(name, args)| Expr::Call(name, args))
+            .map(|(name, args)| Expr::call(name, args))
             .message("Unable to parse call"),
     )
 }
@@ -207,7 +207,7 @@ mod function_call_tests {
         let input = "foo()";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -228,14 +228,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
 
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
-                vec![Expr::Identifier("bar".to_string())],
+                vec![Expr::identifier("bar")],
             ),
             "",
         ));
@@ -247,17 +247,14 @@ mod function_call_tests {
         let input = "foo(bar, baz)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
-                vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
-                ],
+                vec![Expr::identifier("bar"), Expr::identifier("baz")],
             ),
             "",
         ));
@@ -269,7 +266,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -277,9 +274,9 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
-                    Expr::Identifier("qux".to_string()),
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz"),
+                    Expr::identifier("qux"),
                 ],
             ),
             "",
@@ -292,7 +289,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux, quux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -300,10 +297,10 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
-                    Expr::Identifier("qux".to_string()),
-                    Expr::Identifier("quux".to_string()),
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz"),
+                    Expr::identifier("qux"),
+                    Expr::identifier("quux"),
                 ],
             ),
             "",
@@ -316,7 +313,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux, quux, quuz)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -324,11 +321,11 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
-                    Expr::Identifier("qux".to_string()),
-                    Expr::Identifier("quux".to_string()),
-                    Expr::Identifier("quuz".to_string()),
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz"),
+                    Expr::identifier("qux"),
+                    Expr::identifier("quux"),
+                    Expr::identifier("quuz"),
                 ],
             ),
             "",
@@ -341,7 +338,7 @@ mod function_call_tests {
         let input = "foo(bar, baz, qux, quux, quuz, quuux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -349,12 +346,12 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
-                    Expr::Identifier("qux".to_string()),
-                    Expr::Identifier("quux".to_string()),
-                    Expr::Identifier("quuz".to_string()),
-                    Expr::Identifier("quuux".to_string()),
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz"),
+                    Expr::identifier("qux"),
+                    Expr::identifier("quux"),
+                    Expr::identifier("quuz"),
+                    Expr::identifier("quuux"),
                 ],
             ),
             "",
@@ -367,16 +364,16 @@ mod function_call_tests {
         let input = "foo({bar: baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
-                vec![Expr::Record(vec![(
+                vec![Expr::record(vec![(
                     "bar".to_string(),
-                    Box::new(Expr::Identifier("baz".to_string())),
+                    Expr::identifier("baz"),
                 )])],
             ),
             "",
@@ -389,7 +386,7 @@ mod function_call_tests {
         let input = "foo({bar: baz}, qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -397,11 +394,8 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Record(vec![(
-                        "bar".to_string(),
-                        Box::new(Expr::Identifier("baz".to_string())),
-                    )]),
-                    Expr::Identifier("qux".to_string()),
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))]),
+                    Expr::identifier("qux"),
                 ],
             ),
             "",
@@ -414,7 +408,7 @@ mod function_call_tests {
         let input = "foo({bar: baz}, {qux: quux})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -422,14 +416,8 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Record(vec![(
-                        "bar".to_string(),
-                        Box::new(Expr::Identifier("baz".to_string())),
-                    )]),
-                    Expr::Record(vec![(
-                        "qux".to_string(),
-                        Box::new(Expr::Identifier("quux".to_string())),
-                    )]),
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))]),
+                    Expr::record(vec![("qux".to_string(), Expr::identifier("quux"))]),
                 ],
             ),
             "",
@@ -442,7 +430,7 @@ mod function_call_tests {
         let input = "foo({bar: baz}, {qux: quux}, quuz)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -450,15 +438,9 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Record(vec![(
-                        "bar".to_string(),
-                        Box::new(Expr::Identifier("baz".to_string())),
-                    )]),
-                    Expr::Record(vec![(
-                        "qux".to_string(),
-                        Box::new(Expr::Identifier("quux".to_string())),
-                    )]),
-                    Expr::Identifier("quuz".to_string()),
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))]),
+                    Expr::record(vec![("qux".to_string(), Expr::identifier("quux"))]),
+                    Expr::identifier("quuz"),
                 ],
             ),
             "",
@@ -471,16 +453,16 @@ mod function_call_tests {
         let input = "foo([bar, baz])";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
-                vec![Expr::Sequence(vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
+                vec![Expr::sequence(vec![
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz"),
                 ])],
             ),
             "",
@@ -493,7 +475,7 @@ mod function_call_tests {
         let input = "foo([bar, baz], qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -501,11 +483,8 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Sequence(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("baz".to_string()),
-                    ]),
-                    Expr::Identifier("qux".to_string()),
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")]),
+                    Expr::identifier("qux"),
                 ],
             ),
             "",
@@ -518,7 +497,7 @@ mod function_call_tests {
         let input = "foo([bar, baz], [qux, quux])";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -526,14 +505,8 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Sequence(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("baz".to_string()),
-                    ]),
-                    Expr::Sequence(vec![
-                        Expr::Identifier("qux".to_string()),
-                        Expr::Identifier("quux".to_string()),
-                    ]),
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")]),
+                    Expr::sequence(vec![Expr::identifier("qux"), Expr::identifier("quux")]),
                 ],
             ),
             "",
@@ -546,16 +519,16 @@ mod function_call_tests {
         let input = "foo((bar, baz))";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
-                vec![Expr::Tuple(vec![
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Identifier("baz".to_string()),
+                vec![Expr::tuple(vec![
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz"),
                 ])],
             ),
             "",
@@ -568,7 +541,7 @@ mod function_call_tests {
         let input = "foo((bar, baz), qux)";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
@@ -576,11 +549,8 @@ mod function_call_tests {
                     },
                 },
                 vec![
-                    Expr::Tuple(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("baz".to_string()),
-                    ]),
-                    Expr::Identifier("qux".to_string()),
+                    Expr::tuple(vec![Expr::identifier("bar"), Expr::identifier("baz")]),
+                    Expr::identifier("qux"),
                 ],
             ),
             "",
@@ -593,14 +563,14 @@ mod function_call_tests {
         let input = "foo({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -612,7 +582,7 @@ mod function_call_tests {
         let input = "interface.{fn1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::Interface {
                         name: "interface".to_string(),
@@ -621,7 +591,7 @@ mod function_call_tests {
                         function: "fn1".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -633,7 +603,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{fn1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -645,7 +615,7 @@ mod function_call_tests {
                         function: "fn1".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -657,7 +627,7 @@ mod function_call_tests {
         let input = "wasi:cli/run@0.2.0.{run}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "wasi".to_string(),
@@ -669,7 +639,7 @@ mod function_call_tests {
                         function: "run".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -681,7 +651,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -693,7 +663,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -705,7 +675,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[constructor]resource1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -717,7 +687,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -729,7 +699,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1().new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -742,7 +712,7 @@ mod function_call_tests {
                         resource_params: vec![],
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -756,7 +726,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -773,7 +743,7 @@ mod function_call_tests {
                         ],
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -786,7 +756,7 @@ mod function_call_tests {
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -802,7 +772,7 @@ mod function_call_tests {
                         ],
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -814,7 +784,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.do-something}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -827,7 +797,7 @@ mod function_call_tests {
                         method: "do-something".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -839,7 +809,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[method]resource1.do-something}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -852,7 +822,7 @@ mod function_call_tests {
                         method: "do-something".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -865,7 +835,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.do-something-static}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -878,7 +848,7 @@ mod function_call_tests {
                         method: "do-something-static".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -890,7 +860,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[static]resource1.do-something-static}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -903,7 +873,7 @@ mod function_call_tests {
                         method: "do-something-static".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -915,7 +885,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -927,7 +897,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -939,7 +909,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1().drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -952,7 +922,7 @@ mod function_call_tests {
                         resource_params: vec![],
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -964,7 +934,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1(\"hello\", 1, true).drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -981,7 +951,7 @@ mod function_call_tests {
                         ],
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -994,7 +964,7 @@ mod function_call_tests {
             "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1010,7 +980,7 @@ mod function_call_tests {
                         ],
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));
@@ -1022,7 +992,7 @@ mod function_call_tests {
         let input = "ns:name/interface.{[drop]resource1}({bar, baz})";
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
-            Expr::Call(
+            Expr::call(
                 ParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
@@ -1034,7 +1004,7 @@ mod function_call_tests {
                         resource: "resource1".to_string(),
                     },
                 },
-                vec![Expr::Flags(vec!["bar".to_string(), "baz".to_string()])],
+                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
             ),
             "",
         ));

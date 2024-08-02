@@ -180,7 +180,7 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             )))?;
 
-            definition
+            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(definition)
                 .try_into()
                 .map_err(ApiEndpointError::internal)
                 .map(Json)
@@ -254,7 +254,10 @@ impl RegisterApiDefinitionApi {
 
             let values = data
                 .into_iter()
-                .map(|d| d.try_into())
+                .map(|d| {
+                    golem_worker_service_base::api_definition::http::HttpApiDefinition::from(d)
+                        .try_into()
+                })
                 .collect::<Result<Vec<HttpApiDefinition>, _>>()
                 .map_err(ApiEndpointError::internal)?;
 

@@ -182,6 +182,9 @@ mod conversion {
                 ApiDefinitionServiceError::ApiDefinitionDeployed(_) => {
                     ApiEndpointError::bad_request(error)
                 }
+                ApiDefinitionServiceError::RibCompilationErrors(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
             }
         }
     }
@@ -235,7 +238,7 @@ mod conversion {
                         .map(|r| apidefinition::v1::RouteValidationError {
                             method: r.method.to_string(),
                             path: r.path.to_string(),
-                            component: Some(r.component.into()),
+                            component: Some(r.component.component_id.into()),
                             detail: r.detail,
                         })
                         .collect();
@@ -245,7 +248,7 @@ mod conversion {
                         )),
                     }
                 }
-                ApiDefinitionServiceError::ComponentNotFoundError(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::RibCompilationErrors(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_string(),
                     })),
@@ -273,6 +276,18 @@ mod conversion {
                 ApiDefinitionServiceError::InternalError(error) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::InternalError(ErrorBody {
                         error: error.to_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::ComponentNotFoundError(error) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: format!(
+                            "Components not found: {}",
+                            error
+                                .iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        ),
                     })),
                 },
             }

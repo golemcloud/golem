@@ -1,14 +1,15 @@
-use crate::evaluator::{EvaluationError, ExprEvaluationResult};
-use crate::worker_binding::RequestDetails;
+use crate::worker_binding::{RequestDetails, RibInputTypeMismatch};
+use crate::worker_service_rib_interpreter::EvaluationError;
 
 use http::StatusCode;
 use poem::Body;
+use rib::RibInterpreterResult;
 
 pub trait ToResponse<A> {
     fn to_response(&self, request_details: &RequestDetails) -> A;
 }
 
-impl ToResponse<poem::Response> for ExprEvaluationResult {
+impl ToResponse<poem::Response> for RibInterpreterResult {
     fn to_response(&self, request_details: &RequestDetails) -> poem::Response {
         match internal::IntermediateHttpResponse::from(self) {
             Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
@@ -19,6 +20,14 @@ impl ToResponse<poem::Response> for ExprEvaluationResult {
                     e
                 ))),
         }
+    }
+}
+
+impl ToResponse<poem::Response> for RibInputTypeMismatch {
+    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+        poem::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from_string(format!("Error {}", self.0).to_string()))
     }
 }
 
@@ -39,22 +48,22 @@ impl ToResponse<poem::Response> for String {
 }
 
 mod internal {
-    use crate::evaluator::{EvaluationError, ExprEvaluationResult};
-    use crate::primitive::{GetPrimitive, Primitive};
     use crate::worker_binding::RequestDetails;
     use crate::worker_bridge_execution::content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
+    use crate::worker_service_rib_interpreter::EvaluationError;
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
-    use crate::evaluator::getter::GetterExt;
-    use crate::evaluator::path::Path;
+    use crate::getter::GetterExt;
+    use crate::path::Path;
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypedRecord;
     use poem::web::headers::ContentType;
     use poem::{Body, IntoResponse, ResponseParts};
+    use rib::{GetLiteralValue, LiteralValue, RibInterpreterResult};
     use std::collections::HashMap;
 
     pub(crate) struct IntermediateHttpResponse {
@@ -65,10 +74,10 @@ mod internal {
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            evaluation_result: &ExprEvaluationResult,
+            evaluation_result: &RibInterpreterResult,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             match evaluation_result {
-                ExprEvaluationResult::Value(typed_value) => {
+                RibInterpreterResult::Val(typed_value) => {
                     let status = match typed_value.get_optional(&Path::from_key("status")) {
                         Some(typed_value) => get_status_code(&typed_value),
                         None => Ok(StatusCode::OK),
@@ -89,7 +98,7 @@ mod internal {
                         headers,
                     })
                 }
-                ExprEvaluationResult::Unit => Ok(IntermediateHttpResponse {
+                RibInterpreterResult::Unit => Ok(IntermediateHttpResponse {
                     body: None,
                     status: StatusCode::default(),
                     headers: ResolvedResponseHeaders::default(),
@@ -167,20 +176,20 @@ mod internal {
 
     fn get_status_code(status_code: &TypeAnnotatedValue) -> Result<StatusCode, EvaluationError> {
         let status_res: Result<u16, EvaluationError> =
-            match status_code.get_primitive() {
-                Some(Primitive::String(status_str)) => status_str.parse().map_err(|e| {
-                    EvaluationError::Message(format!(
+            match status_code.get_literal() {
+                Some(LiteralValue::String(status_str)) => status_str.parse().map_err(|e| {
+                    EvaluationError(format!(
                         "Invalid Status Code Expression. It is resolved to a string but not a number {}. Error: {}",
                         status_str, e
                     ))
                 }),
-                Some(Primitive::Num(number)) => number.to_string().parse().map_err(|e| {
-                    EvaluationError::Message(format!(
+                Some(LiteralValue::Num(number)) => number.to_string().parse().map_err(|e| {
+                    EvaluationError(format!(
                         "Invalid Status Code Expression. It is resolved to a number but not a u16 {}. Error: {}",
                         number, e
                     ))
                 }),
-                _ => Err(EvaluationError::Message(format!(
+                _ => Err(EvaluationError(format!(
                     "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
                     status_code.to_json_value()
                 )))
@@ -188,7 +197,7 @@ mod internal {
 
         let status_u16 = status_res?;
 
-        StatusCode::from_u16(status_u16).map_err(|e| EvaluationError::Message(format!(
+        StatusCode::from_u16(status_u16).map_err(|e| EvaluationError(format!(
             "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
             status_u16, e
         )))
@@ -213,7 +222,7 @@ mod internal {
                             .as_ref()
                             .and_then(|v| v.type_annotated_value.clone())
                             .ok_or("Unable to resolve header value".to_string())?
-                            .get_primitive()
+                            .get_literal()
                             .map(|primitive| primitive.to_string())
                             .unwrap_or_else(|| "Unable to resolve header".to_string());
 
@@ -237,7 +246,7 @@ mod internal {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::worker_binding::TypedHttRequestDetails;
+    use crate::worker_binding::HttpRequestDetails;
     use crate::worker_bridge_execution::to_response::internal::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
@@ -287,10 +296,10 @@ mod test {
             ),
         ]);
 
-        let evaluation_result: ExprEvaluationResult = ExprEvaluationResult::Value(record);
+        let evaluation_result: RibInterpreterResult = RibInterpreterResult::Val(record);
 
         let http_response: poem::Response =
-            evaluation_result.to_response(&RequestDetails::Http(TypedHttRequestDetails::empty()));
+            evaluation_result.to_response(&RequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();
@@ -312,11 +321,11 @@ mod test {
 
     #[tokio::test]
     async fn test_evaluation_result_to_response_with_no_http_specifics() {
-        let evaluation_result: ExprEvaluationResult =
-            ExprEvaluationResult::Value(TypeAnnotatedValue::Str("Healthy".to_string()));
+        let evaluation_result: RibInterpreterResult =
+            RibInterpreterResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
         let http_response: poem::Response =
-            evaluation_result.to_response(&RequestDetails::Http(TypedHttRequestDetails::empty()));
+            evaluation_result.to_response(&RequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

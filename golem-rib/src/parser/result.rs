@@ -28,14 +28,8 @@ use combine::stream::easy;
 
 pub fn result<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        spaces().with(
-            between(string("ok("), char(')'), rib_expr())
-                .map(|expr| Expr::Result(Ok(Box::new(expr)))),
-        ),
-        spaces().with(
-            between(string("err("), char(')'), rib_expr())
-                .map(|expr| Expr::Result(Err(Box::new(expr)))),
-        ),
+        spaces().with(between(string("ok("), char(')'), rib_expr()).map(|expr| Expr::ok(expr))),
+        spaces().with(between(string("err("), char(')'), rib_expr()).map(|expr| Expr::err(expr))),
     ))
 }
 
@@ -48,26 +42,14 @@ mod tests {
     fn test_result() {
         let input = "ok(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((
-                Expr::Result(Ok(Box::new(Expr::Identifier("foo".to_string())))),
-                ""
-            ))
-        );
+        assert_eq!(result, Ok((Expr::ok(Expr::identifier("foo")), "")));
     }
 
     #[test]
     fn test_result_err() {
         let input = "err(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((
-                Expr::Result(Err(Box::new(Expr::Identifier("foo".to_string())))),
-                ""
-            ))
-        );
+        assert_eq!(result, Ok((Expr::err(Expr::identifier("foo")), "")));
     }
 
     #[test]
@@ -77,10 +59,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Result(Ok(Box::new(Expr::Sequence(vec![
-                    Expr::Identifier("foo".to_string()),
-                    Expr::Identifier("bar".to_string())
-                ])))),
+                Expr::ok(Expr::sequence(vec![
+                    Expr::identifier("foo"),
+                    Expr::identifier("bar")
+                ])),
                 ""
             ))
         );
@@ -93,10 +75,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Result(Err(Box::new(Expr::Sequence(vec![
-                    Expr::Identifier("foo".to_string()),
-                    Expr::Identifier("bar".to_string())
-                ])))),
+                Expr::err(Expr::sequence(vec![
+                    Expr::identifier("foo"),
+                    Expr::identifier("bar")
+                ])),
                 ""
             ))
         );
@@ -108,12 +90,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Result(Ok(Box::new(Expr::Result(Err(Box::new(Expr::Identifier(
-                    "foo".to_string()
-                ))))))),
-                ""
-            ))
+            Ok((Expr::ok(Expr::err(Expr::identifier("foo"))), ""))
         );
     }
 
@@ -123,12 +100,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Result(Err(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
-                    "foo".to_string()
-                ))))))),
-                ""
-            ))
+            Ok((Expr::err(Expr::ok(Expr::identifier("foo"))), ""))
         );
     }
 
@@ -138,12 +110,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Result(Ok(Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
-                    "foo".to_string()
-                ))))))),
-                ""
-            ))
+            Ok((Expr::ok(Expr::ok(Expr::identifier("foo"))), ""))
         );
     }
 
@@ -153,12 +120,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Result(Err(Box::new(Expr::Result(Err(Box::new(
-                    Expr::Identifier("foo".to_string())
-                )))))),
-                ""
-            ))
+            Ok((Expr::err(Expr::err(Expr::identifier("foo"))), ""))
         );
     }
 }

@@ -31,10 +31,10 @@ pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
         )
         .map(|fields: Vec<Field>| {
-            Expr::Record(
+            Expr::record(
                 fields
                     .iter()
-                    .map(|f| (f.key.clone(), Box::new(f.value.clone())))
+                    .map(|f| (f.key.clone(), f.value.clone()))
                     .collect::<Vec<_>>(),
             )
         }),
@@ -76,10 +76,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![(
-                    "foo".to_string(),
-                    Box::new(Expr::Identifier("bar".to_string()))
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
                 ""
             ))
         );
@@ -92,15 +89,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![
-                    (
-                        "foo".to_string(),
-                        Box::new(Expr::Identifier("bar".to_string()))
-                    ),
-                    (
-                        "baz".to_string(),
-                        Box::new(Expr::Identifier("qux".to_string()))
-                    )
+                Expr::record(vec![
+                    ("foo".to_string(), Expr::identifier("bar")),
+                    ("baz".to_string(), Expr::identifier("qux"))
                 ]),
                 ""
             ))
@@ -114,10 +105,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![(
-                    "foo".to_string(),
-                    Box::new(Expr::Literal("bar".to_string()))
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::literal("bar"))]),
                 ""
             ))
         );
@@ -137,12 +125,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![(
+                Expr::record(vec![(
                     "foo".to_string(),
-                    Box::new(Expr::Record(vec![(
-                        "bar".to_string(),
-                        Box::new(Expr::Identifier("baz".to_string()))
-                    )]))
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
                 )]),
                 ""
             ))
@@ -156,12 +141,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![(
+                Expr::record(vec![(
                     "foo".to_string(),
-                    Box::new(Expr::Tuple(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("baz".to_string())
-                    ]))
+                    Expr::tuple(vec![Expr::identifier("bar"), Expr::identifier("baz")])
                 )]),
                 ""
             ))
@@ -175,12 +157,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![(
+                Expr::record(vec![(
                     "foo".to_string(),
-                    Box::new(Expr::Sequence(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("baz".to_string())
-                    ]))
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
                 )]),
                 ""
             ))
@@ -194,12 +173,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Record(vec![(
-                    "foo".to_string(),
-                    Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
-                        "bar".to_string()
-                    )))))
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::ok(Expr::identifier("bar")))]),
                 ""
             ))
         );

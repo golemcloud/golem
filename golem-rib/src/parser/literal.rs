@@ -46,11 +46,11 @@ mod internal {
             )
             .map(|parts: Vec<Expr>| {
                 if parts.is_empty() {
-                    Expr::Literal("".to_string())
+                    Expr::literal("")
                 } else if parts.len() == 1 {
                     parts.first().unwrap().clone()
                 } else {
-                    Expr::Concat(parts)
+                    Expr::concat(parts)
                 }
             })
             .message("Unable to parse literal"),
@@ -64,7 +64,7 @@ mod internal {
                 .or(digit())
                 .or(char_('_').or(char_('-').or(char_('.')).or(char_('/')).or(char_(':')))),
         )
-        .map(|s: String| Expr::Literal(s))
+        .map(|s: String| Expr::literal(s))
         .message("Unable to parse static part of literal")
     }
 
@@ -87,14 +87,14 @@ mod tests {
     fn test_empty_literal() {
         let input = "\"\"";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Literal("".to_string()), "")));
+        assert_eq!(result, Ok((Expr::literal(""), "")));
     }
 
     #[test]
     fn test_literal() {
         let input = "\"foo\"";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Literal("foo".to_string()), "")));
+        assert_eq!(result, Ok((Expr::literal("foo"), "")));
     }
 
     #[test]
@@ -104,10 +104,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Concat(vec![
-                    Expr::Literal("foo-".to_string()),
-                    Expr::Identifier("bar".to_string()),
-                    Expr::Literal("-baz".to_string()),
+                Expr::concat(vec![
+                    Expr::literal("foo-"),
+                    Expr::identifier("bar"),
+                    Expr::literal("-baz"),
                 ]),
                 ""
             ))
@@ -121,16 +121,13 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Cond(
-                    Box::new(Expr::EqualTo(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        Box::new(Expr::Concat(vec![
-                            Expr::Literal("bar-".to_string()),
-                            Expr::Identifier("worker_id".to_string())
-                        ]))
-                    )),
-                    Box::new(Expr::unsigned_integer(1)),
-                    Box::new(Expr::Literal("baz".to_string())),
+                Expr::cond(
+                    Expr::equal_to(
+                        Expr::identifier("foo"),
+                        Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
+                    ),
+                    Expr::number(1f64),
+                    Expr::literal("baz"),
                 ),
                 ""
             ))
@@ -141,13 +138,13 @@ mod tests {
     fn test_direct_interpolation() {
         let input = "\"${foo}\"";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Identifier("foo".to_string()), "")));
+        assert_eq!(result, Ok((Expr::identifier("foo"), "")));
     }
 
     #[test]
     fn test_direct_interpolation_flag() {
         let input = "\"${{foo}}\"";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Flags(vec!["foo".to_string()]), "")));
+        assert_eq!(result, Ok((Expr::flags(vec!["foo".to_string()]), "")));
     }
 }

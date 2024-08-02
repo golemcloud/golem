@@ -1,8 +1,19 @@
+pub use compiler::*;
 pub use expr::*;
 pub use function_name::*;
+pub use inferred_type::*;
+pub use interpreter::*;
 pub use text::*;
-
+pub use type_inference::*;
+pub use variable_id::*;
+pub use type_registry::*;
+mod compiler;
 mod expr;
 mod function_name;
+mod inferred_type;
+mod interpreter;
 mod parser;
 mod text;
+mod type_inference;
+mod type_registry;
+mod variable_id;

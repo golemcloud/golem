@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::api_definition::http::{AllPathPatterns, HttpApiDefinition, Route};
+use crate::api_definition::http::{
+    AllPathPatterns, CompiledHttpApiDefinition, HttpApiDefinition, Route,
+};
 
 use crate::http::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
@@ -59,7 +61,7 @@ pub trait ApiDeploymentService<Namespace> {
     async fn get_definitions_by_site(
         &self,
         site: &ApiSiteString,
-    ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>>;
+    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDeploymentError<Namespace>>;
 
     async fn delete(
         &self,
@@ -191,7 +193,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 
         let mut set_not_draft: Vec<ApiDefinitionIdWithVersion> = vec![];
 
-        let mut definitions: Vec<HttpApiDefinition> = vec![];
+        let mut definitions: Vec<CompiledHttpApiDefinition> = vec![];
 
         for api_definition_key in deployment.api_definition_keys.clone() {
             if !existing_api_definition_keys.contains(&api_definition_key) {
@@ -238,7 +240,13 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 
         definitions.extend(existing_definitions);
 
-        let conflicting_definitions = HttpApiDefinition::find_conflicts(definitions.as_slice());
+        let conflicting_definitions = HttpApiDefinition::find_conflicts(
+            definitions
+                .into_iter()
+                .map(|x| x.into())
+                .collect::<Vec<HttpApiDefinition>>()
+                .as_slice(),
+        );
 
         if !conflicting_definitions.is_empty() {
             let conflicting_definitions = conflicting_definitions
@@ -425,14 +433,14 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     async fn get_definitions_by_site(
         &self,
         site: &ApiSiteString,
-    ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>> {
+    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDeploymentError<Namespace>> {
         info!("Get API definitions");
         let records = self
             .deployment_repo
             .get_definitions_by_site(site.to_string().as_str())
             .await?;
 
-        let mut values: Vec<HttpApiDefinition> = vec![];
+        let mut values: Vec<CompiledHttpApiDefinition> = vec![];
 
         for record in records {
             values.push(record.try_into().map_err(|_| {
@@ -516,7 +524,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     async fn get_definitions_by_site(
         &self,
         _site: &ApiSiteString,
-    ) -> Result<Vec<HttpApiDefinition>, ApiDeploymentError<Namespace>> {
+    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDeploymentError<Namespace>> {
         Ok(vec![])
     }
 

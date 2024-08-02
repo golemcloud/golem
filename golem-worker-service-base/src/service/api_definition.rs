@@ -18,9 +18,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::api_definition::http::HttpApiDefinition;
-use golem_common::model::ComponentId;
-use golem_service_base::model::Component;
+use crate::api_definition::http::{
+    CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
+    RouteCompilationErrors,
+};
+use golem_service_base::model::{Component, VersionedComponentId};
 use tracing::{error, info};
 
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
@@ -47,7 +49,9 @@ pub enum ApiDefinitionError<E> {
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors<E>),
     #[error("Unable to fetch component: {0:?}")]
-    ComponentNotFoundError(Vec<ComponentId>),
+    ComponentNotFoundError(Vec<VersionedComponentId>),
+    #[error("Rib compilation error: {0:?}")]
+    RibCompilationErrors(String),
     #[error("API definition not found: {0}")]
     ApiDefinitionNotFound(ApiDefinitionId),
     #[error("API definition is not draft: {0}")]
@@ -64,6 +68,22 @@ impl<E> From<RepoError> for ApiDefinitionError<E> {
     fn from(error: RepoError) -> Self {
         match error {
             RepoError::Internal(e) => ApiDefinitionError::InternalError(e.clone()),
+        }
+    }
+}
+
+impl<E> From<RouteCompilationErrors> for ApiDefinitionError<E> {
+    fn from(error: RouteCompilationErrors) -> Self {
+        match error {
+            RouteCompilationErrors::RibCompilationError(e) => {
+                ApiDefinitionError::RibCompilationErrors(e)
+            }
+            RouteCompilationErrors::MetadataNotFoundError(e) => {
+                ApiDefinitionError::RibCompilationErrors(format!(
+                    "Failed to find the metadata of the component {}",
+                    e
+                ))
+            }
         }
     }
 }
@@ -93,7 +113,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         version: &ApiVersion,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<HttpApiDefinition>, ValidationError>;
+    ) -> ApiResult<Option<CompiledHttpApiDefinition>, ValidationError>;
 
     async fn delete(
         &self,
@@ -107,14 +127,14 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         &self,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError>;
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError>;
 
     async fn get_all_versions(
         &self,
         id: &ApiDefinitionId,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError>;
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError>;
 }
 
 pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
@@ -154,7 +174,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
             .map(|binding| async move {
                 let id = &binding.component_id;
                 self.component_service
-                    .get_latest(id, auth_ctx)
+                    .get_by_version(&id.component_id, id.version, auth_ctx)
                     .await
                     .map_err(|e| {
                         error!(
@@ -175,7 +195,8 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
 
             // Ensure that all components were retrieved.
             if !errors.is_empty() {
-                let errors: Vec<ComponentId> = errors.into_iter().map(|r| r.unwrap_err()).collect();
+                let errors: Vec<VersionedComponentId> =
+                    errors.into_iter().map(|r| r.unwrap_err()).collect();
                 return Err(ApiDefinitionError::ComponentNotFoundError(errors));
             }
 
@@ -221,8 +242,16 @@ where
         self.api_definition_validator
             .validate(definition, components.as_slice())?;
 
-        let record =
-            ApiDefinitionRecord::new(namespace.clone(), definition.clone()).map_err(|_| {
+        let component_metadata_dictionary =
+            ComponentMetadataDictionary::from_components(&components);
+
+        let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
+            definition,
+            &component_metadata_dictionary,
+        )?;
+
+        let record = ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition)
+            .map_err(|_| {
                 ApiDefinitionError::InternalError("Failed to convert record".to_string())
             })?;
 
@@ -266,8 +295,16 @@ where
         self.api_definition_validator
             .validate(definition, components.as_slice())?;
 
-        let record =
-            ApiDefinitionRecord::new(namespace.clone(), definition.clone()).map_err(|_| {
+        let component_metadata_dictionary =
+            ComponentMetadataDictionary::from_components(&components);
+
+        let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
+            definition,
+            &component_metadata_dictionary,
+        )?;
+
+        let record = ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition)
+            .map_err(|_| {
                 ApiDefinitionError::InternalError("Failed to convert record".to_string())
             })?;
 
@@ -282,7 +319,7 @@ where
         version: &ApiVersion,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Option<CompiledHttpApiDefinition>, ValidationError> {
         info!(namespace = %namespace, "Get API definition");
         let value = self
             .definition_repo
@@ -338,14 +375,14 @@ where
         &self,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
         info!(namespace = %namespace, "Get all API definitions");
         let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
-        let values: Vec<HttpApiDefinition> = records
+        let values: Vec<CompiledHttpApiDefinition> = records
             .iter()
             .map(|d| d.clone().try_into())
-            .collect::<Result<Vec<HttpApiDefinition>, _>>()
+            .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
             .map_err(|_| {
                 ApiDefinitionError::InternalError("Failed to convert record".to_string())
             })?;
@@ -358,7 +395,7 @@ where
         id: &ApiDefinitionId,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
         info!(namespace = %namespace, "Get all API definitions versions");
 
         let records = self
@@ -366,10 +403,10 @@ where
             .get_all_versions(&namespace.to_string(), id.0.as_str())
             .await?;
 
-        let values: Vec<HttpApiDefinition> = records
+        let values: Vec<CompiledHttpApiDefinition> = records
             .iter()
             .map(|d| d.clone().try_into())
-            .collect::<Result<Vec<HttpApiDefinition>, _>>()
+            .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
             .map_err(|_| {
                 ApiDefinitionError::InternalError("Failed to convert record".to_string())
             })?;
@@ -412,7 +449,7 @@ where
         _version: &ApiVersion,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<HttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Option<CompiledHttpApiDefinition>, ValidationError> {
         Ok(None)
     }
 
@@ -430,7 +467,7 @@ where
         &self,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
         Ok(vec![])
     }
 
@@ -439,7 +476,7 @@ where
         _id: &ApiDefinitionId,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<HttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
         Ok(vec![])
     }
 }

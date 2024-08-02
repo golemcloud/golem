@@ -4,9 +4,9 @@ use poem_openapi::*;
 use serde::{Deserialize, Serialize};
 
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
-use golem_common::model::ComponentId;
+use golem_service_base::model::VersionedComponentId;
 
-use crate::api_definition::http::MethodPattern;
+use crate::api_definition::http::{AllPathPatterns, CompiledRoute, MethodPattern};
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
 use rib::Expr;
 
@@ -51,7 +51,7 @@ pub struct Route {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
-    pub component_id: ComponentId,
+    pub component_id: VersionedComponentId,
     pub worker_name: String,
     pub idempotency_key: Option<String>,
     pub response: String,
@@ -266,6 +266,38 @@ impl TryFrom<crate::api_definition::http::Route> for grpc_apidefinition::HttpRou
         };
 
         Ok(result)
+    }
+}
+
+impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute {
+    type Error = String;
+
+    fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
+        let method = value.method as i32;
+        let path = value.path.to_string();
+        let binding = value.binding.try_into()?;
+        Ok(Self {
+            method,
+            path,
+            binding: Some(binding),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for CompiledRoute {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute,
+    ) -> Result<Self, Self::Error> {
+        let method = MethodPattern::try_from(value.method)?;
+        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
+        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
+        Ok(CompiledRoute {
+            method,
+            path,
+            binding,
+        })
     }
 }
 

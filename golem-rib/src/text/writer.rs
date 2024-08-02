@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
+use crate::MatchArm;
 use std::fmt::Display;
 use std::io::Write;
 
@@ -78,31 +79,31 @@ impl<W: Write> Writer<W> {
 
     fn write_expr(&mut self, expr: &Expr) -> Result<(), WriterError> {
         match expr {
-            Expr::Literal(string) => {
+            Expr::Literal(string, _) => {
                 self.write_display("\"")?;
                 self.write_str(string)?;
                 self.write_display("\"")
             }
-            Expr::Identifier(identifier) => self.write_str(identifier),
+            Expr::Identifier(identifier, _) => self.write_str(identifier.name()),
 
-            Expr::Let(let_variable, expr) => {
+            Expr::Let(variable_id, expr, _) => {
                 self.write_str("let ")?;
-                self.write_str(let_variable)?;
+                self.write_str(variable_id.name())?;
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }
-            Expr::SelectField(expr, field_name) => {
+            Expr::SelectField(expr, field_name, _) => {
                 self.write_expr(expr)?;
                 self.write_str(".")?;
                 self.write_str(field_name)
             }
-            Expr::SelectIndex(expr, index) => {
+            Expr::SelectIndex(expr, index, _) => {
                 self.write_expr(expr)?;
                 self.write_display("[")?;
                 self.write_display(index)?;
                 self.write_display("]")
             }
-            Expr::Sequence(sequence) => {
+            Expr::Sequence(sequence, _) => {
                 self.write_display("[")?;
                 for (idx, expr) in sequence.iter().enumerate() {
                     if idx != 0 {
@@ -113,7 +114,7 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display("]")
             }
-            Expr::Record(record) => {
+            Expr::Record(record, _) => {
                 self.write_display("{")?;
                 for (idx, (key, value)) in record.iter().enumerate() {
                     if idx != 0 {
@@ -127,7 +128,7 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display("}")
             }
-            Expr::Tuple(tuple) => {
+            Expr::Tuple(tuple, _) => {
                 self.write_display("(")?;
                 for (idx, expr) in tuple.iter().enumerate() {
                     if idx != 0 {
@@ -138,8 +139,8 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display(")")
             }
-            Expr::Number(number) => self.write_display(number),
-            Expr::Flags(flags) => {
+            Expr::Number(number, _) => self.write_display(number.value),
+            Expr::Flags(flags, _) => {
                 self.write_display("{")?;
                 for (idx, flag) in flags.iter().enumerate() {
                     if idx != 0 {
@@ -150,13 +151,13 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display("}")
             }
-            Expr::Boolean(bool) => self.write_display(bool),
-            Expr::Concat(concatenated) => {
+            Expr::Boolean(bool, _) => self.write_display(bool),
+            Expr::Concat(concatenated, _) => {
                 self.write_display("\"")?;
                 internal::write_concatenated_exprs(self, concatenated)?;
                 self.write_display("\"")
             }
-            Expr::Multiple(expr) => {
+            Expr::Multiple(expr, _) => {
                 for (idx, expr) in expr.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(";")?;
@@ -166,36 +167,36 @@ impl<W: Write> Writer<W> {
                 }
                 Ok(())
             }
-            Expr::Not(expr) => {
+            Expr::Not(expr, _) => {
                 self.write_str("!")?;
                 self.write_expr(expr)
             }
-            Expr::GreaterThan(left, right) => {
+            Expr::GreaterThan(left, right, _) => {
                 self.write_expr(left)?;
                 self.write_str(" > ")?;
                 self.write_expr(right)
             }
-            Expr::GreaterThanOrEqualTo(left, right) => {
+            Expr::GreaterThanOrEqualTo(left, right, _) => {
                 self.write_expr(left)?;
                 self.write_str(" >= ")?;
                 self.write_expr(right)
             }
-            Expr::LessThanOrEqualTo(left, right) => {
+            Expr::LessThanOrEqualTo(left, right, _) => {
                 self.write_expr(left)?;
                 self.write_str(" <= ")?;
                 self.write_expr(right)
             }
-            Expr::EqualTo(left, right) => {
+            Expr::EqualTo(left, right, _) => {
                 self.write_expr(left)?;
                 self.write_str(" == ")?;
                 self.write_expr(right)
             }
-            Expr::LessThan(left, right) => {
+            Expr::LessThan(left, right, _) => {
                 self.write_expr(left)?;
                 self.write_str(" < ")?;
                 self.write_expr(right)
             }
-            Expr::Cond(if_expr, left, right) => {
+            Expr::Cond(if_expr, left, right, _) => {
                 self.write_str("if ")?;
                 self.write_expr(if_expr)?;
                 self.write_str(" then ")?;
@@ -203,7 +204,7 @@ impl<W: Write> Writer<W> {
                 self.write_str(" else ")?;
                 self.write_expr(right)
             }
-            Expr::PatternMatch(match_expr, match_terms) => {
+            Expr::PatternMatch(match_expr, match_terms, _) => {
                 self.write_str("match ")?;
                 self.write_expr(match_expr)?;
                 self.write_str(" { ")?;
@@ -212,22 +213,25 @@ impl<W: Write> Writer<W> {
                     if idx != 0 {
                         self.write_str(", ")?;
                     }
-                    let (match_case, match_expr) = &match_term.0;
-                    internal::write_constructor(match_case, self)?;
+                    let MatchArm {
+                        arm_pattern,
+                        arm_resolution_expr,
+                    } = &match_term;
+                    internal::write_constructor(arm_pattern, self)?;
                     self.write_str(" => ")?;
-                    self.write_expr(match_expr)?;
+                    self.write_expr(arm_resolution_expr)?;
                 }
                 self.write_str(" } ")
             }
-            Expr::Option(constructor) => match constructor {
+            Expr::Option(constructor, _) => match constructor {
                 Some(expr) => {
                     self.write_str("some(")?;
                     self.write_expr(expr)?;
                     self.write_str(")")
                 }
-                None => self.write_str("non"),
+                None => self.write_str("none"),
             },
-            Expr::Result(constructor) => match constructor {
+            Expr::Result(constructor, _) => match constructor {
                 Ok(expr) => {
                     self.write_str("ok(")?;
                     self.write_expr(expr)?;
@@ -240,13 +244,9 @@ impl<W: Write> Writer<W> {
                 }
             },
 
-            Expr::Call(string, params) => {
-                let function_name = match string.site().interface_name() {
-                    Some(interface) => {
-                        format!("{}.{{{}}}", interface, string.function().function_name())
-                    }
-                    None => string.function().function_name().to_string(),
-                };
+            Expr::Call(invocation_name, params, _) => {
+                let function_name = invocation_name.to_string();
+
                 self.write_str(function_name)?;
                 self.write_display("(")?;
                 for (idx, param) in params.iter().enumerate() {
@@ -257,6 +257,23 @@ impl<W: Write> Writer<W> {
                     self.write_expr(param)?;
                 }
                 self.write_display(")")
+            }
+
+            Expr::Unwrap(expr, _) => {
+                self.write_str("unwrap(")?;
+                self.write_expr(expr)?;
+                self.write_str(")")
+            }
+
+            Expr::Throw(msg, _) => {
+                self.write_str("throw(")?;
+                self.write_str(msg)?;
+                self.write_str(")")
+            }
+            Expr::Tag(expr, _) => {
+                self.write_str("get_tag(")?;
+                self.write_expr(expr)?;
+                self.write_str(")")
             }
         }
     }
@@ -284,8 +301,8 @@ mod internal {
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
-            Expr::Literal(str) => ExprType::Text(str),
-            Expr::Concat(vec) => ExprType::StringInterpolated(vec),
+            Expr::Literal(str, _) => ExprType::Text(str),
+            Expr::Concat(vec, _) => ExprType::StringInterpolated(vec),
             expr => ExprType::Code(expr),
         }
     }
@@ -352,7 +369,7 @@ mod internal {
                 }
             }
             ArmPattern::Literal(expr) => match *expr.clone() {
-                Expr::Identifier(s) => writer.write_str(s),
+                Expr::Identifier(s, _) => writer.write_str(s.name()),
                 any_expr => writer.write_expr(&any_expr),
             },
         }

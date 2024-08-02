@@ -26,10 +26,9 @@ use combine::stream::easy;
 pub fn option<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
         spaces().with(
-            between(string("some("), char(')'), rib_expr())
-                .map(|expr| Expr::Option(Some(Box::new(expr)))),
+            between(string("some("), char(')'), rib_expr()).map(|expr| Expr::option(Some(expr))),
         ),
-        spaces().with(string("none").map(|_| Expr::Option(None))),
+        spaces().with(string("none").map(|_| Expr::option(None))),
     ))
 }
 
@@ -44,10 +43,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Option(Some(Box::new(Expr::Identifier("foo".to_string())))),
-                ""
-            ))
+            Ok((Expr::option(Some(Expr::identifier("foo"))), ""))
         );
     }
 
@@ -55,7 +51,7 @@ mod tests {
     fn test_none() {
         let input = "none";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Option(None), "")));
+        assert_eq!(result, Ok((Expr::option(None), "")));
     }
 
     #[test]
@@ -65,9 +61,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Option(Some(Box::new(Expr::Option(Some(Box::new(
-                    Expr::Identifier("foo".to_string())
-                )))))),
+                Expr::option(Some(Expr::option(Some(Expr::identifier("foo"))))),
                 ""
             ))
         );
@@ -80,10 +74,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Option(Some(Box::new(Expr::Sequence(vec![
-                    Expr::Identifier("foo".to_string()),
-                    Expr::Identifier("bar".to_string())
-                ])))),
+                Expr::option(Some(Expr::sequence(vec![
+                    Expr::identifier("foo"),
+                    Expr::identifier("bar")
+                ]))),
                 ""
             ))
         );
@@ -95,10 +89,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Option(Some(Box::new(Expr::Literal("foo".to_string())))),
-                ""
-            ))
+            Ok((Expr::option(Some(Expr::literal("foo".to_string()))), ""))
         );
     }
 }

@@ -31,9 +31,9 @@ pub fn select_index<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             .map(
                 |(expr, _, number, _, possible_indices)| match possible_indices {
                     Some(indices) => {
-                        build_select_index_from(Expr::SelectIndex(Box::new(expr), number), indices)
+                        build_select_index_from(Expr::select_index(expr, number), indices)
                     }
-                    None => Expr::SelectIndex(Box::new(expr), number),
+                    None => Expr::select_index(expr, number),
                 },
             ),
     )
@@ -41,7 +41,7 @@ pub fn select_index<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
 
 mod internal {
     use super::*;
-    use crate::expr::Number;
+
     use crate::parser::number::number;
     use crate::parser::sequence::sequence;
     use combine::error::StreamError;
@@ -50,7 +50,7 @@ mod internal {
     pub(crate) fn build_select_index_from(base_expr: Expr, indices: Vec<usize>) -> Expr {
         let mut result = base_expr;
         for index in indices {
-            result = Expr::SelectIndex(Box::new(result), index);
+            result = Expr::select_index(result, index);
         }
         result
     }
@@ -69,15 +69,15 @@ mod internal {
 
     pub(crate) fn pos_num<'t>() -> impl Parser<easy::Stream<&'t str>, Output = usize> {
         number().and_then(|s: Expr| match s {
-            Expr::Number(number) => match number {
-                Number::Signed(_) => Err(easy::Error::message_static_message(
-                    "Cannot use a negative number to index",
-                )),
-                Number::Float(_) => Err(easy::Error::message_static_message(
-                    "Cannot use a float number to index",
-                )),
-                Number::Unsigned(u64) => Ok(u64 as usize),
-            },
+            Expr::Number(number, _) => {
+                if number.value < 0.0 {
+                    Err(easy::Error::message_static_message(
+                        "Cannot use a negative number to index",
+                    ))
+                } else {
+                    Ok(number.value as usize)
+                }
+            }
             _ => Err(easy::Error::message_static_message(
                 "Cannot use a float number to index",
             )),
@@ -101,10 +101,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::SelectIndex(Box::new(Expr::Identifier("foo".to_string())), 0),
-                ""
-            ))
+            Ok((Expr::select_index(Expr::identifier("foo"), 0), ""))
         );
     }
 
@@ -115,13 +112,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::SelectIndex(
-                    Box::new(Expr::SelectIndex(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        0
-                    )),
-                    1
-                ),
+                Expr::select_index(Expr::select_index(Expr::identifier("foo"), 0), 1),
                 ""
             ))
         );

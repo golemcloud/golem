@@ -15,7 +15,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use crate::api_definition::http::HttpApiDefinition;
+use crate::api_definition::http::CompiledHttpApiDefinition;
 use crate::http::InputHttpRequest;
 use crate::service::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
@@ -50,13 +50,13 @@ impl<Namespace> HttpApiDefinitionLookup<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace> ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition>
+impl<Namespace> ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition>
     for HttpApiDefinitionLookup<Namespace>
 {
     async fn get(
         &self,
         input_http_request: InputHttpRequest,
-    ) -> Result<Vec<HttpApiDefinition>, ApiDefinitionLookupError> {
+    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDefinitionLookupError> {
         // HOST should exist in Http Request
         let host = input_http_request
             .get_host()

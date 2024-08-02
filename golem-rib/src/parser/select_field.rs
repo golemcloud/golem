@@ -71,14 +71,16 @@ mod internal {
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         // a.b
         match nest {
-            Expr::Identifier(str) => Some(Expr::SelectField(Box::new(base), str)),
-            Expr::SelectField(second, last) => {
-                let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectField(Box::new(inner_select), last))
+            Expr::Identifier(variable_id, _) => {
+                Some(Expr::select_field(base, variable_id.name().as_str()))
             }
-            Expr::SelectIndex(second, last_index) => {
+            Expr::SelectField(second, last, _) => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectIndex(Box::new(inner_select), last_index))
+                Some(Expr::select_field(inner_select, last.as_str()))
+            }
+            Expr::SelectIndex(second, last_index, _) => {
+                let inner_select = build_selector(base, *second)?;
+                Some(Expr::select_index(inner_select, last_index))
             }
             _ => None,
         }
@@ -88,7 +90,7 @@ mod internal {
         choice((
             attempt(select_index()),
             attempt(record()),
-            attempt(field_name().map(Expr::Identifier)),
+            attempt(field_name().map(|s| Expr::identifier(s.as_str()))),
         ))
     }
 
@@ -112,10 +114,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::SelectField(
-                    Box::new(Expr::Identifier("foo".to_string())),
-                    "bar".to_string()
-                ),
+                Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
                 ""
             ))
         );
@@ -128,11 +127,11 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::SelectField(
-                    Box::new(Expr::Record(vec![(
+                Expr::select_field(
+                    Expr::record(vec![(
                         "foo".to_string(),
-                        Box::new(Expr::Identifier("bar".to_string()))
-                    )])),
+                        Expr::identifier("bar".to_string())
+                    )]),
                     "foo".to_string()
                 ),
                 ""
@@ -147,11 +146,8 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::SelectField(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        "bar".to_string()
-                    )),
+                Expr::select_field(
+                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
                     "baz".to_string()
                 ),
                 ""
@@ -166,14 +162,11 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::SelectIndex(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::SelectIndex(
-                            Box::new(Expr::Identifier("foo".to_string())),
-                            0
-                        )),
+                Expr::select_index(
+                    Expr::select_field(
+                        Expr::select_index(Expr::identifier("foo".to_string()), 0),
                         "bar".to_string()
-                    )),
+                    ),
                     1
                 ),
                 ""
@@ -188,14 +181,11 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::SelectField(
-                    Box::new(Expr::SelectIndex(
-                        Box::new(Expr::SelectField(
-                            Box::new(Expr::Identifier("foo".to_string())),
-                            "bar".to_string()
-                        )),
+                Expr::select_field(
+                    Expr::select_index(
+                        Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
                         0
-                    )),
+                    ),
                     "baz".to_string()
                 ),
                 ""
@@ -209,12 +199,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::GreaterThan(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        "bar".to_string()
-                    )),
-                    Box::new(Expr::Literal("bar".to_string()))
+                Expr::greater_than(
+                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
+                    Expr::literal("bar".to_string())
                 ),
                 ""
             ))
@@ -227,12 +214,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::GreaterThan(
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        "bar".to_string()
-                    )),
-                    Box::new(Expr::unsigned_integer(1))
+                Expr::greater_than(
+                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
+                    Expr::number(1f64)
                 ),
                 ""
             ))
@@ -246,22 +230,13 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Cond(
-                    Box::new(Expr::GreaterThan(
-                        Box::new(Expr::SelectField(
-                            Box::new(Expr::Identifier("foo".to_string())),
-                            "bar".to_string()
-                        )),
-                        Box::new(Expr::unsigned_integer(1))
-                    )),
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        "bar".to_string()
-                    )),
-                    Box::new(Expr::SelectField(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        "baz".to_string()
-                    ))
+                Expr::cond(
+                    Expr::greater_than(
+                        Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
+                        Expr::number(1f64)
+                    ),
+                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
+                    Expr::select_field(Expr::identifier("foo".to_string()), "baz".to_string())
                 ),
                 ""
             ))
@@ -275,42 +250,42 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::PatternMatch(
-                    Box::new(Expr::Identifier("foo".to_string())),
+                Expr::pattern_match(
+                    Expr::identifier("foo".to_string()),
                     vec![
-                        MatchArm((
+                        MatchArm::match_arm(
                             ArmPattern::WildCard,
-                            Box::new(Expr::Identifier("bar".to_string()))
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(
-                                Expr::Identifier("x".to_string())
+                            Expr::identifier("bar".to_string())
+                        ),
+                        MatchArm::match_arm(
+                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier(
+                                "x".to_string()
+                            )))),
+                            Expr::identifier("x".to_string())
+                        ),
+                        MatchArm::match_arm(
+                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier(
+                                "x".to_string()
+                            )))),
+                            Expr::identifier("x".to_string())
+                        ),
+                        MatchArm::match_arm(
+                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            Expr::identifier("foo".to_string())
+                        ),
+                        MatchArm::match_arm(
+                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
+                                "x".to_string()
                             ))))),
-                            Box::new(Expr::Identifier("x".to_string()))
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(
-                                Expr::Identifier("x".to_string())
-                            ))))),
-                            Box::new(Expr::Identifier("x".to_string()))
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Option(None))),
-                            Box::new(Expr::Identifier("foo".to_string()))
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(
-                                Expr::Identifier("x".to_string())
-                            ))))),
-                            Box::new(Expr::Identifier("x".to_string()))
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Identifier("foo".to_string()))),
-                            Box::new(Expr::SelectField(
-                                Box::new(Expr::Identifier("foo".to_string())),
+                            Expr::identifier("x".to_string())
+                        ),
+                        MatchArm::match_arm(
+                            ArmPattern::Literal(Box::new(Expr::identifier("foo".to_string()))),
+                            Expr::select_field(
+                                Expr::identifier("foo".to_string()),
                                 "bar".to_string()
-                            ))
-                        )),
+                            )
+                        ),
                     ]
                 ),
                 ""
