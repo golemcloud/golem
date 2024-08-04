@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock, Weak};
 
 use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor,
@@ -61,7 +61,7 @@ use tokio::task::JoinHandle;
 use golem::api;
 use golem_common::config::RedisConfig;
 
-use golem_api_grpc::proto::golem::workerexecutor::{
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, get_workers_metadata_response,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,

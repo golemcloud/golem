@@ -25,8 +25,8 @@ use tonic::transport::Channel;
 use tonic::Status;
 use tracing::{debug, error, info, warn, Instrument};
 
-use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::{Pod, ShardId};

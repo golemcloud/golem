@@ -71,7 +71,7 @@ impl Pod {
 
     pub fn from_register_request(
         source_ip: IpAddr,
-        request: golem::shardmanager::RegisterRequest,
+        request: golem::shardmanager::v1::RegisterRequest,
     ) -> Result<Self, ShardManagerError> {
         let pod = Pod {
             host: request.host,

@@ -3,14 +3,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::Instrument;
 
+use golem_api_grpc::proto::golem::apidefinition::{
+    ApiDefinition as GrpcApiDefinition, ApiDefinitionList,
+};
 use golem_api_grpc::proto::golem::{
-    apidefinition::{
+    apidefinition::v1::{
         api_definition_error, api_definition_service_server::ApiDefinitionService,
         create_api_definition_request, create_api_definition_response,
         delete_api_definition_response, get_all_api_definitions_response,
         get_api_definition_response, get_api_definition_versions_response,
-        update_api_definition_request, update_api_definition_response,
-        ApiDefinition as GrpcApiDefinition, ApiDefinitionError, ApiDefinitionList,
+        update_api_definition_request, update_api_definition_response, ApiDefinitionError,
         CreateApiDefinitionRequest, CreateApiDefinitionResponse, DeleteApiDefinitionRequest,
         DeleteApiDefinitionResponse, GetAllApiDefinitionsRequest, GetAllApiDefinitionsResponse,
         GetApiDefinitionRequest, GetApiDefinitionResponse, GetApiDefinitionVersionsRequest,

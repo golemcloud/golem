@@ -25,9 +25,9 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_error::Error;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
-use golem_api_grpc::proto::golem::shardmanager::ShardManagerError;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
+use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
 use golem_common::cache::*;
 use golem_common::client::GrpcClient;
 use golem_common::model::RoutingTable;
@@ -129,24 +129,31 @@ impl RoutingTableService for RoutingTableServiceDefault {
         self.cache
             .get_or_insert_simple(&(), || {
                 Box::pin(async move {
-                    let response =
-                        client.call(|client| Box::pin(client
-                        .get_routing_table(shardmanager::GetRoutingTableRequest {})))
+                    let response = client
+                        .call(|client| {
+                            Box::pin(
+                                client
+                                    .get_routing_table(shardmanager::v1::GetRoutingTableRequest {}),
+                            )
+                        })
                         .await
-                        .map_err(|err| {
-                            RoutingTableError::ShardManagerGrpcError(err)
-                        })?;
+                        .map_err(RoutingTableError::ShardManagerGrpcError)?;
                     match response.into_inner() {
-                        shardmanager::GetRoutingTableResponse {
+                        shardmanager::v1::GetRoutingTableResponse {
                             result:
-                            Some(shardmanager::get_routing_table_response::Result::Success(routing_table)),
+                                Some(shardmanager::v1::get_routing_table_response::Result::Success(
+                                    routing_table,
+                                )),
                         } => Ok(routing_table.into()),
-                        shardmanager::GetRoutingTableResponse {
-                            result: Some(shardmanager::get_routing_table_response::Result::Failure(failure)),
+                        shardmanager::v1::GetRoutingTableResponse {
+                            result:
+                                Some(shardmanager::v1::get_routing_table_response::Result::Failure(
+                                    failure,
+                                )),
                         } => Err(RoutingTableError::ShardManagerError(failure)),
-                        shardmanager::GetRoutingTableResponse { result: None } => {
+                        shardmanager::v1::GetRoutingTableResponse { result: None } => {
                             Err(RoutingTableError::NoResult)
-                        },
+                        }
                     }
                 })
             })

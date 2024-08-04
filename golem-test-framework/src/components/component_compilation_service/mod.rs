@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::componentcompilation::{
+use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_response, ComponentCompilationRequest,
 };
 use tonic::transport::Channel;
@@ -26,7 +26,7 @@ use tracing::Level;
 
 use crate::components::component_service::ComponentService;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
-use golem_api_grpc::proto::golem::componentcompilation::component_compilation_service_client::ComponentCompilationServiceClient;
+use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_client::ComponentCompilationServiceClient;
 use golem_common::model::ComponentId;
 
 pub mod docker;

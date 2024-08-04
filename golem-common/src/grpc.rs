@@ -70,13 +70,13 @@ pub trait HasProtoApiDefinition {
     fn api_definition(&self) -> Option<&apidefinition::ApiDefinition>;
 }
 
-impl HasProtoApiDefinition for apidefinition::create_api_definition_request::ApiDefinition {
+impl HasProtoApiDefinition for apidefinition::v1::create_api_definition_request::ApiDefinition {
     fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind {
         match self {
-            apidefinition::create_api_definition_request::ApiDefinition::Definition(_) => {
+            apidefinition::v1::create_api_definition_request::ApiDefinition::Definition(_) => {
                 ProtoApiDefinitionKind::Golem
             }
-            apidefinition::create_api_definition_request::ApiDefinition::Openapi(_) => {
+            apidefinition::v1::create_api_definition_request::ApiDefinition::Openapi(_) => {
                 ProtoApiDefinitionKind::OpenAPI
             }
         }
@@ -84,21 +84,21 @@ impl HasProtoApiDefinition for apidefinition::create_api_definition_request::Api
 
     fn api_definition(&self) -> Option<&apidefinition::ApiDefinition> {
         match self {
-            apidefinition::create_api_definition_request::ApiDefinition::Definition(api_def) => {
-                Some(api_def)
-            }
-            apidefinition::create_api_definition_request::ApiDefinition::Openapi(_) => None,
+            apidefinition::v1::create_api_definition_request::ApiDefinition::Definition(
+                api_def,
+            ) => Some(api_def),
+            apidefinition::v1::create_api_definition_request::ApiDefinition::Openapi(_) => None,
         }
     }
 }
 
-impl HasProtoApiDefinition for apidefinition::update_api_definition_request::ApiDefinition {
+impl HasProtoApiDefinition for apidefinition::v1::update_api_definition_request::ApiDefinition {
     fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind {
         match self {
-            apidefinition::update_api_definition_request::ApiDefinition::Definition(_) => {
+            apidefinition::v1::update_api_definition_request::ApiDefinition::Definition(_) => {
                 ProtoApiDefinitionKind::Golem
             }
-            apidefinition::update_api_definition_request::ApiDefinition::Openapi(_) => {
+            apidefinition::v1::update_api_definition_request::ApiDefinition::Openapi(_) => {
                 ProtoApiDefinitionKind::OpenAPI
             }
         }
@@ -106,10 +106,10 @@ impl HasProtoApiDefinition for apidefinition::update_api_definition_request::Api
 
     fn api_definition(&self) -> Option<&apidefinition::ApiDefinition> {
         match self {
-            apidefinition::update_api_definition_request::ApiDefinition::Definition(api_def) => {
-                Some(api_def)
-            }
-            apidefinition::update_api_definition_request::ApiDefinition::Openapi(_) => None,
+            apidefinition::v1::update_api_definition_request::ApiDefinition::Definition(
+                api_def,
+            ) => Some(api_def),
+            apidefinition::v1::update_api_definition_request::ApiDefinition::Openapi(_) => None,
         }
     }
 }

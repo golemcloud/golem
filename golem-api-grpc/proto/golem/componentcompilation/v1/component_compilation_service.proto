@@ -4,7 +4,7 @@ import "golem/common/empty.proto";
 import "golem/common/error_body.proto";
 import "golem/component/component_id.proto";
 
-package golem.componentcompilation;
+package golem.componentcompilation.v1;
 
 service ComponentCompilationService {
     rpc EnqueueCompilation(ComponentCompilationRequest) returns (ComponentCompilationResponse);

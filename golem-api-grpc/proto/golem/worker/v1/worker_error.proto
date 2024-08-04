@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package golem.worker;
+package golem.worker.v1;
 
 import "golem/common/error_body.proto";
-import "golem/worker/worker_execution_error.proto";
+import "golem/worker/v1/worker_execution_error.proto";
 
 message WorkerError {
   oneof error {

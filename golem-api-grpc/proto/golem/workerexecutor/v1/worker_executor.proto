@@ -17,12 +17,12 @@ import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
-import public "golem/worker/worker_execution_error.proto";
+import public "golem/worker/v1/worker_execution_error.proto";
 
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
 
-package golem.workerexecutor;
+package golem.workerexecutor.v1;
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -45,7 +45,7 @@ service WorkerExecutor {
 message InvokeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -57,7 +57,7 @@ message DeleteWorkerRequest {
 message DeleteWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -70,7 +70,7 @@ message CompletePromiseRequest {
 message CompletePromiseResponse {
   oneof result {
     CompletePromiseSuccess success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -81,7 +81,7 @@ message CompletePromiseSuccess {
 message InterruptWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -97,7 +97,7 @@ message CreateWorkerRequest {
 message CreateWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -117,14 +117,14 @@ message InvokeAndAwaitWorkerRequest {
 message InvokeAndAwaitWorkerResponse {
   oneof result {
     InvokeAndAwaitWorkerSuccess success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
 message InvokeAndAwaitWorkerResponseTyped {
   oneof result {
     InvokeAndAwaitWorkerSuccessTyped success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -166,7 +166,7 @@ message RevokeShardsRequest {
 message RevokeShardsResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -177,7 +177,7 @@ message AssignShardsRequest {
 message AssignShardsResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -189,7 +189,7 @@ message GetWorkerMetadataRequest {
 message GetWorkerMetadataResponse {
   oneof result {
     golem.worker.WorkerMetadata success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -201,7 +201,7 @@ message ResumeWorkerRequest {
 message ResumeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -214,7 +214,7 @@ message GetRunningWorkersMetadataRequest {
 message GetRunningWorkersMetadataResponse {
   oneof result {
     GetRunningWorkersMetadataSuccessResponse success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -234,7 +234,7 @@ message GetWorkersMetadataRequest {
 message GetWorkersMetadataResponse {
   oneof result {
     GetWorkersMetadataSuccessResponse success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
@@ -253,6 +253,6 @@ message UpdateWorkerRequest {
 message UpdateWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerExecutionError failure = 2;
+    golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }

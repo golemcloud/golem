@@ -27,10 +27,11 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult,
 };
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::{
-    self, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
-    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
+use golem_api_grpc::proto::golem::workerexecutor;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest,
+    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
@@ -284,13 +285,13 @@ where
                 }))
             },
             |response| match response.into_inner() {
-                workerexecutor::CreateWorkerResponse {
-                    result: Some(workerexecutor::create_worker_response::Result::Success(_)),
+                workerexecutor::v1::CreateWorkerResponse {
+                    result: Some(workerexecutor::v1::create_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::CreateWorkerResponse {
-                    result: Some(workerexecutor::create_worker_response::Result::Failure(err)),
+                workerexecutor::v1::CreateWorkerResponse {
+                    result: Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -336,7 +337,7 @@ where
                 info!("Delete worker");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.delete_worker(
-                    workerexecutor::DeleteWorkerRequest {
+                    workerexecutor::v1::DeleteWorkerRequest {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
                             worker_id.clone(),
                         )),
@@ -345,13 +346,13 @@ where
                 ))
             },
             |response| match response.into_inner() {
-                workerexecutor::DeleteWorkerResponse {
-                    result: Some(workerexecutor::delete_worker_response::Result::Success(_)),
+                workerexecutor::v1::DeleteWorkerResponse {
+                    result: Some(workerexecutor::v1::delete_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::DeleteWorkerResponse {
-                    result: Some(workerexecutor::delete_worker_response::Result::Failure(err)),
+                workerexecutor::v1::DeleteWorkerResponse {
+                    result: Some(workerexecutor::v1::delete_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::DeleteWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::DeleteWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -427,10 +428,10 @@ where
             },
             move |response| {
                 match response.into_inner() {
-                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Success(
-                                 workerexecutor::InvokeAndAwaitWorkerSuccessTyped {
+                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
                                      output: Some(output),
                                  },
                              )),
@@ -438,14 +439,14 @@ where
                         info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         output.type_annotated_value.ok_or("Empty response".into())
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponseTyped {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response_typed::Result::Failure(err)),
+                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
                     } => {
                         error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponseTyped { .. } => {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
                         error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
@@ -475,7 +476,7 @@ where
             move |worker_executor_client| {
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
-                        InvokeAndAwaitWorkerRequest {
+                    workerexecutor::v1::InvokeAndAwaitWorkerRequest {
                             worker_id: Some(worker_id_clone.clone().into()),
                             name: function_name.clone(),
                             input: params.clone(),
@@ -490,24 +491,24 @@ where
             },
             move |response| {
                 match response.into_inner() {
-                    workerexecutor::InvokeAndAwaitWorkerResponse {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponse {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response::Result::Success(
-                                 workerexecutor::InvokeAndAwaitWorkerSuccess {
+                        Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Success(
+                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccess {
                                      output,
                                  },
                              )),
                     } => {
                         Ok(InvokeResult { result: output })
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponse {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponse {
                         result:
-                        Some(workerexecutor::invoke_and_await_worker_response::Result::Failure(err)),
+                        Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
                         error!("Invoked function error: {err:?}");
                         Err(err.into())
                     },
-                    workerexecutor::InvokeAndAwaitWorkerResponse { .. } => {
+                    workerexecutor::v1::InvokeAndAwaitWorkerResponse { .. } => {
                         error!("Invoked function failed with empty response");
                         Err("Empty response".into())
                     }
@@ -539,7 +540,7 @@ where
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
-                    workerexecutor::InvokeWorkerRequest {
+                    workerexecutor::v1::InvokeWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         name: function_name.clone(),
                         input: params_.clone(),
@@ -551,13 +552,13 @@ where
                 ))
             },
             |response| match response.into_inner() {
-                workerexecutor::InvokeWorkerResponse {
-                    result: Some(workerexecutor::invoke_worker_response::Result::Success(_)),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::InvokeWorkerResponse {
-                    result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -580,7 +581,7 @@ where
                 info!("Invoke function");
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.invoke_worker(
-                    workerexecutor::InvokeWorkerRequest {
+                    workerexecutor::v1::InvokeWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         idempotency_key: idempotency_key.clone(),
                         name: function_name.clone(),
@@ -592,16 +593,16 @@ where
                 ))
             },
             |response| match response.into_inner() {
-                workerexecutor::InvokeWorkerResponse {
-                    result: Some(workerexecutor::invoke_worker_response::Result::Success(_)),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::InvokeWorkerResponse {
-                    result: Some(workerexecutor::invoke_worker_response::Result::Failure(err)),
+                workerexecutor::v1::InvokeWorkerResponse {
+                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
                 } => {
                     error!("Invoked function error: {err:?}");
                     Err(err.into())
                 }
-                workerexecutor::InvokeWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -639,19 +640,19 @@ where
                 },
                 |response| {
                     match response.into_inner() {
-                        workerexecutor::CompletePromiseResponse {
+                        workerexecutor::v1::CompletePromiseResponse {
                             result:
-                            Some(workerexecutor::complete_promise_response::Result::Success(
+                            Some(workerexecutor::v1::complete_promise_response::Result::Success(
                                      success,
                                  )),
                         } => Ok(success.completed),
-                        workerexecutor::CompletePromiseResponse {
+                        workerexecutor::v1::CompletePromiseResponse {
                             result:
-                            Some(workerexecutor::complete_promise_response::Result::Failure(
+                            Some(workerexecutor::v1::complete_promise_response::Result::Failure(
                                      err,
                                  )),
                         } => Err(err.into()),
-                        workerexecutor::CompletePromiseResponse { .. } => {
+                        workerexecutor::v1::CompletePromiseResponse { .. } => {
                             Err("Empty response".into())
                         }
                     }
@@ -683,13 +684,14 @@ where
                 )
             },
             |response| match response.into_inner() {
-                workerexecutor::InterruptWorkerResponse {
-                    result: Some(workerexecutor::interrupt_worker_response::Result::Success(_)),
+                workerexecutor::v1::InterruptWorkerResponse {
+                    result: Some(workerexecutor::v1::interrupt_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::InterruptWorkerResponse {
-                    result: Some(workerexecutor::interrupt_worker_response::Result::Failure(err)),
+                workerexecutor::v1::InterruptWorkerResponse {
+                    result:
+                        Some(workerexecutor::v1::interrupt_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::InterruptWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::InterruptWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -710,7 +712,7 @@ where
                 let worker_id = worker_id.clone();
                 info!("Get metadata");
                 Box::pin(worker_executor_client.get_worker_metadata(
-                        workerexecutor::GetWorkerMetadataRequest {
+                        workerexecutor::v1::GetWorkerMetadataRequest {
                             worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
                             account_id: metadata.account_id.clone().map(|id| id.into()),
                         }
@@ -718,20 +720,20 @@ where
             },
             |response| {
                 match response.into_inner() {
-                    workerexecutor::GetWorkerMetadataResponse {
+                    workerexecutor::v1::GetWorkerMetadataResponse {
                         result:
-                        Some(workerexecutor::get_worker_metadata_response::Result::Success(metadata)),
+                        Some(workerexecutor::v1::get_worker_metadata_response::Result::Success(metadata)),
                     } => {
                         Ok(metadata.try_into().unwrap())
                     },
-                    workerexecutor::GetWorkerMetadataResponse {
+                    workerexecutor::v1::GetWorkerMetadataResponse {
                         result:
-                        Some(workerexecutor::get_worker_metadata_response::Result::Failure(err)),
+                        Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(err)),
                     } => {
                         error!("Get metadata error: {err:?}");
                         Err(err.into())
                     },
-                    workerexecutor::GetWorkerMetadataResponse { .. } => {
+                    workerexecutor::v1::GetWorkerMetadataResponse { .. } => {
                         Err("Empty response".into())
                     }
                 }
@@ -789,13 +791,13 @@ where
                 }))
             },
             |response| match response.into_inner() {
-                workerexecutor::ResumeWorkerResponse {
-                    result: Some(workerexecutor::resume_worker_response::Result::Success(_)),
+                workerexecutor::v1::ResumeWorkerResponse {
+                    result: Some(workerexecutor::v1::resume_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::ResumeWorkerResponse {
-                    result: Some(workerexecutor::resume_worker_response::Result::Failure(err)),
+                workerexecutor::v1::ResumeWorkerResponse {
+                    result: Some(workerexecutor::v1::resume_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::ResumeWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::ResumeWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -824,13 +826,13 @@ where
                 }))
             },
             |response| match response.into_inner() {
-                workerexecutor::UpdateWorkerResponse {
-                    result: Some(workerexecutor::update_worker_response::Result::Success(_)),
+                workerexecutor::v1::UpdateWorkerResponse {
+                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(_)),
                 } => Ok(()),
-                workerexecutor::UpdateWorkerResponse {
-                    result: Some(workerexecutor::update_worker_response::Result::Failure(err)),
+                workerexecutor::v1::UpdateWorkerResponse {
+                    result: Some(workerexecutor::v1::update_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::UpdateWorkerResponse { .. } => Err("Empty response".into()),
+                workerexecutor::v1::UpdateWorkerResponse { .. } => Err("Empty response".into()),
             },
         )
         .await?;
@@ -898,7 +900,7 @@ where
 
                 Box::pin(
                         worker_executor_client.get_running_workers_metadata(
-                            workerexecutor::GetRunningWorkersMetadataRequest {
+                            workerexecutor::v1::GetRunningWorkersMetadataRequest {
                                 component_id: Some(component_id),
                                 filter: filter.clone().map(|f| f.into())
                             }
@@ -907,9 +909,9 @@ where
                 |responses| {
                     responses.into_iter().map(|response| {
                         match response.into_inner() {
-                            workerexecutor::GetRunningWorkersMetadataResponse {
+                            workerexecutor::v1::GetRunningWorkersMetadataResponse {
                                 result:
-                                Some(workerexecutor::get_running_workers_metadata_response::Result::Success(workerexecutor::GetRunningWorkersMetadataSuccessResponse {
+                                Some(workerexecutor::v1::get_running_workers_metadata_response::Result::Success(workerexecutor::v1::GetRunningWorkersMetadataSuccessResponse {
                                                                                                                 workers
                                                                                                             })),
                             } => {
@@ -918,11 +920,11 @@ where
                                 }))?;
                                 Ok(workers)
                             }
-                            workerexecutor::GetRunningWorkersMetadataResponse {
+                            workerexecutor::v1::GetRunningWorkersMetadataResponse {
                                 result:
-                                Some(workerexecutor::get_running_workers_metadata_response::Result::Failure(err)),
+                                Some(workerexecutor::v1::get_running_workers_metadata_response::Result::Failure(err)),
                             } => Err(err.into()),
-                            workerexecutor::GetRunningWorkersMetadataResponse { .. } => {
+                            workerexecutor::v1::GetRunningWorkersMetadataResponse { .. } => {
                                 Err("Empty response".into())
                             }
                         }
@@ -951,7 +953,7 @@ where
                     component_id.clone().into();
                 let account_id = metadata.account_id.clone().map(|id| id.into());
                 Box::pin(worker_executor_client.get_workers_metadata(
-                            golem_api_grpc::proto::golem::workerexecutor::GetWorkersMetadataRequest {
+                            golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest {
                                 component_id: Some(component_id),
                                 filter: filter.clone().map(|f| f.into()),
                                 cursor: Some(cursor.clone().into()),
@@ -963,9 +965,9 @@ where
             },
                          |response| {
                              match response.into_inner() {
-                                 workerexecutor::GetWorkersMetadataResponse {
+                                 workerexecutor::v1::GetWorkersMetadataResponse {
                                      result:
-                                     Some(workerexecutor::get_workers_metadata_response::Result::Success(workerexecutor::GetWorkersMetadataSuccessResponse {
+                                     Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(workerexecutor::v1::GetWorkersMetadataSuccessResponse {
                                                                                                              workers, cursor
                                                                                                          })),
                                  } => {
@@ -974,11 +976,11 @@ where
                                      }))?;
                                      Ok((cursor.map(|c| c.into()), workers))
                                  }
-                                 workerexecutor::GetWorkersMetadataResponse {
+                                 workerexecutor::v1::GetWorkersMetadataResponse {
                                      result:
-                                     Some(workerexecutor::get_workers_metadata_response::Result::Failure(err)),
+                                     Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(err)),
                                  } => Err(err.into()),
-                                 workerexecutor::GetWorkersMetadataResponse { .. } => {
+                                 workerexecutor::v1::GetWorkersMetadataResponse { .. } => {
                                      Err("Empty response".into())
                                  }
                              }

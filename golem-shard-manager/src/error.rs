@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_error;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::retriable_error::IsRetriableError;
 
@@ -56,11 +56,11 @@ impl IsRetriableError for ShardManagerError {
     }
 }
 
-impl From<ShardManagerError> for golem::shardmanager::ShardManagerError {
-    fn from(value: ShardManagerError) -> golem::shardmanager::ShardManagerError {
+impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
+    fn from(value: ShardManagerError) -> golem::shardmanager::v1::ShardManagerError {
         let error = |cons: fn(golem::common::ErrorBody) -> shard_manager_error::Error,
                      error: String| {
-            golem::shardmanager::ShardManagerError {
+            golem::shardmanager::v1::ShardManagerError {
                 error: Some(cons(golem::common::ErrorBody { error })),
             }
         };
@@ -122,7 +122,7 @@ impl IsRetriableError for HealthCheckError {
     }
 }
 
-pub struct ShardManagerTraceErrorKind<'a>(pub &'a golem::shardmanager::ShardManagerError);
+pub struct ShardManagerTraceErrorKind<'a>(pub &'a golem::shardmanager::v1::ShardManagerError);
 
 impl<'a> Debug for ShardManagerTraceErrorKind<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -135,11 +135,9 @@ impl<'a> TraceErrorKind for ShardManagerTraceErrorKind<'a> {
         match &self.0.error {
             None => "None",
             Some(error) => match error {
-                golem::shardmanager::shard_manager_error::Error::InvalidRequest(_) => {
-                    "InvalidRequest"
-                }
-                golem::shardmanager::shard_manager_error::Error::Timeout(_) => "Timeout",
-                golem::shardmanager::shard_manager_error::Error::Unknown(_) => "Unknown",
+                shard_manager_error::Error::InvalidRequest(_) => "InvalidRequest",
+                shard_manager_error::Error::Timeout(_) => "Timeout",
+                shard_manager_error::Error::Unknown(_) => "Unknown",
             },
         }
     }
