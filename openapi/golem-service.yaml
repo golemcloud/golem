@@ -1,9 +1,9 @@
 openapi: 3.0.0
 info:
   title: Golem API
-  version: '2.0'
+  version: '1.0'
 paths:
-  /v2/components/{component_id}/workers:
+  /v1/components/{component_id}/workers:
     get:
       tags:
       - Worker
@@ -155,7 +155,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}:
+  /v1/components/{component_id}/workers/{worker_name}:
     get:
       tags:
       - Worker
@@ -286,7 +286,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/invoke-and-await:
+  /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
@@ -380,7 +380,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/invoke:
+  /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
@@ -467,7 +467,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/complete:
+  /v1/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
       - Worker
@@ -539,7 +539,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/interrupt:
+  /v1/components/{component_id}/workers/{worker_name}/interrupt:
     post:
       tags:
       - Worker
@@ -612,7 +612,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/find:
+  /v1/components/{component_id}/workers/find:
     post:
       tags:
       - Worker
@@ -676,7 +676,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/resume:
+  /v1/components/{component_id}/workers/{worker_name}/resume:
     post:
       tags:
       - Worker
@@ -742,7 +742,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/update:
+  /v1/components/{component_id}/workers/{worker_name}/update:
     post:
       tags:
       - Worker
@@ -1427,7 +1427,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
-  /v2/components:
+  /v1/components:
     get:
       tags:
       - Component
@@ -1547,7 +1547,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/upload:
+  /v1/components/{component_id}/upload:
     put:
       tags:
       - Component
@@ -1612,7 +1612,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/download:
+  /v1/components/{component_id}/download:
     get:
       tags:
       - Component
@@ -1679,7 +1679,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}:
+  /v1/components/{component_id}:
     get:
       tags:
       - Component
@@ -1739,7 +1739,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/versions/{version}:
+  /v1/components/{component_id}/versions/{version}:
     get:
       tags:
       - Component
@@ -1805,7 +1805,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/latest:
+  /v1/components/{component_id}/latest:
     get:
       tags:
       - Component
