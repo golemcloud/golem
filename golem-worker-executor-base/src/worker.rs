@@ -20,6 +20,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::error::{GolemError, WorkerOutOfMemory};
+use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
 use crate::services::component::ComponentMetadata;
@@ -35,6 +36,7 @@ use crate::services::{
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
+use golem_common::exports;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
@@ -46,8 +48,6 @@ use golem_common::model::{
     WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
-use golem_service_base::exports;
-use golem_service_base::typechecker::TypeCheckOut;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -1405,16 +1405,14 @@ impl RunningWorker {
                                                             .map(|t| t.into())
                                                             .collect();
 
-                                                        let result = output
-                                                            .validate_function_result(
-                                                                function_results,
-                                                                calling_convention,
-                                                            )
-                                                            .map_err(|e| {
-                                                                GolemError::ValueMismatch {
-                                                                    details: e.join(", "),
-                                                                }
-                                                            });
+                                                        let result = interpret_function_results(
+                                                            output,
+                                                            function_results,
+                                                            calling_convention,
+                                                        )
+                                                        .map_err(|e| GolemError::ValueMismatch {
+                                                            details: e.join(", "),
+                                                        });
 
                                                         match result {
                                                             Ok(result) => {

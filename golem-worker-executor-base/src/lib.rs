@@ -16,6 +16,8 @@ pub mod durable_host;
 pub mod error;
 pub mod grpc;
 pub mod http_server;
+
+pub mod function_result_interpreter;
 pub mod invocation;
 pub mod metrics;
 pub mod model;

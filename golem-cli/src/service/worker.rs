@@ -193,7 +193,7 @@ fn wave_parameters_to_json(
     wave: &[String],
     component: &Component,
     function: &str,
-) -> Result<Vec<PreciseJson>, GolemError> {
+) -> Result<Vec<Value>, GolemError> {
     let types = function_params_types(component, function)?;
 
     if wave.len() != types.len() {
@@ -210,12 +210,12 @@ fn wave_parameters_to_json(
         .map(|(param, typ)| parse_parameter(param, typ))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let json_params = params
+    params
         .into_iter()
-        .map(PreciseJson::from)
-        .collect::<Vec<_>>();
-
-    Ok(json_params)
+        .map(|v| {
+            serde_json::to_value(PreciseJson::from(v)).map_err(|err| GolemError(err.to_string()))
+        })
+        .collect::<Result<Vec<_>, GolemError>>()
 }
 
 fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
@@ -236,26 +236,28 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
     parameters: Option<Value>,
     wave: Vec<String>,
     function: &str,
-) -> Result<(Value, Option<Component>), GolemError> {
+) -> Result<(Vec<Value>, Option<Component>), GolemError> {
     if let Some(parameters) = parameters {
-        Ok((parameters, None))
+        let parameters = parameters
+            .as_array()
+            .ok_or_else(|| GolemError("Parameters must be an array".to_string()))?;
+
+        Ok((parameters.clone(), None))
     } else if let Some(component) =
         resolve_worker_component_version(client, components, component_id, worker_name.clone())
             .await?
     {
-        let json = wave_parameters_to_json(&wave, &component, function)?;
+        let precise_json_array = wave_parameters_to_json(&wave, &component, function)?;
 
-        let json_array: Vec<Value> = json.into_iter().map(|v| v.into()).collect();
-        Ok((Value::Array(json_array), Some(component)))
+        Ok((precise_json_array, Some(component)))
     } else {
         info!("No worker found with name {worker_name}. Assuming it should be create with the latest component version");
         let component = components.get_latest_metadata(component_id).await?;
 
-        let json = wave_parameters_to_json(&wave, &component, function)?;
-        let json_array: Vec<Value> = json.into_iter().map(|v| v.into()).collect();
+        let json_array = wave_parameters_to_json(&wave, &component, function)?;
 
         // We are not going to use this component for result parsing.
-        Ok((Value::Array(json_array), None))
+        Ok((json_array, None))
     }
 }
 

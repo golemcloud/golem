@@ -1,7 +1,6 @@
 syntax = "proto3";
 
 import public "golem/common/account_id.proto";
-import public "golem/common/json_value.proto";
 import public "golem/worker/calling_convention.proto";
 import public "golem/common/empty.proto";
 import public "golem/worker/idempotency_key.proto";

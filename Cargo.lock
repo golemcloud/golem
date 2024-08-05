@@ -3867,7 +3867,6 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
- "golem-service-base",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",

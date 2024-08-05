@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::component_metadata::{ComponentProcessingError, RawComponentMetadata};
-
-use golem_service_base::model::{ComponentMetadata, LinearMemory};
+use golem_common::component_metadata::{
+    ComponentMetadata, ComponentProcessingError, LinearMemory, RawComponentMetadata,
+};
 
 pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProcessingError> {
-    let raw_component_metadata = RawComponentMetadata::from_data(data)?;
+    let raw_component_metadata = RawComponentMetadata::analyse_component(data)?;
 
     let producers = raw_component_metadata
         .producers

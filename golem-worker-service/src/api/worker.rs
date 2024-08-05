@@ -3,7 +3,6 @@ use crate::service::{component::ComponentService, worker::WorkerService};
 use golem_common::model::{
     CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
 };
-use golem_common::precise_json::PreciseJson;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -135,26 +134,7 @@ impl WorkerApi {
             function = function.0
         );
 
-        let json_values = params.0.params.as_array().ok_or_else(|| {
-            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Invalid parameters".to_string()],
-            }))
-        })?;
-
-        let mut precise_jsons = vec![];
-
-        for json_value in json_values {
-            let precise_json = PreciseJson::try_from(json_value.clone());
-
-            match precise_json {
-                Ok(precise_json) => precise_jsons.push(precise_json),
-                Err(err) => {
-                    return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                        errors: vec![format!("Invalid function parameters {}", err)],
-                    })))
-                }
-            }
-        }
+        let precise_jsons = params.0.params;
 
         let response = self
             .worker_service
@@ -197,26 +177,7 @@ impl WorkerApi {
             function = function.0
         );
 
-        let json_values = params.0.params.as_array().ok_or_else(|| {
-            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Invalid parameters".to_string()],
-            }))
-        })?;
-
-        let mut precise_jsons = vec![];
-
-        for json_value in json_values {
-            let precise_json = PreciseJson::try_from(json_value.clone());
-
-            match precise_json {
-                Ok(precise_json) => precise_jsons.push(precise_json),
-                Err(err) => {
-                    return Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                        errors: vec![format!("Invalid function parameters {}", err)],
-                    })))
-                }
-            }
-        }
+        let precise_json_array = params.0.params;
 
         let response = self
             .worker_service
@@ -224,7 +185,7 @@ impl WorkerApi {
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_jsons.clone(),
+                precise_json_array.clone(),
                 None,
                 empty_worker_metadata(),
             )

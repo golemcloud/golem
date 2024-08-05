@@ -7,6 +7,7 @@ use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -314,7 +315,7 @@ fn worker_invoke_drop(
 
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let hello: WorkerId = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -325,6 +326,7 @@ fn worker_invoke_drop(
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
+    dbg!(hello.clone());
     let args_key: IdempotencyKey = IdempotencyKey::fresh();
     let result = cli.run_json(&[
         "worker",
@@ -336,19 +338,26 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[constructor]counter}",
         &cfg.arg('j', "parameters"),
-        "[{\"str\": \"counter1\"}]",
+        "[{\"type\" : \"Str\", \"value\" : \"counter1\"}]",
         &cfg.arg('k', "idempotency-key"),
         &args_key.0,
     ])?;
-    let handle_str = match result {
+
+    let (uri, resource_id) = match result {
         serde_json::Value::Array(vec) => match vec[0].clone() {
-            serde_json::Value::String(str) => str,
+            serde_json::Value::String(str) => {
+                dbg!("hmmm");
+                get_handle_from_str(str.as_str())
+            }
             _ => panic!("Expected handle string"),
         },
         _ => panic!("Expected handle string"),
-    };
+    }
+    .ok_or(Failed::without_message())?;
 
-    let handle_json = format!("[{{\"handle\" : \"{}\"}}]", handle_str);
+    let handle_json =
+        json!([{ "type": "Handle", "value": { "uri": uri , "resource_id": resource_id  } }]);
+
     let args_key1: IdempotencyKey = IdempotencyKey::fresh();
 
     cli.run_json(&[
@@ -361,12 +370,28 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[drop]counter}",
         &cfg.arg('j', "parameters"),
-        handle_json.as_str(),
+        handle_json.to_string().as_str(),
         &cfg.arg('k', "idempotency-key"),
         &args_key1.0,
     ])?;
 
     Ok(())
+}
+
+fn get_handle_from_str(handle_str: &str) -> Option<(String, u64)> {
+    let parts: Vec<&str> = handle_str.split('/').collect();
+    if parts.len() >= 2 {
+        match u64::from_str(parts[parts.len() - 1]) {
+            Ok(resource_id) => {
+                let uri = parts[0..(parts.len() - 1)].join("/");
+
+                Some((uri, resource_id))
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
 }
 
 fn worker_invoke_no_params(

@@ -1040,11 +1040,11 @@ pub fn to_worker_metadata(
     }
 }
 
-fn dump_component_info(path: &Path) -> golem_service_base::model::ComponentMetadata {
+fn dump_component_info(path: &Path) -> golem_common::component_metadata::ComponentMetadata {
     let data = std::fs::read(path).unwrap();
 
-    let component_metadata: golem_service_base::model::ComponentMetadata =
-        golem_service_base::model::ComponentMetadata::from_data(&data).unwrap();
+    let component_metadata: golem_common::component_metadata::ComponentMetadata =
+        golem_common::component_metadata::ComponentMetadata::analyse_component(&data).unwrap();
 
     let exports = &component_metadata.exports;
     let mems = &component_metadata.memories;
@@ -1056,7 +1056,7 @@ fn dump_component_info(path: &Path) -> golem_service_base::model::ComponentMetad
 }
 
 async fn log_and_save_component_metadata(path: &Path) {
-    let component_metadata: golem_service_base::model::ComponentMetadata =
+    let component_metadata: golem_common::component_metadata::ComponentMetadata =
         dump_component_info(path);
 
     let json_data = serde_json::to_string(&component_metadata).unwrap();

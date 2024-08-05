@@ -2488,7 +2488,9 @@ components:
     InvokeParameters:
       type: object
       properties:
-        params: {}
+        params:
+          type: array
+          items: {}
       required:
       - params
     InvokeResponse:
