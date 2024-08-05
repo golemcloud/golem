@@ -20,14 +20,14 @@ spec:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/components/[^/]+/workers/[^/]+/connect$"
+          - path: "/v1/components/[^/]+/workers/[^/]+/connect$"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/components/[^/]+/workers(.*)"
+          - path: "/v1/components/[^/]+/workers(.*)"
             pathType: ImplementationSpecific
             backend:
               service:
@@ -65,21 +65,21 @@ spec:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/components/*/workers/*/connect"
+          - path: "/v1/components/*/workers/*/connect"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/components/*/workers/*"
+          - path: "/v1/components/*/workers/*"
             pathType: ImplementationSpecific
             backend:
               service:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
-          - path: "/v2/components/*/workers"
+          - path: "/v1/components/*/workers"
             pathType: ImplementationSpecific
             backend:
               service:

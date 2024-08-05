@@ -23,7 +23,7 @@ pub struct WorkerApi {
 
 type Result<T> = std::result::Result<T, WorkerApiBaseError>;
 
-#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     #[oai(
         path = "/:component_id/workers",

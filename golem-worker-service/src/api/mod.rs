@@ -36,7 +36,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/specs", spec)
         .nest("/metrics", metrics)
         .at(
-            "/v2/components/:component_id/workers/:worker_name/connect",
+            "/v1/components/:component_id/workers/:worker_name/connect",
             get(worker_connect::ws.data(connect_services)),
         )
 }
@@ -62,6 +62,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             HealthcheckApi,
         ),
         "Golem API",
-        "2.0",
+        "1.0",
     )
 }
