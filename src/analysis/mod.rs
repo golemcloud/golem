@@ -70,7 +70,7 @@ pub struct AnalysedInstance {
     pub funcs: Vec<AnalysedFunction>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum AnalysedType {
     Bool,
     S8,
@@ -102,13 +102,13 @@ pub enum AnalysedType {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum AnalysedResourceMode {
     Owned,
     Borrowed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct AnalysedResourceId {
     pub value: u64,
 }
