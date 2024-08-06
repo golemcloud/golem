@@ -35,12 +35,12 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
-use golem_common::exports::FunctionResult;
+use golem_common::model::exports::FunctionResult;
+use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{
     AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
     ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
 };
-use golem_common::precise_json::PreciseJson;
 use golem_service_base::model::{
     GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
 };

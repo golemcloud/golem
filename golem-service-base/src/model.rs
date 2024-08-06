@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
-use golem_common::precise_json::PreciseJson;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
@@ -730,7 +730,9 @@ impl From<GolemErrorPromiseAlreadyCompleted>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-#[error("Worker Interrupted: {}", if *.recover_immediately { "recovering immediately" } else { "not recovering immediately" })]
+#[error(
+    "Worker Interrupted: {}", if *.recover_immediately { "recovering immediately" } else { "not recovering immediately" }
+)]
 pub struct GolemErrorInterrupted {
     pub recover_immediately: bool,
 }
