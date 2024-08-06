@@ -112,8 +112,8 @@ mod tests {
     use serde_json::Value;
     use std::sync::Arc;
 
+    use golem_common::model::precise_json::PreciseJson;
     use golem_common::model::IdempotencyKey;
-    use golem_common::precise_json::PreciseJson;
 
     use crate::api_definition::http::HttpApiDefinition;
     use crate::evaluator::getter::Getter;

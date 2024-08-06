@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::component_metadata::{
+use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, LinearMemory, RawComponentMetadata,
 };
 

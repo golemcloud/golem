@@ -106,7 +106,7 @@ use crate::services::component::ComponentMetadata;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
-use golem_common::exports;
+use golem_common::model::exports;
 use golem_common::retries::get_delay;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
