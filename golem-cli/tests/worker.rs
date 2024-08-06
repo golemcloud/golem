@@ -2,10 +2,11 @@ use crate::cli::{Cli, CliLive};
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey};
 use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
+use golem_common::precise_json::PreciseJson;
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -343,20 +344,19 @@ fn worker_invoke_drop(
         &args_key.0,
     ])?;
 
-    let (uri, resource_id) = match result {
-        serde_json::Value::Array(vec) => match vec[0].clone() {
-            serde_json::Value::String(str) => {
-                dbg!("hmmm");
-                get_handle_from_str(str.as_str())
-            }
-            _ => panic!("Expected handle string"),
-        },
-        _ => panic!("Expected handle string"),
-    }
-    .ok_or(Failed::without_message())?;
+    // result is a JSON response containing a tuple with a single element holding the resource handle.
+    // we only need this inner element:
+    let counter1 = result
+        .as_object()
+        .unwrap()
+        .get("value")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .get(0)
+        .unwrap();
 
-    let handle_json =
-        json!([{ "type": "Handle", "value": { "uri": uri , "resource_id": resource_id  } }]);
+    let json_parameter_list = Value::Array(vec![counter1.clone()]);
 
     let args_key1: IdempotencyKey = IdempotencyKey::fresh();
 
@@ -370,7 +370,7 @@ fn worker_invoke_drop(
         &cfg.arg('f', "function"),
         "rpc:counters/api.{[drop]counter}",
         &cfg.arg('j', "parameters"),
-        handle_json.to_string().as_str(),
+        json_parameter_list.to_string().as_str(),
         &cfg.arg('k', "idempotency-key"),
         &args_key1.0,
     ])?;
