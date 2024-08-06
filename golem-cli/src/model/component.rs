@@ -167,7 +167,7 @@ fn render_result(r: &FunctionResult) -> String {
     render_type(&r.typ)
 }
 
-fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
+pub fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
     if function_wave_compatible(f) {
         let name = &f.name;
 

@@ -339,7 +339,7 @@ async fn get_self_uri() {
     check!(
         result
             == vec![Value::String(format!(
-                "worker://{component_id}/runtime-service-1/function-name"
+                "urn:worker:{component_id}/runtime-service-1/function-name"
             ))]
     );
 }

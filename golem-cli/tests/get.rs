@@ -19,8 +19,12 @@ use crate::worker::make_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
 use golem_client::model::{ApiDeployment, HttpApiDefinition};
-use golem_common::uri::oss::url::{ApiDefinitionUrl, ApiDeploymentUrl, ComponentUrl, WorkerUrl};
-use golem_common::uri::oss::urn::{ApiDefinitionUrn, ApiDeploymentUrn, WorkerUrn};
+use golem_common::uri::oss::url::{
+    ApiDefinitionUrl, ApiDeploymentUrl, ComponentUrl, WorkerFunctionUrl, WorkerUrl,
+};
+use golem_common::uri::oss::urn::{
+    ApiDefinitionUrn, ApiDeploymentUrn, WorkerFunctionUrn, WorkerUrn,
+};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
@@ -47,6 +51,11 @@ fn make(cli: CliLive, deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -
             "top_level_get_worker".to_string(),
             ctx.clone(),
             top_level_get_worker,
+        ),
+        Trial::test_in_context(
+            "top_level_get_worker_function".to_string(),
+            ctx.clone(),
+            top_level_get_worker_function,
         ),
     ]
 }
@@ -182,6 +191,52 @@ fn top_level_get_worker(
     let worker: WorkerMetadataView = cli.run(&["get", &worker_urn.to_string()])?;
 
     assert_eq!(worker.worker_urn, worker_urn);
+
+    Ok(())
+}
+
+fn top_level_get_worker_function(
+    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
+) -> Result<(), Failed> {
+    let component = make_component(deps, "top_level_get_worker_function", &cli)?;
+    let worker_name = "top_level_get_worker_function";
+    let cfg = &cli.config;
+
+    let worker_urn: WorkerUrn = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        worker_name,
+        "--component",
+        &component.component_urn.to_string(),
+    ])?;
+
+    let function_name = "golem:it/api.{get-environment}";
+
+    let url = WorkerFunctionUrl {
+        component_name: component.component_name.to_string(),
+        worker_name: worker_name.to_string(),
+        function: function_name.to_string(),
+    };
+
+    let res = cli.run_string(&["get", &url.to_string()])?;
+
+    assert_eq!(
+        res,
+        "golem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>\n"
+    );
+
+    let urn = WorkerFunctionUrn {
+        id: worker_urn.id,
+        function: function_name.to_string(),
+    };
+
+    let res = cli.run_string(&["get", &urn.to_string()])?;
+
+    assert_eq!(
+        res,
+        "golem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>\n"
+    );
 
     Ok(())
 }

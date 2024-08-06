@@ -8,7 +8,7 @@ pub fn create(auction: Auction) {
     let component_id = env::var("AUCTION_COMPONENT_ID").expect("AUCTION_COMPONENT_ID not set");
     let uri = stub_auction::Uri {
         value: format!(
-            "worker://{component_id}/auction-{}",
+            "urn:worker:{component_id}/auction-{}",
             auction.auction_id.auction_id
         ),
     };
@@ -20,7 +20,7 @@ pub fn create(auction: Auction) {
 pub fn create_res(auction: Auction) -> RunningAuction {
     let component_id = env::var("AUCTION_COMPONENT_ID").expect("AUCTION_COMPONENT_ID not set");
     let uri = stub_auction::Uri {
-        value: format!("worker://{component_id}/auction"),
+        value: format!("urn:worker:{component_id}/auction"),
     };
     let wit_auction = auction.into();
     RunningAuction::new(&uri, &wit_auction)

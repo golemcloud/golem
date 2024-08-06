@@ -442,8 +442,42 @@ pub trait TypedGolemUrl {
         }
     }
 
+    fn expect_path3(path: &str) -> Result<(String, String, String), GolemUrlTransformError> {
+        let path = path
+            .strip_prefix('/')
+            .ok_or(Self::invalid_path("path is not started with '/'"))?;
+
+        let segments = path.split('/').collect::<Vec<_>>();
+
+        if segments.len() != 3 {
+            Err(Self::invalid_path(format!(
+                "3 segments expected, but got {} segments",
+                segments.len()
+            )))
+        } else {
+            let segment1 = segments.first().unwrap();
+            let segment2 = segments.get(1).unwrap();
+            let segment3 = segments.get(2).unwrap();
+
+            Ok((
+                urldecode(segment1),
+                urldecode(segment2),
+                urldecode(segment3),
+            ))
+        }
+    }
+
     fn make_path2(elem1: &str, elem2: &str) -> String {
         format!("/{}/{}", urlencode(elem1), urlencode(elem2))
+    }
+
+    fn make_path3(elem1: &str, elem2: &str, elem3: &str) -> String {
+        format!(
+            "/{}/{}/{}",
+            urlencode(elem1),
+            urlencode(elem2),
+            urlencode(elem3)
+        )
     }
 
     fn expect_empty_query(
