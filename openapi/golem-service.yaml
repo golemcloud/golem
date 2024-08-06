@@ -2086,6 +2086,11 @@ components:
       type: object
     GolemErrorParamTypeMismatch:
       type: object
+      properties:
+        details:
+          type: string
+      required:
+      - details
     GolemErrorPreviousInvocationExited:
       type: object
     GolemErrorPreviousInvocationFailed:

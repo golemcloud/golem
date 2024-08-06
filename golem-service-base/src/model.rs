@@ -752,21 +752,27 @@ impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::worker::v1::I
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[error("Parameter type mismatch")]
-pub struct GolemErrorParamTypeMismatch {}
+pub struct GolemErrorParamTypeMismatch {
+    pub details: String,
+}
 
 impl From<golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch>
     for GolemErrorParamTypeMismatch
 {
-    fn from(_value: golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch) -> Self {
-        Self {}
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch) -> Self {
+        Self {
+            details: value.details,
+        }
     }
 }
 
 impl From<GolemErrorParamTypeMismatch>
     for golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch
 {
-    fn from(_value: GolemErrorParamTypeMismatch) -> Self {
-        Self {}
+    fn from(value: GolemErrorParamTypeMismatch) -> Self {
+        Self {
+            details: value.details,
+        }
     }
 }
 

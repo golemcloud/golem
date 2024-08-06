@@ -499,10 +499,10 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     },
                 )),
             },
-            GolemError::ParamTypeMismatch { .. } => golem::worker::v1::WorkerExecutionError {
+            GolemError::ParamTypeMismatch { details } => golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ParamTypeMismatch(
-                        golem::worker::v1::ParamTypeMismatch {},
+                        golem::worker::v1::ParamTypeMismatch { details },
                     ),
                 ),
             },

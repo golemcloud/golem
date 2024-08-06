@@ -7,7 +7,6 @@ use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
