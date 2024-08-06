@@ -21,9 +21,10 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    ComponentId, FilterComparator, ScanCursor, StringFilterComparator, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus,
+    ComponentId, FilterComparator, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use rand::seq::IteratorRandom;
 use serde_json::json;
@@ -69,6 +70,244 @@ async fn dynamic_worker_creation() {
             ]),
         ])))))]
     );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_1() {
+    let component_id = DEPS.store_component("counters").await;
+    let worker_id = DEPS.start_worker(&component_id, "counters-1").await;
+    DEPS.log_output(&worker_id).await;
+
+    let counter1 = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{[constructor]counter}",
+            vec![Value::String("counter1".to_string())],
+        )
+        .await
+        .unwrap();
+
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{[method]counter.inc-by}",
+            vec![counter1[0].clone(), Value::U64(5)],
+        )
+        .await;
+
+    let result1 = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{[method]counter.get-value}",
+            vec![counter1[0].clone()],
+        )
+        .await;
+
+    let metadata1 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+
+    let _ = DEPS
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{[drop]counter}",
+            vec![counter1[0].clone()],
+        )
+        .await;
+
+    let result2 = DEPS
+        .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .await;
+
+    let metadata2 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+
+    check!(result1 == Ok(vec![Value::U64(5)]));
+
+    check!(
+        result2
+            == Ok(vec![Value::List(vec![Value::Tuple(vec![
+                Value::String("counter1".to_string()),
+                Value::U64(5)
+            ])])])
+    );
+
+    let ts = Timestamp::now_utc();
+    let mut resources1 = metadata1
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    resources1.sort_by_key(|(k, _v)| *k);
+    check!(
+        resources1
+            == vec![(
+                WorkerResourceId(0),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    indexed_resource_key: None
+                }
+            ),]
+    );
+
+    let resources2 = metadata2
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    check!(resources2 == vec![]);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_1_json() {
+    let component_id = DEPS.store_component("counters").await;
+    let worker_id = DEPS.start_worker(&component_id, "counters-1j").await;
+    DEPS.log_output(&worker_id).await;
+
+    let counter1 = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{[constructor]counter}",
+            vec![json!({ "type": "Str", "value": "counter1" })],
+        )
+        .await
+        .unwrap();
+
+    // counter1 is a JSON response containing a tuple with a single element holding the resource handle.
+    // we only need this inner element:
+    let counter1 = counter1
+        .as_object()
+        .unwrap()
+        .get("value")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .get(0)
+        .unwrap();
+
+    info!("Using counter1 resource handle {counter1}");
+
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{[method]counter.inc-by}",
+            vec![counter1.clone(), json!({ "type": "U64", "value": 5 })],
+        )
+        .await;
+
+    let result1 = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{[method]counter.get-value}",
+            vec![counter1.clone()],
+        )
+        .await;
+
+    let metadata1 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{[drop]counter}",
+            vec![counter1.clone()],
+        )
+        .await;
+
+    let result2 = DEPS
+        .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .await;
+
+    let metadata2 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+
+    check!(
+        result1
+            == Ok(json!(
+                {
+                    "type": "Tuple",
+                    "value": [{ "type": "U64", "value": 5 }]
+                }
+            ))
+    );
+
+    check!(
+        result2
+            == Ok(json!(
+            {
+                "type": "Tuple",
+                "value": [{
+                    "type": "List",
+                    "value": [
+                        {
+                            "type": "Tuple",
+                            "value": [
+                                { "type": "Str", "value": "counter1" },
+                                { "type": "U64", "value": 5 }
+                            ]
+                        }
+                    ]
+                }]
+            }))
+    );
+
+    let ts = Timestamp::now_utc();
+    let mut resources1 = metadata1
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    resources1.sort_by_key(|(k, _v)| *k);
+    check!(
+        resources1
+            == vec![(
+                WorkerResourceId(0),
+                WorkerResourceDescription {
+                    created_at: ts,
+                    indexed_resource_key: None
+                }
+            ),]
+    );
+
+    let resources2 = metadata2
+        .last_known_status
+        .owned_resources
+        .iter()
+        .map(|(k, v)| {
+            (
+                *k,
+                WorkerResourceDescription {
+                    created_at: ts,
+                    ..v.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    check!(resources2 == vec![]);
 }
 
 #[tokio::test]

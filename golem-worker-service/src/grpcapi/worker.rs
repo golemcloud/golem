@@ -15,7 +15,7 @@
 use poem_openapi::types::ParseFromJSON;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
-use tracing::Instrument;
+use tracing::{Instrument, warn};
 
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;

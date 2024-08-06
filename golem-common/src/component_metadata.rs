@@ -16,6 +16,7 @@ use bincode::{Decode, Encode};
 use std::fmt::{self, Display, Formatter};
 
 use crate::exports::Export;
+use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
@@ -391,22 +392,14 @@ fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
         match export {
             AnalysedExport::Function(fun) => {
                 if fun.is_constructor() {
-                    let drop_name = fun.name.replace("[constructor]", "[drop]");
-                    to_add.push(AnalysedExport::Function(AnalysedFunction {
-                        name: drop_name,
-                        ..fun.clone()
-                    }));
+                    to_add.push(AnalysedExport::Function(drop_from_constructor(fun)));
                 }
             }
             AnalysedExport::Instance(instance) => {
                 let mut to_add = Vec::new();
                 for fun in &instance.funcs {
                     if fun.is_constructor() {
-                        let drop_name = fun.name.replace("[constructor]", "[drop]");
-                        to_add.push(AnalysedFunction {
-                            name: drop_name,
-                            ..fun.clone()
-                        });
+                        to_add.push(drop_from_constructor(fun));
                     }
                 }
                 instance.funcs.extend(to_add.into_iter());
@@ -415,4 +408,20 @@ fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
     }
 
     exports.extend(to_add);
+}
+
+fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
+    let drop_name = constructor.name.replace("[constructor]", "[drop]");
+    AnalysedFunction {
+        name: drop_name,
+        params: constructor
+            .results
+            .iter()
+            .map(|result| AnalysedFunctionParameter {
+                name: "self".to_string(),
+                typ: result.typ.clone(),
+            })
+            .collect(),
+        results: vec![],
+    }
 }

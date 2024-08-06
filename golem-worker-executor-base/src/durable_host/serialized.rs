@@ -672,7 +672,7 @@ mod tests {
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),
             interrupt_kind_strat().prop_map(|kind| GolemError::Interrupted { kind }),
-            Just(GolemError::ParamTypeMismatch),
+            ".*".prop_map(|details| GolemError::ParamTypeMismatch { details }),
             Just(GolemError::NoValueInMessage),
             ".*".prop_map(|details| GolemError::ValueMismatch { details }),
             (".*", ".*").prop_map(|(expected, got)| GolemError::UnexpectedOplogEntry { expected, got }),
