@@ -60,7 +60,6 @@ pub trait WorkerService {
         function: String,
         parameters: Option<Value>,
         wave: Vec<String>,
-        use_stdio: bool,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn invoke(
@@ -345,7 +344,6 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         function: String,
         parameters: Option<Value>,
         wave: Vec<String>,
-        use_stdio: bool,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let human_readable = format == Format::Text;
@@ -388,7 +386,6 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 function.clone(),
                 InvokeParameters { params: parameters },
                 idempotency_key,
-                use_stdio,
             )
             .await?;
 

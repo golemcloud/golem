@@ -31,7 +31,6 @@ impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
 mod internal {
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
-    use golem_common::model::CallingConvention;
     use golem_service_base::model::WorkerId;
 
     use golem_worker_service_base::worker_bridge_execution::{
@@ -90,7 +89,6 @@ mod internal {
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name.to_string(),
                 invoke_parameters,
-                &CallingConvention::Component,
                 None,
                 empty_worker_metadata(),
             )

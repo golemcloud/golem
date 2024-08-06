@@ -18,8 +18,8 @@ use crate::clients::worker::WorkerClient;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::model::{
-    CallingConvention, InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest,
-    WorkerCreationRequest, WorkerFilter, WorkerId, WorkersMetadataRequest,
+    InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest, WorkerCreationRequest,
+    WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
 use golem_client::Context;
 use native_tls::TlsConnector;
@@ -74,18 +74,11 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         function: String,
         parameters: InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
-        use_stdio: bool,
     ) -> Result<InvokeResult, GolemError> {
         info!(
             "Invoke and await for function {function} in {}/{}",
             component_id.0, name.0
         );
-
-        let calling_convention = if use_stdio {
-            CallingConvention::Stdio
-        } else {
-            CallingConvention::Component
-        };
 
         Ok(self
             .client
@@ -94,7 +87,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                 &name.0,
                 idempotency_key.as_ref().map(|k| k.0.as_str()),
                 &function,
-                Some(&calling_convention),
                 &parameters,
             )
             .await?)

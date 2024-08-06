@@ -324,13 +324,6 @@ paths:
           type: string
         explode: true
         style: form
-      - in: query
-        name: calling-convention
-        deprecated: false
-        schema:
-          $ref: '#/components/schemas/CallingConvention'
-        explode: true
-        style: form
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1896,11 +1889,6 @@ components:
           type: string
       required:
       - host
-    CallingConvention:
-      type: string
-      enum:
-      - Component
-      - Stdio
     CompleteParameters:
       type: object
       properties:

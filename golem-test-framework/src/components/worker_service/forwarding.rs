@@ -275,7 +275,6 @@ impl WorkerService for ForwardingWorkerService {
                 worker_id: request.worker_id,
                 idempotency_key: request.idempotency_key,
                 name: request.function,
-                calling_convention: request.calling_convention,
                 input: request
                     .invoke_parameters
                     .map(|p| p.params.clone())

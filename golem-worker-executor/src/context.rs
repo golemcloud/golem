@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
 use anyhow::Error;
@@ -25,8 +24,8 @@ use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -53,7 +52,7 @@ use golem_worker_executor_base::services::{
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 
 use crate::services::AdditionalDeps;
@@ -153,19 +152,6 @@ impl InvocationManagement for Context {
 }
 
 #[async_trait]
-impl IoCapturing for Context {
-    async fn start_capturing_stdout(&mut self, provided_stdin: String) {
-        self.durable_ctx
-            .start_capturing_stdout(provided_stdin)
-            .await
-    }
-
-    async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error> {
-        self.durable_ctx.finish_capturing_stdout().await
-    }
-}
-
-#[async_trait]
 impl StatusManagement for Context {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         self.durable_ctx.check_interrupt()
@@ -202,10 +188,9 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<CallingConvention>,
     ) -> Result<(), GolemError> {
         self.durable_ctx
-            .on_exported_function_invoked(full_function_name, function_input, calling_convention)
+            .on_exported_function_invoked(full_function_name, function_input)
             .await
     }
 

@@ -225,24 +225,6 @@ async fn shopping_cart_example() {
 
 #[tokio::test]
 #[tracing::instrument]
-async fn stdio_cc() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("stdio-cc").await;
-    let worker_id = executor.start_worker(&component_id, "stdio-cc-1").await;
-
-    let result = executor
-        .invoke_and_await_stdio(&worker_id, "run", serde_json::Value::Number(1234.into()))
-        .await;
-
-    drop(executor);
-
-    assert!(result == Ok(serde_json::Value::Number(2468.into())))
-}
-
-#[tokio::test]
-#[tracing::instrument]
 async fn dynamic_worker_creation() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();

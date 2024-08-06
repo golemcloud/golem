@@ -37,8 +37,8 @@ use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::exports::FunctionResult;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey,
-    ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
+    AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, ScanCursor,
+    Timestamp, WorkerFilter, WorkerStatus,
 };
 use golem_common::precise_json::PreciseJson;
 use golem_service_base::model::{
@@ -92,7 +92,6 @@ pub trait WorkerService<AuthCtx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value>;
@@ -104,7 +103,6 @@ pub trait WorkerService<AuthCtx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue>;
@@ -116,7 +114,6 @@ pub trait WorkerService<AuthCtx> {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult>;
@@ -368,7 +365,6 @@ where
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value> {
@@ -378,7 +374,6 @@ where
                 idempotency_key,
                 function_name,
                 params,
-                calling_convention,
                 invocation_context,
                 metadata,
             )
@@ -395,14 +390,12 @@ where
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
-        let calling_convention = *calling_convention;
 
         let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
             .into_iter()
@@ -419,10 +412,9 @@ where
                         name: function_name.clone(),
                         input: params_.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        calling_convention: calling_convention.into(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
-                        context: invocation_context.clone()
+                        context: invocation_context.clone(),
                     }
                 )
                 )
@@ -439,20 +431,20 @@ where
                     } => {
                         info!("Invoked function on {}: {}", worker_id, function_name_clone);
                         output.type_annotated_value.ok_or("Empty response".into())
-                    },
+                    }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
                     } => {
                         error!("Invoked function on {}: {} failed with {err:?}", worker_id, function_name_clone);
                         Err(err.into())
-                    },
+                    }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
                         error!("Invoked function on {}: {} failed with empty response", worker_id, function_name_clone);
                         Err("Empty response".into())
                     }
                 }
-            }
+            },
         ).await?;
 
         Ok(invoke_response)
@@ -464,13 +456,11 @@ where
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
-        let calling_convention = *calling_convention;
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
@@ -478,16 +468,15 @@ where
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
                     workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                            worker_id: Some(worker_id_clone.clone().into()),
-                            name: function_name.clone(),
-                            input: params.clone(),
-                            idempotency_key: idempotency_key.clone(),
-                            calling_convention: calling_convention.into(),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                            account_limits: metadata.limits.clone().map(|id| id.into()),
-                            context: invocation_context.clone()
-                        }
-                    )
+                        worker_id: Some(worker_id_clone.clone().into()),
+                        name: function_name.clone(),
+                        input: params.clone(),
+                        idempotency_key: idempotency_key.clone(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
+                        context: invocation_context.clone(),
+                    }
+                )
                 )
             },
             move |response| {
@@ -501,20 +490,20 @@ where
                              )),
                     } => {
                         Ok(InvokeResult { result: output })
-                    },
+                    }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponse {
                         result:
                         Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(err)),
                     } => {
                         error!("Invoked function error: {err:?}");
                         Err(err.into())
-                    },
+                    }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponse { .. } => {
                         error!("Invoked function failed with empty response");
                         Err("Empty response".into())
                     }
                 }
-            }
+            },
         ).await?;
 
         Ok(invoke_response)
@@ -657,7 +646,7 @@ where
                             Err("Empty response".into())
                         }
                     }
-                }
+                },
             )
             .await?;
         Ok(result)
@@ -713,11 +702,11 @@ where
                 let worker_id = worker_id.clone();
                 info!("Get metadata");
                 Box::pin(worker_executor_client.get_worker_metadata(
-                        workerexecutor::v1::GetWorkerMetadataRequest {
-                            worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
-                            account_id: metadata.account_id.clone().map(|id| id.into()),
-                        }
-                    ))
+                    workerexecutor::v1::GetWorkerMetadataRequest {
+                        worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }
+                ))
             },
             |response| {
                 match response.into_inner() {
@@ -726,19 +715,19 @@ where
                         Some(workerexecutor::v1::get_worker_metadata_response::Result::Success(metadata)),
                     } => {
                         Ok(metadata.try_into().unwrap())
-                    },
+                    }
                     workerexecutor::v1::GetWorkerMetadataResponse {
                         result:
                         Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(err)),
                     } => {
                         error!("Get metadata error: {err:?}");
                         Err(err.into())
-                    },
+                    }
                     workerexecutor::v1::GetWorkerMetadataResponse { .. } => {
                         Err("Empty response".into())
                     }
                 }
-            }
+            },
         ).await?;
 
         Ok(metadata)
@@ -900,37 +889,38 @@ where
                     component_id.clone().into();
 
                 Box::pin(
-                        worker_executor_client.get_running_workers_metadata(
-                            workerexecutor::v1::GetRunningWorkersMetadataRequest {
-                                component_id: Some(component_id),
-                                filter: filter.clone().map(|f| f.into())
-                            }
-                        )
-                )},
-                |responses| {
-                    responses.into_iter().map(|response| {
-                        match response.into_inner() {
-                            workerexecutor::v1::GetRunningWorkersMetadataResponse {
-                                result:
-                                Some(workerexecutor::v1::get_running_workers_metadata_response::Result::Success(workerexecutor::v1::GetRunningWorkersMetadataSuccessResponse {
+                    worker_executor_client.get_running_workers_metadata(
+                        workerexecutor::v1::GetRunningWorkersMetadataRequest {
+                            component_id: Some(component_id),
+                            filter: filter.clone().map(|f| f.into()),
+                        }
+                    )
+                )
+            },
+            |responses| {
+                responses.into_iter().map(|response| {
+                    match response.into_inner() {
+                        workerexecutor::v1::GetRunningWorkersMetadataResponse {
+                            result:
+                            Some(workerexecutor::v1::get_running_workers_metadata_response::Result::Success(workerexecutor::v1::GetRunningWorkersMetadataSuccessResponse {
                                                                                                                 workers
                                                                                                             })),
-                            } => {
-                                let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
-                                    details: "Convert response error".to_string(),
-                                }))?;
-                                Ok(workers)
-                            }
-                            workerexecutor::v1::GetRunningWorkersMetadataResponse {
-                                result:
-                                Some(workerexecutor::v1::get_running_workers_metadata_response::Result::Failure(err)),
-                            } => Err(err.into()),
-                            workerexecutor::v1::GetRunningWorkersMetadataResponse { .. } => {
-                                Err("Empty response".into())
-                            }
+                        } => {
+                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
+                                details: "Convert response error".to_string(),
+                            }))?;
+                            Ok(workers)
                         }
-                    }).collect::<Result<Vec<_>, ResponseMapResult>>()
-                }
+                        workerexecutor::v1::GetRunningWorkersMetadataResponse {
+                            result:
+                            Some(workerexecutor::v1::get_running_workers_metadata_response::Result::Failure(err)),
+                        } => Err(err.into()),
+                        workerexecutor::v1::GetRunningWorkersMetadataResponse { .. } => {
+                            Err("Empty response".into())
+                        }
+                    }
+                }).collect::<Result<Vec<_>, ResponseMapResult>>()
+            },
         ).await?;
 
         Ok(result.into_iter().flatten().collect())
@@ -947,46 +937,57 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
-        let result = self.call_worker_executor(
-            RandomExecutor,
-            move |worker_executor_client| {
-                let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-                    component_id.clone().into();
-                let account_id = metadata.account_id.clone().map(|id| id.into());
-                Box::pin(worker_executor_client.get_workers_metadata(
-                            golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest {
-                                component_id: Some(component_id),
-                                filter: filter.clone().map(|f| f.into()),
-                                cursor: Some(cursor.clone().into()),
-                                count,
-                                precise,
-                                account_id,
-                            }
-                        ))
-            },
-                         |response| {
-                             match response.into_inner() {
-                                 workerexecutor::v1::GetWorkersMetadataResponse {
-                                     result:
-                                     Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(workerexecutor::v1::GetWorkersMetadataSuccessResponse {
-                                                                                                             workers, cursor
-                                                                                                         })),
-                                 } => {
-                                     let workers = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| GolemError::Unknown(GolemErrorUnknown {
-                                         details: "Convert response error".to_string(),
-                                     }))?;
-                                     Ok((cursor.map(|c| c.into()), workers))
-                                 }
-                                 workerexecutor::v1::GetWorkersMetadataResponse {
-                                     result:
-                                     Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(err)),
-                                 } => Err(err.into()),
-                                 workerexecutor::v1::GetWorkersMetadataResponse { .. } => {
-                                     Err("Empty response".into())
-                                 }
-                             }
-                         }
-        ).await?;
+        let result = self
+            .call_worker_executor(
+                RandomExecutor,
+                move |worker_executor_client| {
+                    let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+                        component_id.clone().into();
+                    let account_id = metadata.account_id.clone().map(|id| id.into());
+                    Box::pin(worker_executor_client.get_workers_metadata(
+                    golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest {
+                        component_id: Some(component_id),
+                        filter: filter.clone().map(|f| f.into()),
+                        cursor: Some(cursor.clone().into()),
+                        count,
+                        precise,
+                        account_id,
+                    }
+                ))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::GetWorkersMetadataResponse {
+                        result:
+                            Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(
+                                workerexecutor::v1::GetWorkersMetadataSuccessResponse {
+                                    workers,
+                                    cursor,
+                                },
+                            )),
+                    } => {
+                        let workers = workers
+                            .into_iter()
+                            .map(|w| w.try_into())
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|_| {
+                                GolemError::Unknown(GolemErrorUnknown {
+                                    details: "Convert response error".to_string(),
+                                })
+                            })?;
+                        Ok((cursor.map(|c| c.into()), workers))
+                    }
+                    workerexecutor::v1::GetWorkersMetadataResponse {
+                        result:
+                            Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(
+                                err,
+                            )),
+                    } => Err(err.into()),
+                    workerexecutor::v1::GetWorkersMetadataResponse { .. } => {
+                        Err("Empty response".into())
+                    }
+                },
+            )
+            .await?;
 
         Ok(result)
     }
@@ -1052,7 +1053,6 @@ where
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Vec<PreciseJson>,
-        _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<Value> {
@@ -1065,7 +1065,6 @@ where
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Vec<PreciseJson>,
-        _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
@@ -1081,7 +1080,6 @@ where
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,
-        _calling_convention: &CallingConvention,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult> {

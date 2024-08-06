@@ -14,8 +14,7 @@ use uuid::Uuid;
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
-    WorkerInvocation,
+    AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId, WorkerInvocation,
 };
 
 #[derive(
@@ -238,7 +237,6 @@ pub enum OplogEntry {
         function_name: String,
         request: OplogPayload,
         idempotency_key: IdempotencyKey,
-        calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
