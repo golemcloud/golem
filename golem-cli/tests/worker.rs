@@ -2,7 +2,6 @@ use crate::cli::{Cli, CliLive};
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey};
 use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
-use golem_common::precise_json::PreciseJson;
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -353,7 +352,7 @@ fn worker_invoke_drop(
         .unwrap()
         .as_array()
         .unwrap()
-        .get(0)
+        .first()
         .unwrap();
 
     let json_parameter_list = Value::Array(vec![counter1.clone()]);
@@ -376,22 +375,6 @@ fn worker_invoke_drop(
     ])?;
 
     Ok(())
-}
-
-fn get_handle_from_str(handle_str: &str) -> Option<(String, u64)> {
-    let parts: Vec<&str> = handle_str.split('/').collect();
-    if parts.len() >= 2 {
-        match u64::from_str(parts[parts.len() - 1]) {
-            Ok(resource_id) => {
-                let uri = parts[0..(parts.len() - 1)].join("/");
-
-                Some((uri, resource_id))
-            }
-            Err(_) => None,
-        }
-    } else {
-        None
-    }
 }
 
 fn worker_invoke_no_params(

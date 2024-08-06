@@ -199,7 +199,7 @@ async fn counter_resource_test_1_json() {
         .unwrap()
         .as_array()
         .unwrap()
-        .get(0)
+        .first()
         .unwrap();
 
     info!("Using counter1 resource handle {counter1}");
