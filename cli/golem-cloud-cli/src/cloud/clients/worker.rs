@@ -367,7 +367,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         url.path_segments_mut()
             .map_err(|_| GolemError("Can't get path.".to_string()))?
-            .push("v2")
+            .push("v1")
             .push("components")
             .push(&component_id.0.to_string())
             .push("workers")
