@@ -25,7 +25,8 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
     InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
@@ -101,6 +102,15 @@ pub trait WorkerService {
         Ok(self.client().await?.invoke(request).await?.into_inner())
     }
 
+    async fn invoke_json(&self, request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
+        Ok(self
+            .client()
+            .await?
+            .invoke_json(request)
+            .await?
+            .into_inner())
+    }
+
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
@@ -109,6 +119,18 @@ pub trait WorkerService {
             .client()
             .await?
             .invoke_and_await(request)
+            .await?
+            .into_inner())
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        request: InvokeAndAwaitJsonRequest,
+    ) -> crate::Result<InvokeAndAwaitJsonResponse> {
+        Ok(self
+            .client()
+            .await?
+            .invoke_and_await_json(request)
             .await?
             .into_inner())
     }

@@ -27,7 +27,9 @@ service WorkerService {
 
   rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
+  rpc InvokeAndAwaitJson (InvokeAndAwaitJsonRequest) returns (InvokeAndAwaitJsonResponse);
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
+  rpc InvokeJson (InvokeJsonRequest) returns (InvokeResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
@@ -116,6 +118,22 @@ message InvokeAndAwaitResponse {
   }
 }
 
+message InvokeAndAwaitJsonRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  repeated string invokeParameters = 4;
+  golem.worker.CallingConvention callingConvention = 5;
+  optional golem.worker.InvocationContext context = 6;
+}
+
+message InvokeAndAwaitJsonResponse {
+  oneof result {
+    string success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
 message InvokeRequest {
   golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
@@ -129,6 +147,14 @@ message InvokeResponse {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerError error = 2;
   }
+}
+
+message InvokeJsonRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  repeated string invokeParameters = 4;
+  optional golem.worker.InvocationContext context = 6;
 }
 
 message ResumeWorkerRequest {

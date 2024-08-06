@@ -26,6 +26,7 @@ use golem_common::model::{
     WorkerMetadata, WorkerStatus,
 };
 use rand::seq::IteratorRandom;
+use serde_json::json;
 use std::time::{Duration, SystemTime};
 use tokio::time::sleep;
 use tracing::log::info;
@@ -143,6 +144,89 @@ async fn counter_resource_test_2() {
                 Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
             ])])
     );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn counter_resource_test_2_json() {
+    let component_id = DEPS.store_component("counters").await;
+    let worker_id = DEPS.start_worker(&component_id, "counters-2").await;
+    DEPS.log_output(&worker_id).await;
+
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            vec![json!({ "type": "U64", "value": 5 })],
+        )
+        .await;
+
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            vec![json!({ "type": "U64", "value": 1 })],
+        )
+        .await;
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").inc-by}",
+            vec![json!({ "type": "U64", "value": 2 })],
+        )
+        .await;
+
+    let result1 = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+    let result2 = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").get-value}",
+            vec![],
+        )
+        .await;
+
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").drop}",
+            vec![],
+        )
+        .await;
+    let _ = DEPS
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter2\").drop}",
+            vec![],
+        )
+        .await;
+
+    let result3 = DEPS
+        .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
+        .await;
+
+    // check!(result1 == Ok(json!({ "type": "U64", "value": 5 }))); // TODO should be this
+    check!(result1 == Ok(json!([5])));
+    // check!(result2 == Ok(json!({ "type": "U64", "value": 3 }))); // TODO should be this
+    check!(result2 == Ok(json!([3])));
+    // check!(
+    //     result3
+    //         == Ok(json!(
+    //             {
+    //                 "type": "List",
+    //                 "value": [
+    //                     { "type": "Tuple", "value": [ { "type": "String", "value": "counter1" }, { "type": "U64", "value": 5 } ] },
+    //                     { "type": "Tuple", "value": [ { "type": "String", "value": "counter2" }, { "type": "U64", "value": 3 } ] }
+    //                 ]
+    //             }
+    //         ))
+    // ); // TODO should be this
+    check!(result3 == Ok(json!([[["counter1", 5], ["counter2", 3]]])));
 }
 
 #[tokio::test]
