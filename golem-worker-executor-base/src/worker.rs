@@ -36,7 +36,7 @@ use crate::services::{
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
-use golem_common::exports;
+use golem_common::model::exports;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,

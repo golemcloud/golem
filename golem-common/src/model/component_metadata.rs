@@ -15,7 +15,7 @@
 use bincode::{Decode, Encode};
 use std::fmt::{self, Display, Formatter};
 
-use crate::exports::Export;
+use crate::model::exports::Export;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
@@ -54,7 +54,6 @@ impl ComponentMetadata {
     Encode,
     Decode,
 )]
-
 pub struct ProducerField {
     pub name: String,
     pub values: Vec<VersionedName>,

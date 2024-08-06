@@ -44,7 +44,10 @@ use crate::model::oplog::{
 use crate::model::regions::DeletedRegions;
 use crate::newtype_uuid;
 
+pub mod component_metadata;
+pub mod exports;
 pub mod oplog;
+pub mod precise_json;
 pub mod regions;
 
 use golem_api_grpc::proto::golem::shardmanager::{

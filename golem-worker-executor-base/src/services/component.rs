@@ -35,10 +35,10 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::LinearMemory;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::component_metadata::RawComponentMetadata;
 use golem_common::config::RetryConfig;
-use golem_common::exports::Export;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::component_metadata::RawComponentMetadata;
+use golem_common::model::exports::Export;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
 use http::Uri;
@@ -450,7 +450,7 @@ async fn get_metadata_via_grpc(
                             let vec: Vec<Result<Export, String>> = export
                                 .into_iter()
                                 .map(|proto_export| {
-                                    golem_common::exports::Export::try_from(proto_export)
+                                    golem_common::model::exports::Export::try_from(proto_export)
                                 })
                                 .collect();
                             vec.into_iter().collect()
@@ -640,13 +640,16 @@ impl ComponentServiceLocalFileSystem {
     ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
         // check if component metadata is already available in a corresponding `json` file in a target directory
         // otherwise, try to analyse the component file.
-        let component_metadata_opt: Option<golem_common::component_metadata::ComponentMetadata> =
-            Self::read_component_metadata_from_local_file(path)
-                .await
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let component_metadata_opt: Option<
+            golem_common::model::component_metadata::ComponentMetadata,
+        > = Self::read_component_metadata_from_local_file(path)
+            .await
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-        if let Some(golem_common::component_metadata::ComponentMetadata {
-            memories, exports, ..
+        if let Some(golem_common::model::component_metadata::ComponentMetadata {
+            memories,
+            exports,
+            ..
         }) = component_metadata_opt
         {
             let linear_memories = memories
