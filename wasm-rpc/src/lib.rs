@@ -265,6 +265,35 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     }
 }
 
+impl Value {
+    pub fn type_case_name(&self) -> &'static str {
+        match self {
+            Value::Bool(_) => "bool",
+            Value::U8(_) => "u8",
+            Value::U16(_) => "u16",
+            Value::U32(_) => "u32",
+            Value::U64(_) => "u64",
+            Value::S8(_) => "s8",
+            Value::S16(_) => "s16",
+            Value::S32(_) => "s32",
+            Value::S64(_) => "s64",
+            Value::F32(_) => "f32",
+            Value::F64(_) => "f64",
+            Value::Char(_) => "char",
+            Value::String(_) => "string",
+            Value::List(_) => "list",
+            Value::Tuple(_) => "tuple",
+            Value::Record(_) => "record",
+            Value::Variant { .. } => "variant",
+            Value::Enum(_) => "enum",
+            Value::Flags(_) => "flags",
+            Value::Option(_) => "option",
+            Value::Result(_) => "result",
+            Value::Handle { .. } => "handle",
+        }
+    }
+}
+
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
