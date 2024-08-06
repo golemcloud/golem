@@ -48,7 +48,7 @@ use golem_common::metrics::api::{
 };
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
     TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
@@ -579,8 +579,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(request).await?;
 
-        let calling_convention = request.calling_convention();
-
         let idempotency_key = request
             .idempotency_key()?
             .unwrap_or(IdempotencyKey::fresh());
@@ -594,12 +592,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         let values = worker
-            .invoke_and_await(
-                idempotency_key,
-                calling_convention,
-                full_function_name,
-                function_input,
-            )
+            .invoke_and_await(idempotency_key, full_function_name, function_input)
             .await?;
 
         Ok(values)
@@ -649,8 +642,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), GolemError> {
         let full_function_name = request.name();
 
-        let calling_convention = request.calling_convention();
-
         let worker = self.get_or_create(request).await?;
 
         let idempotency_key = request
@@ -665,12 +656,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|msg| GolemError::ValueMismatch { details: msg })?;
 
         worker
-            .invoke(
-                idempotency_key,
-                calling_convention,
-                full_function_name,
-                function_input,
-            )
+            .invoke(idempotency_key, full_function_name, function_input)
             .await?;
 
         Ok(())
@@ -950,7 +936,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                  matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if *target_version == request.target_version)
+                matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if *target_version == request.target_version)
                 ) {
                     return Err(GolemError::invalid_request(
                         "The same update is already in progress",
@@ -1280,7 +1266,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_and_await_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            calling_convention = request.calling_convention,
             account_id = proto_account_id_string(&request.account_id),
         );
 
@@ -1295,7 +1280,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )))
-            },
+            }
             Err(err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse {
@@ -1320,16 +1305,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_and_await_worker_json_typed",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            calling_convention = request.calling_convention,
             account_id = proto_account_id_string(&request.account_id),
         );
 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
             Ok(type_annotated_value) => {
-
-                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped { output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(type_annotated_value),
-                })};
+                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
+                    output: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(type_annotated_value),
+                    })
+                };
 
                 record.succeed(Ok(Response::new(
                     golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
@@ -1338,7 +1323,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )))
-            },
+            }
             Err(err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
@@ -1811,7 +1796,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 trait GrpcInvokeRequest {
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
-    fn calling_convention(&self) -> CallingConvention;
     fn input(&self) -> Vec<Val>;
     fn worker_id(&self) -> Result<WorkerId, GolemError>;
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
@@ -1832,10 +1816,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeWorkerRequest {
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
         self.account_limits.clone()
-    }
-
-    fn calling_convention(&self) -> CallingConvention {
-        CallingConvention::Component
     }
 
     fn input(&self) -> Vec<Val> {
@@ -1888,13 +1868,6 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeAndAwaitWorkerReques
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
         self.account_limits.clone()
-    }
-
-    fn calling_convention(&self) -> CallingConvention {
-        match self.calling_convention() {
-            golem::worker::CallingConvention::Component => CallingConvention::Component,
-            golem::worker::CallingConvention::Stdio => CallingConvention::Stdio,
-        }
     }
 
     fn input(&self) -> Vec<Val> {

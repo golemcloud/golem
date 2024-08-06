@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.worker;
-
-
-enum CallingConvention {
-  COMPONENT = 0;
-  STDIO = 1;
-}

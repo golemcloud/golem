@@ -31,8 +31,8 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, Timestamp, WorkerId,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
+    WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
@@ -211,7 +211,6 @@ pub trait OplogOps: Oplog {
         function_name: String,
         request: &R,
         idempotency_key: IdempotencyKey,
-        calling_convention: Option<CallingConvention>,
     ) -> Result<OplogEntry, String> {
         let serialized_request = serialize(request)?.to_vec();
 
@@ -221,7 +220,6 @@ pub trait OplogOps: Oplog {
             function_name,
             request: payload,
             idempotency_key,
-            calling_convention,
         };
         self.add(entry.clone()).await;
         Ok(entry)

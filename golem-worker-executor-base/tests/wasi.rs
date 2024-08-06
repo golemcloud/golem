@@ -89,7 +89,7 @@ async fn read_stdin() {
 
     drop(executor);
 
-    assert!(result.is_err()); // stdin is disabled in component calling convention
+    assert!(result.is_err()); // stdin is disabled
 }
 
 #[tokio::test]

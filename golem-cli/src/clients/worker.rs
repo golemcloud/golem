@@ -36,7 +36,6 @@ pub trait WorkerClient {
         function: String,
         parameters: InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
-        use_stdio: bool,
     ) -> Result<InvokeResult, GolemError>;
 
     async fn invoke(

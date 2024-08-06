@@ -763,46 +763,6 @@ impl Display for IdempotencyKey {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode, Enum)]
-pub enum CallingConvention {
-    Component,
-    Stdio,
-}
-
-impl TryFrom<i32> for CallingConvention {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(CallingConvention::Component),
-            1 => Ok(CallingConvention::Stdio),
-            _ => Err(format!("Unknown calling convention: {}", value)),
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::worker::CallingConvention> for CallingConvention {
-    fn from(value: golem_api_grpc::proto::golem::worker::CallingConvention) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::worker::CallingConvention::Component => {
-                CallingConvention::Component
-            }
-            golem_api_grpc::proto::golem::worker::CallingConvention::Stdio => {
-                CallingConvention::Stdio
-            }
-        }
-    }
-}
-
-impl From<CallingConvention> for i32 {
-    fn from(value: CallingConvention) -> Self {
-        match value {
-            CallingConvention::Component => 0,
-            CallingConvention::Stdio => 1,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
@@ -1002,7 +962,6 @@ pub enum WorkerInvocation {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<golem_wasm_rpc::Value>,
-        calling_convention: CallingConvention,
     },
     ManualUpdate {
         target_version: ComponentVersion,
@@ -2010,7 +1969,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(
                     FilterComparator::Equal,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_and(vec![
@@ -2034,7 +1993,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .or(WorkerFilter::new_status(
                     FilterComparator::NotEqual,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_or(vec![
@@ -2048,7 +2007,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(
                     FilterComparator::NotEqual,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_or(vec![
@@ -2064,7 +2023,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .or(WorkerFilter::new_status(
                     FilterComparator::NotEqual,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_and(vec![
@@ -2105,7 +2064,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(
                     FilterComparator::Equal,
-                    WorkerStatus::Idle
+                    WorkerStatus::Idle,
                 ))
                 .matches(&worker_metadata)
         );
@@ -2117,7 +2076,7 @@ mod tests {
         )
         .and(WorkerFilter::new_status(
             FilterComparator::Equal,
-            WorkerStatus::Idle
+            WorkerStatus::Idle,
         ))
         .matches(&worker_metadata));
 

@@ -43,9 +43,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
+    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -424,7 +424,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke(
         &self,
         idempotency_key: IdempotencyKey,
-        calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
@@ -436,13 +435,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
                 // Invoke the function in the background
-                self.enqueue(
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                    calling_convention,
-                )
-                .await;
+                self.enqueue(idempotency_key, full_function_name, function_input)
+                    .await;
                 Ok(None)
             }
         }
@@ -451,17 +445,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
-        calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
-            .invoke(
-                idempotency_key.clone(),
-                calling_convention,
-                full_function_name,
-                function_input,
-            )
+            .invoke(idempotency_key.clone(), full_function_name, function_input)
             .await?
         {
             Some(Ok(output)) => Ok(output),
@@ -721,17 +709,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        calling_convention: CallingConvention,
     ) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running
-                    .enqueue(
-                        idempotency_key,
-                        full_function_name,
-                        function_input,
-                        calling_convention,
-                    )
+                    .enqueue(idempotency_key, full_function_name, function_input)
                     .await;
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
@@ -740,7 +722,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     idempotency_key,
                     full_function_name,
                     function_input,
-                    calling_convention,
                 };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
@@ -1109,13 +1090,11 @@ impl RunningWorker {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        calling_convention: CallingConvention,
     ) {
         let invocation = WorkerInvocation::ExportedFunction {
             idempotency_key,
             full_function_name,
             function_input,
-            calling_convention,
         };
         self.enqueue_worker_invocation(invocation).await;
     }
@@ -1344,7 +1323,6 @@ impl RunningWorker {
                                     idempotency_key: invocation_key,
                                     full_function_name,
                                     function_input,
-                                    calling_convention,
                                 } => {
                                     let span = span!(
                                         Level::INFO,
@@ -1379,7 +1357,6 @@ impl RunningWorker {
                                             function_input.clone(),
                                             store,
                                             &instance,
-                                            calling_convention,
                                             true, // We are always in live mode at this point
                                         )
                                         .await;
@@ -1408,7 +1385,6 @@ impl RunningWorker {
                                                         let result = interpret_function_results(
                                                             output,
                                                             function_results,
-                                                            calling_convention,
                                                         )
                                                         .map_err(|e| GolemError::ValueMismatch {
                                                             details: e.join(", "),
@@ -1533,7 +1509,6 @@ impl RunningWorker {
                                             vec![],
                                             store,
                                             &instance,
-                                            CallingConvention::Component,
                                             true,
                                         )
                                             .await;

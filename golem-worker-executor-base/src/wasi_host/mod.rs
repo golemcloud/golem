@@ -25,7 +25,6 @@ use wasmtime_wasi::{
 
 pub mod helpers;
 pub mod logging;
-pub mod managed_stdio;
 
 pub fn create_linker<Ctx: WorkerCtx + Send + Sync, F>(
     engine: &Engine,
