@@ -15,11 +15,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use golem_wasm_rpc::json::get_json_from_typed_value;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
-use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
@@ -85,7 +83,7 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
-    // Accepts Json Params and Returns Json (with no type information)
+    // Accepts Json Params and Returns Json
     async fn invoke_and_await_function_json(
         &self,
         worker_id: &WorkerId,
@@ -95,9 +93,22 @@ pub trait WorkerService<AuthCtx> {
         calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<Value>;
+    ) -> WorkerResult<PreciseJson> {
+        let result = self
+            .invoke_and_await_function_typed(
+                worker_id,
+                idempotency_key,
+                function_name,
+                params,
+                calling_convention,
+                invocation_context,
+                metadata,
+            )
+            .await?;
+        Ok(result.into())
+    }
 
-    // Accepts Json Params and Returns TypeAnnotatedValue (a Json with more type Info)
+    // Accepts Json Params and Returns TypeAnnotatedValue
     async fn invoke_and_await_function_typed(
         &self,
         worker_id: &WorkerId,
@@ -359,34 +370,6 @@ where
         .await?;
 
         Ok(())
-    }
-
-    // Accepts Json Params and Returns Json (with no type information)
-    async fn invoke_and_await_function_json(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
-        invocation_context: Option<InvocationContext>,
-        metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<Value> {
-        let result = self
-            .invoke_and_await_function_typed(
-                worker_id,
-                idempotency_key,
-                function_name,
-                params,
-                calling_convention,
-                invocation_context,
-                metadata,
-            )
-            .await?;
-
-        let json = get_json_from_typed_value(&result);
-
-        Ok(json)
     }
 
     async fn invoke_and_await_function_typed(
@@ -1044,19 +1027,6 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         Ok(())
-    }
-
-    async fn invoke_and_await_function_json(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<PreciseJson>,
-        _calling_convention: &CallingConvention,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<Value> {
-        Ok(Value::default())
     }
 
     async fn invoke_and_await_function_typed(

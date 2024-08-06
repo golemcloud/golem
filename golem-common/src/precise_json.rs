@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-
+use std::fmt::{Display, Formatter};
 use thiserror::Error;
 
 // This is different to wasm_rpc::Value mainly for the type `Record` that it holds `Keys`
@@ -46,6 +46,12 @@ pub enum PreciseJson {
         uri: String,
         resource_id: u64,
     },
+}
+
+impl Display for PreciseJson {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.to_json_string().fmt(f)
+    }
 }
 
 impl types::Type for PreciseJson {

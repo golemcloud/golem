@@ -210,23 +210,38 @@ async fn counter_resource_test_2_json() {
         .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    // check!(result1 == Ok(json!({ "type": "U64", "value": 5 }))); // TODO should be this
-    check!(result1 == Ok(json!([5])));
-    // check!(result2 == Ok(json!({ "type": "U64", "value": 3 }))); // TODO should be this
-    check!(result2 == Ok(json!([3])));
-    // check!(
-    //     result3
-    //         == Ok(json!(
-    //             {
-    //                 "type": "List",
-    //                 "value": [
-    //                     { "type": "Tuple", "value": [ { "type": "String", "value": "counter1" }, { "type": "U64", "value": 5 } ] },
-    //                     { "type": "Tuple", "value": [ { "type": "String", "value": "counter2" }, { "type": "U64", "value": 3 } ] }
-    //                 ]
-    //             }
-    //         ))
-    // ); // TODO should be this
-    check!(result3 == Ok(json!([[["counter1", 5], ["counter2", 3]]])));
+    check!(
+        result1
+            == Ok(json!(
+                {
+                    "type": "Tuple",
+                    "value": [{ "type": "U64", "value": 5 }]
+                }
+            ))
+    );
+    check!(
+        result2
+            == Ok(json!(
+                {
+                    "type": "Tuple",
+                    "value": [{ "type": "U64", "value": 3 }]
+                }
+            ))
+    );
+    check!(
+        result3
+            == Ok(json!(
+                    {
+                "type": "Tuple",
+                "value": [{
+                    "type": "List",
+                    "value": [
+                        { "type": "Tuple", "value": [ { "type": "Str", "value": "counter1" }, { "type": "U64", "value": 5 } ] },
+                        { "type": "Tuple", "value": [ { "type": "Str", "value": "counter2" }, { "type": "U64", "value": 3 } ] }
+                    ]
+                }]}
+            ))
+    );
 }
 
 #[tokio::test]

@@ -1291,9 +1291,9 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeResult {
-    pub result: serde_json::value::Value,
+    pub result: PreciseJson,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]
