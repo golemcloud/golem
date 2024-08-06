@@ -1,5 +1,5 @@
 use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem::component::component_service_server::ComponentServiceServer;
+use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
 use std::net::SocketAddr;
 use tonic::transport::{Error, Server};
 

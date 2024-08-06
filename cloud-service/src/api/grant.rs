@@ -73,7 +73,7 @@ pub struct GrantApi {
     pub account_grant_service: Arc<dyn AccountGrantService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/accounts", tag = ApiTags::Grant)]
+#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Grant)]
 impl GrantApi {
     #[oai(
         path = "/:account_id/grants",

@@ -181,7 +181,7 @@ pub struct WorkerApi {
     worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     pub fn new(
         component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
@@ -322,10 +322,9 @@ impl WorkerApi {
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
-
         let response = self
             .worker_service
-            .invoke_and_await_function(
+            .invoke_and_await_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
@@ -373,7 +372,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .invoke_function(
+            .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,

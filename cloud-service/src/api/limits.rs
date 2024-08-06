@@ -85,7 +85,7 @@ pub struct LimitsApi {
     pub plan_limit_service: Arc<dyn PlanLimitService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/resource-limits", tag = ApiTags::Limits)]
+#[OpenApi(prefix_path = "/v1/resource-limits", tag = ApiTags::Limits)]
 impl LimitsApi {
     /// Get resource limits for a given account.
     #[oai(path = "/", method = "get", operation_id = "get_resource_limits")]

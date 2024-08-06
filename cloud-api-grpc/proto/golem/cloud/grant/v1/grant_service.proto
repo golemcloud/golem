@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package golem.cloud.grant;
+package golem.cloud.grant.v1;
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
-import public "golem/cloud/grant/grant_error.proto";
+import public "golem/cloud/grant/v1/grant_error.proto";
 import public "golem/cloud/grant/role.proto";
 
 service CloudGrantService {
@@ -21,7 +21,7 @@ message GetGrantsRequest {
 message GetGrantsResponse {
   oneof result {
     GetGrantsSuccessResponse success = 1;
-    golem.cloud.grant.GrantError error = 2;
+    golem.cloud.grant.v1.GrantError error = 2;
   }
 }
 
@@ -37,7 +37,7 @@ message DeleteGrantRequest {
 message DeleteGrantResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.cloud.grant.GrantError error = 2;
+    golem.cloud.grant.v1.GrantError error = 2;
   }
 }
 
@@ -49,7 +49,7 @@ message GetGrantRequest {
 message GetGrantResponse {
   oneof result {
     golem.cloud.grant.Role role = 1;
-    golem.cloud.grant.GrantError error = 2;
+    golem.cloud.grant.v1.GrantError error = 2;
   }
 }
 
@@ -61,6 +61,6 @@ message PutGrantRequest {
 message PutGrantResponse {
   oneof result {
     golem.cloud.grant.Role role = 1;
-    golem.cloud.grant.GrantError error = 2;
+    golem.cloud.grant.v1.GrantError error = 2;
   }
 }

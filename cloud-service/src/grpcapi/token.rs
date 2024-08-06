@@ -6,13 +6,14 @@ use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::token;
-use cloud_api_grpc::proto::golem::cloud::token::cloud_token_service_server::CloudTokenService;
-use cloud_api_grpc::proto::golem::cloud::token::{
+use cloud_api_grpc::proto::golem::cloud::token::v1::cloud_token_service_server::CloudTokenService;
+use cloud_api_grpc::proto::golem::cloud::token::v1::{
     create_token_response, delete_token_response, get_token_response, get_tokens_response,
     token_error, CreateTokenRequest, CreateTokenResponse, DeleteTokenRequest, DeleteTokenResponse,
     GetTokenRequest, GetTokenResponse, GetTokensRequest, GetTokensResponse,
-    GetTokensSuccessResponse, Token, TokenError, UnsafeToken,
+    GetTokensSuccessResponse, TokenError,
 };
+use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
 use cloud_common::grpc::proto_token_id_string;
 use cloud_common::model::TokenId;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};

@@ -80,7 +80,7 @@ pub struct TokenApi {
     pub token_service: Arc<dyn TokenService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/accounts", tag = ApiTags::Token)]
+#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Token)]
 impl TokenApi {
     /// Get all tokens
     ///

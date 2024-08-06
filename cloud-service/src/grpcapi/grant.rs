@@ -5,13 +5,13 @@ use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
-use cloud_api_grpc::proto::golem::cloud::grant::cloud_grant_service_server::CloudGrantService;
-use cloud_api_grpc::proto::golem::cloud::grant::{
-    delete_grant_response, get_grant_response, get_grants_response, put_grant_response,
-    DeleteGrantRequest, DeleteGrantResponse, GetGrantRequest, GetGrantResponse, GetGrantsRequest,
-    GetGrantsResponse, GetGrantsSuccessResponse, PutGrantRequest, PutGrantResponse,
+use cloud_api_grpc::proto::golem::cloud::grant::v1::cloud_grant_service_server::CloudGrantService;
+use cloud_api_grpc::proto::golem::cloud::grant::v1::{
+    delete_grant_response, get_grant_response, get_grants_response, grant_error,
+    put_grant_response, DeleteGrantRequest, DeleteGrantResponse, GetGrantRequest, GetGrantResponse,
+    GetGrantsRequest, GetGrantsResponse, GetGrantsSuccessResponse, GrantError, PutGrantRequest,
+    PutGrantResponse,
 };
-use cloud_api_grpc::proto::golem::cloud::grant::{grant_error, GrantError};
 use cloud_common::model::Role;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;

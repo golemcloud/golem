@@ -8,19 +8,17 @@ use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project;
 use crate::service::project_auth;
 use crate::service::project_auth::ProjectAuthorisationService;
-use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_server::CloudProjectService;
-use cloud_api_grpc::proto::golem::cloud::project::{
+use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_server::CloudProjectService;
+use cloud_api_grpc::proto::golem::cloud::project::v1::{
     create_project_response, delete_project_response, get_default_project_response,
-    get_project_actions_response, get_project_response, get_projects_response,
+    get_project_actions_response, get_project_response, get_projects_response, project_error,
     CreateProjectRequest, CreateProjectResponse, CreateProjectSuccessResponse,
     DeleteProjectRequest, DeleteProjectResponse, GetDefaultProjectRequest,
     GetDefaultProjectResponse, GetProjectActionsRequest, GetProjectActionsResponse,
     GetProjectActionsSuccessResponse, GetProjectRequest, GetProjectResponse, GetProjectsRequest,
-    GetProjectsResponse, GetProjectsSuccessResponse,
+    GetProjectsResponse, GetProjectsSuccessResponse, ProjectError,
 };
-use cloud_api_grpc::proto::golem::cloud::project::{
-    project_error, Project, ProjectDataRequest, ProjectError,
-};
+use cloud_api_grpc::proto::golem::cloud::project::Project;
 use cloud_common::grpc::proto_project_id_string;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::metrics::api::TraceErrorKind;
@@ -205,11 +203,7 @@ impl ProjectGrpcApi {
     ) -> Result<Project, ProjectError> {
         let auth = self.auth(metadata).await?;
 
-        let data: ProjectDataRequest = request
-            .project_data_request
-            .ok_or_else(|| bad_request_error("Missing project data"))?;
-
-        let owner_account_id: golem_common::model::AccountId = data
+        let owner_account_id: golem_common::model::AccountId = request
             .owner_account_id
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
@@ -217,9 +211,9 @@ impl ProjectGrpcApi {
         let project = model::Project {
             project_id: ProjectId::new_v4(),
             project_data: model::ProjectData {
-                name: data.name,
+                name: request.name,
                 owner_account_id,
-                description: data.description,
+                description: request.description,
                 default_environment_id: "default".to_string(),
                 project_type: model::ProjectType::NonDefault,
             },
@@ -283,10 +277,7 @@ impl CloudProjectService for ProjectGrpcApi {
     ) -> Result<Response<CreateProjectResponse>, Status> {
         let (m, _, r) = request.into_parts();
 
-        let record = recorded_grpc_api_request!(
-            "create_project",
-            project_name = r.project_data_request.as_ref().map(|p| p.name.clone())
-        );
+        let record = recorded_grpc_api_request!("create_project", project_name = r.name);
 
         let response = match self.create(r, m).instrument(record.span.clone()).await {
             Ok(result) => record.succeed(create_project_response::Result::Success(

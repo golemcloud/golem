@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::limit::cloud_limits_service_client::CloudLimitsServiceClient;
-use cloud_api_grpc::proto::golem::cloud::limit::{
+use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
+use cloud_api_grpc::proto::golem::cloud::limit::v1::{
     batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
     BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
 };

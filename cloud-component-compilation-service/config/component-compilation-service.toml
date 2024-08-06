@@ -16,6 +16,7 @@ max_component_size = 1000000
 [compile_worker.retries]
 max_attempts = 3
 max_delay = "1s"
+max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
@@ -81,6 +82,7 @@ without_time = false
 # [blob_storage.config.retries]
 # max_attempts = 3
 # max_delay = "1s"
+# max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
@@ -90,6 +92,7 @@ without_time = false
 # [compile_worker.retries]
 # max_attempts = 3
 # max_delay = "1s"
+# max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 # 

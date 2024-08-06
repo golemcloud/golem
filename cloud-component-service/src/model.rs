@@ -1,8 +1,9 @@
 use crate::service::auth::CloudNamespace;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
+use golem_common::component_metadata::ComponentMetadata;
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::model::{
-    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
 };
 use poem_openapi::Object;
 

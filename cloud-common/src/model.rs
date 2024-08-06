@@ -230,13 +230,13 @@ pub struct ProjectAuthorisedActions {
     pub actions: ProjectActions,
 }
 
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::GetProjectActionsSuccessResponse>
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::project::v1::GetProjectActionsSuccessResponse>
     for ProjectAuthorisedActions
 {
     type Error = String;
 
     fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::project::GetProjectActionsSuccessResponse,
+        value: cloud_api_grpc::proto::golem::cloud::project::v1::GetProjectActionsSuccessResponse,
     ) -> Result<Self, Self::Error> {
         let actions: HashSet<ProjectAction> = value
             .actions

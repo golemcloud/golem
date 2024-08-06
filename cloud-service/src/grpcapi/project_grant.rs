@@ -2,17 +2,15 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use cloud_api_grpc::proto::golem::cloud::projectgrant::cloud_project_grant_service_server::CloudProjectGrantService;
-use cloud_api_grpc::proto::golem::cloud::projectgrant::{
+use cloud_api_grpc::proto::golem::cloud::projectgrant::v1::cloud_project_grant_service_server::CloudProjectGrantService;
+use cloud_api_grpc::proto::golem::cloud::projectgrant::v1::{
     create_project_grant_response, delete_project_grant_response, get_project_grant_response,
-    get_project_grants_response, CreateProjectGrantRequest, CreateProjectGrantResponse,
-    DeleteProjectGrantRequest, DeleteProjectGrantResponse, GetProjectGrantRequest,
-    GetProjectGrantResponse, GetProjectGrantsRequest, GetProjectGrantsResponse,
-    GetProjectGrantsSuccessResponse,
+    get_project_grants_response, project_grant_error, CreateProjectGrantRequest,
+    CreateProjectGrantResponse, DeleteProjectGrantRequest, DeleteProjectGrantResponse,
+    GetProjectGrantRequest, GetProjectGrantResponse, GetProjectGrantsRequest,
+    GetProjectGrantsResponse, GetProjectGrantsSuccessResponse, ProjectGrantError,
 };
-use cloud_api_grpc::proto::golem::cloud::projectgrant::{
-    project_grant_error, ProjectGrant, ProjectGrantDataRequest, ProjectGrantError,
-};
+use cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrant;
 
 use crate::auth::AccountAuthorisation;
 use crate::grpcapi::get_authorisation_token;
@@ -196,19 +194,15 @@ impl ProjectGrantGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing project id"))?;
 
-        let data: ProjectGrantDataRequest = request
-            .data
-            .ok_or_else(|| bad_request_error("Missing data"))?;
-
-        let grantee_account_id: golem_common::model::AccountId = data
+        let grantee_account_id: golem_common::model::AccountId = request
             .grantee_account_id
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
 
-        let project_policy_id = match data.project_policy_id.and_then(|id| id.value) {
+        let project_policy_id = match request.project_policy_id.and_then(|id| id.value) {
             Some(policy_id) => ProjectPolicyId(policy_id.into()),
             None => {
-                let actions: HashSet<cloud_common::model::ProjectAction> = data
+                let actions: HashSet<cloud_common::model::ProjectAction> = request
                     .project_actions
                     .into_iter()
                     .map(|action| action.try_into())
@@ -217,7 +211,7 @@ impl ProjectGrantGrpcApi {
 
                 let policy = model::ProjectPolicy {
                     id: ProjectPolicyId::new_v4(),
-                    name: data.project_policy_name,
+                    name: request.project_policy_name,
                     project_actions: cloud_common::model::ProjectActions { actions },
                 };
                 self.project_policy_service.create(&policy).await?;

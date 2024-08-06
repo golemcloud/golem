@@ -116,7 +116,7 @@ pub struct ComponentApi {
     component_service: Arc<dyn ComponentService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Component)]
+#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
     pub fn new(component_service: Arc<dyn ComponentService + Sync + Send>) -> Self {
         Self { component_service }

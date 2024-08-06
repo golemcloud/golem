@@ -32,6 +32,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             healthcheck::HealthcheckApi,
         ),
         "Golem API",
-        "2.0",
+        "1.0",
     )
 }

@@ -7,6 +7,7 @@ use golem_common::model::{
     AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::durable_host::{
@@ -208,7 +209,7 @@ impl InvocationHooks for Context {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)

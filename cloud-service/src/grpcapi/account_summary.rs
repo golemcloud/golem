@@ -3,14 +3,11 @@ use crate::grpcapi::get_authorisation_token;
 use crate::service::account_summary;
 use crate::service::account_summary::AccountSummaryServiceError;
 use crate::service::auth::{AuthService, AuthServiceError};
-use cloud_api_grpc::proto::golem::cloud::accountsummary::account_summary_error;
-use cloud_api_grpc::proto::golem::cloud::accountsummary::cloud_account_summary_service_server::CloudAccountSummaryService;
-use cloud_api_grpc::proto::golem::cloud::accountsummary::get_account_count_response;
-use cloud_api_grpc::proto::golem::cloud::accountsummary::get_accounts_response;
-use cloud_api_grpc::proto::golem::cloud::accountsummary::{AccountSummary, AccountSummaryError};
-use cloud_api_grpc::proto::golem::cloud::accountsummary::{
-    GetAccountCountRequest, GetAccountCountResponse, GetAccountsRequest, GetAccountsResponse,
-    GetAccountsSuccessResponse,
+use cloud_api_grpc::proto::golem::cloud::accountsummary::v1::cloud_account_summary_service_server::CloudAccountSummaryService;
+use cloud_api_grpc::proto::golem::cloud::accountsummary::v1::{
+    account_summary_error, get_account_count_response, get_accounts_response, AccountSummary,
+    AccountSummaryError, GetAccountCountRequest, GetAccountCountResponse, GetAccountsRequest,
+    GetAccountsResponse, GetAccountsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_common::metrics::api::TraceErrorKind;

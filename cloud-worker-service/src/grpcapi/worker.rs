@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::service::auth::{get_authorisation_token, AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
+use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_worker_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response,
     invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
@@ -12,11 +12,12 @@ use golem_api_grpc::proto::golem::worker::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, InvokeResult,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
     ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError, WorkerMetadata,
+    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
 };
+use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
     proto_invocation_context_parent_worker_id_string, proto_worker_id_string,

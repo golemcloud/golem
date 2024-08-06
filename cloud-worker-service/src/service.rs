@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 use golem_service_base::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service_base::api_definition::http::HttpApiDefinition;
-use golem_worker_service_base::evaluator::WorkerMetadataFetcher;
 use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
@@ -50,7 +49,6 @@ use crate::service::auth::{
 use crate::service::limit::{LimitService, LimitServiceDefault, LimitServiceNoop};
 use crate::service::project::{ProjectService, ProjectServiceDefault, ProjectServiceNoop};
 use crate::service::worker::{WorkerService, WorkerServiceDefault, WorkerServiceNoop};
-use crate::worker_component_metadata_fetcher::DefaultWorkerComponentMetadataFetcher;
 use crate::worker_request_to_http_response::CloudWorkerRequestToHttpResponse;
 
 pub mod api_certificate;
@@ -73,8 +71,6 @@ pub struct ApiServices {
     pub certificate_service: Arc<dyn CertificateService + Sync + Send>,
     pub component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
-    // Custom request specific services
-    pub worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send>,
     pub worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub http_request_api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
@@ -287,6 +283,7 @@ pub async fn get_api_services(
                 min_delay: Duration::from_millis(100),
                 max_delay: Duration::from_secs(2),
                 multiplier: 2.0,
+                max_jitter_factor: Some(0.15),
             },
             connect_timeout: Duration::from_secs(10),
         },
@@ -298,17 +295,12 @@ pub async fn get_api_services(
         Arc::new(
             golem_worker_service_base::service::worker::WorkerServiceDefault::new(
                 worker_executor_clients.clone(),
+                config.base_config.worker_executor_retries.clone(),
                 component_service.clone(),
                 routing_table_service.clone(),
             ),
         ),
     ));
-
-    let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> =
-        Arc::new(DefaultWorkerComponentMetadataFetcher::new(
-            worker_service.clone(),
-            config.base_config.component_service.access_token,
-        ));
 
     let worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
         Arc::new(CloudWorkerRequestToHttpResponse::new(
@@ -330,7 +322,6 @@ pub async fn get_api_services(
         certificate_service,
         component_service,
         worker_service,
-        worker_metadata_fetcher,
         worker_request_to_http_service,
         http_request_api_definition_lookup_service,
     })
@@ -378,12 +369,6 @@ pub fn get_api_services_noop(config: &WorkerServiceCloudConfig) -> ApiServices {
     let worker_service: Arc<dyn WorkerService + Sync + Send> =
         Arc::new(WorkerServiceNoop::default());
 
-    let worker_metadata_fetcher: Arc<dyn WorkerMetadataFetcher + Sync + Send> =
-        Arc::new(DefaultWorkerComponentMetadataFetcher::new(
-            worker_service.clone(),
-            config.base_config.component_service.access_token,
-        ));
-
     let worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> =
         Arc::new(CloudWorkerRequestToHttpResponse::new(
             worker_service.clone(),
@@ -404,7 +389,6 @@ pub fn get_api_services_noop(config: &WorkerServiceCloudConfig) -> ApiServices {
         certificate_service,
         component_service,
         worker_service,
-        worker_metadata_fetcher,
         worker_request_to_http_service,
         http_request_api_definition_lookup_service,
     }

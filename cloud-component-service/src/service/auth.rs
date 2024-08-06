@@ -153,7 +153,7 @@ impl AuthService for CloudAuthService {
 
 impl From<ProjectError> for AuthServiceError {
     fn from(e: ProjectError) -> Self {
-        use cloud_api_grpc::proto::golem::cloud::project::project_error;
+        use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
 
         match e {
             ProjectError::Server(e) => match e.error {

@@ -4,7 +4,7 @@ use crate::service::api_domain::ApiDomainServiceError;
 use crate::service::api_domain::RegisterDomainRouteError;
 use crate::service::auth::{AuthServiceError, CloudNamespace};
 use crate::service::project::ProjectError;
-use cloud_api_grpc::proto::golem::cloud::project::project_error::Error;
+use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_service_base::model::ErrorBody;
 use golem_worker_service_base::service::api_definition::ApiDefinitionError as BaseApiDefinitionError;

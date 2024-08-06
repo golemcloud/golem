@@ -99,7 +99,7 @@ pub struct ProjectGrantApi {
     pub project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/projects", tag = ApiTags::ProjectGrant)]
+#[OpenApi(prefix_path = "/v1/projects", tag = ApiTags::ProjectGrant)]
 impl ProjectGrantApi {
     /// Get a project's grants
     ///

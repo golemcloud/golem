@@ -616,6 +616,7 @@ impl CertificateManager for AwsCertificateManager {
                 min_delay: Duration::from_millis(800),
                 max_delay: Duration::from_secs(2),
                 multiplier: 2.0,
+                max_jitter_factor: Some(0.15),
             };
 
             let _ = with_retries(

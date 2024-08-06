@@ -1,12 +1,12 @@
 syntax = "proto3";
 
-package golem.cloud.projectpolicy;
+package golem.cloud.projectpolicy.v1;
 
 import public "golem/common/empty.proto";
 import public "golem/common/error_body.proto";
 import public "golem/cloud/projectpolicy/project_policy.proto";
 import public "golem/cloud/projectpolicy/project_policy_data.proto";
-import public "golem/cloud/projectpolicy/project_policy_error.proto";
+import public "golem/cloud/projectpolicy/v1/project_policy_error.proto";
 import public "golem/cloud/projectpolicy/project_policy_id.proto";
 
 service CloudProjectPolicyService {
@@ -21,7 +21,7 @@ message CreateProjectPolicyRequest {
 message CreateProjectPolicyResponse {
   oneof result {
     golem.cloud.projectpolicy.ProjectPolicy success = 1;
-    golem.cloud.projectpolicy.ProjectPolicyError error = 2;
+    golem.cloud.projectpolicy.v1.ProjectPolicyError error = 2;
   }
 }
 
@@ -32,7 +32,7 @@ message GetProjectPolicyRequest {
 message GetProjectPolicyResponse {
   oneof result {
     golem.cloud.projectpolicy.ProjectPolicy success = 1;
-    golem.cloud.projectpolicy.ProjectPolicyError error = 2;
+    golem.cloud.projectpolicy.v1.ProjectPolicyError error = 2;
   }
 }
 

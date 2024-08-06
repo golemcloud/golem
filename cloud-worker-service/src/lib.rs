@@ -8,7 +8,6 @@ pub mod model;
 pub mod repo;
 pub mod service;
 
-mod worker_component_metadata_fetcher;
 pub mod worker_request_to_http_response;
 
 pub trait UriBackConversion {

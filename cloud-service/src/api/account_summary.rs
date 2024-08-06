@@ -62,7 +62,7 @@ pub struct AccountSummaryApi {
     pub account_summary_service: Arc<dyn AccountSummaryService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/admin/accounts", tag = ApiTags::AccountSummary)]
+#[OpenApi(prefix_path = "/v1/admin/accounts", tag = ApiTags::AccountSummary)]
 impl AccountSummaryApi {
     #[oai(path = "/", method = "get", operation_id = "get_account_summary")]
     async fn get_account_summary(

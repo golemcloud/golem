@@ -81,7 +81,7 @@ pub struct AccountApi {
     pub account_service: Arc<dyn AccountService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/accounts", tag = ApiTags::Account)]
+#[OpenApi(prefix_path = "/v1/accounts", tag = ApiTags::Account)]
 impl AccountApi {
     /// Get account
     ///

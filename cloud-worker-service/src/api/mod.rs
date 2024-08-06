@@ -53,7 +53,7 @@ pub fn make_open_api_service(
             ApiDomainApi::new(services.domain_service),
         ),
         "Golem API",
-        "2.0",
+        "1.0",
     )
 }
 
@@ -67,7 +67,7 @@ pub fn management_routes(services: ApiServices) -> Route {
         .nest("/v1/api/docs", ui)
         .nest("/v1/api/specs", spec)
         .at(
-            "/v2/components/:component_id/workers/:worker_name/connect",
+            "/v1/components/:component_id/workers/:worker_name/connect",
             get(worker_connect::ws).data(connect_services),
         )
 }
@@ -75,7 +75,6 @@ pub fn management_routes(services: ApiServices) -> Route {
 pub fn custom_http_request_route(services: ApiServices) -> Route {
     let api_handler = CustomHttpRequestApi::new(
         services.worker_request_to_http_service,
-        services.worker_metadata_fetcher,
         services.http_request_api_definition_lookup_service,
     );
 

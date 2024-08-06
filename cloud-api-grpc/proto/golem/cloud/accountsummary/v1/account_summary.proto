@@ -2,7 +2,7 @@ syntax = "proto3";
 
 import "golem/common/account_id.proto";
 
-package golem.cloud.accountsummary;
+package golem.cloud.accountsummary.v1;
 
 
 message AccountSummary {

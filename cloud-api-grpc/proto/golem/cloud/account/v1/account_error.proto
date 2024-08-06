@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.cloud.account;
+package golem.cloud.account.v1;
 
 import "golem/common/error_body.proto";
 

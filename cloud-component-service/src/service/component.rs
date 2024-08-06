@@ -1,23 +1,23 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
+use crate::service::limit::{LimitError, LimitService};
+use crate::service::project::{ProjectError, ProjectService};
 use async_trait::async_trait;
+use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
 use cloud_common::model::ProjectAction;
+use golem_common::component_metadata::ComponentMetadata;
+use golem_common::component_metadata::ComponentProcessingError;
 use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
 use golem_component_service_base::repo::RepoError;
 use golem_component_service_base::service::component::{
     ComponentError as BaseComponentError, ComponentService as BaseComponentService,
 };
-use golem_component_service_base::service::component_processor::ComponentProcessingError;
-use tracing::error;
-
-use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
-use crate::service::limit::{LimitError, LimitService};
-use crate::service::project::{ProjectError, ProjectService};
-use cloud_api_grpc::proto::golem::cloud::project::project_error;
 use golem_service_base::model::*;
 use golem_service_base::stream::ByteStream;
+use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {

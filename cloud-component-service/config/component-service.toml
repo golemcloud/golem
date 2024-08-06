@@ -12,6 +12,7 @@ port = 8080
 [cloud_service.retries]
 max_attempts = 5
 max_delay = "2s"
+max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 

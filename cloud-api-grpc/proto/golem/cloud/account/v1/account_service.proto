@@ -1,12 +1,12 @@
 syntax = "proto3";
 
-package golem.cloud.account;
+package golem.cloud.account.v1;
 
 import public "golem/common/empty.proto";
 import public "golem/cloud/account/account.proto";
 import public "golem/common/account_id.proto";
 import public "golem/cloud/account/account_data.proto";
-import public "golem/cloud/account/account_error.proto";
+import public "golem/cloud/account/v1/account_error.proto";
 import public "golem/cloud/plan/plan.proto";
 
 service CloudAccountService {
@@ -24,7 +24,7 @@ message AccountDeleteRequest {
 message AccountDeleteResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.cloud.account.AccountError error = 2;
+    golem.cloud.account.v1.AccountError error = 2;
   }
 }
 
@@ -35,7 +35,7 @@ message AccountGetRequest {
 message AccountGetResponse {
   oneof result {
     golem.cloud.account.Account account = 1;
-    golem.cloud.account.AccountError error = 2;
+    golem.cloud.account.v1.AccountError error = 2;
   }
 }
 
@@ -46,7 +46,7 @@ message AccountGetPlanRequest {
 message AccountGetPlanResponse {
   oneof result {
     golem.cloud.plan.Plan plan = 1;
-    golem.cloud.account.AccountError error = 2;
+    golem.cloud.account.v1.AccountError error = 2;
   }
 }
 
@@ -58,7 +58,7 @@ message AccountUpdateRequest {
 message AccountUpdateResponse {
   oneof result {
     golem.cloud.account.Account account = 1;
-    golem.cloud.account.AccountError error = 2;
+    golem.cloud.account.v1.AccountError error = 2;
   }
 }
 
@@ -69,6 +69,6 @@ message AccountCreateRequest {
 message AccountCreateResponse {
   oneof result {
     golem.cloud.account.Account account = 1;
-    golem.cloud.account.AccountError error = 2;
+    golem.cloud.account.v1.AccountError error = 2;
   }
 }

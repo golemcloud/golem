@@ -86,30 +86,13 @@ pub struct ProjectGrantDataRequest {
     pub project_policy_name: Option<String>,
 }
 
-impl From<ProjectGrantDataRequest>
-    for cloud_api_grpc::proto::golem::cloud::projectgrant::ProjectGrantDataRequest
-{
-    fn from(value: ProjectGrantDataRequest) -> Self {
-        Self {
-            grantee_account_id: Some(value.grantee_account_id.into()),
-            project_policy_id: value.project_policy_id.map(|v| v.into()),
-            project_actions: value
-                .project_actions
-                .into_iter()
-                .map(|action| action.into())
-                .collect(),
-            project_policy_name: value.project_policy_name.unwrap_or("".to_string()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 pub struct BatchUpdateResourceLimits {
     pub updates: HashMap<String, i64>,
 }
 
 impl From<BatchUpdateResourceLimits>
-    for cloud_api_grpc::proto::golem::cloud::limit::BatchUpdateResourceLimits
+    for cloud_api_grpc::proto::golem::cloud::limit::v1::BatchUpdateResourceLimits
 {
     fn from(value: BatchUpdateResourceLimits) -> Self {
         Self {
@@ -522,16 +505,6 @@ pub struct ProjectDataRequest {
     pub description: String,
 }
 
-impl From<ProjectDataRequest> for cloud_api_grpc::proto::golem::cloud::project::ProjectDataRequest {
-    fn from(value: ProjectDataRequest) -> Self {
-        Self {
-            name: value.name,
-            owner_account_id: Some(value.owner_account_id.into()),
-            description: value.description,
-        }
-    }
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
 )]
@@ -584,13 +557,13 @@ pub struct AccountSummary {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary>
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::v1::AccountSummary>
     for AccountSummary
 {
     type Error = String;
 
     fn try_from(
-        value: cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary,
+        value: cloud_api_grpc::proto::golem::cloud::accountsummary::v1::AccountSummary,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             id: value.id.ok_or("Missing field: id")?.into(),
@@ -604,7 +577,9 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary
     }
 }
 
-impl From<AccountSummary> for cloud_api_grpc::proto::golem::cloud::accountsummary::AccountSummary {
+impl From<AccountSummary>
+    for cloud_api_grpc::proto::golem::cloud::accountsummary::v1::AccountSummary
+{
     fn from(value: AccountSummary) -> Self {
         Self {
             id: Some(value.id.into()),

@@ -72,7 +72,7 @@ pub struct ProjectPolicyApi {
     pub project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/project-policies", tag = ApiTags::ProjectPolicy)]
+#[OpenApi(prefix_path = "/v1/project-policies", tag = ApiTags::ProjectPolicy)]
 impl ProjectPolicyApi {
     /// Get a project policy
     ///

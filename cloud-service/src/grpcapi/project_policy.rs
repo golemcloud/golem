@@ -4,14 +4,13 @@ use crate::grpcapi::get_authorisation_token;
 use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::project_policy;
-use cloud_api_grpc::proto::golem::cloud::projectpolicy::cloud_project_policy_service_server::CloudProjectPolicyService;
-use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
-    create_project_policy_response, get_project_policy_response, CreateProjectPolicyRequest,
-    CreateProjectPolicyResponse, GetProjectPolicyRequest, GetProjectPolicyResponse,
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::v1::cloud_project_policy_service_server::CloudProjectPolicyService;
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::v1::{
+    create_project_policy_response, get_project_policy_response, project_policy_error,
+    CreateProjectPolicyRequest, CreateProjectPolicyResponse, GetProjectPolicyRequest,
+    GetProjectPolicyResponse, ProjectPolicyError,
 };
-use cloud_api_grpc::proto::golem::cloud::projectpolicy::{
-    project_policy_error, ProjectPolicy, ProjectPolicyError,
-};
+use cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy;
 use cloud_common::grpc::proto_project_policy_id_string;
 use cloud_common::model::ProjectPolicyId;
 use golem_api_grpc::proto::golem::common::ErrorBody;

@@ -1,13 +1,16 @@
 syntax = "proto3";
 
-package golem.cloud.projectgrant;
+package golem.cloud.projectgrant.v1;
 
+import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/common/project_id.proto";
 import public "golem/cloud/projectgrant/project_grant_id.proto";
 import public "golem/cloud/projectgrant/project_grant.proto";
-import public "golem/cloud/projectgrant/project_grant_error.proto";
-import public "golem/cloud/projectgrant/project_grant_data_request.proto";
+import public "golem/cloud/projectgrant/v1/project_grant_error.proto";
+import public "golem/cloud/projectpolicy/project_policy_id.proto";
+import public
+    "golem/cloud/projectpolicy/project_action.proto";
 
 service CloudProjectGrantService {
   rpc GetProjectGrants (GetProjectGrantsRequest) returns (GetProjectGrantsResponse);
@@ -23,7 +26,7 @@ message GetProjectGrantsRequest {
 message GetProjectGrantsResponse {
   oneof result {
     GetProjectGrantsSuccessResponse success = 1;
-    golem.cloud.projectgrant.ProjectGrantError error = 2;
+    golem.cloud.projectgrant.v1.ProjectGrantError error = 2;
   }
 }
 
@@ -39,7 +42,7 @@ message DeleteProjectGrantRequest {
 message DeleteProjectGrantResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.cloud.projectgrant.ProjectGrantError error = 2;
+    golem.cloud.projectgrant.v1.ProjectGrantError error = 2;
   }
 }
 
@@ -51,18 +54,21 @@ message GetProjectGrantRequest {
 message GetProjectGrantResponse {
   oneof result {
     golem.cloud.projectgrant.ProjectGrant success = 1;
-    golem.cloud.projectgrant.ProjectGrantError error = 2;
+    golem.cloud.projectgrant.v1.ProjectGrantError error = 2;
   }
 }
 
 message CreateProjectGrantRequest {
   golem.common.ProjectId projectId = 1;
-  golem.cloud.projectgrant.ProjectGrantDataRequest data = 2;
+  golem.common.AccountId grantee_account_id = 2;
+  golem.cloud.projectpolicy.ProjectPolicyId project_policy_id = 3;
+  repeated golem.cloud.projectpolicy.ProjectAction project_actions = 4;
+  string project_policy_name = 5;
 }
 
 message CreateProjectGrantResponse {
   oneof result {
     golem.cloud.projectgrant.ProjectGrant success = 1;
-    golem.cloud.projectgrant.ProjectGrantError error = 2;
+    golem.cloud.projectgrant.v1.ProjectGrantError error = 2;
   }
 }

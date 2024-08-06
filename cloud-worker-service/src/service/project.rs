@@ -5,9 +5,9 @@ use crate::model::ProjectView;
 use crate::service::auth::authorised_request;
 use crate::UriBackConversion;
 use async_trait::async_trait;
-use cloud_api_grpc::proto::golem::cloud::project::cloud_project_service_client::CloudProjectServiceClient;
-use cloud_api_grpc::proto::golem::cloud::project::project_error::Error;
-use cloud_api_grpc::proto::golem::cloud::project::{
+use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
+use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
+use cloud_api_grpc::proto::golem::cloud::project::v1::{
     get_project_actions_response, get_project_response, GetProjectActionsRequest, GetProjectRequest,
 };
 use cloud_common::model::{ProjectActions, ProjectAuthorisedActions, TokenSecret};
@@ -158,14 +158,14 @@ impl ProjectService for ProjectServiceDefault {
 
 #[derive(Debug)]
 pub enum ProjectError {
-    Server(cloud_api_grpc::proto::golem::cloud::project::ProjectError),
+    Server(cloud_api_grpc::proto::golem::cloud::project::v1::ProjectError),
     Connection(Status),
     Transport(tonic::transport::Error),
     Unknown(String),
 }
 
-impl From<cloud_api_grpc::proto::golem::cloud::project::ProjectError> for ProjectError {
-    fn from(value: cloud_api_grpc::proto::golem::cloud::project::ProjectError) -> Self {
+impl From<cloud_api_grpc::proto::golem::cloud::project::v1::ProjectError> for ProjectError {
+    fn from(value: cloud_api_grpc::proto::golem::cloud::project::v1::ProjectError) -> Self {
         Self::Server(value)
     }
 }

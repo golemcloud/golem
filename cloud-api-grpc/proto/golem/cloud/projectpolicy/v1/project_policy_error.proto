@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package golem.cloud.projectgrant;
+package golem.cloud.projectpolicy.v1;
 
 import "golem/common/error_body.proto";
 
-message ProjectGrantError {
+message ProjectPolicyError {
   oneof error {
     golem.common.ErrorsBody bad_request = 1;
     golem.common.ErrorBody unauthorized = 2;

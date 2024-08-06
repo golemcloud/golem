@@ -96,7 +96,7 @@ pub struct ProjectApi {
     pub project_auth_service: Arc<dyn ProjectAuthorisationService + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/projects", tag = ApiTags::Project)]
+#[OpenApi(prefix_path = "/v1/projects", tag = ApiTags::Project)]
 impl ProjectApi {
     /// Get the default project
     ///
