@@ -74,7 +74,7 @@ async fn dynamic_worker_creation() {
 #[tokio::test]
 #[tracing::instrument]
 async fn counter_resource_test_2() {
-    let component_id = DEPS.store_component("counters").await;
+    let component_id = DEPS.store_unique_component("counters").await;
     let worker_id = DEPS.start_worker(&component_id, "counters-2").await;
     DEPS.log_output(&worker_id).await;
 
@@ -149,8 +149,8 @@ async fn counter_resource_test_2() {
 #[tokio::test]
 #[tracing::instrument]
 async fn counter_resource_test_2_json() {
-    let component_id = DEPS.store_component("counters").await;
-    let worker_id = DEPS.start_worker(&component_id, "counters-2").await;
+    let component_id = DEPS.store_unique_component("counters").await;
+    let worker_id = DEPS.start_worker(&component_id, "counters-2j").await;
     DEPS.log_output(&worker_id).await;
 
     let _ = DEPS
