@@ -22,7 +22,7 @@ mod json;
 
 /// Protobuf representation of analysis results
 #[cfg(feature = "protobuf")]
-mod protobuf;
+pub mod protobuf;
 
 /// Wave format support for types.
 ///
