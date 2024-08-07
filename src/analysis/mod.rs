@@ -20,6 +20,10 @@ pub use model::*;
 #[cfg(feature = "json")]
 mod json;
 
+/// Protobuf representation of analysis results
+#[cfg(feature = "protobuf")]
+mod protobuf;
+
 /// Wave format support for types.
 ///
 /// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
