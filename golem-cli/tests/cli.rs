@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct CliConfig {
-    short_args: bool,
+    pub short_args: bool,
 }
 
 impl CliConfig {
@@ -27,11 +27,11 @@ impl CliConfig {
 }
 
 pub trait Cli {
-    fn run<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Failed>;
-    fn run_string(&self, args: &[&str]) -> Result<String, Failed>;
-    fn run_json(&self, args: &[&str]) -> Result<Value, Failed>;
-    fn run_unit(&self, args: &[&str]) -> Result<(), Failed>;
-    fn run_stdout(&self, args: &[&str]) -> Result<Child, Failed>;
+    fn run<T: DeserializeOwned, S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<T, Failed>;
+    fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed>;
+    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed>;
+    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed>;
+    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed>;
 }
 
 #[derive(Debug, Clone)]
@@ -156,28 +156,31 @@ impl CliLive {
 }
 
 impl Cli for CliLive {
-    fn run<'a, T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Failed> {
+    fn run<'a, T: DeserializeOwned, S: AsRef<OsStr> + Debug>(
+        &self,
+        args: &[S],
+    ) -> Result<T, Failed> {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
     }
 
-    fn run_string(&self, args: &[&str]) -> Result<String, Failed> {
+    fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed> {
         self.run_inner(args)
     }
 
-    fn run_json(&self, args: &[&str]) -> Result<Value, Failed> {
+    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed> {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
     }
 
-    fn run_unit(&self, args: &[&str]) -> Result<(), Failed> {
+    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed> {
         let _ = self.run_inner(args)?;
         Ok(())
     }
 
-    fn run_stdout(&self, args: &[&str]) -> Result<Child, Failed> {
+    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed> {
         println!(
             "Executing Golem CLI command: {} {args:?}",
             self.golem_cli_path.to_str().unwrap_or("")

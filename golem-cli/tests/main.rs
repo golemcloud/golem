@@ -1,6 +1,8 @@
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use libtest_mimic::{Arguments, Conclusion, Failed};
+use strum_macros::EnumIter;
 use tracing::info;
 
 use golem_test_framework::config::{
@@ -11,9 +13,27 @@ mod api_definition;
 mod api_deployment;
 pub mod cli;
 mod component;
+mod get;
 mod profile;
 mod text;
 mod worker;
+
+#[derive(Debug, Copy, Clone, EnumIter)]
+pub enum RefKind {
+    Name,
+    Url,
+    Urn,
+}
+
+impl Display for RefKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefKind::Name => write!(f, "name"),
+            RefKind::Url => write!(f, "url"),
+            RefKind::Urn => write!(f, "urn"),
+        }
+    }
+}
 
 fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     let args = Arguments::from_args();
@@ -25,7 +45,8 @@ fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     tests.append(&mut text::all(deps.clone()));
     tests.append(&mut api_definition::all(deps.clone()));
     tests.append(&mut api_deployment::all(deps.clone()));
-    tests.append(&mut profile::all(deps));
+    tests.append(&mut profile::all(deps.clone()));
+    tests.append(&mut get::all(deps));
 
     libtest_mimic::run(&args, tests)
 }

@@ -1,7 +1,10 @@
-use crate::cli::{Cli, CliLive};
+use crate::cli::{Cli, CliConfig, CliLive};
+use crate::RefKind;
 use golem_cli::model::component::ComponentView;
-use golem_cli::model::{Format, IdempotencyKey};
-use golem_client::model::{UpdateRecord, WorkerId, WorkersMetadataResponse};
+use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
+use golem_client::model::UpdateRecord;
+use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
+use golem_common::uri::oss::urn::WorkerUrn;
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -10,14 +13,24 @@ use std::io::{BufRead, BufReader};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use strum::IntoEnumIterator;
 
 fn make(
-    suffix: &str,
-    name: &str,
     cli: CliLive,
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    ref_kind: RefKind,
 ) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
+    let cli_suffix = if cli.config.short_args {
+        "short"
+    } else {
+        "long"
+    };
+
+    let suffix = format!("_{ref_kind}_{cli_suffix}");
+
+    let name = format!("CLI_{cli_suffix}_{ref_kind}");
+
+    let ctx = (deps, name.to_string(), cli, ref_kind);
     vec![
         Trial::test_in_context(
             format!("worker_new_instance{suffix}"),
@@ -85,26 +98,24 @@ fn make(
 }
 
 pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
+    let clis = vec![
         CliLive::make("worker_short", deps.clone())
             .unwrap()
             .with_short_args(),
-        deps.clone(),
-    );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
         CliLive::make("worker_long", deps.clone())
             .unwrap()
             .with_long_args(),
-        deps.clone(),
-    );
+    ];
 
-    short_args.append(&mut long_args);
-    short_args
+    let mut tests = Vec::new();
+
+    for cli in clis {
+        for ref_kind in RefKind::iter() {
+            tests.append(&mut make(cli.clone(), deps.clone(), ref_kind));
+        }
+    }
+
+    tests
 }
 
 pub fn make_component_from_file(
@@ -115,6 +126,7 @@ pub fn make_component_from_file(
 ) -> Result<ComponentView, Failed> {
     let env_service = deps.component_directory().join(file);
     let cfg = &cli.config;
+
     cli.run(&[
         "component",
         "add",
@@ -132,68 +144,126 @@ pub fn make_component(
     make_component_from_file(deps, component_name, cli, "environment-service.wasm")
 }
 
+fn component_ref_key(cfg: &CliConfig, ref_kind: RefKind) -> String {
+    match ref_kind {
+        RefKind::Name => cfg.arg('c', "component-name"),
+        RefKind::Url | RefKind::Urn => cfg.arg('C', "component"),
+    }
+}
+
+fn component_ref_value(component: &ComponentView, ref_kind: RefKind) -> String {
+    match ref_kind {
+        RefKind::Name => component.component_name.to_string(),
+        RefKind::Url => ComponentUrl {
+            name: component.component_name.to_string(),
+        }
+        .to_string(),
+        RefKind::Urn => component.component_urn.to_string(),
+    }
+}
+
 fn worker_new_instance(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} worker new instance"), &cli)?.component_id;
+    let component = make_component(deps, &format!("{name} worker new instance"), &cli)?;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
-    let worker_id: WorkerId = cli.run(&[
+
+    let worker_urn: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
 
-    assert_eq!(worker_id.component_id.to_string(), component_id);
-    assert_eq!(worker_id.worker_name, worker_name);
+    assert_eq!(worker_urn.id.component_id, component.component_urn.id);
+    assert_eq!(worker_urn.id.worker_name, worker_name);
     Ok(())
 }
 
+fn worker_ref(
+    cfg: &CliConfig,
+    ref_kind: RefKind,
+    component: &ComponentView,
+    worker_name: &str,
+) -> Vec<String> {
+    let worker_name = worker_name.to_owned();
+
+    match ref_kind {
+        RefKind::Name => {
+            vec![
+                component_ref_key(cfg, ref_kind),
+                component_ref_value(component, ref_kind),
+                cfg.arg('w', "worker-name"),
+                worker_name,
+            ]
+        }
+        RefKind::Url => {
+            let url = WorkerUrl {
+                component_name: component.component_name.clone(),
+                worker_name,
+            };
+
+            vec![cfg.arg('W', "worker"), url.to_string()]
+        }
+        RefKind::Urn => {
+            let urn = WorkerUrn {
+                id: golem_common::model::WorkerId {
+                    component_id: component.component_urn.id.clone(),
+                    worker_name,
+                },
+            };
+
+            vec![cfg.arg('W', "worker"), urn.to_string()]
+        }
+    }
+}
+
 fn worker_invoke_and_await(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?.component_id;
+    let component = make_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
     let args_key: IdempotencyKey = IdempotencyKey::fresh();
-    let args = cli.run_json(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{get-arguments}",
-        &cfg.arg('j', "parameters"),
-        "[]",
-        &cfg.arg('k', "idempotency-key"),
-        &args_key.0,
-    ])?;
+
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke-and-await".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{get-arguments}".to_owned(),
+        cfg.arg('j', "parameters"),
+        "[]".to_owned(),
+        cfg.arg('k', "idempotency-key"),
+        args_key.0,
+    ];
+
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+
+    let args = cli.run_json(&cli_args)?;
 
     let expected_args = json!([{"ok": ["test-arg"]}]);
 
@@ -201,18 +271,16 @@ fn worker_invoke_and_await(
 
     let env_key: IdempotencyKey = IdempotencyKey::fresh();
 
-    let env = cli.run_json(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{get-environment}",
-        &cfg.arg('k', "idempotency-key"),
-        &env_key.0,
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke-and-await".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{get-environment}".to_owned(),
+        cfg.arg('k', "idempotency-key"),
+        env_key.0,
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let env = cli.run_json(&cli_args)?;
 
     let path = serde_json_path::JsonPath::parse("$[0].ok")?;
 
@@ -229,61 +297,58 @@ fn worker_invoke_and_await(
 }
 
 fn worker_invoke_and_await_wave_params(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component_from_file(
+    let component = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_and_await_wave_params"),
         &cli,
         "key-value-service.wasm",
-    )?
-    .component_id;
+    )?;
     let worker_name = format!("{name}_worker_invoke_and_await_wave_params");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
-    let res_set = cli.with_format(Format::Text).run_string(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{set}",
-        &cfg.arg('a', "arg"),
-        r#""bucket name""#,
-        &cfg.arg('a', "arg"),
-        r#""key name""#,
-        &cfg.arg('a', "arg"),
-        r#"[1, 2, 3]"#,
-    ])?;
+
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke-and-await".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{set}".to_owned(),
+        cfg.arg('a', "arg"),
+        r#""bucket name""#.to_owned(),
+        cfg.arg('a', "arg"),
+        r#""key name""#.to_owned(),
+        cfg.arg('a', "arg"),
+        r#"[1, 2, 3]"#.to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let res_set = cli.with_format(Format::Text).run_string(&cli_args)?;
     assert_eq!(res_set, "Empty result.\n");
 
-    let res_get = cli.with_format(Format::Text).run_string(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{get}",
-        &cfg.arg('a', "arg"),
-        r#""bucket name""#,
-        &cfg.arg('a', "arg"),
-        r#""key name""#,
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke-and-await".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{get}".to_owned(),
+        cfg.arg('a', "arg"),
+        r#""bucket name""#.to_owned(),
+        cfg.arg('a', "arg"),
+        r#""key name""#.to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let res_get = cli.with_format(Format::Text).run_string(&cli_args)?;
     assert_eq!(
         res_get,
         formatdoc!(
@@ -299,49 +364,48 @@ fn worker_invoke_and_await_wave_params(
 }
 
 fn worker_invoke_drop(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component_from_file(
+    let component = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_drop"),
         &cli,
         "counters.wasm",
-    )?
-    .component_id;
+    )?;
 
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let hello: WorkerId = cli.run(&[
+    let hello: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
     dbg!(hello.clone());
     let args_key: IdempotencyKey = IdempotencyKey::fresh();
-    let result = cli.run_json(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "rpc:counters/api.{[constructor]counter}",
-        &cfg.arg('j', "parameters"),
-        "[{\"type\" : \"Str\", \"value\" : \"counter1\"}]",
-        &cfg.arg('k', "idempotency-key"),
-        &args_key.0,
-    ])?;
+
+    let mut cli_args = vec![
+        "worker".to_string(),
+        "invoke-and-await".to_string(),
+        cfg.arg('f', "function"),
+        "rpc:counters/api.{[constructor]counter}".to_string(),
+        cfg.arg('j', "parameters"),
+        "[{\"type\" : \"Str\", \"value\" : \"counter1\"}]".to_string(),
+        cfg.arg('k', "idempotency-key"),
+        args_key.0.clone(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result = cli.run_json(&cli_args)?;
 
     let (uri, resource_id) = match result {
         serde_json::Value::Array(vec) => match vec[0].clone() {
@@ -360,20 +424,18 @@ fn worker_invoke_drop(
 
     let args_key1: IdempotencyKey = IdempotencyKey::fresh();
 
-    cli.run_json(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "rpc:counters/api.{[drop]counter}",
-        &cfg.arg('j', "parameters"),
-        handle_json.to_string().as_str(),
-        &cfg.arg('k', "idempotency-key"),
-        &args_key1.0,
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_string(),
+        "invoke-and-await".to_string(),
+        cfg.arg('f', "function"),
+        "rpc:counters/api.{[drop]counter}".to_string(),
+        cfg.arg('j', "parameters"),
+        handle_json.to_string(),
+        cfg.arg('k', "idempotency-key"),
+        args_key1.0.to_string(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_json(&cli_args)?;
 
     Ok(())
 }
@@ -395,122 +457,118 @@ fn get_handle_from_str(handle_str: &str) -> Option<(String, u64)> {
 }
 
 fn worker_invoke_no_params(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?.component_id;
+    let component = make_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_no_params");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
-    cli.run_unit(&[
-        "worker",
-        "invoke",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{get-arguments}",
-    ])?;
+
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{get-arguments}".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
 
     Ok(())
 }
 
 fn worker_invoke_json_params(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} worker_invoke_json_params"), &cli)?.component_id;
+    let component = make_component(deps, &format!("{name} worker_invoke_json_params"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_json_params");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
-    cli.run_unit(&[
-        "worker",
-        "invoke",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{get-arguments}",
-        &cfg.arg('j', "parameters"),
-        "[]",
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{get-arguments}".to_owned(),
+        cfg.arg('j', "parameters"),
+        "[]".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
 
     Ok(())
 }
 
 fn worker_invoke_wave_params(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component_from_file(
+    let component = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_wave_params"),
         &cli,
         "key-value-service.wasm",
-    )?
-    .component_id;
+    )?;
     let worker_name = format!("{name}_worker_invoke_wave_params");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
-    cli.run_unit(&[
-        "worker",
-        "invoke",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "golem:it/api.{set}",
-        &cfg.arg('a', "arg"),
-        r#""bucket name""#,
-        &cfg.arg('a', "arg"),
-        r#""key name""#,
-        &cfg.arg('a', "arg"),
-        r#"[1, 2, 3]"#,
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke".to_owned(),
+        cfg.arg('f', "function"),
+        "golem:it/api.{set}".to_owned(),
+        cfg.arg('a', "arg"),
+        r#""bucket name""#.to_owned(),
+        cfg.arg('a', "arg"),
+        r#""key name""#.to_owned(),
+        cfg.arg('a', "arg"),
+        r#"[1, 2, 3]"#.to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
 
     Ok(())
 }
 
 fn worker_connect(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
@@ -523,25 +581,19 @@ fn worker_connect(
         &format!("{name} worker_connect"),
         stdout_service.to_str().unwrap(),
     ])?;
-    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_connect");
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
 
-    let mut child = cli.run_stdout(&[
-        "worker",
-        "connect",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
+    let mut cli_args = vec!["worker".to_owned(), "connect".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let mut child = cli.run_stdout(&cli_args)?;
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -557,18 +609,16 @@ fn worker_connect(
         }
     });
 
-    let _ = cli.run_json(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        "run",
-        &cfg.arg('j', "parameters"),
-        "[]",
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke-and-await".to_owned(),
+        cfg.arg('f', "function"),
+        "run".to_owned(),
+        cfg.arg('j', "parameters"),
+        "[]".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let _ = cli.run_json(&cli_args)?;
 
     let line = rx.recv_timeout(Duration::from_secs(5))?;
 
@@ -580,10 +630,11 @@ fn worker_connect(
 }
 
 fn worker_connect_failed(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
@@ -596,17 +647,11 @@ fn worker_connect_failed(
         &format!("{name} worker_connect_failed"),
         stdout_service.to_str().unwrap(),
     ])?;
-    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_connect_failed");
 
-    let mut child = cli.run_stdout(&[
-        "worker",
-        "connect",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-    ])?;
+    let mut cli_args = vec!["worker".to_owned(), "connect".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let mut child = cli.run_stdout(&cli_args)?;
 
     let exit = child.wait().unwrap();
 
@@ -616,10 +661,11 @@ fn worker_connect_failed(
 }
 
 fn worker_interrupt(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
@@ -632,33 +678,28 @@ fn worker_interrupt(
         &format!("{name} worker_interrupt"),
         interruption_service.to_str().unwrap(),
     ])?;
-    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_interrupt");
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
-    cli.run_unit(&[
-        "worker",
-        "interrupt",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-    ])?;
+    let mut cli_args = vec!["worker".to_owned(), "interrupt".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
 
     Ok(())
 }
 
 fn worker_simulated_crash(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
@@ -671,63 +712,58 @@ fn worker_simulated_crash(
         &format!("{name} worker_simulated_crash"),
         interruption_service.to_str().unwrap(),
     ])?;
-    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_simulated_crash");
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
-    cli.run_unit(&[
-        "worker",
-        "simulated-crash",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-    ])?;
+    let mut cli_args = vec!["worker".to_owned(), "simulated-crash".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
 
     Ok(())
 }
 
 fn worker_list(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component(deps, &format!("{name} worker_list"), &cli)?.component_id;
+    let component = make_component(deps, &format!("{name} worker_list"), &cli)?;
     let cfg = &cli.config;
 
     let workers_count = 10;
-    let mut worker_ids = vec![];
+    let mut worker_urns = vec![];
 
     for i in 0..workers_count {
         let worker_name = format!("{name}_worker-{i}");
-        let worker_id: WorkerId = cli.run(&[
+        let worker_urn: WorkerUrn = cli.run(&[
             "worker",
             "add",
             &cfg.arg('w', "worker-name"),
             &worker_name,
-            &cfg.arg('C', "component-id"),
-            &component_id,
+            &component_ref_key(cfg, ref_kind),
+            &component_ref_value(&component, ref_kind),
         ])?;
 
-        worker_ids.push(worker_id);
+        worker_urns.push(worker_urn);
     }
 
-    for worker_id in worker_ids {
-        let result: WorkersMetadataResponse = cli.run(&[
+    for worker_urn in worker_urns {
+        let result: WorkersMetadataResponseView = cli.run(&[
             "worker",
             "list",
-            &cfg.arg('C', "component-id"),
-            &component_id,
+            &component_ref_key(cfg, ref_kind),
+            &component_ref_value(&component, ref_kind),
             &cfg.arg('f', "filter"),
-            format!("name = {}", worker_id.worker_name).as_str(),
+            format!("name = {}", worker_urn.id.worker_name).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
             "--precise",
@@ -738,11 +774,11 @@ fn worker_list(
         assert!(result.cursor.is_none());
     }
 
-    let result: WorkersMetadataResponse = cli.run(&[
+    let result: WorkersMetadataResponseView = cli.run(&[
         "worker",
         "list",
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
         &cfg.arg('f', "filter"),
         "version >= 0",
         &cfg.arg('f', "filter"),
@@ -759,11 +795,11 @@ fn worker_list(
         result.cursor.as_ref().unwrap().layer,
         result.cursor.as_ref().unwrap().cursor
     );
-    let result2: WorkersMetadataResponse = cli.run(&[
+    let result2: WorkersMetadataResponseView = cli.run(&[
         "worker",
         "list",
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
         &cfg.arg('f', "filter"),
         "version >= 0",
         &cfg.arg('f', "filter"),
@@ -778,11 +814,11 @@ fn worker_list(
 
     if let Some(cursor2) = result2.cursor {
         let cursor2 = format!("{}/{}", cursor2.layer, cursor2.cursor);
-        let result3: WorkersMetadataResponse = cli.run(&[
+        let result3: WorkersMetadataResponseView = cli.run(&[
             "worker",
             "list",
-            &cfg.arg('C', "component-id"),
-            &component_id,
+            &component_ref_key(cfg, ref_kind),
+            &component_ref_value(&component, ref_kind),
             &cfg.arg('f', "filter"),
             "version >= 0",
             &cfg.arg('f', "filter"),
@@ -799,10 +835,11 @@ fn worker_list(
 }
 
 fn worker_update(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
     let cfg = &cli.config;
@@ -814,15 +851,14 @@ fn worker_update(
         &format!("{name} worker_update"),
         component_v1.to_str().unwrap(),
     ])?;
-    let component_id = component.component_id;
     let worker_name = format!("{name}_worker_update");
 
-    let workers_list = || -> Result<WorkersMetadataResponse, Failed> {
+    let workers_list = || -> Result<WorkersMetadataResponseView, Failed> {
         cli.run(&[
             "worker",
             "list",
-            &cfg.arg('C', "component-id"),
-            &component_id,
+            &component_ref_key(cfg, ref_kind),
+            &component_ref_value(&component, ref_kind),
             &cfg.arg('f', "filter"),
             format!("name like {}_worker", name).as_str(),
             "--precise",
@@ -830,37 +866,34 @@ fn worker_update(
         ])
     };
 
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
     ])?;
     let original_updates = workers_list()?.workers[0].updates.len();
     let component_v2 = deps.component_directory().join("update-test-v2.wasm");
     let component: ComponentView = cli.run(&[
         "component",
         "update",
-        &cfg.arg('c', "component-name"),
-        &format!("{name} worker_update"),
+        &component_ref_key(cfg, ref_kind),
+        &component_ref_value(&component, ref_kind),
         component_v2.to_str().unwrap(),
     ])?;
-    let component_id = component.component_id;
 
-    cli.run_unit(&[
-        "worker",
-        "update",
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('m', "mode"),
-        "auto",
-        &cfg.arg('t', "target-version"),
-        "1",
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "update".to_owned(),
+        cfg.arg('m', "mode"),
+        "auto".to_owned(),
+        cfg.arg('t', "target-version"),
+        "1".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
     let worker_updates_after_update = workers_list()?.workers[0].updates[0].clone();
     let target_version = match worker_updates_after_update {
         UpdateRecord::PendingUpdate(pu) => pu.target_version,
@@ -874,68 +907,63 @@ fn worker_update(
 }
 
 fn worker_invoke_indexed_resource(
-    (deps, name, cli): (
+    (deps, name, cli, ref_kind): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
         String,
         CliLive,
+        RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component_from_file(
+    let component = make_component_from_file(
         deps,
         &format!("{name}_worker_invoke_indexed_resource"),
         &cli,
         "counters.wasm",
-    )?
-    .component_id;
+    )?;
     let worker_name = format!("{name}_worker_invoke_indexed_resource");
     let cfg = &cli.config;
 
-    cli.run_unit(&[
-        "worker",
-        "invoke",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter1").inc-by}"#,
-        &cfg.arg('a', "arg"),
-        "1",
-    ])?;
-    cli.run_unit(&[
-        "worker",
-        "invoke",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter1").inc-by}"#,
-        &cfg.arg('a', "arg"),
-        "2",
-    ])?;
-    cli.run_unit(&[
-        "worker",
-        "invoke",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter2").inc-by}"#,
-        &cfg.arg('a', "arg"),
-        "5",
-    ])?;
-    let result = cli.run_json(&[
-        "worker",
-        "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
-        &cfg.arg('w', "worker-name"),
-        &worker_name,
-        &cfg.arg('f', "function"),
-        r#"rpc:counters/api.{counter("counter1").get-value}"#,
-    ])?;
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke".to_owned(),
+        cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter1").inc-by}"#.to_owned(),
+        cfg.arg('a', "arg"),
+        "1".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
+
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke".to_owned(),
+        cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter1").inc-by}"#.to_owned(),
+        cfg.arg('a', "arg"),
+        "2".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
+
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke".to_owned(),
+        cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter2").inc-by}"#.to_owned(),
+        cfg.arg('a', "arg"),
+        "5".to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    cli.run_unit(&cli_args)?;
+
+    let mut cli_args = vec![
+        "worker".to_owned(),
+        "invoke-and-await".to_owned(),
+        cfg.arg('f', "function"),
+        r#"rpc:counters/api.{counter("counter1").get-value}"#.to_owned(),
+    ];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result = cli.run_json(&cli_args)?;
 
     assert_eq!(result, json!([3]));
 

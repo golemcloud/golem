@@ -18,8 +18,8 @@ use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
 use crate::model::{
-    ComponentId, ComponentIdOrName, Format, GolemError, GolemResult, IdempotencyKey,
-    WorkerMetadata, WorkerName, WorkerUpdateMode, WorkersMetadataResponse,
+    Format, GolemError, GolemResult, IdempotencyKey, WorkerMetadata, WorkerMetadataView,
+    WorkerName, WorkerUpdateMode, WorkersMetadataResponseView,
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
@@ -28,8 +28,13 @@ use golem_client::model::{
     WorkerNameFilter,
 };
 use golem_common::model::precise_json::PreciseJson;
+use golem_common::model::{ComponentId, WorkerId};
+use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
+use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
+use itertools::Itertools;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -41,7 +46,7 @@ pub trait WorkerService {
 
     async fn add(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         worker_name: WorkerName,
         env: Vec<(String, String)>,
         args: Vec<String>,
@@ -51,11 +56,17 @@ pub trait WorkerService {
         let key = IdempotencyKey(Uuid::new_v4().to_string());
         Ok(GolemResult::Ok(Box::new(key)))
     }
+
+    async fn resolve_uri(
+        &self,
+        worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<WorkerUrn, GolemError>;
+
     async fn invoke_and_await(
         &self,
         format: Format,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         parameters: Option<Value>,
@@ -64,8 +75,7 @@ pub trait WorkerService {
     ) -> Result<GolemResult, GolemError>;
     async fn invoke(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         parameters: Option<Value>,
@@ -74,37 +84,32 @@ pub trait WorkerService {
     ) -> Result<GolemResult, GolemError>;
     async fn connect(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn interrupt(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn simulated_crash(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn delete(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn get(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn list(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         filter: Option<Vec<String>>,
         count: Option<u64>,
         cursor: Option<ScanCursor>,
@@ -113,8 +118,7 @@ pub trait WorkerService {
     ) -> Result<GolemResult, GolemError>;
     async fn update(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         target_version: u64,
         mode: WorkerUpdateMode,
         project: Option<Self::ProjectContext>,
@@ -142,14 +146,12 @@ pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
 async fn resolve_worker_component_version_no_ref<ProjectContext: Send + Sync>(
     worker_client: Box<dyn WorkerClient + Send + Sync>,
     component_service: Box<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
-    component_id: ComponentId,
-    worker_name: WorkerName,
+    worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
     resolve_worker_component_version(
         worker_client.as_ref(),
         component_service.as_ref(),
-        &component_id,
-        worker_name,
+        worker_urn,
     )
     .await
 }
@@ -157,15 +159,20 @@ async fn resolve_worker_component_version_no_ref<ProjectContext: Send + Sync>(
 async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     client: &(dyn WorkerClient + Send + Sync),
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
-    component_id: &ComponentId,
-    worker_name: WorkerName,
+    worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
+    let WorkerId {
+        component_id,
+        worker_name,
+    } = worker_urn.id;
+    let component_urn = ComponentUrn { id: component_id };
+
     let worker_meta = client
         .find_metadata(
-            component_id.clone(),
+            component_urn.clone(),
             Some(WorkerFilter::Name(WorkerNameFilter {
                 comparator: StringFilterComparator::Equal,
-                value: worker_name.0,
+                value: worker_name,
             })),
             None,
             Some(2),
@@ -180,7 +187,7 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     } else if let Some(worker) = worker_meta.workers.first() {
         Ok(Some(
             components
-                .get_metadata(component_id, worker.component_version)
+                .get_metadata(&component_urn, worker.component_version)
                 .await?,
         ))
     } else {
@@ -230,8 +237,7 @@ fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemEr
 async fn resolve_parameters<ProjectContext: Send + Sync>(
     client: &(dyn WorkerClient + Send + Sync),
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
-    component_id: &ComponentId,
-    worker_name: &WorkerName,
+    worker_urn: &WorkerUrn,
     parameters: Option<Value>,
     wave: Vec<String>,
     function: &str,
@@ -243,15 +249,18 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
 
         Ok((parameters.clone(), None))
     } else if let Some(component) =
-        resolve_worker_component_version(client, components, component_id, worker_name.clone())
-            .await?
+        resolve_worker_component_version(client, components, worker_urn.clone()).await?
     {
         let precise_json_array = wave_parameters_to_json(&wave, &component, function)?;
 
         Ok((precise_json_array, Some(component)))
     } else {
-        info!("No worker found with name {worker_name}. Assuming it should be create with the latest component version");
-        let component = components.get_latest_metadata(component_id).await?;
+        info!("No worker found with name {}. Assuming it should be create with the latest component version", worker_urn.id.worker_name);
+        let component_urn = ComponentUrn {
+            id: worker_urn.id.component_id.clone(),
+        };
+
+        let component = components.get_latest_metadata(&component_urn).await?;
 
         let json_array = wave_parameters_to_json(&wave, &component, function)?;
 
@@ -265,8 +274,7 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
     async_component_request: AsyncComponentRequest,
     client: &(dyn WorkerClient + Send + Sync),
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
-    component_id: &ComponentId,
-    worker_name: &WorkerName,
+    worker_urn: &WorkerUrn,
     function: &str,
 ) -> Result<InvokeResultView, GolemError> {
     let component = match async_component_request {
@@ -280,14 +288,7 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
 
     let component = match component {
         None => {
-            match resolve_worker_component_version(
-                client,
-                components,
-                component_id,
-                worker_name.clone(),
-            )
-            .await
-            {
+            match resolve_worker_component_version(client, components, worker_urn.clone()).await {
                 Ok(Some(component)) => component,
                 _ => {
                     error!("Failed to get worker metadata after successful call.");
@@ -316,30 +317,57 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
     async fn add(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         worker_name: WorkerName,
         env: Vec<(String, String)>,
         args: Vec<String>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let component_urn = self.components.resolve_uri(component_uri, project).await?;
 
         let inst = self
             .client
-            .new_worker(worker_name, component_id, args, env)
+            .new_worker(worker_name, component_urn, args, env)
             .await?;
 
-        Ok(GolemResult::Ok(Box::new(WorkerAddView(inst))))
+        Ok(GolemResult::Ok(Box::new(WorkerAddView(WorkerUrn {
+            id: WorkerId {
+                component_id: ComponentId(inst.component_id),
+                worker_name: inst.worker_name,
+            },
+        }))))
+    }
+
+    async fn resolve_uri(
+        &self,
+        worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<WorkerUrn, GolemError> {
+        match worker_uri {
+            WorkerUri::URN(urn) => Ok(urn),
+            WorkerUri::URL(WorkerUrl {
+                component_name,
+                worker_name,
+            }) => {
+                let component_uri = ComponentUri::URL(ComponentUrl {
+                    name: component_name,
+                });
+                let component_urn = self.components.resolve_uri(component_uri, project).await?;
+
+                Ok(WorkerUrn {
+                    id: WorkerId {
+                        component_id: component_urn.id,
+                        worker_name,
+                    },
+                })
+            }
+        }
     }
 
     async fn invoke_and_await(
         &self,
         format: Format,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         parameters: Option<Value>,
@@ -347,16 +375,12 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let human_readable = format == Format::Text;
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
         let (parameters, component_meta) = resolve_parameters(
             self.client.as_ref(),
             self.components.as_ref(),
-            &component_id,
-            &worker_name,
+            &worker_urn,
             parameters,
             wave,
             &function,
@@ -371,8 +395,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             AsyncComponentRequest::Async(tokio::spawn(resolve_worker_component_version_no_ref(
                 worker_client,
                 component_service,
-                component_id.clone(),
-                worker_name.clone(),
+                worker_urn.clone(),
             )))
         } else {
             AsyncComponentRequest::Empty
@@ -381,8 +404,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let res = self
             .client
             .invoke_and_await(
-                worker_name.clone(),
-                component_id.clone(),
+                worker_urn.clone(),
                 function.clone(),
                 InvokeParameters { params: parameters },
                 idempotency_key,
@@ -395,8 +417,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 async_component_request,
                 self.client.as_ref(),
                 self.components.as_ref(),
-                &component_id,
-                &worker_name,
+                &worker_urn,
                 &function,
             )
             .await?;
@@ -409,24 +430,19 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
     async fn invoke(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         parameters: Option<Value>,
         wave: Vec<String>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
         let (parameters, _) = resolve_parameters(
             self.client.as_ref(),
             self.components.as_ref(),
-            &component_id,
-            &worker_name,
+            &worker_urn,
             parameters,
             wave,
             &function,
@@ -435,8 +451,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
         self.client
             .invoke(
-                worker_name,
-                component_id,
+                worker_urn,
                 function,
                 InvokeParameters { params: parameters },
                 idempotency_key,
@@ -448,105 +463,81 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
     async fn connect(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        self.client.connect(worker_name, component_id).await?;
+        self.client.connect(worker_urn).await?;
 
         Err(GolemError("Unexpected connection closure".to_string()))
     }
 
     async fn interrupt(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        self.client.interrupt(worker_name, component_id).await?;
+        self.client.interrupt(worker_urn).await?;
 
         Ok(GolemResult::Str("Interrupted".to_string()))
     }
 
     async fn simulated_crash(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        self.client
-            .simulated_crash(worker_name, component_id)
-            .await?;
+        self.client.simulated_crash(worker_urn).await?;
 
         Ok(GolemResult::Str("Done".to_string()))
     }
 
     async fn delete(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        self.client.delete(worker_name, component_id).await?;
+        self.client.delete(worker_urn).await?;
 
         Ok(GolemResult::Str("Deleted".to_string()))
     }
 
     async fn get(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        let response = self.client.get_metadata(worker_name, component_id).await?;
+        let response: WorkerMetadataView = self.client.get_metadata(worker_urn).await?.into();
 
         Ok(GolemResult::Ok(Box::new(response)))
     }
 
     async fn list(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         filter: Option<Vec<String>>,
         count: Option<u64>,
         cursor: Option<ScanCursor>,
         precise: Option<bool>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
+        let component_urn = self.components.resolve_uri(component_uri, project).await?;
 
         if count.is_some() {
-            let response = self
+            let response: WorkersMetadataResponseView = self
                 .client
-                .list_metadata(component_id, filter, cursor, count, precise)
-                .await?;
+                .list_metadata(component_urn, filter, cursor, count, precise)
+                .await?
+                .into();
 
             Ok(GolemResult::Ok(Box::new(response)))
         } else {
@@ -557,7 +548,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 let response = self
                     .client
                     .list_metadata(
-                        component_id.clone(),
+                        component_urn.clone(),
                         filter.clone(),
                         new_cursor,
                         Some(50),
@@ -574,8 +565,8 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 }
             }
 
-            Ok(GolemResult::Ok(Box::new(WorkersMetadataResponse {
-                workers,
+            Ok(GolemResult::Ok(Box::new(WorkersMetadataResponseView {
+                workers: workers.into_iter().map_into().collect(),
                 cursor: None,
             })))
         }
@@ -583,20 +574,13 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
     async fn update(
         &self,
-        component_id_or_name: ComponentIdOrName,
-        worker_name: WorkerName,
+        worker_uri: WorkerUri,
         target_version: u64,
         mode: WorkerUpdateMode,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self
-            .components
-            .resolve_id(component_id_or_name, project)
-            .await?;
-        let _ = self
-            .client
-            .update(worker_name, component_id, mode, target_version)
-            .await?;
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        let _ = self.client.update(worker_urn, mode, target_version).await?;
 
         Ok(GolemResult::Str("Updated".to_string()))
     }

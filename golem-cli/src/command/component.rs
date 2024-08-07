@@ -40,9 +40,9 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
     /// Updates an existing component by uploading a new version of its WASM
     #[command()]
     Update {
-        /// The component name or identifier to update
+        /// The component to update
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
+        component_name_or_uri: ComponentRef,
 
         /// The WASM file to be used as a new version of the Golem component
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
@@ -63,9 +63,9 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
     /// Get component
     #[command()]
     Get {
-        /// The Golem component id or name
+        /// The Golem component
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
+        component_name_or_uri: ComponentRef,
 
         /// The version of the component
         #[arg(short = 't', long)]
@@ -95,13 +95,13 @@ impl<
                     .await
             }
             ComponentSubCommand::Update {
-                component_id_or_name,
+                component_name_or_uri,
                 component_file,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .update(component_id_or_name, component_file, project_id)
+                    .update(component_name_or_uri, component_file, project_id)
                     .await
             }
             ComponentSubCommand::List {
@@ -112,12 +112,14 @@ impl<
                 service.list(component_name, Some(project_id)).await
             }
             ComponentSubCommand::Get {
-                component_id_or_name,
+                component_name_or_uri,
                 version,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service.get(component_id_or_name, version, project_id).await
+                service
+                    .get(component_name_or_uri, version, project_id)
+                    .await
             }
         }
     }

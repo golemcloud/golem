@@ -14,25 +14,184 @@
 
 use crate::command::ComponentRefSplit;
 use clap::builder::ValueParser;
-use clap::Subcommand;
+use clap::{ArgMatches, Error, FromArgMatches, Subcommand};
 use golem_client::model::ScanCursor;
+use golem_common::model::WorkerId;
+use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
+use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 
 use crate::model::{
     Format, GolemError, GolemResult, IdempotencyKey, JsonValueParser, WorkerName, WorkerUpdateMode,
 };
+use crate::oss::model::OssContext;
 use crate::parse_key_val;
 use crate::service::project::ProjectResolver;
 use crate::service::worker::WorkerService;
 
+#[derive(clap::Args, Debug, Clone)]
+pub struct OssWorkerNameOrUriArg {
+    /// Worker URI. Either URN or URL.
+    #[arg(short = 'W', long, conflicts_with_all(["worker_name", "component", "component_name"]), required = true, value_name = "URI")]
+    worker: Option<WorkerUri>,
+
+    /// Component URI. Either URN or URL.
+    #[arg(short = 'C', long, conflicts_with_all(["component_name", "worker"]), required = true, value_name = "URI")]
+    component: Option<ComponentUri>,
+
+    #[arg(short, long, conflicts_with_all(["component", "worker"]), required = true)]
+    component_name: Option<String>,
+
+    /// Name of the worker
+    #[arg(short, long, conflicts_with = "worker", required = true)]
+    worker_name: Option<WorkerName>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OssWorkerUriArg {
+    pub uri: WorkerUri,
+    pub worker_name: bool,
+    pub component_name: bool,
+}
+
+impl FromArgMatches for OssWorkerUriArg {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        OssWorkerNameOrUriArg::from_arg_matches(matches).map(|c| (&c).into())
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        let prc0: OssWorkerNameOrUriArg = (&self.clone()).into();
+        let mut prc = prc0.clone();
+        let res = OssWorkerNameOrUriArg::update_from_arg_matches(&mut prc, matches);
+        *self = (&prc).into();
+        res
+    }
+}
+
+impl clap::Args for OssWorkerUriArg {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        OssWorkerNameOrUriArg::augment_args(cmd)
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        OssWorkerNameOrUriArg::augment_args_for_update(cmd)
+    }
+}
+
+impl From<&OssWorkerNameOrUriArg> for OssWorkerUriArg {
+    fn from(value: &OssWorkerNameOrUriArg) -> Self {
+        match &value.worker {
+            Some(uri) => OssWorkerUriArg {
+                uri: uri.clone(),
+                worker_name: false,
+                component_name: false,
+            },
+            None => {
+                let worker_name = value.worker_name.clone().unwrap().0;
+
+                match &value.component {
+                    Some(ComponentUri::URN(component_urn)) => {
+                        let uri = WorkerUri::URN(WorkerUrn {
+                            id: WorkerId {
+                                component_id: component_urn.id.clone(),
+                                worker_name,
+                            },
+                        });
+                        OssWorkerUriArg {
+                            uri,
+                            worker_name: true,
+                            component_name: false,
+                        }
+                    }
+                    Some(ComponentUri::URL(component_url)) => {
+                        let uri = WorkerUri::URL(WorkerUrl {
+                            component_name: component_url.name.to_string(),
+                            worker_name,
+                        });
+
+                        OssWorkerUriArg {
+                            uri,
+                            worker_name: true,
+                            component_name: false,
+                        }
+                    }
+                    None => {
+                        let component_name = value.component_name.clone().unwrap();
+                        let uri = WorkerUri::URL(WorkerUrl {
+                            component_name,
+                            worker_name,
+                        });
+
+                        OssWorkerUriArg {
+                            uri,
+                            worker_name: true,
+                            component_name: true,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
+    fn from(value: &OssWorkerUriArg) -> Self {
+        if !value.worker_name {
+            OssWorkerNameOrUriArg {
+                worker: Some(value.uri.clone()),
+                component: None,
+                component_name: None,
+                worker_name: None,
+            }
+        } else {
+            match &value.uri {
+                WorkerUri::URN(urn) => {
+                    let component_uri = ComponentUri::URN(ComponentUrn {
+                        id: urn.id.component_id.clone(),
+                    });
+
+                    OssWorkerNameOrUriArg {
+                        worker: None,
+                        component: Some(component_uri),
+                        component_name: None,
+                        worker_name: Some(WorkerName(urn.id.worker_name.to_string())),
+                    }
+                }
+                WorkerUri::URL(url) => {
+                    if value.component_name {
+                        OssWorkerNameOrUriArg {
+                            worker: None,
+                            component: None,
+                            component_name: Some(url.component_name.to_string()),
+                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                        }
+                    } else {
+                        let component_uri = ComponentUri::URL(ComponentUrl {
+                            name: url.component_name.to_string(),
+                        });
+
+                        OssWorkerNameOrUriArg {
+                            worker: None,
+                            component: Some(component_uri),
+                            component_name: None,
+                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum WorkerSubcommand<ComponentRef: clap::Args> {
+pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     /// Creates a new idle worker
     #[command()]
     Add {
-        /// The Golem component to use for the worker, identified by either its name or its component ID
+        /// The Golem component to use for the worker
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
+        component_name_or_uri: ComponentRef,
 
         /// Name of the newly created worker
         #[arg(short, long)]
@@ -54,13 +213,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     /// Invokes a worker and waits for its completion
     #[command()]
     InvokeAndAwait {
-        /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
 
         /// A pre-generated idempotency key
         #[arg(short = 'k', long)]
@@ -89,13 +243,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     /// Triggers a function invocation on a worker without waiting for its completion
     #[command()]
     Invoke {
-        /// The Golem component the worker to be invoked belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
 
         /// A pre-generated idempotency key
         #[arg(short = 'k', long)]
@@ -124,25 +273,15 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     /// Connect to a worker and live stream its standard output, error and log channels
     #[command()]
     Connect {
-        /// The Golem component the worker to be connected to belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
     },
 
     /// Interrupts a running worker
     #[command()]
     Interrupt {
-        /// The Golem component the worker to be interrupted belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
     },
 
     /// Simulates a crash on a worker for testing purposes.
@@ -150,44 +289,29 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     /// The worker starts recovering and resuming immediately.
     #[command()]
     SimulatedCrash {
-        /// The Golem component the worker to be crashed belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
     },
 
     /// Deletes a worker
     #[command()]
     Delete {
-        /// The Golem component the worker to be deleted belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
     },
 
     /// Retrieves metadata about an existing worker
     #[command()]
     Get {
-        /// The Golem component the worker to be retrieved belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
     },
     /// Retrieves metadata about an existing workers in a component
     #[command()]
     List {
         /// The Golem component the workers to be retrieved belongs to
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
+        component_name_or_uri: ComponentRef,
 
         /// Filter for worker metadata in form of `property op value`.
         ///
@@ -214,13 +338,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     /// Updates a worker
     #[command()]
     Update {
-        /// The Golem component of the worker, identified by either its name or its component ID
         #[command(flatten)]
-        component_id_or_name: ComponentRef,
-
-        /// Name of the worker to update
-        #[arg(short, long)]
-        worker_name: WorkerName,
+        worker_ref: WorkerRef,
 
         /// Update mode - auto or manual
         #[arg(short, long)]
@@ -232,7 +351,17 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
     },
 }
 
-impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
+pub trait WorkerRefSplit<ProjectRef> {
+    fn split(self) -> (WorkerUri, Option<ProjectRef>);
+}
+
+impl WorkerRefSplit<OssContext> for OssWorkerUriArg {
+    fn split(self) -> (WorkerUri, Option<OssContext>) {
+        (self.uri, None)
+    }
+}
+
+impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<ComponentRef, WorkerRef> {
     pub async fn handle<ProjectRef: Send + Sync + 'static, ProjectContext: Send + Sync>(
         self,
         format: Format,
@@ -241,36 +370,35 @@ impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
     ) -> Result<GolemResult, GolemError>
     where
         ComponentRef: ComponentRefSplit<ProjectRef>,
+        WorkerRef: WorkerRefSplit<ProjectRef>,
     {
         match self {
             WorkerSubcommand::Add {
-                component_id_or_name,
+                component_name_or_uri,
                 worker_name,
                 env,
                 args,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .add(component_id_or_name, worker_name, env, args, project_id)
+                    .add(component_name_or_uri, worker_name, env, args, project_id)
                     .await
             }
             WorkerSubcommand::IdempotencyKey {} => service.idempotency_key().await,
             WorkerSubcommand::InvokeAndAwait {
-                component_id_or_name,
-                worker_name,
+                worker_ref,
                 idempotency_key,
                 function,
                 parameters,
                 wave,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .invoke_and_await(
                         format,
-                        component_id_or_name,
-                        worker_name,
+                        worker_uri,
                         idempotency_key,
                         function,
                         parameters,
@@ -280,19 +408,17 @@ impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
                     .await
             }
             WorkerSubcommand::Invoke {
-                component_id_or_name,
-                worker_name,
+                worker_ref,
                 idempotency_key,
                 function,
                 parameters,
                 wave,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .invoke(
-                        component_id_or_name,
-                        worker_name,
+                        worker_uri,
                         idempotency_key,
                         function,
                         parameters,
@@ -301,68 +427,43 @@ impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
                     )
                     .await
             }
-            WorkerSubcommand::Connect {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+            WorkerSubcommand::Connect { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .connect(component_id_or_name, worker_name, project_id)
-                    .await
+                service.connect(worker_uri, project_id).await
             }
-            WorkerSubcommand::Interrupt {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+            WorkerSubcommand::Interrupt { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .interrupt(component_id_or_name, worker_name, project_id)
-                    .await
+                service.interrupt(worker_uri, project_id).await
             }
-            WorkerSubcommand::SimulatedCrash {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+            WorkerSubcommand::SimulatedCrash { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .simulated_crash(component_id_or_name, worker_name, project_id)
-                    .await
+                service.simulated_crash(worker_uri, project_id).await
             }
-            WorkerSubcommand::Delete {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+            WorkerSubcommand::Delete { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .delete(component_id_or_name, worker_name, project_id)
-                    .await
+                service.delete(worker_uri, project_id).await
             }
-            WorkerSubcommand::Get {
-                component_id_or_name,
-                worker_name,
-            } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+            WorkerSubcommand::Get { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .get(component_id_or_name, worker_name, project_id)
-                    .await
+                service.get(worker_uri, project_id).await
             }
             WorkerSubcommand::List {
-                component_id_or_name,
+                component_name_or_uri,
                 filter,
                 count,
                 cursor,
                 precise,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .list(
-                        component_id_or_name,
+                        component_name_or_uri,
                         filter,
                         count,
                         cursor,
@@ -372,21 +473,14 @@ impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
                     .await
             }
             WorkerSubcommand::Update {
-                component_id_or_name,
-                worker_name,
+                worker_ref,
                 target_version,
                 mode,
             } => {
-                let (component_id_or_name, project_ref) = component_id_or_name.split();
+                let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .update(
-                        component_id_or_name,
-                        worker_name,
-                        target_version,
-                        mode,
-                        project_id,
-                    )
+                    .update(worker_uri, target_version, mode, project_id)
                     .await
             }
         }

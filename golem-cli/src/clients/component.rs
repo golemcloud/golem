@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::model::component::Component;
-use crate::model::{ComponentId, ComponentName, GolemError, PathBufOrStdin};
+use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
+use golem_common::uri::oss::urn::ComponentUrn;
 
 #[async_trait]
 pub trait ComponentClient {
@@ -22,12 +23,12 @@ pub trait ComponentClient {
 
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError>;
     async fn get_latest_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError>;
     async fn find(
         &self,
@@ -40,5 +41,9 @@ pub trait ComponentClient {
         file: PathBufOrStdin,
         project: &Option<Self::ProjectContext>,
     ) -> Result<Component, GolemError>;
-    async fn update(&self, id: ComponentId, file: PathBufOrStdin) -> Result<Component, GolemError>;
+    async fn update(
+        &self,
+        urn: ComponentUrn,
+        file: PathBufOrStdin,
+    ) -> Result<Component, GolemError>;
 }

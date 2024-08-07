@@ -22,6 +22,7 @@ use golem_client::model::{
     WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
 use golem_client::Context;
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use native_tls::TlsConnector;
 use serde::Deserialize;
 use tokio::{task, time};
@@ -31,7 +32,7 @@ use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
 
 use crate::model::{
-    ComponentId, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
 };
 
@@ -47,16 +48,16 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
     async fn new_worker(
         &self,
         name: WorkerName,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<WorkerId, GolemError> {
-        info!("Creating worker {name} of {}", component_id.0);
+        info!("Creating worker {name} of {component_urn}");
 
         Ok(self
             .client
             .launch_new_worker(
-                &component_id.0,
+                &component_urn.id.0,
                 &WorkerCreationRequest {
                     name: name.0,
                     args,
@@ -69,22 +70,18 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
     async fn invoke_and_await(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         function: String,
         parameters: InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<InvokeResult, GolemError> {
-        info!(
-            "Invoke and await for function {function} in {}/{}",
-            component_id.0, name.0
-        );
+        info!("Invoke and await for function {function} in {worker_urn}");
 
         Ok(self
             .client
             .invoke_and_await_function(
-                &component_id.0,
-                &name.0,
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
                 idempotency_key.as_ref().map(|k| k.0.as_str()),
                 &function,
                 &parameters,
@@ -94,22 +91,18 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
     async fn invoke(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         function: String,
         parameters: InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<(), GolemError> {
-        info!(
-            "Invoke function {function} in {}/{}",
-            component_id.0, name.0
-        );
+        info!("Invoke function {function} in {worker_urn}");
 
         let _ = self
             .client
             .invoke_function(
-                &component_id.0,
-                &name.0,
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
                 idempotency_key.as_ref().map(|k| k.0.as_str()),
                 &function,
                 &parameters,
@@ -118,73 +111,71 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         Ok(())
     }
 
-    async fn interrupt(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<(), GolemError> {
-        info!("Interrupting {}/{}", component_id.0, name.0);
+    async fn interrupt(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Interrupting {worker_urn}");
 
         let _ = self
             .client
-            .interrupt_worker(&component_id.0, &name.0, Some(false))
+            .interrupt_worker(
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
+                Some(false),
+            )
             .await?;
         Ok(())
     }
 
-    async fn simulated_crash(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<(), GolemError> {
-        info!("Simulating crash of {}/{}", component_id.0, name.0);
+    async fn simulated_crash(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Simulating crash of {worker_urn}");
 
         let _ = self
             .client
-            .interrupt_worker(&component_id.0, &name.0, Some(true))
+            .interrupt_worker(
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
+                Some(true),
+            )
             .await?;
         Ok(())
     }
 
-    async fn delete(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError> {
-        info!("Deleting worker {}/{}", component_id.0, name.0);
+    async fn delete(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Deleting worker {worker_urn}");
 
-        let _ = self.client.delete_worker(&component_id.0, &name.0).await?;
+        let _ = self
+            .client
+            .delete_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .await?;
         Ok(())
     }
 
-    async fn get_metadata(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<WorkerMetadata, GolemError> {
-        info!("Getting worker {}/{} metadata", component_id.0, name.0);
+    async fn get_metadata(&self, worker_urn: WorkerUrn) -> Result<WorkerMetadata, GolemError> {
+        info!("Getting worker {worker_urn} metadata");
 
         Ok(self
             .client
-            .get_worker_metadata(&component_id.0, &name.0)
+            .get_worker_metadata(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
             .await?
             .into())
     }
 
     async fn find_metadata(
         &self,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         filter: Option<WorkerFilter>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError> {
         info!(
-            "Getting workers metadata for component: {}, filter: {}",
-            component_id.0,
+            "Getting workers metadata for component: {component_urn}, filter: {}",
             filter.is_some()
         );
 
         Ok(self
             .client
             .find_workers_metadata(
-                &component_id.0,
+                &component_urn.id.0,
                 &WorkersMetadataRequest {
                     filter,
                     cursor,
@@ -198,15 +189,14 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
     async fn list_metadata(
         &self,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         filter: Option<Vec<String>>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError> {
         info!(
-            "Getting workers metadata for component: {}, filter: {}",
-            component_id.0,
+            "Getting workers metadata for component: {component_urn}, filter: {}",
             filter
                 .clone()
                 .map(|fs| fs.join(" AND "))
@@ -219,12 +209,18 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         Ok(self
             .client
-            .get_workers_metadata(&component_id.0, filter, cursor.as_deref(), count, precise)
+            .get_workers_metadata(
+                &component_urn.id.0,
+                filter,
+                cursor.as_deref(),
+                count,
+                precise,
+            )
             .await?
             .into())
     }
 
-    async fn connect(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError> {
+    async fn connect(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
         let mut url = self.context.base_url.clone();
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
@@ -236,9 +232,9 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .map_err(|_| GolemError("Can't get path.".to_string()))?
             .push("v1")
             .push("components")
-            .push(&component_id.0.to_string())
+            .push(&worker_urn.id.component_id.0.to_string())
             .push("workers")
-            .push(&name.0)
+            .push(&worker_urn.id.worker_name)
             .push("connect");
 
         let mut request = url
@@ -380,12 +376,11 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
     async fn update(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         mode: WorkerUpdateMode,
         target_version: u64,
     ) -> Result<(), GolemError> {
-        info!("Updating worker {name} of {}", component_id.0);
+        info!("Updating worker {worker_urn}");
         let update_mode = match mode {
             WorkerUpdateMode::Automatic => golem_client::model::WorkerUpdateMode::Automatic,
             WorkerUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
@@ -394,8 +389,8 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         let _ = self
             .client
             .update_worker(
-                &component_id.0,
-                &name.0,
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
                 &UpdateWorkerRequest {
                     mode: update_mode,
                     target_version,

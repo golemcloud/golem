@@ -15,10 +15,12 @@
 use crate::clients::component::ComponentClient;
 use crate::model::component::{Component, ComponentView};
 use crate::model::text::{ComponentAddView, ComponentGetView, ComponentUpdateView};
-use crate::model::{
-    ComponentId, ComponentIdOrName, ComponentName, GolemError, GolemResult, PathBufOrStdin,
-};
+use crate::model::{ComponentName, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
+use golem_common::model::ComponentId;
+use golem_common::uri::oss::uri::ComponentUri;
+use golem_common::uri::oss::url::ComponentUrl;
+use golem_common::uri::oss::urn::ComponentUrn;
 use indoc::formatdoc;
 use itertools::Itertools;
 use std::fmt::Display;
@@ -35,7 +37,7 @@ pub trait ComponentService {
     ) -> Result<GolemResult, GolemError>;
     async fn update(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         component_file: PathBufOrStdin,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
@@ -46,23 +48,23 @@ pub trait ComponentService {
     ) -> Result<GolemResult, GolemError>;
     async fn get(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         version: Option<u64>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
-    async fn resolve_id(
+    async fn resolve_uri(
         &self,
-        reference: ComponentIdOrName,
+        uri: ComponentUri,
         project: Option<Self::ProjectContext>,
-    ) -> Result<ComponentId, GolemError>;
+    ) -> Result<ComponentUrn, GolemError>;
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError>;
     async fn get_latest_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError>;
 }
 
@@ -93,12 +95,12 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 
     async fn update(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         component_file: PathBufOrStdin,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let id = self.resolve_id(component_id_or_name, project).await?;
-        let component = self.client.update(id, component_file).await?;
+        let urn = self.resolve_uri(component_uri, project).await?;
+        let component = self.client.update(urn, component_file).await?;
         let view: ComponentView = component.into();
 
         Ok(GolemResult::Ok(Box::new(ComponentUpdateView(view))))
@@ -117,30 +119,30 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 
     async fn get(
         &self,
-        component_id_or_name: ComponentIdOrName,
+        component_uri: ComponentUri,
         version: Option<u64>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_id = self.resolve_id(component_id_or_name, project).await?;
+        let urn = self.resolve_uri(component_uri, project).await?;
         let component = match version {
-            Some(v) => self.get_metadata(&component_id, v).await?,
-            None => self.get_latest_metadata(&component_id).await?,
+            Some(v) => self.get_metadata(&urn, v).await?,
+            None => self.get_latest_metadata(&urn).await?,
         };
         let view: ComponentView = component.into();
         Ok(GolemResult::Ok(Box::new(ComponentGetView(view))))
     }
 
-    async fn resolve_id(
+    async fn resolve_uri(
         &self,
-        reference: ComponentIdOrName,
+        uri: ComponentUri,
         project_context: Option<Self::ProjectContext>,
-    ) -> Result<ComponentId, GolemError> {
-        match reference {
-            ComponentIdOrName::Id(id) => Ok(id),
-            ComponentIdOrName::Name(name) => {
+    ) -> Result<ComponentUrn, GolemError> {
+        match uri {
+            ComponentUri::URN(urn) => Ok(urn),
+            ComponentUri::URL(ComponentUrl { name }) => {
                 let components = self
                     .client
-                    .find(Some(name.clone()), &project_context)
+                    .find(Some(ComponentName(name.clone())), &project_context)
                     .await?;
                 let components: Vec<Component> = components
                     .into_iter()
@@ -158,14 +160,13 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                         None => "".to_string(),
                         Some(project) => format!(" in project {project}"),
                     };
-                    let component_name = name.0;
                     let ids: Vec<String> = components
                         .into_iter()
                         .map(|c| c.versioned_component_id.component_id.to_string())
                         .collect();
                     Err(GolemError(formatdoc!(
                         "
-                        Multiple components found for name {component_name}{project_msg}:
+                        Multiple components found for name {name}{project_msg}:
                         {}
                         Use explicit --component-id
                     ",
@@ -173,13 +174,10 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                     )))
                 } else {
                     match components.first() {
-                        None => {
-                            let component_name = name.0;
-                            Err(GolemError(format!("Can't find component {component_name}")))
-                        }
-                        Some(component) => {
-                            Ok(ComponentId(component.versioned_component_id.component_id))
-                        }
+                        None => Err(GolemError(format!("Can't find component {name}"))),
+                        Some(component) => Ok(ComponentUrn {
+                            id: ComponentId(component.versioned_component_id.component_id),
+                        }),
                     }
                 }
             }
@@ -188,16 +186,13 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
+        urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError> {
-        self.client.get_metadata(component_id, version).await
+        self.client.get_metadata(urn, version).await
     }
 
-    async fn get_latest_metadata(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<Component, GolemError> {
-        self.client.get_latest_metadata(component_id).await
+    async fn get_latest_metadata(&self, urn: &ComponentUrn) -> Result<Component, GolemError> {
+        self.client.get_latest_metadata(urn).await
     }
 }
