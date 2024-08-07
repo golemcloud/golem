@@ -941,7 +941,7 @@ mod tests {
 
     use crate::json::TypeAnnotatedValueJsonExtensions;
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use crate::{type_annotated_value, TypeAnnotatedValueConstructors, Value};
+    use crate::{TypeAnnotatedValueConstructors, Value};
 
     fn validate_function_result(
         val: Value,

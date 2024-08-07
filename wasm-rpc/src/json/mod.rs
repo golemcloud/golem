@@ -43,9 +43,7 @@ impl Serialize for TypeAnnotatedValue {
     where
         S: Serializer,
     {
-        let typ: AnalysedType = self
-            .try_into()
-            .map_err(|err| serde::ser::Error::custom(err))?;
+        let typ: AnalysedType = self.try_into().map_err(serde::ser::Error::custom)?;
         let value = self.to_json_value();
         let json = TypeAnnotatedValueJson { typ, value };
         json.serialize(serializer)
@@ -71,7 +69,7 @@ impl<'de> Deserialize<'de> for TypeAnnotatedValue {
 #[cfg(test)]
 mod tests {
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use crate::{type_annotated_value, TypeAnnotatedValueConstructors, Value};
+    use crate::{TypeAnnotatedValueConstructors, Value};
     use golem_wasm_ast::analysis::{AnalysedType, TypeStr, TypeTuple, TypeU32};
     use serde_json::json;
 
