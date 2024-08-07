@@ -336,7 +336,7 @@ pub enum AnalysisWarning {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct AnalysisFailure {
-    reason: String,
+    pub reason: String,
 }
 
 impl AnalysisFailure {
