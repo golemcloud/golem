@@ -24,8 +24,8 @@ use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use colored::Colorize;
 use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
-use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl};
-use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn};
+use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
+use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
 use std::path::PathBuf;
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
@@ -161,6 +161,12 @@ async fn get_resource_by_urn(
                 .get(WorkerUri::URN(w), None)
                 .await
         }
+        ResourceUrn::WorkerFunction(f) => {
+            factory
+                .worker_service(ctx)?
+                .get_function(WorkerUri::URN(WorkerUrn { id: f.id }), &f.function, None)
+                .await
+        }
         ResourceUrn::ApiDefinition(ad) => {
             factory
                 .api_definition_service(ctx)?
@@ -202,6 +208,19 @@ async fn get_resource_by_url(
             factory
                 .worker_service(ctx)?
                 .get(WorkerUri::URL(w), None)
+                .await
+        }
+        ResourceUrl::WorkerFunction(f) => {
+            factory
+                .worker_service(ctx)?
+                .get_function(
+                    WorkerUri::URL(WorkerUrl {
+                        component_name: f.component_name,
+                        worker_name: f.worker_name,
+                    }),
+                    &f.function,
+                    None,
+                )
                 .await
         }
         ResourceUrl::ApiDefinition(ad) => {
