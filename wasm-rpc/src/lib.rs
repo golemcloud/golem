@@ -31,11 +31,6 @@ mod extractor;
 #[cfg(feature = "json")]
 pub mod json;
 
-/// Legacy version of conversion to and from JSON, in the presence of golem-wasm-ast generated type information
-#[cfg(feature = "json")]
-// #[deprecated(since = "0.0.38", note = "Use the JSON representation of `TypeAnnotatedValue` instead")]
-pub mod legacy_json;
-
 /// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
 pub mod protobuf;

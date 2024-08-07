@@ -528,7 +528,7 @@ impl WasmValue for TypeAnnotatedValuePrintable {
 mod tests {
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::text::type_annotated_value_from_str;
-    use crate::{create, type_annotated_value_to_string, Value};
+    use crate::{type_annotated_value_to_string, TypeAnnotatedValueConstructors, Value};
     use golem_wasm_ast::analysis::{
         AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
         TypeF64, TypeFlags, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8,
@@ -536,7 +536,7 @@ mod tests {
     };
 
     fn round_trip(value: Value, typ: AnalysedType) {
-        let typed_value = create(&value, &typ).unwrap();
+        let typed_value = TypeAnnotatedValue::create(&value, &typ).unwrap();
         println!("{:?}", typed_value.clone());
 
         let s = type_annotated_value_to_string(&typed_value).unwrap();

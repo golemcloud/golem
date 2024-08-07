@@ -1,4 +1,3 @@
-use crate::Value;
 use golem_wasm_ast::analysis::protobuf::Type;
 
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -8,10 +7,17 @@ use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult}
 use crate::protobuf::{
     TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
 };
+use crate::Value;
 
-pub fn create<T: Into<Type>>(value: &Value, typ: T) -> Result<TypeAnnotatedValue, Vec<String>> {
-    let tpe: Type = typ.into();
-    create_from_type(value, &tpe)
+pub trait TypeAnnotatedValueConstructors: Sized {
+    fn create<T: Into<Type>>(value: &Value, typ: T) -> Result<Self, Vec<String>>;
+}
+
+impl TypeAnnotatedValueConstructors for TypeAnnotatedValue {
+    fn create<T: Into<Type>>(value: &Value, typ: T) -> Result<TypeAnnotatedValue, Vec<String>> {
+        let tpe: Type = typ.into();
+        create_from_type(value, &tpe)
+    }
 }
 
 fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -337,16 +343,17 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
 
 #[cfg(test)]
 mod tests {
-    use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use crate::{create, Value};
     use golem_wasm_ast::analysis::protobuf::{r#type, PrimitiveType, TypePrimitive};
     use golem_wasm_ast::analysis::{AnalysedType, TypeU32};
+
+    use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use crate::{TypeAnnotatedValueConstructors, Value};
 
     #[test]
     fn test_type_annotated_value_from_analysed_type() {
         let analysed_type = AnalysedType::U32(TypeU32);
 
-        let result = create(&Value::U32(1), &analysed_type);
+        let result = TypeAnnotatedValue::create(&Value::U32(1), &analysed_type);
 
         let expected = TypeAnnotatedValue::U32(1);
 
@@ -361,7 +368,7 @@ mod tests {
 
         let typ = golem_wasm_ast::analysis::protobuf::Type { r#type: Some(typ0) };
 
-        let result = create(&Value::U32(1), typ);
+        let result = TypeAnnotatedValue::create(&Value::U32(1), typ);
 
         let expected = TypeAnnotatedValue::U32(1);
 
