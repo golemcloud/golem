@@ -187,7 +187,7 @@ args = [
 ]
 
 [tasks.worker-executor-tests-group1]
-description = "Runs worker executor tests only (group 1/5)"
+description = "Runs worker executor tests only (group 1/6)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration api -- --nocapture
@@ -196,14 +196,14 @@ cargo test --package golem-worker-executor-base --test integration keyvalue -- -
 '''
 
 [tasks.worker-executor-tests-group2]
-description = "Runs worker executor tests only (group 2/5)"
+description = "Runs worker executor tests only (group 2/6)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages -- --nocapture
 '''
 
 [tasks.worker-executor-tests-group3]
-description = "Runs worker executor tests only (group 3/5)"
+description = "Runs worker executor tests only (group 3/6)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration transactions -- --nocapture
@@ -211,19 +211,28 @@ cargo test --package golem-worker-executor-base --test integration wasi -- --noc
 '''
 
 [tasks.worker-executor-tests-group4]
-description = "Runs worker executor tests only (group 4/5)"
+description = "Runs worker executor tests only (group 4/6)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration scalability -- --nocapture
 cargo test --package golem-worker-executor-base --test integration hot_update -- --nocapture
-cargo test --package golem-worker-executor-base --test integration rpc -- --nocapture
+cargo test --package golem-worker-executor-base --test integration rust_rpc -- --nocapture
+
 '''
 
 [tasks.worker-executor-tests-group5]
-description = "Runs worker executor tests only (group 5/5)"
+description = "Runs worker executor tests only (group 5/6)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages2 -- --nocapture
+'''
+
+
+[tasks.worker-executor-tests-group6]
+description = "Runs worker executor tests only (group 6/6)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+script = '''
+cargo test --package golem-worker-executor-base --test integration ts_rpc -- --nocapture
 '''
 
 [tasks.integration-tests]
