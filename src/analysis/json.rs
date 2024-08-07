@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::*;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 impl<'de> Deserialize<'de> for TypeResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -48,10 +48,7 @@ impl<'de> Deserialize<'de> for NameTypePair {
     {
         let (name, typ) = <(String, AnalysedType)>::deserialize(deserializer)?;
 
-        Ok(Self {
-            name,
-            typ,
-        })
+        Ok(Self { name, typ })
     }
 }
 
@@ -65,7 +62,6 @@ impl Serialize for NameTypePair {
     }
 }
 
-
 impl<'de> Deserialize<'de> for NameOptionTypePair {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -73,10 +69,7 @@ impl<'de> Deserialize<'de> for NameOptionTypePair {
     {
         let (name, typ) = <(String, Option<AnalysedType>)>::deserialize(deserializer)?;
 
-        Ok(Self {
-            name,
-            typ
-        })
+        Ok(Self { name, typ })
     }
 }
 
@@ -185,7 +178,6 @@ impl Serialize for TypeRecord {
         <Vec<NameTypePair>>::serialize(&self.fields, serializer)
     }
 }
-
 
 impl<'de> Deserialize<'de> for TypeTuple {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

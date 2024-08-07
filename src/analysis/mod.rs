@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 mod model;
 pub use model::*;
 
@@ -35,7 +34,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
-
 
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 
@@ -87,10 +85,12 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                         self.analyse_instance_export(export.name.as_string(), export.idx)?;
                     result.push(AnalysedExport::Instance(instance));
                 }
-                _ => self.warning(AnalysisWarning::UnsupportedExport(UnsupportedExportWarning {
-                    kind: export.kind.clone(),
-                    name: export.name.as_string(),
-                })),
+                _ => self.warning(AnalysisWarning::UnsupportedExport(
+                    UnsupportedExportWarning {
+                        kind: export.kind.clone(),
+                        name: export.name.as_string(),
+                    },
+                )),
             }
         }
 
@@ -156,9 +156,9 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     |component| component.get_component_type(*function_type),
                 ),
             ComponentSection::Import(ComponentImport {
-                                         desc: ComponentTypeRef::Func(func_type_idx),
-                                         ..
-                                     }) => next_ctx.get_final_referenced(
+                desc: ComponentTypeRef::Func(func_type_idx),
+                ..
+            }) => next_ctx.get_final_referenced(
                 format!("component function type {func_type_idx}"),
                 |component| component.get_component_type(*func_type_idx),
             ),
@@ -289,7 +289,10 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             ComponentDefinedType::Record { fields } => {
                 let mut result = Vec::new();
                 for (name, typ) in fields {
-                    result.push(NameTypePair { name: name.clone(), typ: self.analyse_component_val_type(typ)? });
+                    result.push(NameTypePair {
+                        name: name.clone(),
+                        typ: self.analyse_component_val_type(typ)?,
+                    });
                 }
                 Ok(AnalysedType::Record(TypeRecord { fields: result }))
             }
@@ -298,7 +301,8 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 for case in cases {
                     result.push(NameOptionTypePair {
                         name: case.name.clone(),
-                        typ: case.typ
+                        typ: case
+                            .typ
                             .as_ref()
                             .map(|t| self.analyse_component_val_type(t))
                             .transpose()?,
@@ -307,9 +311,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 Ok(AnalysedType::Variant(TypeVariant { cases: result }))
             }
             ComponentDefinedType::List { elem } => Ok(AnalysedType::List(TypeList {
-                inner: Box::new(
-                    self.analyse_component_val_type(elem)?,
-                )
+                inner: Box::new(self.analyse_component_val_type(elem)?),
             })),
             ComponentDefinedType::Tuple { elems } => {
                 let mut result = Vec::new();
@@ -318,12 +320,14 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 }
                 Ok(AnalysedType::Tuple(TypeTuple { items: result }))
             }
-            ComponentDefinedType::Flags { names } => Ok(AnalysedType::Flags(TypeFlags { names: names.clone() })),
-            ComponentDefinedType::Enum { names } => Ok(AnalysedType::Enum(TypeEnum { cases: names.clone() })),
+            ComponentDefinedType::Flags { names } => Ok(AnalysedType::Flags(TypeFlags {
+                names: names.clone(),
+            })),
+            ComponentDefinedType::Enum { names } => Ok(AnalysedType::Enum(TypeEnum {
+                cases: names.clone(),
+            })),
             ComponentDefinedType::Option { typ } => Ok(AnalysedType::Option(TypeOption {
-                inner: Box::new(
-                    self.analyse_component_val_type(typ)?,
-                )
+                inner: Box::new(self.analyse_component_val_type(typ)?),
             })),
             ComponentDefinedType::Result { ok, err } => Ok(AnalysedType::Result(TypeResult {
                 ok: ok
@@ -377,10 +381,12 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                                         )?;
                                         funcs.push(func);
                                     }
-                                    _ => next_ctx.warning(AnalysisWarning::UnsupportedExport(UnsupportedExportWarning {
-                                        kind: export.kind.clone(),
-                                        name: export.name.as_string(),
-                                    })),
+                                    _ => next_ctx.warning(AnalysisWarning::UnsupportedExport(
+                                        UnsupportedExportWarning {
+                                            kind: export.kind.clone(),
+                                            name: export.name.as_string(),
+                                        },
+                                    )),
                                 }
                             }
 
@@ -488,8 +494,8 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 self.follow_redirects(next)
             }
             ComponentSection::Alias(Alias::InstanceExport {
-                                        instance_idx, name, ..
-                                    }) => {
+                instance_idx, name, ..
+            }) => {
                 let (instance_section, next_ctx) = self
                     .get_final_referenced(format!("instance {instance_idx}"), |component| {
                         component.get_instance_wrapped(*instance_idx)
@@ -497,17 +503,17 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 next_ctx.find_instance_export(instance_section, name)
             }
             ComponentSection::Import(ComponentImport {
-                                         desc: ComponentTypeRef::Type(TypeBounds::Eq(idx)),
-                                         ..
-                                     }) => {
+                desc: ComponentTypeRef::Type(TypeBounds::Eq(idx)),
+                ..
+            }) => {
                 let maybe_tpe = component.get_component_type(*idx);
                 let tpe = AnalysisFailure::fail_on_missing(maybe_tpe, format!("type {idx}"))?;
                 self.follow_redirects(tpe)
             }
             ComponentSection::Alias(Alias::Outer {
-                                        kind,
-                                        target: AliasTarget { count, index },
-                                    }) => {
+                kind,
+                target: AliasTarget { count, index },
+            }) => {
                 let referenced_components = self.get_components_from_stack(*count);
                 let referenced_component = referenced_components
                     .first()
@@ -564,9 +570,9 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                 next_ctx.follow_redirects(wrapped)
             }
             ComponentSection::Import(ComponentImport {
-                                         desc: ComponentTypeRef::Instance(type_idx),
-                                         ..
-                                     }) => {
+                desc: ComponentTypeRef::Instance(type_idx),
+                ..
+            }) => {
                 let maybe_tpe = self.get_component().get_component_type(*type_idx);
                 let tpe = AnalysisFailure::fail_on_missing(maybe_tpe, format!("type {type_idx}"))?;
                 let (tpe, next_ctx) = self.follow_redirects(tpe)?;
@@ -683,7 +689,11 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::{AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeF32, TypeHandle, TypeRecord, TypeResult, TypeStr, TypeU32, TypeU64};
+    use crate::analysis::{
+        AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
+        AnalysedResourceMode, AnalysedType, NameTypePair, TypeF32, TypeHandle, TypeRecord,
+        TypeResult, TypeStr, TypeU32, TypeU64,
+    };
 
     #[test]
     fn analysed_function_kind() {
@@ -731,7 +741,7 @@ mod tests {
                                 name: "quantity".to_string(),
                                 typ: AnalysedType::U32(TypeU32),
                             },
-                        ]
+                        ],
                     }),
                 },
             ],
@@ -774,9 +784,15 @@ mod tests {
                 typ: AnalysedType::Result(TypeResult {
                     ok: Some(Box::new(AnalysedType::Record(TypeRecord {
                         fields: vec![
-                            NameTypePair { name: "lower".to_string(), typ: AnalysedType::U64(TypeU64) },
-                            NameTypePair { name: "upper".to_string(), typ: AnalysedType::U64(TypeU64) },
-                        ]
+                            NameTypePair {
+                                name: "lower".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "upper".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                        ],
                     }))),
                     err: Some(Box::new(AnalysedType::Str(TypeStr))),
                 }),

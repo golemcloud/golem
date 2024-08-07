@@ -1,4 +1,9 @@
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, AnalysisContext, NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant};
+use golem_wasm_ast::analysis::{
+    AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, AnalysisContext,
+    NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeResult,
+    TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+};
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 
@@ -27,11 +32,23 @@ fn exports_shopping_cart_component() {
                     name: "item".to_string(),
                     typ: AnalysedType::Record(TypeRecord {
                         fields: vec![
-                            NameTypePair { name: "product-id".to_string(), typ: AnalysedType::Str(TypeStr) },
-                            NameTypePair { name: "name".to_string(), typ: AnalysedType::Str(TypeStr) },
-                            NameTypePair { name: "price".to_string(), typ: AnalysedType::F32(TypeF32) },
-                            NameTypePair { name: "quantity".to_string(), typ: AnalysedType::U32(TypeU32) },
-                        ]
+                            NameTypePair {
+                                name: "product-id".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            NameTypePair {
+                                name: "name".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            NameTypePair {
+                                name: "price".to_string(),
+                                typ: AnalysedType::F32(TypeF32),
+                            },
+                            NameTypePair {
+                                name: "quantity".to_string(),
+                                typ: AnalysedType::U32(TypeU32),
+                            },
+                        ],
                     }),
                 }],
                 results: vec![],
@@ -65,17 +82,20 @@ fn exports_shopping_cart_component() {
                     name: None,
                     typ: AnalysedType::Variant(TypeVariant {
                         cases: vec![
-                            NameOptionTypePair { name: "error".to_string(), typ: Some(AnalysedType::Str(TypeStr)) },
+                            NameOptionTypePair {
+                                name: "error".to_string(),
+                                typ: Some(AnalysedType::Str(TypeStr)),
+                            },
                             NameOptionTypePair {
                                 name: "success".to_string(),
-                                typ:
-                                Some(AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair { name: "order-id".to_string(), typ: AnalysedType::Str(TypeStr) },
-                                    ]
+                                typ: Some(AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "order-id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
                                 })),
                             },
-                        ]
+                        ],
                     }),
                 }],
             },
@@ -87,12 +107,24 @@ fn exports_shopping_cart_component() {
                     typ: AnalysedType::List(TypeList {
                         inner: Box::new(AnalysedType::Record(TypeRecord {
                             fields: vec![
-                                NameTypePair { name: "product-id".to_string(), typ: AnalysedType::Str(TypeStr) },
-                                NameTypePair { name: "name".to_string(), typ: AnalysedType::Str(TypeStr) },
-                                NameTypePair { name: "price".to_string(), typ: AnalysedType::F32(TypeF32) },
-                                NameTypePair { name: "quantity".to_string(), typ: AnalysedType::U32(TypeU32) },
-                            ]
-                        }))
+                                NameTypePair {
+                                    name: "product-id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                },
+                                NameTypePair {
+                                    name: "name".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                },
+                                NameTypePair {
+                                    name: "price".to_string(),
+                                    typ: AnalysedType::F32(TypeF32),
+                                },
+                                NameTypePair {
+                                    name: "quantity".to_string(),
+                                    typ: AnalysedType::U32(TypeU32),
+                                },
+                            ],
+                        })),
                     }),
                 }],
             },
@@ -196,9 +228,15 @@ fn exports_file_service_component() {
                                     name: "last-modified".to_string(),
                                     typ: AnalysedType::Record(TypeRecord {
                                         fields: vec![
-                                            NameTypePair { name: "seconds".to_string(), typ: AnalysedType::U64(TypeU64) },
-                                            NameTypePair { name: "nanoseconds".to_string(), typ: AnalysedType::U32(TypeU32) },
-                                        ]
+                                            NameTypePair {
+                                                name: "seconds".to_string(),
+                                                typ: AnalysedType::U64(TypeU64),
+                                            },
+                                            NameTypePair {
+                                                name: "nanoseconds".to_string(),
+                                                typ: AnalysedType::U32(TypeU32),
+                                            },
+                                        ],
                                     }),
                                 },
                                 NameTypePair {
@@ -209,11 +247,14 @@ fn exports_file_service_component() {
                                                 name: "seconds".to_string(),
                                                 typ: AnalysedType::U64(TypeU64),
                                             },
-                                            NameTypePair { name: "nanoseconds".to_string(), typ: AnalysedType::U32(TypeU32) },
-                                        ]
+                                            NameTypePair {
+                                                name: "nanoseconds".to_string(),
+                                                typ: AnalysedType::U32(TypeU32),
+                                            },
+                                        ],
                                     }),
                                 },
-                            ]
+                            ],
                         }))),
                         err: Some(Box::new(AnalysedType::Str(TypeStr))),
                     }),
@@ -234,21 +275,33 @@ fn exports_file_service_component() {
                                     name: "last-modified".to_string(),
                                     typ: AnalysedType::Record(TypeRecord {
                                         fields: vec![
-                                            NameTypePair { name: "seconds".to_string(), typ: AnalysedType::U64(TypeU64) },
-                                            NameTypePair { name: "nanoseconds".to_string(), typ: AnalysedType::U32(TypeU32) },
-                                        ]
+                                            NameTypePair {
+                                                name: "seconds".to_string(),
+                                                typ: AnalysedType::U64(TypeU64),
+                                            },
+                                            NameTypePair {
+                                                name: "nanoseconds".to_string(),
+                                                typ: AnalysedType::U32(TypeU32),
+                                            },
+                                        ],
                                     }),
                                 },
                                 NameTypePair {
                                     name: "last-accessed".to_string(),
                                     typ: AnalysedType::Record(TypeRecord {
                                         fields: vec![
-                                            NameTypePair { name: "seconds".to_string(), typ: AnalysedType::U64(TypeU64) },
-                                            NameTypePair { name: "nanoseconds".to_string(), typ: AnalysedType::U32(TypeU32) },
-                                        ]
+                                            NameTypePair {
+                                                name: "seconds".to_string(),
+                                                typ: AnalysedType::U64(TypeU64),
+                                            },
+                                            NameTypePair {
+                                                name: "nanoseconds".to_string(),
+                                                typ: AnalysedType::U32(TypeU32),
+                                            },
+                                        ],
                                     }),
                                 },
-                            ]
+                            ],
                         }))),
                         err: Some(Box::new(AnalysedType::Str(TypeStr))),
                     }),
@@ -367,9 +420,15 @@ fn exports_file_service_component() {
                     typ: AnalysedType::Result(TypeResult {
                         ok: Some(Box::new(AnalysedType::Record(TypeRecord {
                             fields: vec![
-                                NameTypePair { name: "lower".to_string(), typ: AnalysedType::U64(TypeU64) },
-                                NameTypePair { name: "upper".to_string(), typ: AnalysedType::U64(TypeU64) },
-                            ]
+                                NameTypePair {
+                                    name: "lower".to_string(),
+                                    typ: AnalysedType::U64(TypeU64),
+                                },
+                                NameTypePair {
+                                    name: "upper".to_string(),
+                                    typ: AnalysedType::U64(TypeU64),
+                                },
+                            ],
                         }))),
                         err: Some(Box::new(AnalysedType::Str(TypeStr))),
                     }),
@@ -412,9 +471,12 @@ fn exports_auction_registry_composed_component() {
                     results: vec![AnalysedFunctionResult {
                         name: None,
                         typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![(
-                                NameTypePair { name: "bidder-id".to_string(), typ: AnalysedType::Str(TypeStr) }
-                            )]
+                            fields: vec![
+                                (NameTypePair {
+                                    name: "bidder-id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr)
+                                })
+                            ]
                         }),
                     }],
                 },
@@ -441,12 +503,10 @@ fn exports_auction_registry_composed_component() {
                     results: vec![AnalysedFunctionResult {
                         name: None,
                         typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "auction-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                }
-                            ]
+                            fields: vec![NameTypePair {
+                                name: "auction-id".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            }]
                         }),
                     }],
                 },
@@ -461,12 +521,10 @@ fn exports_auction_registry_composed_component() {
                                     NameTypePair {
                                         name: "auction-id".to_string(),
                                         typ: AnalysedType::Record(TypeRecord {
-                                            fields: vec![
-                                                NameTypePair {
-                                                    name: "auction-id".to_string(),
-                                                    typ: AnalysedType::Str(TypeStr),
-                                                }
-                                            ]
+                                            fields: vec![NameTypePair {
+                                                name: "auction-id".to_string(),
+                                                typ: AnalysedType::Str(TypeStr),
+                                            }]
                                         }),
                                     },
                                     NameTypePair {
@@ -532,28 +590,26 @@ fn exports_shopping_cart_resource_component() {
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
-                        typ: AnalysedType::Record(
-                            TypeRecord {
-                                fields: vec![
-                                    NameTypePair {
-                                        name: "product-id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    },
-                                    NameTypePair {
-                                        name: "name".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    },
-                                    NameTypePair {
-                                        name: "price".to_string(),
-                                        typ: AnalysedType::F32(TypeF32),
-                                    },
-                                    NameTypePair {
-                                        name: "quantity".to_string(),
-                                        typ: AnalysedType::U32(TypeU32),
-                                    },
-                                ],
-                            },
-                        ),
+                        typ: AnalysedType::Record(TypeRecord {
+                            fields: vec![
+                                NameTypePair {
+                                    name: "product-id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                },
+                                NameTypePair {
+                                    name: "name".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                },
+                                NameTypePair {
+                                    name: "price".to_string(),
+                                    typ: AnalysedType::F32(TypeF32),
+                                },
+                                NameTypePair {
+                                    name: "quantity".to_string(),
+                                    typ: AnalysedType::U32(TypeU32),
+                                },
+                            ],
+                        }),
                     },
                 ],
                 results: vec![],
@@ -616,15 +672,13 @@ fn exports_shopping_cart_resource_component() {
                             NameOptionTypePair {
                                 name: "success".to_string(),
                                 typ: Some(AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair {
-                                            name: "order-id".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                    ],
+                                    fields: vec![NameTypePair {
+                                        name: "order-id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
                                 })),
                             },
-                        ]
+                        ],
                     }),
                 }],
             },
@@ -659,7 +713,7 @@ fn exports_shopping_cart_resource_component() {
                                     typ: AnalysedType::U32(TypeU32),
                                 },
                             ],
-                        }))
+                        })),
                     }),
                 }],
             },
@@ -745,7 +799,7 @@ fn exports_shopping_cart_resource_versioned_component() {
                                     typ: AnalysedType::U32(TypeU32),
                                 },
                             ],
-                        }, ),
+                        }),
                     },
                 ],
                 results: vec![],
@@ -808,15 +862,13 @@ fn exports_shopping_cart_resource_versioned_component() {
                             NameOptionTypePair {
                                 name: "success".to_string(),
                                 typ: Some(AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair {
-                                            name: "order-id".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                    ],
+                                    fields: vec![NameTypePair {
+                                        name: "order-id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
                                 })),
                             },
-                        ]
+                        ],
                     }),
                 }],
             },
@@ -851,7 +903,7 @@ fn exports_shopping_cart_resource_versioned_component() {
                                     typ: AnalysedType::U32(TypeU32),
                                 },
                             ],
-                        }))
+                        })),
                     }),
                 }],
             },
@@ -897,11 +949,8 @@ fn exports_caller_composed_component() {
                 name: None,
                 typ: AnalysedType::List(TypeList {
                     inner: Box::new(AnalysedType::Tuple(TypeTuple {
-                        items: vec![
-                            AnalysedType::Str(TypeStr),
-                            AnalysedType::U64(TypeU64),
-                        ]
-                    }))
+                        items: vec![AnalysedType::Str(TypeStr), AnalysedType::U64(TypeU64)],
+                    })),
                 }),
             }],
         }),
@@ -928,16 +977,15 @@ fn exports_caller_composed_component() {
                 name: None,
                 typ: AnalysedType::Tuple(TypeTuple {
                     items: vec![
-                        AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) }),
+                        AnalysedType::List(TypeList {
+                            inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
                         AnalysedType::List(TypeList {
                             inner: Box::new(AnalysedType::Tuple(TypeTuple {
-                                items: vec![
-                                    AnalysedType::Str(TypeStr),
-                                    AnalysedType::Str(TypeStr),
-                                ]
-                            }))
+                                items: vec![AnalysedType::Str(TypeStr), AnalysedType::Str(TypeStr)],
+                            })),
                         }),
-                    ]
+                    ],
                 }),
             }],
         }),
@@ -946,18 +994,30 @@ fn exports_caller_composed_component() {
             params: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U64(TypeU64)) }),
+                typ: AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::U64(TypeU64)),
+                }),
             }],
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "bug-wasm-rpc-i32".to_string(),
             params: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: AnalysedType::Variant(TypeVariant { cases: vec![NameOptionTypePair { name: "leaf".to_string(), typ: None }] }),
+                typ: AnalysedType::Variant(TypeVariant {
+                    cases: vec![NameOptionTypePair {
+                        name: "leaf".to_string(),
+                        typ: None,
+                    }],
+                }),
             }],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Variant(TypeVariant { cases: vec![NameOptionTypePair { name: "leaf".to_string(), typ: None }] }),
+                typ: AnalysedType::Variant(TypeVariant {
+                    cases: vec![NameOptionTypePair {
+                        name: "leaf".to_string(),
+                        typ: None,
+                    }],
+                }),
             }],
         }),
     ];

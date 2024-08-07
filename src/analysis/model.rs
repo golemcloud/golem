@@ -19,7 +19,10 @@ use crate::component::{ComponentExternalKind, PrimitiveValueType};
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem_openapi", oai(discriminator_name = "type", one_of = true))]
+#[cfg_attr(
+    feature = "poem_openapi",
+    oai(discriminator_name = "type", one_of = true)
+)]
 pub enum AnalysedExport {
     Function(AnalysedFunction),
     Instance(AnalysedInstance),
@@ -74,7 +77,6 @@ pub struct AnalysedInstance {
     pub funcs: Vec<AnalysedFunction>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
@@ -90,7 +92,6 @@ pub struct NameTypePair {
     pub name: String,
     pub typ: AnalysedType,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
@@ -223,12 +224,14 @@ pub struct TypeHandle {
     pub mode: AnalysedResourceMode,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem_openapi", oai(discriminator_name = "type", one_of = true))]
+#[cfg_attr(
+    feature = "poem_openapi",
+    oai(discriminator_name = "type", one_of = true)
+)]
 pub enum AnalysedType {
     Variant(TypeVariant),
     Result(TypeResult),
@@ -253,7 +256,6 @@ pub enum AnalysedType {
     Bool(TypeBool),
     Handle(TypeHandle),
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
@@ -321,9 +323,12 @@ pub struct UnsupportedExportWarning {
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem_openapi", oai(discriminator_name = "type", one_of = true))]
+#[cfg_attr(
+    feature = "poem_openapi",
+    oai(discriminator_name = "type", one_of = true)
+)]
 pub enum AnalysisWarning {
-    UnsupportedExport(UnsupportedExportWarning)
+    UnsupportedExport(UnsupportedExportWarning),
 }
 
 #[derive(Debug, Clone)]
@@ -336,7 +341,9 @@ pub struct AnalysisFailure {
 
 impl AnalysisFailure {
     pub fn failed(message: impl Into<String>) -> AnalysisFailure {
-        AnalysisFailure { reason: message.into() }
+        AnalysisFailure {
+            reason: message.into(),
+        }
     }
 
     pub fn fail_on_missing<T>(value: Option<T>, description: impl AsRef<str>) -> AnalysisResult<T> {
