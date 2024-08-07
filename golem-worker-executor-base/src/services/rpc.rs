@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_wasm_rpc::{Value, WitValue};
+use golem_wasm_rpc::WitValue;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::debug;
@@ -499,14 +499,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             let result_values = worker
-                .invoke_and_await(
-                    idempotency_key,
-                    golem_common::model::CallingConvention::Component,
-                    function_name,
-                    input_values,
-                )
+                .invoke_and_await(idempotency_key, function_name, input_values)
                 .await?;
-            Ok(Value::Tuple(result_values).into())
+
+            let result_value = golem_wasm_rpc::Value::try_from(result_values).unwrap();
+
+            Ok(result_value.into())
         } else {
             self.remote_rpc
                 .invoke_and_await(
@@ -557,12 +555,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             worker
-                .invoke(
-                    idempotency_key,
-                    golem_common::model::CallingConvention::Component,
-                    function_name,
-                    input_values,
-                )
+                .invoke(idempotency_key, function_name, input_values)
                 .await?;
             Ok(())
         } else {

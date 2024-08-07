@@ -25,10 +25,9 @@ use assert2::check;
 use http_02::{Response, StatusCode};
 use redis::Commands;
 
-use golem_api_grpc::proto::golem::worker::{
-    worker_execution_error, ComponentParseFailed, LogEvent,
-};
-use golem_api_grpc::proto::golem::workerexecutor::CompletePromiseRequest;
+use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
+use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::{
     AccountId, ComponentId, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
@@ -222,24 +221,6 @@ async fn shopping_cart_example() {
                 ]),
             ])])
     )
-}
-
-#[tokio::test]
-#[tracing::instrument]
-async fn stdio_cc() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
-
-    let component_id = executor.store_component("stdio-cc").await;
-    let worker_id = executor.start_worker(&component_id, "stdio-cc-1").await;
-
-    let result = executor
-        .invoke_and_await_stdio(&worker_id, "run", serde_json::Value::Number(1234.into()))
-        .await;
-
-    drop(executor);
-
-    assert!(result == Ok(serde_json::Value::Number(2468.into())))
 }
 
 #[tokio::test]
@@ -1976,6 +1957,7 @@ async fn counter_resource_test_1() {
         )
         .await
         .unwrap();
+
     let _ = executor
         .invoke_and_await(
             &worker_id,
@@ -2011,6 +1993,7 @@ async fn counter_resource_test_1() {
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(5)]));
+
     check!(
         result2
             == Ok(vec![Value::List(vec![Value::Tuple(vec![

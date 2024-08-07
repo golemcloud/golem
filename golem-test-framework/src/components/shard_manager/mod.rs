@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use tonic::transport::Channel;
 use tracing::Level;
 
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 
 use crate::components::redis::Redis;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};

@@ -91,13 +91,11 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             function_name,
             request,
             idempotency_key,
-            calling_convention,
         } => OplogEntry::ExportedFunctionInvoked {
             timestamp: rounded_ts(timestamp),
             function_name,
             request,
             idempotency_key,
-            calling_convention,
         },
         OplogEntry::ExportedFunctionCompleted {
             timestamp,
@@ -289,7 +287,6 @@ async fn entries_with_small_payload() {
                 "f2".to_string(),
                 &"request".to_string(),
                 IdempotencyKey::fresh(),
-                None,
             )
             .await
             .unwrap(),
@@ -332,7 +329,7 @@ async fn entries_with_small_payload() {
             entry1.clone(),
             entry2.clone(),
             entry3.clone(),
-            entry4.clone()
+            entry4.clone(),
         ]
     );
 
@@ -400,7 +397,6 @@ async fn entries_with_large_payload() {
                 "f2".to_string(),
                 &large_payload2,
                 IdempotencyKey::fresh(),
-                None,
             )
             .await
             .unwrap(),
@@ -443,7 +439,7 @@ async fn entries_with_large_payload() {
             entry1.clone(),
             entry2.clone(),
             entry3.clone(),
-            entry4.clone()
+            entry4.clone(),
         ]
     );
 

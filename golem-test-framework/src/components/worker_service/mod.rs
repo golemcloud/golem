@@ -21,14 +21,15 @@ use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 use tracing::Level;
 
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LogEvent,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
+use golem_api_grpc::proto::golem::worker::LogEvent;
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;

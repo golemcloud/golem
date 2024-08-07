@@ -33,7 +33,7 @@ use crate::shard_manager_config::{make_config_loader, HealthCheckK8sConfig, Heal
 use error::ShardManagerError;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
 
@@ -93,13 +93,9 @@ impl ShardManagerServiceImpl {
     async fn register_internal(
         &self,
         source_ip: Option<SocketAddr>,
-        request: golem::shardmanager::RegisterRequest,
+        request: golem::shardmanager::v1::RegisterRequest,
     ) -> Result<(), ShardManagerError> {
-        let source_ip = source_ip
-            .ok_or(ShardManagerError::invalid_request(
-                "could not get source IP",
-            ))?
-            .ip();
+        let source_ip = source_ip.ok_or(ShardManagerError::NoSourceIpForPod)?.ip();
 
         let pod = Pod::from_register_request(source_ip, request)?;
         info!("Shard Manager received request to register pod: {}", pod);
@@ -148,8 +144,9 @@ impl ShardManagerServiceImpl {
 impl ShardManagerService for ShardManagerServiceImpl {
     async fn get_routing_table(
         &self,
-        _request: tonic::Request<golem::shardmanager::GetRoutingTableRequest>,
-    ) -> Result<tonic::Response<golem::shardmanager::GetRoutingTableResponse>, tonic::Status> {
+        _request: tonic::Request<golem::shardmanager::v1::GetRoutingTableRequest>,
+    ) -> Result<tonic::Response<golem::shardmanager::v1::GetRoutingTableResponse>, tonic::Status>
+    {
         let record = recorded_grpc_api_request!("get_routing_table",);
 
         let response = self
@@ -158,9 +155,9 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .await;
 
         Ok(Response::new(
-            golem::shardmanager::GetRoutingTableResponse {
+            golem::shardmanager::v1::GetRoutingTableResponse {
                 result: Some(
-                    golem::shardmanager::get_routing_table_response::Result::Success(
+                    golem::shardmanager::v1::get_routing_table_response::Result::Success(
                         response.into(),
                     ),
                 ),
@@ -170,8 +167,8 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
     async fn register(
         &self,
-        request: tonic::Request<golem::shardmanager::RegisterRequest>,
-    ) -> Result<tonic::Response<golem::shardmanager::RegisterResponse>, tonic::Status> {
+        request: tonic::Request<golem::shardmanager::v1::RegisterRequest>,
+    ) -> Result<tonic::Response<golem::shardmanager::v1::RegisterResponse>, tonic::Status> {
         let source_ip = request.remote_addr();
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
@@ -187,21 +184,21 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .await;
 
         let result = match response {
-            Ok(_) => record.succeed(golem::shardmanager::register_response::Result::Success(
-                golem::shardmanager::RegisterSuccess {
+            Ok(_) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
+                golem::shardmanager::v1::RegisterSuccess {
                     number_of_shards: self.shard_manager_config.number_of_shards as u32,
                 },
             )),
             Err(error) => {
-                let error: golem::shardmanager::ShardManagerError = error.into();
+                let error: golem::shardmanager::v1::ShardManagerError = error.into();
                 record.fail(
-                    golem::shardmanager::register_response::Result::Failure(error.clone()),
+                    golem::shardmanager::v1::register_response::Result::Failure(error.clone()),
                     &ShardManagerTraceErrorKind(&error),
                 )
             }
         };
 
-        Ok(Response::new(golem::shardmanager::RegisterResponse {
+        Ok(Response::new(golem::shardmanager::v1::RegisterResponse {
             result: Some(result),
         }))
     }

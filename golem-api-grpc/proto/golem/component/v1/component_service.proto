@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package golem.component;
+package golem.component.v1;
 
 import public "golem/common/project_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/component/component.proto";
-import public "golem/component/component_error.proto";
+import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
 
 service ComponentService {
@@ -26,7 +26,7 @@ message GetComponentsRequest {
 message GetComponentsResponse {
   oneof result {
     GetComponentsSuccessResponse success = 1;
-    golem.component.ComponentError error = 2;
+    golem.component.v1.ComponentError error = 2;
   }
 }
 
@@ -53,7 +53,7 @@ message CreateComponentRequestChunk {
 message CreateComponentResponse {
   oneof result {
     golem.component.Component success = 1;
-    golem.component.ComponentError error = 2;
+    golem.component.v1.ComponentError error = 2;
   }
 }
 
@@ -65,7 +65,7 @@ message DownloadComponentRequest {
 message DownloadComponentResponse {
   oneof result {
     bytes successChunk = 1;
-    golem.component.ComponentError error = 2;
+    golem.component.v1.ComponentError error = 2;
   }
 }
 
@@ -81,14 +81,14 @@ message GetVersionedComponentRequest {
 message GetComponentMetadataAllVersionsResponse {
   oneof result {
     GetComponentSuccessResponse success = 1;
-    golem.component.ComponentError error = 2;
+    golem.component.v1.ComponentError error = 2;
   }
 }
 
 message GetComponentMetadataResponse {
   oneof result {
     GetComponentMetadataSuccessResponse success = 1;
-    golem.component.ComponentError error = 2;
+    golem.component.v1.ComponentError error = 2;
   }
 }
 
@@ -122,6 +122,6 @@ message UpdateComponentRequestChunk {
 message UpdateComponentResponse {
   oneof result {
     golem.component.Component success = 1;
-    golem.component.ComponentError error = 2;
+    golem.component.v1.ComponentError error = 2;
   }
 }

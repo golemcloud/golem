@@ -20,8 +20,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::error::{GolemError, WorkerOutOfMemory};
+use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
+use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -34,17 +36,19 @@ use crate::services::{
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
+use golem_common::model::exports;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
+    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
@@ -53,7 +57,7 @@ use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
-use wasmtime::{Store, UpdateDeadline};
+use wasmtime::{AsContext, Store, UpdateDeadline};
 
 /// Represents worker that may be running or suspended.
 ///
@@ -420,10 +424,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke(
         &self,
         idempotency_key: IdempotencyKey,
-        calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
-    ) -> Result<Option<Result<Vec<Value>, GolemError>>, GolemError> {
+    ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
 
         match output {
@@ -432,13 +435,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
                 // Invoke the function in the background
-                self.enqueue(
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                    calling_convention,
-                )
-                .await;
+                self.enqueue(idempotency_key, full_function_name, function_input)
+                    .await;
                 Ok(None)
             }
         }
@@ -447,17 +445,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
-        calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
-    ) -> Result<Vec<Value>, GolemError> {
+    ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
-            .invoke(
-                idempotency_key.clone(),
-                calling_convention,
-                full_function_name,
-                function_input,
-            )
+            .invoke(idempotency_key.clone(), full_function_name, function_input)
             .await?
         {
             Some(Ok(output)) => Ok(output),
@@ -574,7 +566,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: Vec<Value>,
+        result: TypeAnnotatedValue,
         oplog_index: OplogIndex,
     ) {
         let mut map = self.invocation_results.write().unwrap();
@@ -717,17 +709,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        calling_convention: CallingConvention,
     ) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running
-                    .enqueue(
-                        idempotency_key,
-                        full_function_name,
-                        function_input,
-                        calling_convention,
-                    )
+                    .enqueue(idempotency_key, full_function_name, function_input)
                     .await;
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
@@ -736,7 +722,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     idempotency_key,
                     full_function_name,
                     function_input,
-                    calling_convention,
                 };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
@@ -1105,13 +1090,11 @@ impl RunningWorker {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        calling_convention: CallingConvention,
     ) {
         let invocation = WorkerInvocation::ExportedFunction {
             idempotency_key,
             full_function_name,
             function_input,
-            calling_convention,
         };
         self.enqueue_worker_invocation(invocation).await;
     }
@@ -1340,7 +1323,6 @@ impl RunningWorker {
                                     idempotency_key: invocation_key,
                                     full_function_name,
                                     function_input,
-                                    calling_convention,
                                 } => {
                                     let span = span!(
                                         Level::INFO,
@@ -1375,7 +1357,6 @@ impl RunningWorker {
                                             function_input.clone(),
                                             store,
                                             &instance,
-                                            calling_convention,
                                             true, // We are always in live mode at this point
                                         )
                                         .await;
@@ -1385,17 +1366,95 @@ impl RunningWorker {
                                                 output,
                                                 consumed_fuel,
                                             }) => {
-                                                store
-                                                    .data_mut()
-                                                    .on_invocation_success(
-                                                        &full_function_name,
-                                                        &function_input,
-                                                        consumed_fuel,
-                                                        output,
-                                                    )
-                                                    .await
-                                                    .unwrap(); // TODO: handle this error
-                                                false // do not break
+                                                let component_metadata =
+                                                    store.as_context().data().component_metadata();
+
+                                                let function_results = exports::function_by_name(
+                                                    &component_metadata.exports,
+                                                    &full_function_name,
+                                                );
+
+                                                match function_results {
+                                                    Ok(Some(export_function)) => {
+                                                        let function_results = export_function
+                                                            .results
+                                                            .into_iter()
+                                                            .map(|t| t.into())
+                                                            .collect();
+
+                                                        let result = interpret_function_results(
+                                                            output,
+                                                            function_results,
+                                                        )
+                                                        .map_err(|e| GolemError::ValueMismatch {
+                                                            details: e.join(", "),
+                                                        });
+
+                                                        match result {
+                                                            Ok(result) => {
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_success(
+                                                                        &full_function_name,
+                                                                        &function_input,
+                                                                        consumed_fuel,
+                                                                        result,
+                                                                    )
+                                                                    .await
+                                                                    .unwrap(); // TODO: handle this error
+                                                                false // do not break
+                                                            }
+                                                            Err(error) => {
+                                                                let trap_type =
+                                                                    TrapType::from_error::<Ctx>(
+                                                                        &anyhow!(error),
+                                                                    );
+
+                                                                store
+                                                                    .data_mut()
+                                                                    .on_invocation_failure(
+                                                                        &trap_type,
+                                                                    )
+                                                                    .await;
+
+                                                                final_decision =
+                                                                    RetryDecision::None;
+                                                                true // break
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Ok(None) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(
+                                                                &TrapType::Error(
+                                                                    WorkerError::Unknown(
+                                                                        "Function not found"
+                                                                            .to_string(),
+                                                                    ),
+                                                                ),
+                                                            )
+                                                            .await;
+
+                                                        final_decision = RetryDecision::None;
+                                                        true // break
+                                                    }
+
+                                                    Err(result) => {
+                                                        store
+                                                            .data_mut()
+                                                            .on_invocation_failure(
+                                                                &TrapType::Error(
+                                                                    WorkerError::Unknown(result),
+                                                                ),
+                                                            )
+                                                            .await;
+
+                                                        final_decision = RetryDecision::None;
+                                                        true // break
+                                                    }
+                                                }
                                             }
                                             _ => {
                                                 let trap_type = match result {
@@ -1437,94 +1496,93 @@ impl RunningWorker {
                                         target_version = target_version.to_string()
                                     );
                                     let do_break = async {
-                                    let _idempotency_key = {
-                                        let ctx = store.data_mut();
-                                        let idempotency_key = IdempotencyKey::fresh();
-                                        ctx.set_current_idempotency_key(idempotency_key.clone())
+                                        let _idempotency_key = {
+                                            let ctx = store.data_mut();
+                                            let idempotency_key = IdempotencyKey::fresh();
+                                            ctx.set_current_idempotency_key(idempotency_key.clone())
+                                                .await;
+                                            idempotency_key
+                                        };
+                                        store.data_mut().begin_call_snapshotting_function();
+                                        let result = invoke_worker(
+                                            "golem:api/save-snapshot@0.2.0.{save}".to_string(),
+                                            vec![],
+                                            store,
+                                            &instance,
+                                            true,
+                                        )
                                             .await;
-                                        idempotency_key
-                                    };
-                                    store.data_mut().begin_call_snapshotting_function();
-                                    let result = invoke_worker(
-                                        "golem:api/save-snapshot@0.2.0.{save}".to_string(),
-                                        vec![],
-                                        store,
-                                        &instance,
-                                        CallingConvention::Component,
-                                        true,
-                                    )
-                                        .await;
-                                    store.data_mut().end_call_snapshotting_function();
+                                        store.data_mut().end_call_snapshotting_function();
 
-                                    match result {
-                                        Ok(InvokeResult::Succeeded { output, .. }) =>
-                                            if let Some(bytes) = Self::decode_snapshot_result(output) {
-                                                match store
-                                                    .data_mut()
-                                                    .get_public_state()
-                                                    .oplog()
-                                                    .create_snapshot_based_update_description(
-                                                        target_version,
-                                                        &bytes,
-                                                    )
-                                                    .await
-                                                {
-                                                    Ok(update_description) => {
-                                                        // Enqueue the update
-                                                        parent.enqueue_update(update_description).await;
+                                        match result {
+                                            Ok(InvokeResult::Succeeded { output, .. }) =>
+                                                if let Some(bytes) = Self::decode_snapshot_result(output) {
+                                                    match store
+                                                        .data_mut()
+                                                        .get_public_state()
+                                                        .oplog()
+                                                        .create_snapshot_based_update_description(
+                                                            target_version,
+                                                            &bytes,
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(update_description) => {
+                                                            // Enqueue the update
+                                                            parent.enqueue_update(update_description).await;
 
-                                                        // Make sure to update the pending updates queue
-                                                        store.data_mut().update_pending_updates().await;
+                                                            // Make sure to update the pending updates queue
+                                                            store.data_mut().update_pending_updates().await;
 
-                                                        // Reactivate the worker
-                                                        final_decision = RetryDecision::Immediate;
+                                                            // Reactivate the worker
+                                                            final_decision = RetryDecision::Immediate;
 
-                                                        // Stop processing the queue to avoid race conditions
-                                                        true
+                                                            // Stop processing the queue to avoid race conditions
+                                                            true
+                                                        }
+                                                        Err(error) => {
+                                                            Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
+                                                            false
+                                                        }
                                                     }
-                                                    Err(error) => {
-                                                        Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
-                                                        false
-                                                    }
-                                                }
-                                            } else {
-                                                Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
+                                                } else {
+                                                    Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
+                                                    false
+                                                },
+                                            Ok(InvokeResult::Failed { error, .. }) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    format!("failed to get a snapshot for manual update: {error}"),
+                                                    store,
+                                                ).await;
                                                 false
-                                            },
-                                        Ok(InvokeResult::Failed { error, .. }) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                format!("failed to get a snapshot for manual update: {error}"),
-                                                store,
-                                            ).await;
-                                            false
+                                            }
+                                            Ok(InvokeResult::Exited { .. }) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    "failed to get a snapshot for manual update: it called exit".to_string(),
+                                                    store,
+                                                ).await;
+                                                false
+                                            }
+                                            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
+                                                    store,
+                                                ).await;
+                                                false
+                                            }
+                                            Err(error) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    format!("failed to get a snapshot for manual update: {error:?}"),
+                                                    store,
+                                                ).await;
+                                                false
+                                            }
                                         }
-                                        Ok(InvokeResult::Exited { .. }) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                "failed to get a snapshot for manual update: it called exit".to_string(),
-                                                store,
-                                            ).await;
-                                            false
-                                        }
-                                        Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
-                                                store,
-                                            ).await;
-                                            false
-                                        }
-                                        Err(error) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                format!("failed to get a snapshot for manual update: {error:?}"),
-                                                store,
-                                            ).await;
-                                            false
-                                        }
-                                    }
-                                }.instrument(span).await;
+                                    }.instrument(span).await;
                                     if do_break {
                                         break;
                                     }
@@ -1618,7 +1676,7 @@ impl RunningWorker {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<Vec<Value>, TrapType>,
+        result: Result<TypeAnnotatedValue, TrapType>,
         oplog_idx: OplogIndex,
     },
     Lazy {
@@ -1640,21 +1698,16 @@ impl InvocationResult {
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
-                    let values: Vec<golem_wasm_rpc::protobuf::Val> = oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
-                    let values = values
-                        .into_iter()
-                        .map(|val| {
-                            val.try_into()
-                                .expect("failed to decode serialized protobuf value")
-                        })
-                        .collect();
+                    let values: TypeAnnotatedValue =
+                        oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+
                     Ok(values)
                 }
                 OplogEntry::Error { error, .. } => Err(TrapType::Error(error)),
                 OplogEntry::Interrupted { .. } => Err(TrapType::Interrupt(InterruptKind::Interrupt)),
                 OplogEntry::Exited { .. } => Err(TrapType::Exit),
                 _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {oplog:?}")
-            } ;
+            };
 
             *self = Self::Cached { result, oplog_idx }
         }
@@ -1677,6 +1730,22 @@ pub enum RetryDecision {
 enum WorkerCommand {
     Invocation,
     Interrupt(InterruptKind),
+}
+
+pub async fn get_component_metadata<Ctx: WorkerCtx>(
+    worker: &Arc<Worker<Ctx>>,
+) -> Result<ComponentMetadata, GolemError> {
+    let component_id = worker.owned_worker_id.component_id();
+    let worker_metadata = worker.get_metadata().await?;
+
+    let component_version = worker_metadata.last_known_status.component_version;
+
+    let component_metadata = worker
+        .component_service()
+        .get_metadata(&component_id, Some(component_version))
+        .await?;
+
+    Ok(component_metadata)
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.

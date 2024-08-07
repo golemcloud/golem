@@ -7,6 +7,7 @@ use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::io::{BufRead, BufReader};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +38,11 @@ fn make(
             format!("worker_invoke_no_params{suffix}"),
             ctx.clone(),
             worker_invoke_no_params,
+        ),
+        Trial::test_in_context(
+            format!("worker_invoke_drop{suffix}"),
+            ctx.clone(),
+            worker_invoke_drop,
         ),
         Trial::test_in_context(
             format!("worker_invoke_json_params{suffix}"),
@@ -290,6 +296,102 @@ fn worker_invoke_and_await_wave_params(
     );
 
     Ok(())
+}
+
+fn worker_invoke_drop(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_id = make_component_from_file(
+        deps,
+        &format!("{name} worker_invoke_drop"),
+        &cli,
+        "counters.wasm",
+    )?
+    .component_id;
+
+    let worker_name = format!("{name}_worker_invoke_and_await");
+    let cfg = &cli.config;
+    let hello: WorkerId = cli.run(&[
+        "worker",
+        "add",
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('e', "env"),
+        "TEST_ENV=test-value",
+        "test-arg",
+    ])?;
+    dbg!(hello.clone());
+    let args_key: IdempotencyKey = IdempotencyKey::fresh();
+    let result = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "rpc:counters/api.{[constructor]counter}",
+        &cfg.arg('j', "parameters"),
+        "[{\"type\" : \"Str\", \"value\" : \"counter1\"}]",
+        &cfg.arg('k', "idempotency-key"),
+        &args_key.0,
+    ])?;
+
+    let (uri, resource_id) = match result {
+        serde_json::Value::Array(vec) => match vec[0].clone() {
+            serde_json::Value::String(str) => {
+                dbg!("hmmm");
+                get_handle_from_str(str.as_str())
+            }
+            _ => panic!("Expected handle string"),
+        },
+        _ => panic!("Expected handle string"),
+    }
+    .ok_or(Failed::without_message())?;
+
+    let handle_json =
+        json!([{ "type": "Handle", "value": { "uri": uri , "resource_id": resource_id  } }]);
+
+    let args_key1: IdempotencyKey = IdempotencyKey::fresh();
+
+    cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('C', "component-id"),
+        &component_id,
+        &cfg.arg('w', "worker-name"),
+        &worker_name,
+        &cfg.arg('f', "function"),
+        "rpc:counters/api.{[drop]counter}",
+        &cfg.arg('j', "parameters"),
+        handle_json.to_string().as_str(),
+        &cfg.arg('k', "idempotency-key"),
+        &args_key1.0,
+    ])?;
+
+    Ok(())
+}
+
+fn get_handle_from_str(handle_str: &str) -> Option<(String, u64)> {
+    let parts: Vec<&str> = handle_str.split('/').collect();
+    if parts.len() >= 2 {
+        match u64::from_str(parts[parts.len() - 1]) {
+            Ok(resource_id) => {
+                let uri = parts[0..(parts.len() - 1)].join("/");
+
+                Some((uri, resource_id))
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
 }
 
 fn worker_invoke_no_params(

@@ -36,7 +36,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/specs", spec)
         .nest("/metrics", metrics)
         .at(
-            "/v2/components/:component_id/workers/:worker_name/connect",
+            "/v1/components/:component_id/workers/:worker_name/connect",
             get(worker_connect::ws.data(connect_services)),
         )
 }
@@ -44,7 +44,6 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
 pub fn custom_request_route(services: Services) -> Route {
     let custom_request_executor = CustomHttpRequestApi::new(
         services.worker_to_http_service,
-        services.worker_metadata_fetcher,
         services.http_definition_lookup_service,
     );
 
@@ -63,6 +62,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             HealthcheckApi,
         ),
         "Golem API",
-        "2.0",
+        "1.0",
     )
 }

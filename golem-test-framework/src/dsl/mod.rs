@@ -17,18 +17,19 @@ pub mod benchmark;
 use crate::config::TestDependencies;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
-use golem_api_grpc::proto::golem::worker::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
+use golem_api_grpc::proto::golem::worker::v1::{
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response, log_event,
-    resume_worker_response, update_worker_response, worker_execution_error, CallingConvention,
-    ConnectWorkerRequest, DeleteWorkerRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeParameters, InvokeRequest, LaunchNewWorkerRequest, LogEvent,
-    ResumeWorkerRequest, StdErrLog, StdOutLog, UpdateMode, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response,
+    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
+    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeRequest,
+    LaunchNewWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError, WorkerExecutionError,
+};
+use golem_api_grpc::proto::golem::worker::{
+    log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
@@ -39,9 +40,6 @@ use golem_common::model::{
     SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
     WorkerStatusRecord,
 };
-use golem_wasm_ast::analysis::AnalysisContext;
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -119,18 +117,11 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> crate::Result<Result<serde_json::Value, Error>>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom_with_key(
         &self,
@@ -138,7 +129,6 @@ pub trait TestDsl {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
     async fn capture_output_forever(
@@ -172,15 +162,20 @@ pub trait TestDsl {
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
-        dump_component_info(&source_path);
-        self.component_service()
+
+        let component_id = self
+            .component_service()
             .get_or_add_component(&source_path)
-            .await
+            .await;
+
+        let _ = log_and_save_component_metadata(&source_path).await;
+
+        component_id
     }
 
     async fn store_unique_component(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
-        dump_component_info(&source_path);
+        let _ = dump_component_info(&source_path);
         let uuid = Uuid::new_v4();
         let unique_name = format!("{name}-{uuid}");
         self.component_service()
@@ -198,7 +193,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
-        dump_component_info(&source_path);
+        let _ = dump_component_info(&source_path);
         self.component_service()
             .update_component(component_id, &source_path)
             .await
@@ -409,14 +404,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
-        TestDsl::invoke_and_await_custom(
-            self,
-            worker_id,
-            function_name,
-            params,
-            CallingConvention::Component,
-        )
-        .await
+        TestDsl::invoke_and_await_custom(self, worker_id, function_name, params).await
     }
 
     async fn invoke_and_await_with_key(
@@ -432,47 +420,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             idempotency_key,
             function_name,
             params,
-            CallingConvention::Component,
         )
         .await
-    }
-
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> crate::Result<Result<serde_json::Value, Error>> {
-        let json_string = params.to_string();
-        let vals = TestDsl::invoke_and_await_custom(
-            self,
-            worker_id,
-            function_name,
-            vec![Value::String(json_string)],
-            CallingConvention::Stdio,
-        )
-        .await?;
-        Ok(vals.and_then(|vals| {
-        if vals.len() == 1 {
-            let value_opt = &vals[0];
-
-            match value_opt {
-                        Value::String(s) => {
-                            if s.is_empty() {
-                                Ok(serde_json::Value::Null)
-                            } else {
-                                let result: serde_json::Value = serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.to_string()));
-                                Ok(result)
-                            }
-                        }
-                        _ => Err(Error::BadRequest(
-                            ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
-                        )),
-                    }
-        } else {
-            Err(Error::BadRequest(
-                        ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }))
-        }}))
     }
 
     async fn invoke_and_await_custom(
@@ -480,7 +429,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
         TestDsl::invoke_and_await_custom_with_key(
@@ -489,7 +437,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             &idempotency_key,
             function_name,
             params,
-            cc,
         )
         .await
     }
@@ -500,7 +447,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let invoke_response = self
             .worker_service()
@@ -511,7 +457,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
-                calling_convention: cc.into(),
                 context: None,
             })
             .await?;
@@ -1036,17 +981,39 @@ pub fn to_worker_metadata(
     }
 }
 
-fn dump_component_info(path: &Path) {
+fn dump_component_info(path: &Path) -> golem_common::model::component_metadata::ComponentMetadata {
     let data = std::fs::read(path).unwrap();
-    let component = Component::<IgnoreAllButMetadata>::from_bytes(&data).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let exports = state.get_top_level_exports();
-    let mems = state.get_all_memories();
+    let component_metadata: golem_common::model::component_metadata::ComponentMetadata =
+        golem_common::model::component_metadata::ComponentMetadata::analyse_component(&data)
+            .unwrap();
+
+    let exports = &component_metadata.exports;
+    let mems = &component_metadata.memories;
 
     info!("Exports of {path:?}: {exports:?}");
     info!("Linear memories of {path:?}: {mems:?}");
-    let _ = exports.unwrap();
+
+    component_metadata
+}
+
+async fn log_and_save_component_metadata(path: &Path) {
+    let component_metadata: golem_common::model::component_metadata::ComponentMetadata =
+        dump_component_info(path);
+
+    let json_data = serde_json::to_string(&component_metadata).unwrap();
+
+    // Write metadata to a path corresponding to component-id
+    // This step is important for the following reason:
+    // * this way it will perfectly simulate downloading the metadata from the component service even in the case of local-component-file tests.
+    // * The test simulates what happens if you invoke an old wasm in component service (that has valid metadata but cannot be loaded anymore)
+    // * The path is used to see if the metadata already exists for component analysis when it comes to local file
+    // See ComponentServiceLocalFileSystem::get_component_metadata_file
+    let component_name = path.file_name().unwrap().to_str().unwrap();
+    let mut current_dir = Path::new("../target").to_path_buf();
+    current_dir.push(component_name);
+    current_dir.set_extension("json");
+    tokio::fs::write(&current_dir, json_data).await.unwrap()
 }
 
 #[async_trait]
@@ -1112,27 +1079,6 @@ pub trait TestDslUnsafe {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<Value>, Error>;
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error>;
-    async fn invoke_and_await_custom(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error>;
-    async fn invoke_and_await_custom_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
     ) -> Result<Vec<Value>, Error>;
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
     async fn capture_output_forever(
@@ -1284,49 +1230,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             idempotency_key,
             function_name,
             params,
-        )
-        .await
-        .expect("Failed to invoke function")
-    }
-
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error> {
-        <T as TestDsl>::invoke_and_await_stdio(self, worker_id, function_name, params)
-            .await
-            .expect("Failed to invoke function")
-    }
-
-    async fn invoke_and_await_custom(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error> {
-        <T as TestDsl>::invoke_and_await_custom(self, worker_id, function_name, params, cc)
-            .await
-            .expect("Failed to invoke function")
-    }
-
-    async fn invoke_and_await_custom_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error> {
-        <T as TestDsl>::invoke_and_await_custom_with_key(
-            self,
-            worker_id,
-            idempotency_key,
-            function_name,
-            params,
-            cc,
         )
         .await
         .expect("Failed to invoke function")

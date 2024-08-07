@@ -16,6 +16,8 @@ pub mod durable_host;
 pub mod error;
 pub mod grpc;
 pub mod http_server;
+
+pub mod function_result_interpreter;
 pub mod invocation;
 pub mod metrics;
 pub mod model;
@@ -29,7 +31,7 @@ pub mod workerctx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_server::WorkerExecutorServer;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
 use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;

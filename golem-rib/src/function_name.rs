@@ -16,9 +16,12 @@ use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{TypeAnnotatedValue, Value};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::type_annotated_value_from_str;
+use golem_wasm_rpc::Value;
 use semver::{BuildMetadata, Prerelease};
 use std::borrow::Cow;
+use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionSite {
@@ -262,6 +265,53 @@ pub enum ParsedFunctionReference {
     },
 }
 
+impl Display for ParsedFunctionReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let function_name = match self {
+            Self::Function { function } => function.clone(),
+            Self::RawResourceConstructor { resource } => format!("{}.new", resource),
+            Self::IndexedResourceConstructor {
+                resource,
+                resource_params,
+            } => {
+                format!("{}({}).new", resource, resource_params.join(", "))
+            }
+            Self::RawResourceMethod { resource, method } => format!("{}.{}", resource, method),
+            Self::RawResourceStaticMethod { resource, method } => {
+                format!("[static]{}.{}", resource, method)
+            }
+            Self::RawResourceDrop { resource } => format!("{}.drop", resource),
+            Self::IndexedResourceDrop {
+                resource,
+                resource_params,
+            } => {
+                format!("{}({}).drop", resource, resource_params.join(", "))
+            }
+            Self::IndexedResourceMethod {
+                resource,
+                resource_params,
+                method,
+            } => {
+                format!("{}({}).{}", resource, resource_params.join(", "), method)
+            }
+            Self::IndexedResourceStaticMethod {
+                resource,
+                resource_params,
+                method,
+            } => {
+                format!(
+                    "[static]{}({}).{}",
+                    resource,
+                    resource_params.join(", "),
+                    method
+                )
+            }
+        };
+
+        write!(f, "{}", function_name)
+    }
+}
+
 impl ParsedFunctionReference {
     pub fn function_name(&self) -> String {
         match self {
@@ -365,8 +415,8 @@ impl ParsedFunctionReference {
             } else {
                 let mut result = Vec::new();
                 for (raw_param, param_type) in raw_params.iter().zip(types.iter()) {
-                    let type_annotated_value =
-                        wasm_wave::from_str::<TypeAnnotatedValue>(param_type, raw_param)
+                    let type_annotated_value: TypeAnnotatedValue =
+                        type_annotated_value_from_str(param_type, raw_param)
                             .map_err(|err| err.to_string())?;
                     let value = type_annotated_value.try_into()?;
                     result.push(value);
@@ -545,6 +595,18 @@ impl From<ParsedFunctionReference> for golem_api_grpc::proto::golem::rib::Parsed
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: ParsedFunctionReference,
+}
+
+impl Display for ParsedFunctionName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let function_name = self
+            .site
+            .interface_name()
+            .map_or(self.function.function_name(), |interface| {
+                format!("{}.{{{}}}", interface, self.function)
+            });
+        write!(f, "{}", function_name)
+    }
 }
 
 impl ParsedFunctionName {
@@ -1178,5 +1240,45 @@ mod function_name_tests {
                 },
             }
         );
+    }
+
+    fn round_trip_function_name_parse(input: &str) {
+        let parsed = ParsedFunctionName::parse(input).expect("Input Parsing failed");
+        let parsed_written =
+            ParsedFunctionName::parse(parsed.to_string()).expect("Round-trip parsing failed");
+        assert_eq!(parsed, parsed_written);
+    }
+
+    #[test]
+    fn test_parsed_function_name_display() {
+        round_trip_function_name_parse("run-example");
+        round_trip_function_name_parse("interface.{fn1}");
+        round_trip_function_name_parse("wasi:cli/run@0.2.0.{run}");
+        round_trip_function_name_parse("ns:name/interface.{resource1.new}");
+        round_trip_function_name_parse("ns:name/interface.{[constructor]resource1}");
+        round_trip_function_name_parse("ns:name/interface.{resource1().new}");
+        round_trip_function_name_parse("ns:name/interface.{resource1(\"hello\", 1, true).new}");
+        round_trip_function_name_parse(
+            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}",
+        );
+        round_trip_function_name_parse("ns:name/interface.{resource1.do-something}");
+        round_trip_function_name_parse(
+            "ns:name/interface.{resource1(\"hello\", 1, true).do-something}",
+        );
+        round_trip_function_name_parse(
+            "ns:name/interface.{resource1(\"hello\", 1, { field-a: some(1) }).do-something}",
+        );
+        round_trip_function_name_parse("ns:name/interface.{[static]resource1.do-something-static}");
+        round_trip_function_name_parse(
+            "ns:name/interface.{[static]resource1(\"hello\", 1, true).do-something-static}",
+        );
+        round_trip_function_name_parse("ns:name/interface.{[static]resource1(\"hello\", 1, { field-a: some(1) }).do-something-static}");
+        round_trip_function_name_parse("ns:name/interface.{resource1.drop}");
+        round_trip_function_name_parse("ns:name/interface.{resource1().drop}");
+        round_trip_function_name_parse("ns:name/interface.{resource1(\"hello\", 1, true).drop}");
+        round_trip_function_name_parse(
+            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}",
+        );
+        round_trip_function_name_parse("ns:name/interface.{[drop]resource1}");
     }
 }

@@ -16,8 +16,9 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::service::component_compilation::ComponentCompilationService;
-use crate::service::component_processor::{process_component, ComponentProcessingError};
+use crate::service::component_processor::process_component;
 use async_trait::async_trait;
+use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::ComponentId;
 use tap::TapFallible;
 use tracing::{error, info};
@@ -25,8 +26,9 @@ use tracing::{error, info};
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_service_base::model::{
-    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
 };
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
@@ -245,7 +247,8 @@ where
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
 
-        let metadata = process_component(&data)?;
+        let metadata =
+            process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
 
         let next_component = self
             .component_repo

@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use tonic::transport::{Channel, Endpoint};
 use tracing::Level;
 
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
 use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;

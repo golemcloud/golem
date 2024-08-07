@@ -19,7 +19,7 @@ use crate::components::rdb::Rdb;
 use crate::components::{ChildProcessLogger, GolemEnvVars};
 use async_trait::async_trait;
 
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};

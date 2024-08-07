@@ -14,7 +14,7 @@
 
 use crate::components::worker_service::{new_client, WorkerService};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use tonic::transport::Channel;
 use tracing::info;
 

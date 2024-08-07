@@ -6,14 +6,14 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
 
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::path::{Path, PathBuf};
-use std::string::FromUtf8Error;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 
 use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor,
@@ -49,7 +49,7 @@ use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogServi
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, IoCapturing, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
 
@@ -60,7 +60,7 @@ use tokio::task::JoinHandle;
 use golem::api;
 use golem_common::config::RedisConfig;
 
-use golem_api_grpc::proto::golem::workerexecutor::{
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, get_workers_metadata_response,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataSuccessResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
@@ -496,19 +496,6 @@ impl InvocationManagement for TestWorkerCtx {
 }
 
 #[async_trait]
-impl IoCapturing for TestWorkerCtx {
-    async fn start_capturing_stdout(&mut self, provided_stdin: String) {
-        self.durable_ctx
-            .start_capturing_stdout(provided_stdin)
-            .await
-    }
-
-    async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error> {
-        self.durable_ctx.finish_capturing_stdout().await
-    }
-}
-
-#[async_trait]
 impl StatusManagement for TestWorkerCtx {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         self.durable_ctx.check_interrupt()
@@ -545,10 +532,9 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<golem_common::model::CallingConvention>,
     ) -> Result<(), GolemError> {
         self.durable_ctx
-            .on_exported_function_invoked(full_function_name, function_input, calling_convention)
+            .on_exported_function_invoked(full_function_name, function_input)
             .await
     }
 
@@ -561,7 +547,7 @@ impl InvocationHooks for TestWorkerCtx {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)

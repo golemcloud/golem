@@ -1,5 +1,6 @@
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_service_base::model::{
-    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
 };
 use serde::{Deserialize, Serialize};
 

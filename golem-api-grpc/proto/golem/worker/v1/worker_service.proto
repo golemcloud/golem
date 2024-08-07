@@ -1,9 +1,8 @@
 syntax = "proto3";
 
-package golem.worker;
+package golem.worker.v1;
 
 import public "golem/common/empty.proto";
-import public "golem/worker/calling_convention.proto";
 import public "golem/worker/complete_parameters.proto";
 import public "golem/worker/cursor.proto";
 import public "golem/worker/idempotency_key.proto";
@@ -11,7 +10,7 @@ import public "golem/worker/invocation_context.proto";
 import public "golem/worker/invoke_parameters.proto";
 import public "golem/worker/invoke_result.proto";
 import public "golem/worker/invoke_result_json.proto";
-import public "golem/worker/worker_error.proto";
+import public "golem/worker/v1/worker_error.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/log_event.proto";
@@ -45,7 +44,7 @@ message LaunchNewWorkerRequest {
 message LaunchNewWorkerResponse {
   oneof result {
     LaunchNewWorkerSuccessResponse success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -62,7 +61,7 @@ message CompletePromiseRequest {
 message CompletePromiseResponse {
   oneof result {
     bool success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -73,7 +72,7 @@ message DeleteWorkerRequest {
 message DeleteWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -84,7 +83,7 @@ message GetWorkerMetadataRequest {
 message GetWorkerMetadataResponse {
   oneof result {
     golem.worker.WorkerMetadata success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -96,7 +95,7 @@ message InterruptWorkerRequest {
 message InterruptWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -105,14 +104,13 @@ message InvokeAndAwaitRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
-  golem.worker.CallingConvention callingConvention = 5;
   optional golem.worker.InvocationContext context = 6;
 }
 
 message InvokeAndAwaitResponse {
   oneof result {
     golem.worker.InvokeResult success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -127,7 +125,7 @@ message InvokeRequest {
 message InvokeResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -138,7 +136,7 @@ message ResumeWorkerRequest {
 message ResumeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.WorkerError error = 2;
+    golem.worker.v1.WorkerError error = 2;
   }
 }
 

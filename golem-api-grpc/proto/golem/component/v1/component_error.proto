@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package golem.component;
+package golem.component.v1;
 
 import "golem/common/error_body.proto";
 

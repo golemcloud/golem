@@ -5,7 +5,7 @@ import "golem/shardmanager/shard_id.proto";
 import "golem/component/component_id.proto";
 import "golem/worker/worker_id.proto";
 
-package golem.worker;
+package golem.worker.v1;
 
 
 message WorkerExecutionError {

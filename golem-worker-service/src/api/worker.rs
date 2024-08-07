@@ -1,8 +1,6 @@
 use crate::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
-use golem_common::model::{
-    CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
-};
+use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -13,6 +11,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
+
 use tracing::Instrument;
 
 pub struct WorkerApi {
@@ -22,7 +21,7 @@ pub struct WorkerApi {
 
 type Result<T> = std::result::Result<T, WorkerApiBaseError>;
 
-#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     #[oai(
         path = "/:component_id/workers",
@@ -120,11 +119,9 @@ impl WorkerApi {
         worker_name: Path<String>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
-        #[oai(name = "calling-convention")] calling_convention: Query<Option<CallingConvention>>,
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResult>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-        let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
         let record = recorded_http_api_request!(
             "invoke_and_await_function",
@@ -133,17 +130,17 @@ impl WorkerApi {
             function = function.0
         );
 
+        let precise_jsons = params.0.params;
+
         let response = self
             .worker_service
-            .invoke_and_await_function(
+            .invoke_and_await_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
-                &calling_convention,
+                precise_jsons,
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await
@@ -175,16 +172,17 @@ impl WorkerApi {
             function = function.0
         );
 
+        let precise_json_array = params.0.params;
+
         let response = self
             .worker_service
-            .invoke_function(
+            .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                precise_json_array.clone(),
                 None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await

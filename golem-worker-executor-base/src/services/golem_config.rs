@@ -262,6 +262,7 @@ pub enum IndexedStorageConfig {
     InMemory,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum BlobStorageConfig {
@@ -569,6 +570,7 @@ impl Default for MemoryConfig {
                 min_delay: Duration::from_millis(100),
                 max_delay: Duration::from_secs(5),
                 multiplier: 2.0,
+                max_jitter_factor: None, // TODO: should we add jitter here?
             },
         }
     }

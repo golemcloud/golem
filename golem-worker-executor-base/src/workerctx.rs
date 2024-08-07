@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::string::FromUtf8Error;
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
+    WorkerStatus, WorkerStatusRecord,
 };
 
 use crate::error::GolemError;
@@ -54,7 +54,6 @@ use crate::worker::{RetryDecision, Worker};
 pub trait WorkerCtx:
     FuelManagement
     + InvocationManagement
-    + IoCapturing
     + StatusManagement
     + InvocationHooks
     + ExternalOperations<Self>
@@ -194,21 +193,6 @@ pub trait InvocationManagement {
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
 }
 
-/// The IoCapturing interface of a worker context is used by the Stdio calling convention to
-/// associate a provided standard input string with the worker, and start capturing its emitted
-/// standard output.
-///
-/// This feature enables passing data to and from workers even if they don't support WIT bindings.
-#[async_trait]
-pub trait IoCapturing {
-    /// Starts capturing the standard output of the worker, and at the same time, provides some
-    /// predefined standard input to it.
-    async fn start_capturing_stdout(&mut self, provided_stdin: String);
-
-    /// Finishes capturing the standard output of the worker and returns the captured string.
-    async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error>;
-}
-
 /// The status management interface of a worker context is responsible for querying and storing
 /// the worker's status.
 ///
@@ -247,13 +231,11 @@ pub trait InvocationHooks {
     /// Arguments:
     /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
     /// - `function_input`: The input of the function being invoked
-    /// - `calling_convention`: The calling convention used to invoke the function
     #[allow(clippy::ptr_arg)]
     async fn on_exported_function_invoked(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<CallingConvention>,
     ) -> Result<(), GolemError>;
 
     /// Called when a worker invocation fails
@@ -271,7 +253,7 @@ pub trait InvocationHooks {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError>;
 }
 

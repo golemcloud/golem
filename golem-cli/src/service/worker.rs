@@ -27,7 +27,9 @@ use golem_client::model::{
     InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator, Type, WorkerFilter,
     WorkerNameFilter,
 };
-use golem_wasm_rpc::TypeAnnotatedValue;
+use golem_common::model::precise_json::PreciseJson;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::type_annotated_value_from_str;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -58,7 +60,6 @@ pub trait WorkerService {
         function: String,
         parameters: Option<Value>,
         wave: Vec<String>,
-        use_stdio: bool,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn invoke(
@@ -191,7 +192,7 @@ fn wave_parameters_to_json(
     wave: &[String],
     component: &Component,
     function: &str,
-) -> Result<Value, GolemError> {
+) -> Result<Vec<Value>, GolemError> {
     let types = function_params_types(component, function)?;
 
     if wave.len() != types.len() {
@@ -208,16 +209,17 @@ fn wave_parameters_to_json(
         .map(|(param, typ)| parse_parameter(param, typ))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let json_params = params
-        .iter()
-        .map(golem_wasm_rpc::json::get_json_from_typed_value)
-        .collect::<Vec<_>>();
-
-    Ok(Value::Array(json_params))
+    params
+        .into_iter()
+        .map(|v| {
+            serde_json::to_value(PreciseJson::from(v)).map_err(|err| GolemError(err.to_string()))
+        })
+        .collect::<Result<Vec<_>, GolemError>>()
 }
 
 fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
-    match wasm_wave::from_str(&type_to_analysed(typ), wave) {
+    // Avoid converting from typ to AnalysedType
+    match type_annotated_value_from_str(&type_to_analysed(typ), wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"
@@ -233,24 +235,28 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
     parameters: Option<Value>,
     wave: Vec<String>,
     function: &str,
-) -> Result<(Value, Option<Component>), GolemError> {
+) -> Result<(Vec<Value>, Option<Component>), GolemError> {
     if let Some(parameters) = parameters {
-        Ok((parameters, None))
+        let parameters = parameters
+            .as_array()
+            .ok_or_else(|| GolemError("Parameters must be an array".to_string()))?;
+
+        Ok((parameters.clone(), None))
     } else if let Some(component) =
         resolve_worker_component_version(client, components, component_id, worker_name.clone())
             .await?
     {
-        let json = wave_parameters_to_json(&wave, &component, function)?;
+        let precise_json_array = wave_parameters_to_json(&wave, &component, function)?;
 
-        Ok((json, Some(component)))
+        Ok((precise_json_array, Some(component)))
     } else {
         info!("No worker found with name {worker_name}. Assuming it should be create with the latest component version");
         let component = components.get_latest_metadata(component_id).await?;
 
-        let json = wave_parameters_to_json(&wave, &component, function)?;
+        let json_array = wave_parameters_to_json(&wave, &component, function)?;
 
         // We are not going to use this component for result parsing.
-        Ok((json, None))
+        Ok((json_array, None))
     }
 }
 
@@ -338,7 +344,6 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         function: String,
         parameters: Option<Value>,
         wave: Vec<String>,
-        use_stdio: bool,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let human_readable = format == Format::Text;
@@ -381,7 +386,6 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 function.clone(),
                 InvokeParameters { params: parameters },
                 idempotency_key,
-                use_stdio,
             )
             .await?;
 

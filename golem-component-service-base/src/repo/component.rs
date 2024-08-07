@@ -18,9 +18,10 @@ use std::result::Result;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::ComponentId;
 use golem_service_base::model::{
-    ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
+    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
 };
 use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
@@ -576,7 +577,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 pub mod record_metadata_serde {
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::ComponentMetadata as ComponentMetadataProto;
-    use golem_service_base::model::ComponentMetadata;
+    use golem_common::model::component_metadata::ComponentMetadata;
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;

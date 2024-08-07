@@ -17,23 +17,21 @@ use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerService as GrpcWorkerService;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
+use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_worker_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response,
     invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
-    DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse,
+    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError as GrpcWorkerError, WorkerExecutionError,
 };
-use golem_api_grpc::proto::golem::worker::{
-    worker_error, worker_execution_error, InvokeResult, WorkerError as GrpcWorkerError,
-    WorkerExecutionError, WorkerMetadata,
-};
+use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
     proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
@@ -541,7 +539,6 @@ impl WorkerGrpcApi {
                 params.params,
                 request.context,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -558,11 +555,6 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or(bad_request_error("Missing invoke parameters"))?;
 
-        let calling_convention: golem_common::model::CallingConvention = request
-            .calling_convention
-            .try_into()
-            .map_err(bad_request_error)?;
-
         let result = self
             .worker_service
             .invoke_and_await_function_proto(
@@ -570,10 +562,8 @@ impl WorkerGrpcApi {
                 request.idempotency_key,
                 request.function,
                 params.params,
-                &calling_convention,
                 request.context,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 

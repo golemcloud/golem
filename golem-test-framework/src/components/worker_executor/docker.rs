@@ -21,7 +21,7 @@ use crate::components::component_service::ComponentService;
 use crate::components::docker::KillContainer;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use testcontainers::core::WaitFor;

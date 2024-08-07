@@ -16,13 +16,13 @@ use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::v1::{
     invoke_and_await_response, invoke_response, update_worker_response, worker_error,
-    CallingConvention, InvocationContext, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeParameters, InvokeRequest, InvokeResponse, UpdateMode, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
+use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeParameters, UpdateMode};
 use golem_common::client::GrpcClient;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_wasm_rpc::{Value, WitValue};
@@ -194,7 +194,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         function: function_name.clone(),
                         invoke_parameters: invoke_parameters.clone(),
-                        calling_convention: CallingConvention::Component as i32,
                         context: Some(InvocationContext {
                             parent: Some(caller_worker_id.clone().into()),
                             args: caller_args.clone(),

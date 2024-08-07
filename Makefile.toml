@@ -18,6 +18,9 @@
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
 # - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
 # - `cargo make generate-configs`: generates configs from code defaults
+# - `cargo make elastic-up`: starts elastic, kibana, filebeat (in detached mode) and loads logs into elastic
+# - `cargo make elastic-stop`: stops the elastic env
+# - `cargo make elastic-down`: stops and removes the elastic env, including all stored data
 
 [config]
 default_to_workspace = false # by default, we run cargo commands on top level instead of per member
@@ -373,6 +376,7 @@ dependencies = [
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
+    "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-cli",
 ]
@@ -414,6 +418,18 @@ args = [
     "publish",
     "-p",
     "golem-common",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-service-base]
+description = "Publishes golem-service-base package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-service-base",
     "--all-features",
     "--allow-dirty",
     "--no-verify",
@@ -611,4 +627,24 @@ git diff --exit-code \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
     golem-worker-executor/config/worker-executor.sample.env
+'''
+
+## ** Elastic tasks **
+
+[tasks.elastic-up]
+description = "Starts elastic, kibana and filebeat and loads logs into elastic"
+script = '''
+docker compose --project-directory log-tools/elastic up --detach
+'''
+
+[tasks.elastic-stop]
+description = "Stops the elastic environment"
+script = '''
+docker compose --project-directory log-tools/elastic stop
+'''
+
+[tasks.elastic-down]
+description = "Stops and removes the elastic environment, including all data"
+script = '''
+docker compose --project-directory log-tools/elastic down --volumes
 '''

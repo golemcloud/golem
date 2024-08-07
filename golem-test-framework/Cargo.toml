@@ -13,6 +13,7 @@ repository = "https://github.com/golemcloud/golem"
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
@@ -46,3 +47,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+log = { version = "0.4.22", features = [] }

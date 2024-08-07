@@ -84,10 +84,6 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args> {
             conflicts_with = "parameters"
         )]
         wave: Vec<String>,
-
-        /// Enables the STDIO calling convention, passing the parameters through stdin instead of a typed exported interface
-        #[arg(short = 's', long, default_value_t = false)]
-        use_stdio: bool,
     },
 
     /// Triggers a function invocation on a worker without waiting for its completion
@@ -267,7 +263,6 @@ impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
                 function,
                 parameters,
                 wave,
-                use_stdio,
             } => {
                 let (component_id_or_name, project_ref) = component_id_or_name.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
@@ -280,7 +275,6 @@ impl<ComponentRef: clap::Args> WorkerSubcommand<ComponentRef> {
                         function,
                         parameters,
                         wave,
-                        use_stdio,
                         project_id,
                     )
                     .await

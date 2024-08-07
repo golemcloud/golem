@@ -27,20 +27,20 @@ use crate::services::golem_config::{
 use crate::storage::blob::BlobStorage;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::{
-    download_component_response, get_component_metadata_response, DownloadComponentRequest,
-    GetLatestComponentRequest, GetVersionedComponentRequest,
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::{
+    download_component_response, get_component_metadata_response, ComponentError,
+    DownloadComponentRequest, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
-use golem_api_grpc::proto::golem::component::{ComponentError, LinearMemory};
+use golem_api_grpc::proto::golem::component::LinearMemory;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::component_metadata::RawComponentMetadata;
+use golem_common::model::exports::Export;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
-use golem_wasm_ast::analysis::{AnalysisContext, AnalysisFailure};
-use golem_wasm_ast::IgnoreAll;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
@@ -55,6 +55,7 @@ pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
+    pub exports: Vec<Export>,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -427,6 +428,7 @@ async fn get_metadata_via_grpc(
                         Err(GrpcError::Domain(error))
                     }
                 }?;
+
                 let result = ComponentMetadata {
                     version: component
                         .versioned_component_id
@@ -441,6 +443,22 @@ async fn get_metadata_via_grpc(
                         .as_ref()
                         .map(|metadata| metadata.memories.clone())
                         .unwrap_or_default(),
+                    exports: component
+                        .metadata
+                        .map(|metadata| {
+                            let export = metadata.exports;
+                            let vec: Vec<Result<Export, String>> = export
+                                .into_iter()
+                                .map(|proto_export| {
+                                    golem_common::model::exports::Export::try_from(proto_export)
+                                })
+                                .collect();
+                            vec.into_iter().collect()
+                        })
+                        .unwrap_or_else(|| Ok(Vec::new()))
+                        .map_err(|_| {
+                            GrpcError::Unexpected("Failed to get the exports".to_string())
+                        })?,
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
@@ -616,31 +634,60 @@ impl ComponentServiceLocalFileSystem {
             .await
     }
 
-    async fn analyize_memories(
+    async fn analyze_memories_and_exports(
         component_id: &ComponentId,
-        path: &&PathBuf,
-    ) -> Result<Vec<LinearMemory>, GolemError> {
-        let analysis: AnalysisContext<IgnoreAll> = golem_wasm_ast::analysis::AnalysisContext::new(
-            golem_wasm_ast::component::Component::from_bytes(&tokio::fs::read(&path).await?)
-                .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
+        path: &PathBuf,
+    ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
+        // check if component metadata is already available in a corresponding `json` file in a target directory
+        // otherwise, try to analyse the component file.
+        let component_metadata_opt: Option<
+            golem_common::model::component_metadata::ComponentMetadata,
+        > = Self::read_component_metadata_from_local_file(path)
+            .await
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
+        if let Some(golem_common::model::component_metadata::ComponentMetadata {
+            memories,
+            exports,
+            ..
+        }) = component_metadata_opt
+        {
+            let linear_memories = memories
+                .into_iter()
+                .map(|mem| LinearMemory {
+                    initial: mem.initial,
+                    maximum: mem.maximum,
+                })
+                .collect::<Vec<_>>();
+
+            Ok((linear_memories, exports))
+        } else {
+            let component_bytes = &tokio::fs::read(&path).await?;
+            let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)
+                .map_err(|reason| {
+                GolemError::GetLatestVersionOfComponentFailed {
                     component_id: component_id.clone(),
-                    reason,
-                })?,
-        );
-        Ok(analysis
-            .get_all_memories()
-            .map_err(|reason| GolemError::GetLatestVersionOfComponentFailed {
-                component_id: component_id.clone(),
-                reason: match reason {
-                    AnalysisFailure::Failed(reason) => reason,
-                },
-            })?
-            .into_iter()
-            .map(|mem| LinearMemory {
-                initial: mem.mem_type.limits.min * 65536,
-                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
-            })
-            .collect::<Vec<_>>())
+                    reason: reason.to_string(),
+                }
+            })?;
+
+            let exports = raw_component_metadata
+                .exports
+                .into_iter()
+                .map(|export| export.into())
+                .collect::<Vec<_>>();
+
+            let linear_memories: Vec<LinearMemory> = raw_component_metadata
+                .memories
+                .into_iter()
+                .map(|mem| LinearMemory {
+                    initial: mem.mem_type.limits.min * 65536,
+                    maximum: mem.mem_type.limits.max.map(|m| m * 65536),
+                })
+                .collect::<Vec<_>>();
+
+            Ok((linear_memories, exports))
+        }
     }
 
     async fn get_metadata_impl(
@@ -686,14 +733,32 @@ impl ComponentServiceLocalFileSystem {
         };
 
         let size = tokio::fs::metadata(&path).await?.len();
-        let memories = Self::analyize_memories(component_id, &path)
+        let (memories, exports) = Self::analyze_memories_and_exports(component_id, path)
             .await
-            .unwrap_or_default(); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
+            .unwrap_or((vec![], vec![])); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
+
         Ok(ComponentMetadata {
             version: *version,
             size,
             memories,
+            exports,
         })
+    }
+
+    async fn read_component_metadata_from_local_file(component_path: &Path) -> Option<Vec<u8>> {
+        let component_metadata_local = Self::get_component_metadata_file(component_path).await?;
+        tokio::fs::read(component_metadata_local).await.ok()
+    }
+
+    pub async fn get_component_metadata_file(component_path: &Path) -> Option<PathBuf> {
+        let mut target_dir = Path::new("../target").to_path_buf();
+        let component_file = component_path
+            .file_name()
+            .and_then(|os_str| os_str.to_str())?;
+        target_dir.push(component_file);
+        // We expect the component metadata to be in the same directory as the component file with extension as json
+        target_dir.set_extension("json");
+        Some(target_dir)
     }
 }
 

@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
-use std::string::FromUtf8Error;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -36,9 +35,8 @@ use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
-use crate::wasi_host::managed_stdio::ManagedStandardIo;
 use crate::workerctx::{
-    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement, IoCapturing,
+    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement,
     PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
@@ -51,18 +49,19 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::AsContextMut;
-use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, WasiCtx, WasiView};
+use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Stdout, WasiCtx, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -99,10 +98,12 @@ mod sync_helper;
 
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
+use crate::function_result_interpreter::interpret_function_results;
 use crate::services::component::ComponentMetadata;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
+use golem_common::model::exports;
 use golem_common::retries::get_delay;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
@@ -152,9 +153,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
 
-        let stdio = ManagedStandardIo::new(owned_worker_id.worker_id());
-        let stdin = ManagedStdIn::from_standard_io(stdio.clone()).await;
-        let stdout = ManagedStdOut::from_standard_io(stdio.clone());
+        let stdin = ManagedStdIn::disabled();
+        let stdout = ManagedStdOut::from_stdout(Stdout);
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
         let last_oplog_index = oplog.current_oplog_index().await;
@@ -179,7 +179,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
                 event_service,
-                managed_stdio: stdio,
                 invocation_queue,
                 oplog: oplog.clone(),
             },
@@ -279,10 +278,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         status.oplog_idx = self.state.oplog.current_oplog_index().await;
         f(&mut status);
         self.public_state.worker().update_status(status).await;
-    }
-
-    pub fn get_stdio(&self) -> ManagedStandardIo {
-        self.public_state.managed_stdio.clone()
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
@@ -436,7 +431,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,
-                                    CallingConvention::Component,
                                     true,
                                 )
                                 .await;
@@ -455,16 +449,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     Ok(InvokeResult::Succeeded { output, .. }) => {
                                         if output.len() == 1 {
                                             match &output[0] {
-                                                    Value::Result(Err(Some(boxed_error_value))) => {
-                                                        match &**boxed_error_value {
-                                                            Value::String(error) =>
-                                                                Some(format!("Manual update failed to load snapshot: {error}")),
-                                                            _ =>
-                                                                Some("Unexpected result value from the snapshot load function".to_string())
-                                                        }
+                                                Value::Result(Err(Some(boxed_error_value))) => {
+                                                    match &**boxed_error_value {
+                                                        Value::String(error) =>
+                                                            Some(format!("Manual update failed to load snapshot: {error}")),
+                                                        _ =>
+                                                            Some("Unexpected result value from the snapshot load function".to_string())
                                                     }
-                                                    _ => None
                                                 }
+                                                _ => None
+                                            }
                                         } else {
                                             Some("Unexpected result value from the snapshot load function".to_string())
                                         }
@@ -571,23 +565,6 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.state.get_current_idempotency_key()
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> IoCapturing for DurableWorkerCtx<Ctx> {
-    async fn start_capturing_stdout(&mut self, provided_stdin: String) {
-        self.public_state
-            .managed_stdio
-            .start_single_stdio_call(provided_stdin)
-            .await
-    }
-
-    async fn finish_capturing_stdout(&mut self) -> Result<String, FromUtf8Error> {
-        self.public_state
-            .managed_stdio
-            .finish_single_stdio_call()
-            .await
     }
 }
 
@@ -718,7 +695,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        calling_convention: Option<CallingConvention>,
     ) -> Result<(), GolemError> {
         if self.state.snapshotting_mode.is_none() {
             let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
@@ -734,7 +710,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,
-                    calling_convention,
                 )
                 .await
                 .unwrap_or_else(|err| {
@@ -815,18 +790,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         function_input: &Vec<Value>,
         consumed_fuel: i64,
-        output: Vec<Value>,
+        output: TypeAnnotatedValue,
     ) -> Result<(), GolemError> {
         let is_live_after = self.state.is_live();
 
         if is_live_after {
             if self.state.snapshotting_mode.is_none() {
-                let proto_output: Vec<golem_wasm_rpc::protobuf::Val> =
-                    output.iter().map(|value| value.clone().into()).collect();
-
                 self.state
                     .oplog
-                    .add_exported_function_completed(&proto_output, consumed_fuel)
+                    .add_exported_function_completed(&output, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1082,12 +1054,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => break Ok(RetryDecision::None),
-                    Ok(Some((
-                        function_name,
-                        function_input,
-                        idempotency_key,
-                        calling_convention,
-                    ))) => {
+                    Ok(Some((function_name, function_input, idempotency_key))) => {
                         debug!("Replaying function {function_name}");
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
@@ -1102,7 +1069,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             function_input.clone(),
                             store,
                             instance,
-                            calling_convention.unwrap_or(CallingConvention::Component),
                             false, // we know it was not live before, because cont=true
                         )
                         .instrument(span)
@@ -1113,18 +1079,74 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 output,
                                 consumed_fuel,
                             }) => {
-                                if let Err(err) = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_invocation_success(
-                                        &full_function_name,
-                                        &function_input,
-                                        consumed_fuel,
-                                        output,
-                                    )
-                                    .await
-                                {
-                                    break Err(err);
+                                let component_metadata =
+                                    store.as_context().data().component_metadata();
+
+                                match exports::function_by_name(
+                                    &component_metadata.exports,
+                                    &full_function_name,
+                                ) {
+                                    Ok(value) => {
+                                        if let Some(value) = value {
+                                            let function_results: Vec<AnalysedFunctionResult> =
+                                                value
+                                                    .results
+                                                    .into_iter()
+                                                    .map(|t| t.into())
+                                                    .collect();
+
+                                            let result = interpret_function_results(
+                                                output,
+                                                function_results,
+                                            )
+                                            .map_err(|e| GolemError::ValueMismatch {
+                                                details: e.join(", "),
+                                            })?;
+                                            if let Err(err) = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_success(
+                                                    &full_function_name,
+                                                    &function_input,
+                                                    consumed_fuel,
+                                                    result,
+                                                )
+                                                .await
+                                            {
+                                                break Err(err);
+                                            }
+                                        } else {
+                                            let trap_type = TrapType::Error(WorkerError::Unknown(
+                                                format!("Function {full_function_name} not found"),
+                                            ));
+
+                                            let _ = store
+                                                .as_context_mut()
+                                                .data_mut()
+                                                .on_invocation_failure(&trap_type)
+                                                .await;
+
+                                            break Err(GolemError::invalid_request(format!(
+                                                "Function {full_function_name} not found"
+                                            )));
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let trap_type =
+                                            TrapType::Error(WorkerError::Unknown(format!(
+                                                "Function {full_function_name} not found: {err}"
+                                            )));
+
+                                        let _ = store
+                                            .as_context_mut()
+                                            .data_mut()
+                                            .on_invocation_failure(&trap_type)
+                                            .await;
+
+                                        break Err(GolemError::invalid_request(format!(
+                                            "Function {full_function_name} not found: {err}"
+                                        )));
+                                    }
                                 }
                                 count += 1;
                                 continue;
@@ -1278,7 +1300,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
             let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
             match oplog_entry.first_key_value()
                 .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", owned_worker_id.worker_id)) {
-                (_, OplogEntry::Error { error, .. } )=> {
+                (_, OplogEntry::Error { error, .. }) => {
                     retry_count += 1;
                     if first_error.is_none() {
                         first_error = Some(error.clone());
@@ -1290,7 +1312,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         break Some(
                             LastError {
                                 error: first_error.unwrap(),
-                                retry_count
+                                retry_count,
                             }
                         );
                     }
@@ -1683,7 +1705,6 @@ impl HasConfig for PrivateDurableWorkerState {
 pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
-    managed_stdio: ManagedStandardIo,
     invocation_queue: Weak<Worker<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
 }
@@ -1693,7 +1714,6 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
         Self {
             promise_service: self.promise_service.clone(),
             event_service: self.event_service.clone(),
-            managed_stdio: self.managed_stdio.clone(),
             invocation_queue: self.invocation_queue.clone(),
             oplog: self.oplog.clone(),
         }

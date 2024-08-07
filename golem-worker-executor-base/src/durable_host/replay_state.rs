@@ -16,7 +16,8 @@ use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{CallingConvention, IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -182,15 +183,7 @@ impl ReplayState {
 
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
-    ) -> Result<
-        Option<(
-            String,
-            Vec<Value>,
-            IdempotencyKey,
-            Option<CallingConvention>,
-        )>,
-        GolemError,
-    > {
+    ) -> Result<Option<(String, Vec<Value>, IdempotencyKey)>, GolemError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
@@ -198,7 +191,6 @@ impl ReplayState {
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
                         idempotency_key,
-                        calling_convention,
                         ..
                     } => {
                         let request: Vec<golem_wasm_rpc::protobuf::Val> = self
@@ -218,7 +210,6 @@ impl ReplayState {
                             function_name.to_string(),
                             request,
                             idempotency_key.clone(),
-                            *calling_convention,
                         )));
                     }
                     entry if entry.is_hint() => {}
@@ -237,25 +228,19 @@ impl ReplayState {
 
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
-    ) -> Result<Option<Vec<Value>>, GolemError> {
+    ) -> Result<Option<TypeAnnotatedValue>, GolemError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match &oplog_entry {
                     OplogEntry::ExportedFunctionCompleted { .. } => {
-                        let response: Vec<golem_wasm_rpc::protobuf::Val> = self
+                        let response: TypeAnnotatedValue = self
                             .oplog
                             .get_payload_of_entry(&oplog_entry)
                             .await
                             .expect("failed to deserialize function response payload")
                             .unwrap();
-                        let response = response
-                            .into_iter()
-                            .map(|val| {
-                                val.try_into()
-                                    .expect("failed to decode serialized protobuf value")
-                            })
-                            .collect();
+
                         break Ok(Some(response));
                     }
                     entry if entry.is_hint() => {}

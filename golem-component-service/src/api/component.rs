@@ -118,7 +118,7 @@ pub struct ComponentApi {
     pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
 }
 
-#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Component)]
+#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {

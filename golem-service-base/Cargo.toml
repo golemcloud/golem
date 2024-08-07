@@ -2,6 +2,10 @@
 name = "golem-service-base"
 version = "0.0.0"
 edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Shared code between Golem services"
 
 [lib]
 
@@ -16,13 +20,15 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-bigdecimal = "0.4.2"
+bigdecimal = { workspace = true }
 bincode = { workspace = true }
+chrono = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 http_02 = { workspace = true }
+humantime-serde = { workspace = true }
 hyper = { workspace = true }
-num-traits = "0.2"
+num-traits = { workspace = true }
 poem-openapi = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
