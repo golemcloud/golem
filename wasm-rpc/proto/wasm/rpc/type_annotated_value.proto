@@ -1,7 +1,8 @@
 syntax = "proto3";
 
 package wasm.rpc;
-import "wasm/rpc/type.proto";
+
+import "wasm/ast/type.proto";
 
 message TypeAnnotatedValue {
     oneof type_annotated_value {
@@ -31,17 +32,17 @@ message TypeAnnotatedValue {
 }
 
 message TypedList {
-    Type typ = 1;
+    wasm.ast.Type typ = 1;
     repeated TypeAnnotatedValue values = 2;
 }
 
 message TypedTuple {
-    repeated Type typ = 1;
+    repeated wasm.ast.Type typ = 1;
     repeated TypeAnnotatedValue value = 2;
 }
 
 message TypedRecord {
-    repeated NameTypePair typ = 1;
+    repeated wasm.ast.NameTypePair typ = 1;
     repeated NameValuePair value = 2;
 }
 
@@ -51,7 +52,7 @@ message TypedFlags {
 }
 
 message TypedVariant {
-    TypeVariant typ = 1;
+    wasm.ast.TypeVariant typ = 1;
     string case_name = 2;
     TypeAnnotatedValue case_value = 3;
 }
@@ -62,13 +63,13 @@ message TypedEnum {
 }
 
 message TypedOption {
-    Type typ = 1;
+    wasm.ast.Type typ = 1;
     optional TypeAnnotatedValue value = 2;
 }
 
 message TypedResult {
-    Type ok = 1;
-    Type error = 2;
+    wasm.ast.Type ok = 1;
+    wasm.ast.Type error = 2;
     oneof result_value {
         TypeAnnotatedValue ok_value = 3;
         TypeAnnotatedValue error_value = 4;
@@ -76,7 +77,7 @@ message TypedResult {
 }
 
 message TypedHandle {
-    TypeHandle typ = 1;
+    wasm.ast.TypeHandle typ = 1;
     string uri = 2;
     uint64 resource_id = 3;
 }

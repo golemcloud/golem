@@ -427,7 +427,7 @@ pub fn compose(args: ComposeArgs) -> anyhow::Result<()> {
 
         let state = AnalysisContext::new(stub_component);
         let stub_exports = state.get_top_level_exports().map_err(|err| match err {
-            AnalysisFailure::Failed(msg) => anyhow!(msg),
+            AnalysisFailure { reason } => anyhow!(reason),
         })?;
 
         for export in stub_exports {

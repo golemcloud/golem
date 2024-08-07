@@ -1,12 +1,13 @@
 use crate::Value;
+use golem_wasm_ast::analysis::protobuf::Type;
 
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::protobuf::typed_result::ResultValue;
 use crate::protobuf::{NameValuePair, TypedOption};
-use crate::protobuf::{
-    Type, TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
-};
 use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult};
+use crate::protobuf::{
+    TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
+};
 
 pub fn create<T: Into<Type>>(value: &Value, typ: T) -> Result<TypeAnnotatedValue, Vec<String>> {
     let tpe: Type = typ.into();
@@ -30,7 +31,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         Value::String(value) => Ok(TypeAnnotatedValue::Str(value.clone())),
 
         Value::Enum(value) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Enum(typ_enum)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Enum(typ_enum)) => {
                 match typ_enum.names.get(*value as usize) {
                     Some(name) => Ok(TypeAnnotatedValue::Enum(TypedEnum {
                         typ: typ_enum.names.clone(),
@@ -46,30 +47,32 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         },
 
         Value::Option(value) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Option(typ_option)) => match value {
-                Some(value) => {
-                    if let Some(inner_type) = &typ_option.elem {
-                        let result = create_from_type(value, inner_type)?;
-                        Ok(TypeAnnotatedValue::Option(Box::new(TypedOption {
-                            typ: Some((**inner_type).clone()),
-                            value: Some(Box::new(RootTypeAnnotatedValue {
-                                type_annotated_value: Some(result),
-                            })),
-                        })))
-                    } else {
-                        Err(vec!["Unexpected inner type for Option.".to_string()])
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Option(typ_option)) => {
+                match value {
+                    Some(value) => {
+                        if let Some(inner_type) = &typ_option.elem {
+                            let result = create_from_type(value, inner_type)?;
+                            Ok(TypeAnnotatedValue::Option(Box::new(TypedOption {
+                                typ: Some((**inner_type).clone()),
+                                value: Some(Box::new(RootTypeAnnotatedValue {
+                                    type_annotated_value: Some(result),
+                                })),
+                            })))
+                        } else {
+                            Err(vec!["Unexpected inner type for Option.".to_string()])
+                        }
                     }
+                    None => Ok(TypeAnnotatedValue::Option(Box::new(TypedOption {
+                        typ: typ_option.elem.as_deref().cloned(),
+                        value: None,
+                    }))),
                 }
-                None => Ok(TypeAnnotatedValue::Option(Box::new(TypedOption {
-                    typ: typ_option.elem.as_deref().cloned(),
-                    value: None,
-                }))),
-            },
+            }
             _ => Err(vec!["Unexpected type; expected an Option type.".to_string()]),
         },
 
         Value::Tuple(values) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Tuple(typ_tuple)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Tuple(typ_tuple)) => {
                 if values.len() != typ_tuple.elems.len() {
                     return Err(vec![format!(
                         "Tuple has unexpected number of elements: {} vs {}",
@@ -106,7 +109,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         },
 
         Value::List(values) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::List(typ_list)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::List(typ_list)) => {
                 if let Some(inner_type) = &typ_list.elem {
                     let mut errors = vec![];
                     let mut results = vec![];
@@ -139,7 +142,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         },
 
         Value::Record(values) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Record(typ_record)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Record(typ_record)) => {
                 if values.len() != typ_record.fields.len() {
                     return Err(vec!["The total number of field values is zero".to_string()]);
                 }
@@ -182,7 +185,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
             case_idx,
             case_value,
         } => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Variant(typ_variant)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Variant(typ_variant)) => {
                 if (*case_idx as usize) < typ_variant.cases.len() {
                     let cases = typ_variant.cases.clone();
 
@@ -197,7 +200,9 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
                                 let result = create_from_type(case_value, &tpe)?;
 
                                 Ok(TypeAnnotatedValue::Variant(Box::new(TypedVariant {
-                                    typ: Some(crate::protobuf::TypeVariant { cases }),
+                                    typ: Some(golem_wasm_ast::analysis::protobuf::TypeVariant {
+                                        cases,
+                                    }),
                                     case_name: case_name.clone(),
                                     case_value: Some(Box::new(RootTypeAnnotatedValue {
                                         type_annotated_value: Some(result),
@@ -207,7 +212,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
                             None => Err(vec![format!("Missing value for case {case_name}")]),
                         },
                         None => Ok(TypeAnnotatedValue::Variant(Box::new(TypedVariant {
-                            typ: Some(crate::protobuf::TypeVariant { cases }),
+                            typ: Some(golem_wasm_ast::analysis::protobuf::TypeVariant { cases }),
                             case_name: case_name.clone(),
                             case_value: None,
                         }))),
@@ -222,7 +227,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         },
 
         Value::Flags(values) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Flags(typ_flags)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Flags(typ_flags)) => {
                 if values.len() != typ_flags.names.len() {
                     return Err(vec![format!(
                         "Unexpected number of flag states: {:?} vs {:?}",
@@ -246,7 +251,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         },
 
         Value::Result(value) => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Result(typ_result)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Result(typ_result)) => {
                 match (value, &typ_result.ok, &typ_result.err) {
                     (Ok(Some(value)), Some(ok_type), _) => {
                         let result = create_from_type(value, ok_type)?;
@@ -315,7 +320,7 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
         },
 
         Value::Handle { uri, resource_id } => match &typ.r#type {
-            Some(crate::protobuf::r#type::Type::Handle(typ_handle)) => {
+            Some(golem_wasm_ast::analysis::protobuf::r#type::Type::Handle(typ_handle)) => {
                 let handle = TypedHandle {
                     uri: uri.value.clone(),
                     resource_id: *resource_id,
@@ -333,13 +338,13 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
 #[cfg(test)]
 mod tests {
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use crate::protobuf::{r#type, PrimitiveType, TypePrimitive};
     use crate::{create, Value};
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_ast::analysis::protobuf::{r#type, PrimitiveType, TypePrimitive};
+    use golem_wasm_ast::analysis::{AnalysedType, TypeU32};
 
     #[test]
     fn test_type_annotated_value_from_analysed_type() {
-        let analysed_type = AnalysedType::U32;
+        let analysed_type = AnalysedType::U32(TypeU32);
 
         let result = create(&Value::U32(1), &analysed_type);
 
@@ -354,7 +359,7 @@ mod tests {
             primitive: PrimitiveType::Bool as i32,
         });
 
-        let typ = crate::protobuf::Type { r#type: Some(typ0) };
+        let typ = golem_wasm_ast::analysis::protobuf::Type { r#type: Some(typ0) };
 
         let result = create(&Value::U32(1), typ);
 
