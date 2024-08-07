@@ -213,11 +213,12 @@ fn api_definition_import(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let path = make_open_api_file(&component_name, &component.component_id)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let path = make_open_api_file(&component_name, &component_id)?;
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
 
-    let expected = golem_def(&component_name, &component.component_id);
+    let expected = golem_def(&component_name, &component_id);
 
     assert_eq!(res, expected);
 
@@ -233,7 +234,8 @@ fn api_definition_add(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -252,14 +254,15 @@ fn api_definition_update(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
 
-    let def = golem_def(&component_name, &component.component_id);
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let updated = golem_def_with_response(
         &component_name,
-        &component.component_id,
+        &component_id,
         "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: 200}}"
             .to_string(),
     );
@@ -280,13 +283,14 @@ fn api_definition_update_immutable(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_update_immutable{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
 
-    let mut def = golem_def(&component_name, &component.component_id);
+    let mut def = golem_def(&component_name, &component_id);
     def.draft = false;
     let path = make_golem_file(&def)?;
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let updated = golem_def_with_response(&component_name, &component.component_id, "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: 200}}".to_string());
+    let updated = golem_def_with_response(&component_name, &component_id, "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: 200}}".to_string());
     let path = make_golem_file(&updated)?;
     let res = cli.run_string(&["api-definition", "update", path.to_str().unwrap()]);
 
@@ -304,7 +308,8 @@ fn api_definition_list(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_list{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -325,7 +330,8 @@ fn api_definition_list_versions(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_list_versions{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
@@ -353,7 +359,8 @@ fn api_definition_get(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_get{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -383,7 +390,8 @@ fn api_definition_delete(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_delete{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;

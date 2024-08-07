@@ -5,6 +5,8 @@ use golem_client::model::{
     NameTypePair, ProtectedComponentId, ResourceMode, Type, TypeEnum, TypeFlags, TypeRecord,
     TypeTuple, TypeVariant, UserComponentId, VersionedComponentId,
 };
+use golem_common::model::ComponentId;
+use golem_common::uri::oss::urn::ComponentUrn;
 use golem_wasm_ast::wave::DisplayNamedFunc;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
@@ -49,7 +51,7 @@ impl From<golem_client::model::Component> for Component {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
-    pub component_id: String,
+    pub component_urn: ComponentUrn,
     pub component_version: u64,
     pub component_name: String,
     pub component_size: u64,
@@ -68,7 +70,9 @@ impl From<Component> for ComponentView {
 impl From<&Component> for ComponentView {
     fn from(value: &Component) -> Self {
         ComponentView {
-            component_id: value.versioned_component_id.component_id.to_string(),
+            component_urn: ComponentUrn {
+                id: ComponentId(value.versioned_component_id.component_id),
+            },
             component_version: value.versioned_component_id.version,
             component_name: value.component_name.to_string(),
             component_size: value.component_size,

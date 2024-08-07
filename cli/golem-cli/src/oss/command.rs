@@ -16,11 +16,12 @@ use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
 use crate::command::profile::ProfileSubCommand;
-use crate::command::worker::WorkerSubcommand;
-use crate::model::{ComponentIdOrName, Format};
+use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
+use crate::model::{ComponentUriArg, Format};
 use crate::oss::model::OssContext;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
+use golem_common::uri::oss::uri::ResourceUri;
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 
 #[derive(Subcommand, Debug)]
@@ -30,14 +31,23 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
     #[command()]
     Component {
         #[command(subcommand)]
-        subcommand: ComponentSubCommand<OssContext, ComponentIdOrName>,
+        subcommand: ComponentSubCommand<OssContext, ComponentUriArg>,
     },
 
     /// Manage Golem workers
     #[command()]
     Worker {
         #[command(subcommand)]
-        subcommand: WorkerSubcommand<ComponentIdOrName>,
+        subcommand: WorkerSubcommand<ComponentUriArg, OssWorkerUriArg>,
+    },
+
+    /// Get resource by URI
+    ///
+    /// Use resource URN or URL to get resource metadata.
+    #[command()]
+    Get {
+        #[arg(value_name = "URI")]
+        uri: ResourceUri,
     },
 
     /// Create a new Golem component from built-in examples

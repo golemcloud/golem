@@ -13,26 +13,26 @@
 // limitations under the License.
 
 use crate::model::{
-    ComponentId, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
 use golem_client::model::{InvokeParameters, InvokeResult, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 
 #[async_trait]
 pub trait WorkerClient {
     async fn new_worker(
         &self,
         name: WorkerName,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<WorkerId, GolemError>;
 
     async fn invoke_and_await(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         function: String,
         parameters: InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
@@ -40,32 +40,19 @@ pub trait WorkerClient {
 
     async fn invoke(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         function: String,
         parameters: InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<(), GolemError>;
 
-    async fn interrupt(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<(), GolemError>;
-    async fn simulated_crash(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<(), GolemError>;
-    async fn delete(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError>;
-    async fn get_metadata(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<WorkerMetadata, GolemError>;
+    async fn interrupt(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
+    async fn simulated_crash(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
+    async fn delete(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
+    async fn get_metadata(&self, worker_urn: WorkerUrn) -> Result<WorkerMetadata, GolemError>;
     async fn find_metadata(
         &self,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         filter: Option<WorkerFilter>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
@@ -73,18 +60,17 @@ pub trait WorkerClient {
     ) -> Result<WorkersMetadataResponse, GolemError>;
     async fn list_metadata(
         &self,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         filter: Option<Vec<String>>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError>;
-    async fn connect(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError>;
+    async fn connect(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
 
     async fn update(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         mode: WorkerUpdateMode,
         target_version: u64,
     ) -> Result<(), GolemError>;
