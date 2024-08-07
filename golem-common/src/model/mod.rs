@@ -50,6 +50,7 @@ pub mod oplog;
 pub mod precise_json;
 pub mod regions;
 
+use crate::uri::oss::urn::WorkerUrn;
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
@@ -250,7 +251,7 @@ impl WorkerId {
     }
 
     pub fn uri(&self) -> String {
-        format!("worker://{}", self.slug())
+        WorkerUrn { id: self.clone() }.to_string()
     }
 }
 

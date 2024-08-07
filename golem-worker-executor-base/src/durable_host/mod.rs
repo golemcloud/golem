@@ -69,7 +69,7 @@ use wasmtime_wasi_http::types::{
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::wasm_rpc::UriExtensions;
+use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
 use crate::services::rpc::Rpc;
@@ -1664,7 +1664,7 @@ impl PrivateDurableWorkerState {
 #[async_trait]
 impl ResourceStore for PrivateDurableWorkerState {
     fn self_uri(&self) -> Uri {
-        Uri::golem_uri(&self.owned_worker_id.worker_id, None)
+        Uri::golem_urn(&self.owned_worker_id.worker_id, None)
     }
 
     async fn add(&mut self, resource: ResourceAny) -> u64 {

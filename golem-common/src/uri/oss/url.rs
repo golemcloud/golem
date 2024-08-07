@@ -244,6 +244,93 @@ impl TypedGolemUrl for WorkerUrl {
 
 url_from_into!(WorkerUrl);
 
+/// Typed Golem URL for worker function
+///
+/// Format: `worker:///{component_name}/{worker_name}/{function}`
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct WorkerFunctionUrl {
+    pub component_name: String,
+    pub worker_name: String,
+    pub function: String,
+}
+
+impl TypedGolemUrl for WorkerFunctionUrl {
+    fn resource_type() -> &'static str {
+        WORKER_TYPE_NAME
+    }
+
+    fn try_from_parts(path: &str, query: Option<&str>) -> Result<Self, GolemUrlTransformError>
+    where
+        Self: Sized,
+    {
+        let (component_name, worker_name, function) = Self::expect_path3(path)?;
+
+        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+
+        Ok(Self {
+            component_name,
+            worker_name,
+            function,
+        })
+    }
+
+    fn to_parts(&self) -> (String, Option<String>) {
+        (
+            Self::make_path3(&self.component_name, &self.worker_name, &self.function),
+            None,
+        )
+    }
+}
+
+url_from_into!(WorkerFunctionUrl);
+
+/// Typed Golem URL for worker or worker function
+///
+/// Format: `worker:///{component_name}/{worker_name}` or `worker:///{component_name}/{worker_name}/{function}`
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum WorkerOrFunctionUrl {
+    Worker(WorkerUrl),
+    Function(WorkerFunctionUrl),
+}
+
+impl TypedGolemUrl for WorkerOrFunctionUrl {
+    fn resource_type() -> &'static str {
+        WORKER_TYPE_NAME
+    }
+
+    fn try_from_parts(path: &str, query: Option<&str>) -> Result<Self, GolemUrlTransformError>
+    where
+        Self: Sized,
+    {
+        let has_function = if let Some(rest) = path.strip_prefix('/') {
+            if let Some((_, rest)) = rest.split_once('/') {
+                rest.contains('/')
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if has_function {
+            Ok(Self::Function(WorkerFunctionUrl::try_from_parts(
+                path, query,
+            )?))
+        } else {
+            Ok(Self::Worker(WorkerUrl::try_from_parts(path, query)?))
+        }
+    }
+
+    fn to_parts(&self) -> (String, Option<String>) {
+        match self {
+            Self::Worker(w) => w.to_parts(),
+            Self::Function(f) => f.to_parts(),
+        }
+    }
+}
+
+url_from_into!(WorkerOrFunctionUrl);
+
 /// Typed Golem URL for API definition
 ///
 /// Format: `api-definition:///{name}/{version}`
@@ -313,6 +400,7 @@ pub enum ResourceUrl {
     Component(ComponentUrl),
     ComponentVersion(ComponentVersionUrl),
     Worker(WorkerUrl),
+    WorkerFunction(WorkerFunctionUrl),
     ApiDefinition(ApiDefinitionUrl),
     ApiDeployment(ApiDeploymentUrl),
 }
@@ -326,7 +414,10 @@ impl TryFrom<&GolemUrl> for ResourceUrl {
                 ComponentOrVersionUrl::Component(c) => Ok(ResourceUrl::Component(c)),
                 ComponentOrVersionUrl::Version(v) => Ok(ResourceUrl::ComponentVersion(v)),
             },
-            WORKER_TYPE_NAME => Ok(ResourceUrl::Worker(WorkerUrl::try_from(value)?)),
+            WORKER_TYPE_NAME => match WorkerOrFunctionUrl::try_from(value)? {
+                WorkerOrFunctionUrl::Worker(w) => Ok(ResourceUrl::Worker(w)),
+                WorkerOrFunctionUrl::Function(f) => Ok(ResourceUrl::WorkerFunction(f)),
+            },
             API_DEFINITION_TYPE_NAME => Ok(ResourceUrl::ApiDefinition(ApiDefinitionUrl::try_from(
                 value,
             )?)),
@@ -360,6 +451,7 @@ impl From<&ResourceUrl> for GolemUrl {
             ResourceUrl::Component(c) => c.into(),
             ResourceUrl::ComponentVersion(v) => v.into(),
             ResourceUrl::Worker(w) => w.into(),
+            ResourceUrl::WorkerFunction(f) => f.into(),
             ResourceUrl::ApiDefinition(d) => d.into(),
             ResourceUrl::ApiDeployment(d) => d.into(),
         }
@@ -393,7 +485,7 @@ impl Display for ResourceUrl {
 mod tests {
     use crate::uri::oss::url::{
         ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
-        ComponentVersionUrl, ResourceUrl, WorkerUrl,
+        ComponentVersionUrl, ResourceUrl, WorkerFunctionUrl, WorkerOrFunctionUrl, WorkerUrl,
     };
     use crate::uri::GolemUrl;
     use std::str::FromStr;
@@ -508,6 +600,81 @@ mod tests {
 
         assert_eq!(typed.component_name, "my component");
         assert_eq!(typed.worker_name, "my worker");
+    }
+
+    #[test]
+    pub fn worker_function_url_to_url() {
+        let typed = WorkerFunctionUrl {
+            component_name: "my component".to_string(),
+            worker_name: "my worker".to_string(),
+            function: "fn a".to_string(),
+        };
+
+        let untyped: GolemUrl = typed.into();
+        assert_eq!(untyped.to_string(), "worker:///my+component/my+worker/fn+a");
+    }
+
+    #[test]
+    pub fn worker_function_url_from_url() {
+        let untyped = GolemUrl::from_str("worker:///my+component/my+worker/fn+a").unwrap();
+        let typed: WorkerFunctionUrl = untyped.try_into().unwrap();
+
+        assert_eq!(typed.component_name, "my component");
+        assert_eq!(typed.worker_name, "my worker");
+        assert_eq!(typed.function, "fn a");
+    }
+
+    #[test]
+    pub fn worker_function_url_from_str() {
+        let typed = WorkerFunctionUrl::from_str("worker:///my+component/my+worker/fn+a").unwrap();
+
+        assert_eq!(typed.component_name, "my component");
+        assert_eq!(typed.worker_name, "my worker");
+        assert_eq!(typed.function, "fn a");
+    }
+
+    #[test]
+    pub fn worker_or_function_url_to_url() {
+        let typed_w = WorkerOrFunctionUrl::Worker(WorkerUrl {
+            component_name: "my component".to_string(),
+            worker_name: "my worker".to_string(),
+        });
+        let typed_f = WorkerOrFunctionUrl::Function(WorkerFunctionUrl {
+            component_name: "my component".to_string(),
+            worker_name: "my worker".to_string(),
+            function: "fn a".to_string(),
+        });
+
+        let untyped_w: GolemUrl = typed_w.into();
+        let untyped_f: GolemUrl = typed_f.into();
+
+        assert_eq!(untyped_w.to_string(), "worker:///my+component/my+worker");
+        assert_eq!(
+            untyped_f.to_string(),
+            "worker:///my+component/my+worker/fn+a"
+        );
+    }
+
+    #[test]
+    pub fn worker_or_function_url_from_url() {
+        let untyped_w = GolemUrl::from_str("worker:///my+component/my+worker").unwrap();
+        let untyped_f = GolemUrl::from_str("worker:///my+component/my+worker/fn+a").unwrap();
+
+        let typed_w: WorkerOrFunctionUrl = untyped_w.try_into().unwrap();
+        let typed_f: WorkerOrFunctionUrl = untyped_f.try_into().unwrap();
+
+        assert_eq!(typed_w.to_string(), "worker:///my+component/my+worker");
+        assert_eq!(typed_f.to_string(), "worker:///my+component/my+worker/fn+a");
+    }
+
+    #[test]
+    pub fn worker_or_function_url_from_str() {
+        let typed_w = WorkerOrFunctionUrl::from_str("worker:///my+component/my+worker").unwrap();
+        let typed_f =
+            WorkerOrFunctionUrl::from_str("worker:///my+component/my+worker/fn+a").unwrap();
+
+        assert_eq!(typed_w.to_string(), "worker:///my+component/my+worker");
+        assert_eq!(typed_f.to_string(), "worker:///my+component/my+worker/fn+a");
     }
 
     #[test]

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::clients::worker::WorkerClient;
-use crate::model::component::{function_params_types, Component};
+use crate::model::component::{function_params_types, show_exported_function, Component};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::WorkerAddView;
 use crate::model::wave::type_to_analysed;
@@ -24,8 +24,8 @@ use crate::model::{
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use golem_client::model::{
-    InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator, Type, WorkerFilter,
-    WorkerNameFilter,
+    Export, ExportInstance, InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator,
+    Type, WorkerFilter, WorkerNameFilter,
 };
 use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{ComponentId, WorkerId};
@@ -105,6 +105,12 @@ pub trait WorkerService {
     async fn get(
         &self,
         worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
+    async fn get_function(
+        &self,
+        worker_uri: WorkerUri,
+        function: &str,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
     async fn list(
@@ -519,6 +525,54 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let response: WorkerMetadataView = self.client.get_metadata(worker_urn).await?.into();
 
         Ok(GolemResult::Ok(Box::new(response)))
+    }
+
+    async fn get_function(
+        &self,
+        worker_uri: WorkerUri,
+        function_name: &str,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        let worker = self.client.get_metadata(worker_urn.clone()).await?;
+
+        let component_urn = ComponentUrn {
+            id: worker_urn.id.component_id,
+        };
+        let component = self
+            .components
+            .get_metadata(&component_urn, worker.component_version)
+            .await?;
+
+        let function = component
+            .metadata
+            .exports
+            .iter()
+            .flat_map(|exp| match exp {
+                Export::Instance(ExportInstance {
+                    name: prefix,
+                    functions,
+                }) => functions
+                    .iter()
+                    .map(|f| {
+                        (
+                            format!("{prefix}.{{{}}}", f.name),
+                            show_exported_function(&format!("{prefix}."), f),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                Export::Function(f) => {
+                    vec![(f.name.clone(), show_exported_function("", f))]
+                }
+            })
+            .find(|(name, _)| name == function_name);
+
+        match function {
+            None => Err(GolemError(format!(
+                "Can't find function '{function_name}' in component {component_urn}."
+            ))),
+            Some((_, function)) => Ok(GolemResult::Str(function)),
+        }
     }
 
     async fn list(

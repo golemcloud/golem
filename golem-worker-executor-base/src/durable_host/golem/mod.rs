@@ -22,7 +22,7 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::wasm_rpc::UriExtensions;
+use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
@@ -218,7 +218,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     ) -> Result<golem::rpc::types::Uri, anyhow::Error> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api", "get_self_uri");
-        let uri = golem_wasm_rpc::golem::rpc::types::Uri::golem_uri(
+        let uri = golem_wasm_rpc::golem::rpc::types::Uri::golem_urn(
             &self.owned_worker_id.worker_id,
             Some(&function_name),
         );
