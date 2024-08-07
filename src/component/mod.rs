@@ -295,6 +295,9 @@ impl Section<ComponentIndexSpace, ComponentSectionType> for Instance {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Enum))]
 pub enum ComponentExternalKind {
     Module,
     Func,

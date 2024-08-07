@@ -7,11 +7,15 @@ homepage = "https://golem.cloud"
 description = "WASM AST"
 
 [dependencies]
+bincode = { version = "2.0.0-rc.3", optional = true }
+leb128 = { version = "0.2.5", optional = true }
 mappable-rc = "0.1.1"
+poem-openapi = { version = "5.0.2", optional = true }
+serde = { version = "1.0.122", optional = true, features = ["derive"] }
+serde_json = { version = "1.0.122", optional = true }
 wasmparser = { version = "0.207.0", optional = true }
 wasm-encoder = { version = "0.207.0", optional = true }
 wasm-metadata = { version = "0.207.0", optional = true }
-leb128 = {  version = "0.2.5", optional = true }
 wasm-wave = { version = "=0.6.0", optional = true }
 
 [dev-dependencies]
@@ -20,7 +24,7 @@ pretty_assertions = "1.4.0"
 wasmprinter = "0.207.0"
 
 [features]
-default = ["parser", "writer", "component", "metadata", "analysis", "wave"]
+default = ["parser", "writer", "component", "metadata", "analysis", "wave", "json", "bincode", "poem_openapi"]
 
 # Support building up the WASM AST by parsing a binary WASM module or component using the wasmparser library
 parser = ["dep:wasmparser", "dep:leb128"]
@@ -40,7 +44,14 @@ analysis = ["component"]
 # Wave format representation
 wave = ["dep:wasm-wave"]
 
+# Bincode serialization for analysis output
+bincode = ["dep:bincode"]
 
+# Serde JSON serialization for analysis output
+json = ["dep:serde", "dep:serde_json"]
+
+# poem-openapi instances for analysis output
+poem_openapi = ["json", "dep:poem-openapi"]
 
 [lib]
 path = "src/lib.rs"
