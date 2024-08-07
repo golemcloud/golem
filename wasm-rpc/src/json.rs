@@ -15,6 +15,4 @@
 //use crate::protobuf::TypeAnnotatedValue;
 
 /// An internal representation of a TypeAnnotatedValue that can be serialized to JSON.
-struct TypeAnnotatedValueJson {
-
-}
+struct TypeAnnotatedValueJson {}
