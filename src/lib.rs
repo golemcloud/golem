@@ -65,12 +65,6 @@ mod customization;
 #[cfg(feature = "metadata")]
 pub mod metadata;
 
-/// Wave format support for types.
-///
-/// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
-#[cfg(feature = "wave")]
-pub mod wave;
-
 pub use customization::*;
 
 /// An index space defines one of the possible indexes various WASM nodes can belong to.

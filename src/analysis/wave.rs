@@ -1,4 +1,7 @@
-use crate::analysis::{AnalysedFunction, AnalysedType};
+use crate::analysis::{
+    AnalysedFunction, AnalysedType, TypeEnum, TypeFlags, TypeList, TypeOption, TypeRecord,
+    TypeResult, TypeTuple, TypeVariant,
+};
 use std::borrow::Cow;
 use std::fmt::Display;
 use wasm_wave::wasm::{DisplayType, WasmFunc, WasmType, WasmTypeKind};
@@ -6,19 +9,19 @@ use wasm_wave::wasm::{DisplayType, WasmFunc, WasmType, WasmTypeKind};
 impl WasmType for AnalysedType {
     fn kind(&self) -> WasmTypeKind {
         match self {
-            AnalysedType::Bool => WasmTypeKind::Bool,
-            AnalysedType::S8 => WasmTypeKind::S8,
-            AnalysedType::U8 => WasmTypeKind::U8,
-            AnalysedType::S16 => WasmTypeKind::S16,
-            AnalysedType::U16 => WasmTypeKind::U16,
-            AnalysedType::S32 => WasmTypeKind::S32,
-            AnalysedType::U32 => WasmTypeKind::U32,
-            AnalysedType::S64 => WasmTypeKind::S64,
-            AnalysedType::U64 => WasmTypeKind::U64,
-            AnalysedType::F32 => WasmTypeKind::Float32,
-            AnalysedType::F64 => WasmTypeKind::Float64,
-            AnalysedType::Chr => WasmTypeKind::Char,
-            AnalysedType::Str => WasmTypeKind::String,
+            AnalysedType::Bool(_) => WasmTypeKind::Bool,
+            AnalysedType::S8(_) => WasmTypeKind::S8,
+            AnalysedType::U8(_) => WasmTypeKind::U8,
+            AnalysedType::S16(_) => WasmTypeKind::S16,
+            AnalysedType::U16(_) => WasmTypeKind::U16,
+            AnalysedType::S32(_) => WasmTypeKind::S32,
+            AnalysedType::U32(_) => WasmTypeKind::U32,
+            AnalysedType::S64(_) => WasmTypeKind::S64,
+            AnalysedType::U64(_) => WasmTypeKind::U64,
+            AnalysedType::F32(_) => WasmTypeKind::Float32,
+            AnalysedType::F64(_) => WasmTypeKind::Float64,
+            AnalysedType::Chr(_) => WasmTypeKind::Char,
+            AnalysedType::Str(_) => WasmTypeKind::String,
             AnalysedType::List(_) => WasmTypeKind::List,
             AnalysedType::Tuple(_) => WasmTypeKind::Tuple,
             AnalysedType::Record(_) => WasmTypeKind::Record,
@@ -27,12 +30,12 @@ impl WasmType for AnalysedType {
             AnalysedType::Option(_) => WasmTypeKind::Option,
             AnalysedType::Result { .. } => WasmTypeKind::Result,
             AnalysedType::Variant(_) => WasmTypeKind::Variant,
-            AnalysedType::Resource { .. } => WasmTypeKind::Unsupported,
+            AnalysedType::Handle(_) => WasmTypeKind::Unsupported,
         }
     }
 
     fn list_element_type(&self) -> Option<Self> {
-        if let AnalysedType::List(ty) = self {
+        if let AnalysedType::List(TypeList { inner: ty }) = self {
             Some(*ty.clone())
         } else {
             None
@@ -40,11 +43,11 @@ impl WasmType for AnalysedType {
     }
 
     fn record_fields(&self) -> Box<dyn Iterator<Item = (Cow<str>, Self)> + '_> {
-        if let AnalysedType::Record(fields) = self {
+        if let AnalysedType::Record(TypeRecord { fields }) = self {
             Box::new(
                 fields
                     .iter()
-                    .map(|(name, ty)| (Cow::Borrowed(name.as_str()), ty.clone())),
+                    .map(|pair| (Cow::Borrowed(pair.name.as_str()), pair.typ.clone())),
             )
         } else {
             Box::new(std::iter::empty())
@@ -52,19 +55,19 @@ impl WasmType for AnalysedType {
     }
 
     fn tuple_element_types(&self) -> Box<dyn Iterator<Item = Self> + '_> {
-        if let AnalysedType::Tuple(types) = self {
-            Box::new(types.clone().into_iter())
+        if let AnalysedType::Tuple(TypeTuple { items }) = self {
+            Box::new(items.clone().into_iter())
         } else {
             Box::new(std::iter::empty())
         }
     }
 
     fn variant_cases(&self) -> Box<dyn Iterator<Item = (Cow<str>, Option<Self>)> + '_> {
-        if let AnalysedType::Variant(cases) = self {
+        if let AnalysedType::Variant(TypeVariant { cases }) = self {
             Box::new(
                 cases
                     .iter()
-                    .map(|(name, ty)| (Cow::Borrowed(name.as_str()), ty.clone())),
+                    .map(|case| (Cow::Borrowed(case.name.as_str()), case.typ.clone())),
             )
         } else {
             Box::new(std::iter::empty())
@@ -72,7 +75,7 @@ impl WasmType for AnalysedType {
     }
 
     fn enum_cases(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        if let AnalysedType::Enum(cases) = self {
+        if let AnalysedType::Enum(TypeEnum { cases }) = self {
             Box::new(cases.iter().map(|name| Cow::Borrowed(name.as_str())))
         } else {
             Box::new(std::iter::empty())
@@ -80,18 +83,18 @@ impl WasmType for AnalysedType {
     }
 
     fn option_some_type(&self) -> Option<Self> {
-        if let AnalysedType::Option(ty) = self {
-            Some(*ty.clone())
+        if let AnalysedType::Option(TypeOption { inner }) = self {
+            Some(*inner.clone())
         } else {
             None
         }
     }
 
     fn result_types(&self) -> Option<(Option<Self>, Option<Self>)> {
-        if let AnalysedType::Result { ok, error } = self {
+        if let AnalysedType::Result(TypeResult { ok, err }) = self {
             Some((
                 ok.as_ref().map(|t| *t.clone()),
-                error.as_ref().map(|t| *t.clone()),
+                err.as_ref().map(|t| *t.clone()),
             ))
         } else {
             None
@@ -99,7 +102,7 @@ impl WasmType for AnalysedType {
     }
 
     fn flags_names(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        if let AnalysedType::Flags(names) = self {
+        if let AnalysedType::Flags(TypeFlags { names }) = self {
             Box::new(names.iter().map(|name| Cow::Borrowed(name.as_str())))
         } else {
             Box::new(std::iter::empty())
@@ -111,11 +114,15 @@ impl WasmFunc for AnalysedFunction {
     type Type = AnalysedType;
 
     fn params(&self) -> Box<dyn Iterator<Item = Self::Type> + '_> {
-        Box::new(self.params.iter().map(|p| p.typ.clone()))
+        Box::new(self.parameters.iter().map(|p| p.typ.clone()))
     }
 
     fn param_names(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        Box::new(self.params.iter().map(|p| Cow::Borrowed(p.name.as_str())))
+        Box::new(
+            self.parameters
+                .iter()
+                .map(|p| Cow::Borrowed(p.name.as_str())),
+        )
     }
 
     fn results(&self) -> Box<dyn Iterator<Item = Self::Type> + '_> {
