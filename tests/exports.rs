@@ -20,7 +20,7 @@ fn exports_shopping_cart_component() {
         functions: vec![
             AnalysedFunction {
                 name: "initialize-cart".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "user-id".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -28,7 +28,7 @@ fn exports_shopping_cart_component() {
             },
             AnalysedFunction {
                 name: "add-item".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "item".to_string(),
                     typ: AnalysedType::Record(TypeRecord {
                         fields: vec![
@@ -55,7 +55,7 @@ fn exports_shopping_cart_component() {
             },
             AnalysedFunction {
                 name: "remove-item".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "product-id".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -63,7 +63,7 @@ fn exports_shopping_cart_component() {
             },
             AnalysedFunction {
                 name: "update-item-quantity".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
                         typ: AnalysedType::Str(TypeStr),
@@ -77,7 +77,7 @@ fn exports_shopping_cart_component() {
             },
             AnalysedFunction {
                 name: "checkout".to_string(),
-                params: vec![],
+                parameters: vec![],
                 results: vec![AnalysedFunctionResult {
                     name: None,
                     typ: AnalysedType::Variant(TypeVariant {
@@ -101,7 +101,7 @@ fn exports_shopping_cart_component() {
             },
             AnalysedFunction {
                 name: "get-cart-contents".to_string(),
-                params: vec![],
+                parameters: vec![],
                 results: vec![AnalysedFunctionResult {
                     name: None,
                     typ: AnalysedType::List(TypeList {
@@ -147,7 +147,7 @@ fn exports_file_service_component() {
         functions: vec![
             AnalysedFunction {
                 name: "read-file".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -161,7 +161,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "write-file".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "path".to_string(),
                         typ: AnalysedType::Str(TypeStr),
@@ -181,7 +181,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "write-file-direct".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "path".to_string(),
                         typ: AnalysedType::Str(TypeStr),
@@ -201,7 +201,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "delete-file".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -215,7 +215,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "get-file-info".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -262,7 +262,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "get-info".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -309,7 +309,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "create-directory".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -323,7 +323,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "create-link".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "source".to_string(),
                         typ: AnalysedType::Str(TypeStr),
@@ -343,7 +343,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "create-sym-link".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "source".to_string(),
                         typ: AnalysedType::Str(TypeStr),
@@ -363,7 +363,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "remove-directory".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -377,7 +377,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "remove-file".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -391,7 +391,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "rename-file".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "source".to_string(),
                         typ: AnalysedType::Str(TypeStr),
@@ -411,7 +411,7 @@ fn exports_file_service_component() {
             },
             AnalysedFunction {
                 name: "hash".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -458,7 +458,7 @@ fn exports_auction_registry_composed_component() {
             functions: vec![
                 AnalysedFunction {
                     name: "create-bidder".to_string(),
-                    params: vec![
+                    parameters: vec![
                         AnalysedFunctionParameter {
                             name: "name".to_string(),
                             typ: AnalysedType::Str(TypeStr),
@@ -482,7 +482,7 @@ fn exports_auction_registry_composed_component() {
                 },
                 AnalysedFunction {
                     name: "create-auction".to_string(),
-                    params: vec![
+                    parameters: vec![
                         AnalysedFunctionParameter {
                             name: "name".to_string(),
                             typ: AnalysedType::Str(TypeStr),
@@ -512,7 +512,7 @@ fn exports_auction_registry_composed_component() {
                 },
                 AnalysedFunction {
                     name: "get-auctions".to_string(),
-                    params: vec![],
+                    parameters: vec![],
                     results: vec![AnalysedFunctionResult {
                         name: None,
                         typ: AnalysedType::List(TypeList {
@@ -566,7 +566,7 @@ fn exports_shopping_cart_resource_component() {
         functions: vec![
             AnalysedFunction {
                 name: "[constructor]cart".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "user-id".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -580,7 +580,7 @@ fn exports_shopping_cart_resource_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.add-item".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -616,7 +616,7 @@ fn exports_shopping_cart_resource_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.remove-item".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -633,7 +633,7 @@ fn exports_shopping_cart_resource_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.update-item-quantity".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -654,7 +654,7 @@ fn exports_shopping_cart_resource_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.checkout".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
                     typ: AnalysedType::Handle(TypeHandle {
                         resource_id: AnalysedResourceId(0),
@@ -684,7 +684,7 @@ fn exports_shopping_cart_resource_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
                     typ: AnalysedType::Handle(TypeHandle {
                         resource_id: AnalysedResourceId(0),
@@ -719,7 +719,7 @@ fn exports_shopping_cart_resource_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.merge-with".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -756,7 +756,7 @@ fn exports_shopping_cart_resource_versioned_component() {
         functions: vec![
             AnalysedFunction {
                 name: "[constructor]cart".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "user-id".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 }],
@@ -770,7 +770,7 @@ fn exports_shopping_cart_resource_versioned_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.add-item".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -806,7 +806,7 @@ fn exports_shopping_cart_resource_versioned_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.remove-item".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -823,7 +823,7 @@ fn exports_shopping_cart_resource_versioned_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.update-item-quantity".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -844,7 +844,7 @@ fn exports_shopping_cart_resource_versioned_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.checkout".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
                     typ: AnalysedType::Handle(TypeHandle {
                         resource_id: AnalysedResourceId(0),
@@ -874,7 +874,7 @@ fn exports_shopping_cart_resource_versioned_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
-                params: vec![AnalysedFunctionParameter {
+                parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
                     typ: AnalysedType::Handle(TypeHandle {
                         resource_id: AnalysedResourceId(0),
@@ -909,7 +909,7 @@ fn exports_shopping_cart_resource_versioned_component() {
             },
             AnalysedFunction {
                 name: "[method]cart.merge-with".to_string(),
-                params: vec![
+                parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
                         typ: AnalysedType::Handle(TypeHandle {
@@ -944,7 +944,7 @@ fn exports_caller_composed_component() {
     let expected = vec![
         AnalysedExport::Function(AnalysedFunction {
             name: "test1".to_string(),
-            params: vec![],
+            parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: AnalysedType::List(TypeList {
@@ -956,7 +956,7 @@ fn exports_caller_composed_component() {
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test2".to_string(),
-            params: vec![],
+            parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: AnalysedType::U64(TypeU64),
@@ -964,7 +964,7 @@ fn exports_caller_composed_component() {
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test3".to_string(),
-            params: vec![],
+            parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: AnalysedType::U64(TypeU64),
@@ -972,7 +972,7 @@ fn exports_caller_composed_component() {
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test4".to_string(),
-            params: vec![],
+            parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: AnalysedType::Tuple(TypeTuple {
@@ -991,7 +991,7 @@ fn exports_caller_composed_component() {
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "test5".to_string(),
-            params: vec![],
+            parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: AnalysedType::List(TypeList {
@@ -1001,7 +1001,7 @@ fn exports_caller_composed_component() {
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "bug-wasm-rpc-i32".to_string(),
-            params: vec![AnalysedFunctionParameter {
+            parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
                 typ: AnalysedType::Variant(TypeVariant {
                     cases: vec![NameOptionTypePair {

@@ -114,11 +114,11 @@ impl WasmFunc for AnalysedFunction {
     type Type = AnalysedType;
 
     fn params(&self) -> Box<dyn Iterator<Item = Self::Type> + '_> {
-        Box::new(self.params.iter().map(|p| p.typ.clone()))
+        Box::new(self.parameters.iter().map(|p| p.typ.clone()))
     }
 
     fn param_names(&self) -> Box<dyn Iterator<Item = Cow<str>> + '_> {
-        Box::new(self.params.iter().map(|p| Cow::Borrowed(p.name.as_str())))
+        Box::new(self.parameters.iter().map(|p| Cow::Borrowed(p.name.as_str())))
     }
 
     fn results(&self) -> Box<dyn Iterator<Item = Self::Type> + '_> {

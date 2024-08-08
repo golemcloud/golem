@@ -34,7 +34,7 @@ pub enum AnalysedExport {
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct AnalysedFunction {
     pub name: String,
-    pub params: Vec<AnalysedFunctionParameter>,
+    pub parameters: Vec<AnalysedFunctionParameter>,
     pub results: Vec<AnalysedFunctionResult>,
 }
 
@@ -53,9 +53,9 @@ impl AnalysedFunction {
 
     pub fn is_method(&self) -> bool {
         self.name.starts_with("[method]")
-            && !self.params.is_empty()
+            && !self.parameters.is_empty()
             && matches!(
-                &self.params[0].typ,
+                &self.parameters[0].typ,
                 AnalysedType::Handle(TypeHandle {
                     mode: AnalysedResourceMode::Borrowed,
                     ..

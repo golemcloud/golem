@@ -218,7 +218,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 
         Ok(AnalysedFunction {
             name,
-            params,
+            parameters: params,
             results,
         })
     }
@@ -703,7 +703,7 @@ mod tests {
     fn analysed_function_kind() {
         let cons = AnalysedFunction {
             name: "[constructor]cart".to_string(),
-            params: vec![AnalysedFunctionParameter {
+            parameters: vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: AnalysedType::Str(TypeStr),
             }],
@@ -717,7 +717,7 @@ mod tests {
         };
         let method = AnalysedFunction {
             name: "[method]cart.add-item".to_string(),
-            params: vec![
+            parameters: vec![
                 AnalysedFunctionParameter {
                     name: "self".to_string(),
                     typ: AnalysedType::Handle(TypeHandle {
@@ -753,7 +753,7 @@ mod tests {
         };
         let static_method = AnalysedFunction {
             name: "[static]cart.merge".to_string(),
-            params: vec![
+            parameters: vec![
                 AnalysedFunctionParameter {
                     name: "self".to_string(),
                     typ: AnalysedType::Handle(TypeHandle {
@@ -779,7 +779,7 @@ mod tests {
         };
         let fun = AnalysedFunction {
             name: "hash".to_string(),
-            params: vec![AnalysedFunctionParameter {
+            parameters: vec![AnalysedFunctionParameter {
                 name: "path".to_string(),
                 typ: AnalysedType::Str(TypeStr),
             }],
