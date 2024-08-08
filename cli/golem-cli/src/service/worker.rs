@@ -14,9 +14,12 @@
 
 use crate::clients::worker::WorkerClient;
 use crate::model::component::{function_params_types, show_exported_function, Component};
+use crate::model::conversions::{
+    analysed_type_client_to_model, decode_type_annotated_value_json,
+    encode_type_annotated_value_json,
+};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::WorkerAddView;
-use crate::model::wave::type_to_analysed;
 use crate::model::{
     Format, GolemError, GolemResult, IdempotencyKey, WorkerMetadata, WorkerMetadataView,
     WorkerName, WorkerUpdateMode, WorkersMetadataResponseView,
@@ -24,14 +27,14 @@ use crate::model::{
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use golem_client::model::{
-    Export, ExportInstance, InvokeParameters, InvokeResult, ScanCursor, StringFilterComparator,
-    Type, WorkerFilter, WorkerNameFilter,
+    AnalysedExport, AnalysedInstance, AnalysedType, InvokeParameters, InvokeResult, ScanCursor,
+    StringFilterComparator, WorkerFilter, WorkerNameFilter,
 };
-use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use itertools::Itertools;
@@ -201,42 +204,33 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     }
 }
 
-fn wave_parameters_to_json(
-    wave: &[String],
-    component: &Component,
-    function: &str,
-) -> Result<Vec<Value>, GolemError> {
-    let types = function_params_types(component, function)?;
-
-    if wave.len() != types.len() {
-        return Err(GolemError(format!(
-            "Invalid number of wave parameters for function {function}. Expected {}, but got {}.",
-            types.len(),
-            wave.len()
-        )));
-    }
-
-    let params = wave
-        .iter()
-        .zip(types)
-        .map(|(param, typ)| parse_parameter(param, typ))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    params
-        .into_iter()
-        .map(|v| {
-            serde_json::to_value(PreciseJson::from(v)).map_err(|err| GolemError(err.to_string()))
-        })
-        .collect::<Result<Vec<_>, GolemError>>()
-}
-
-fn parse_parameter(wave: &str, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
+fn parse_parameter(wave: &str, typ: &AnalysedType) -> Result<TypeAnnotatedValue, GolemError> {
     // Avoid converting from typ to AnalysedType
-    match type_annotated_value_from_str(&type_to_analysed(typ), wave) {
+    match type_annotated_value_from_str(&analysed_type_client_to_model(typ), wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"
         ))),
+    }
+}
+
+async fn get_component_metadata_for_worker<ProjectContext: Send + Sync>(
+    client: &(dyn WorkerClient + Send + Sync),
+    components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
+    worker_urn: &WorkerUrn,
+) -> Result<Component, GolemError> {
+    if let Some(component) =
+        resolve_worker_component_version(client, components, worker_urn.clone()).await?
+    {
+        Ok(component)
+    } else {
+        info!("No worker found with name {}. Assuming it should be create with the latest component version", worker_urn.id.worker_name);
+        let component_urn = ComponentUrn {
+            id: worker_urn.id.component_id.clone(),
+        };
+
+        let component = components.get_latest_metadata(&component_urn).await?;
+        Ok(component)
     }
 }
 
@@ -247,31 +241,98 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
     parameters: Option<Value>,
     wave: Vec<String>,
     function: &str,
-) -> Result<(Vec<Value>, Option<Component>), GolemError> {
+) -> Result<
+    (
+        Vec<golem_client::model::TypeAnnotatedValue>,
+        Option<Component>,
+    ),
+    GolemError,
+> {
     if let Some(parameters) = parameters {
+        // A JSON parameter was provided. It is either an array of serialized TypeAnnotatedValues
+        // or an array of the JSON representation of the parameters with no type information.
         let parameters = parameters
             .as_array()
             .ok_or_else(|| GolemError("Parameters must be an array".to_string()))?;
 
-        Ok((parameters.clone(), None))
-    } else if let Some(component) =
-        resolve_worker_component_version(client, components, worker_urn.clone()).await?
-    {
-        let precise_json_array = wave_parameters_to_json(&wave, &component, function)?;
+        let attempt1 = parameters
+            .iter()
+            .map(|v| serde_json::from_value::<TypeAnnotatedValue>(v.clone()))
+            .collect::<Result<Vec<_>, _>>();
 
-        Ok((precise_json_array, Some(component)))
+        if let Ok(type_annotated_values) = attempt1 {
+            // All elements were valid TypeAnnotatedValues, we don't need component metadata to do the invocation
+            Ok((
+                type_annotated_values
+                    .into_iter()
+                    .map(encode_type_annotated_value_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None,
+            ))
+        } else {
+            // Some elements were not valid TypeAnnotatedValues, we need component metadata to interpret them
+            let component =
+                get_component_metadata_for_worker(client, components, worker_urn).await?;
+            let types = function_params_types(&component, function)?;
+
+            if types.len() != parameters.len() {
+                return Err(GolemError(format!(
+                    "Unexpected number of parameters: got {}, expected {}",
+                    parameters.len(),
+                    types.len()
+                )));
+            }
+
+            let mut type_annotated_values = Vec::new();
+            for (json_param, typ) in parameters.iter().zip(types) {
+                match TypeAnnotatedValue::parse_with_type(
+                    json_param,
+                    &analysed_type_client_to_model(typ),
+                ) {
+                    Ok(tav) => type_annotated_values.push(tav),
+                    Err(err) => {
+                        return Err(GolemError(format!(
+                            "Failed to parse parameter: {}",
+                            err.join(", ")
+                        )))
+                    }
+                }
+            }
+
+            Ok((
+                type_annotated_values
+                    .into_iter()
+                    .map(encode_type_annotated_value_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+                Some(component),
+            ))
+        }
     } else {
-        info!("No worker found with name {}. Assuming it should be create with the latest component version", worker_urn.id.worker_name);
-        let component_urn = ComponentUrn {
-            id: worker_urn.id.component_id.clone(),
-        };
+        // No JSON parameters, we use the WAVE ones
+        let component = get_component_metadata_for_worker(client, components, worker_urn).await?;
+        let types = function_params_types(&component, function)?;
 
-        let component = components.get_latest_metadata(&component_urn).await?;
+        if types.len() != wave.len() {
+            return Err(GolemError(format!(
+                "Unexpected number of parameters: got {}, expected {}",
+                wave.len(),
+                types.len()
+            )));
+        }
 
-        let json_array = wave_parameters_to_json(&wave, &component, function)?;
+        let type_annotated_values = wave
+            .iter()
+            .zip(types)
+            .map(|(wave, typ)| parse_parameter(wave, typ))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // We are not going to use this component for result parsing.
-        Ok((json_array, None))
+        Ok((
+            type_annotated_values
+                .into_iter()
+                .map(encode_type_annotated_value_json)
+                .collect::<Result<Vec<_>, _>>()?,
+            Some(component),
+        ))
     }
 }
 
@@ -299,16 +360,17 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
                 _ => {
                     error!("Failed to get worker metadata after successful call.");
 
-                    return Ok(InvokeResultView::Json(res.result));
+                    let result = decode_type_annotated_value_json(res.result)?;
+                    let json =
+                        serde_json::to_value(&result).map_err(|err| GolemError(err.to_string()))?;
+                    return Ok(InvokeResultView::Json(json));
                 }
             }
         }
         Some(component) => component,
     };
 
-    Ok(InvokeResultView::try_parse_or_json(
-        res, &component, function,
-    ))
+    InvokeResultView::try_parse_or_json(res, &component, function)
 }
 
 enum AsyncComponentRequest {
@@ -430,7 +492,9 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
             Ok(GolemResult::Ok(Box::new(view)))
         } else {
-            Ok(GolemResult::Json(res.result))
+            let result = decode_type_annotated_value_json(res.result)?;
+            let json = serde_json::to_value(&result).map_err(|err| GolemError(err.to_string()))?;
+            Ok(GolemResult::Json(json))
         }
     }
 
@@ -549,7 +613,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             .exports
             .iter()
             .flat_map(|exp| match exp {
-                Export::Instance(ExportInstance {
+                AnalysedExport::Instance(AnalysedInstance {
                     name: prefix,
                     functions,
                 }) => functions
@@ -561,7 +625,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                         )
                     })
                     .collect::<Vec<_>>(),
-                Export::Function(f) => {
+                AnalysedExport::Function(f) => {
                     vec![(f.name.clone(), show_exported_function("", f))]
                 }
             })

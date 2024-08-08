@@ -1,12 +1,14 @@
-use crate::model::component::{function_result_types, Component};
-use crate::model::wave::{type_to_analysed, type_wave_compatible};
-use crate::model::GolemError;
-use golem_client::model::{InvokeResult, Type};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::type_annotated_value_to_string;
+use golem_wasm_rpc::{protobuf, type_annotated_value_to_string};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
 use tracing::{debug, info};
+
+use golem_client::model::InvokeResult;
+
+use crate::model::component::{function_result_types, Component};
+use crate::model::conversions::decode_type_annotated_value_json;
+use crate::model::wave::type_wave_compatible;
+use crate::model::GolemError;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum InvokeResultView {
@@ -21,26 +23,38 @@ impl InvokeResultView {
         res: InvokeResult,
         component: &Component,
         function: &str,
-    ) -> InvokeResultView {
-        Self::try_parse(&res, component, function).unwrap_or(InvokeResultView::Json(res.result))
+    ) -> Result<InvokeResultView, GolemError> {
+        let result = decode_type_annotated_value_json(res.result)?;
+        Ok(
+            Self::try_parse(&result, component, function).unwrap_or_else(|_| {
+                let json = serde_json::to_value(&result).unwrap();
+                InvokeResultView::Json(json)
+            }),
+        )
     }
 
     fn try_parse(
-        res: &InvokeResult,
+        res: &protobuf::type_annotated_value::TypeAnnotatedValue,
         component: &Component,
         function: &str,
     ) -> Result<InvokeResultView, GolemError> {
-        let results = match res.result.as_array() {
-            None => {
-                info!("Can't parse InvokeResult - array expected.");
+        let results = match res {
+            protobuf::type_annotated_value::TypeAnnotatedValue::Tuple(tuple) => tuple
+                .value
+                .iter()
+                .map(|t| t.clone().type_annotated_value.unwrap())
+                .collect::<Vec<_>>(),
+            // TODO: need to support multi-result case when it's a Record
+            _ => {
+                info!("Can't parse InvokeResult - tuple expected.");
 
                 return Err(GolemError(
-                    "Can't parse InvokeResult - array expected.".to_string(),
+                    "Can't parse InvokeResult - tuple expected.".to_string(),
                 ));
             }
-            Some(results) => results,
         };
 
+        // TODO: we don't need this, as the result is always a TypeAnnotatedValue
         let result_types = function_result_types(component, function)?;
 
         if results.len() != result_types.len() {
@@ -58,17 +72,16 @@ impl InvokeResultView {
         }
 
         let wave = results
-            .iter()
-            .zip(result_types.iter())
-            .map(|(json, typ)| Self::try_wave_format(json, typ))
+            .into_iter()
+            .map(Self::try_wave_format)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(InvokeResultView::Wave(wave))
     }
 
-    fn try_wave_format(json: &Value, typ: &Type) -> Result<String, GolemError> {
-        let parsed = Self::try_parse_single(json, typ)?;
-
+    fn try_wave_format(
+        parsed: protobuf::type_annotated_value::TypeAnnotatedValue,
+    ) -> Result<String, GolemError> {
         match type_annotated_value_to_string(&parsed) {
             Ok(res) => Ok(res),
             Err(err) => {
@@ -80,46 +93,51 @@ impl InvokeResultView {
             }
         }
     }
-
-    fn try_parse_single(json: &Value, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
-        match golem_wasm_rpc::json::get_typed_value_from_json(json, &type_to_analysed(typ)) {
-            Ok(res) => Ok(res),
-            Err(errs) => {
-                info!("Failed to parse typed value: {errs:?}");
-
-                Err(GolemError("Failed to parse typed value".to_string()))
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::model::component::Component;
-    use crate::model::invoke_result_view::InvokeResultView;
-    use crate::model::wave::type_to_analysed;
-    use golem_client::model::{
-        ComponentMetadata, Export, ExportFunction, FunctionResult, InvokeResult,
-        ProtectedComponentId, ResourceMode, Type, TypeBool, TypeHandle, UserComponentId,
-        VersionedComponentId,
-    };
-    use golem_wasm_ast::analysis::AnalysedFunctionResult;
-    use golem_wasm_rpc::Uri;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::TypedTuple;
+    use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Uri};
     use uuid::Uuid;
 
-    fn parse(results: Vec<golem_wasm_rpc::Value>, types: Vec<Type>) -> InvokeResultView {
-        let analyzed_res = types
+    use golem_client::model::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedResourceMode,
+        AnalysedType, ComponentMetadata, InvokeResult, ProtectedComponentId, TypeBool, TypeHandle,
+        UserComponentId, VersionedComponentId,
+    };
+
+    use crate::model::component::Component;
+    use crate::model::conversions::{
+        analysed_type_client_to_model, encode_type_annotated_value_json,
+    };
+    use crate::model::invoke_result_view::InvokeResultView;
+
+    fn parse(results: Vec<golem_wasm_rpc::Value>, types: Vec<AnalysedType>) -> InvokeResultView {
+        let typed_results = results
             .iter()
-            .map(|t| AnalysedFunctionResult {
-                name: None,
-                typ: type_to_analysed(t),
+            .zip(&types)
+            .map(|(val, typ)| {
+                TypeAnnotatedValue::create(val, &analysed_type_client_to_model(typ)).unwrap()
+            })
+            .map(|tv| RootTypeAnnotatedValue {
+                type_annotated_value: Some(tv),
             })
             .collect::<Vec<_>>();
-        let json = golem_wasm_rpc::json::function_result(results, &analyzed_res).unwrap();
+
+        let typed_result = TypeAnnotatedValue::Tuple(TypedTuple {
+            typ: types
+                .iter()
+                .map(|t| (&analysed_type_client_to_model(t)).into())
+                .collect(),
+            value: typed_results,
+        });
 
         let func_res = types
             .into_iter()
-            .map(|typ| FunctionResult { name: None, typ })
+            .map(|typ| AnalysedFunctionResult { name: None, typ })
             .collect::<Vec<_>>();
 
         let component = Component {
@@ -143,7 +161,7 @@ mod tests {
             component_size: 0,
             metadata: ComponentMetadata {
                 producers: Vec::new(),
-                exports: vec![Export::Function(ExportFunction {
+                exports: vec![AnalysedExport::Function(AnalysedFunction {
                     name: "func-name".to_string(),
                     parameters: Vec::new(),
                     results: func_res,
@@ -153,14 +171,21 @@ mod tests {
             project_id: None,
         };
 
-        InvokeResultView::try_parse_or_json(InvokeResult { result: json }, &component, "func-name")
+        InvokeResultView::try_parse_or_json(
+            InvokeResult {
+                result: encode_type_annotated_value_json(typed_result).unwrap(),
+            },
+            &component,
+            "func-name",
+        )
+        .unwrap()
     }
 
     #[test]
     fn represented_as_wave() {
         let res = parse(
             vec![golem_wasm_rpc::Value::Bool(true)],
-            vec![Type::Bool(TypeBool {})],
+            vec![AnalysedType::Bool(TypeBool {})],
         );
 
         assert!(matches!(res, InvokeResultView::Wave(_)))
@@ -175,9 +200,9 @@ mod tests {
                 },
                 resource_id: 1,
             }],
-            vec![Type::Handle(TypeHandle {
+            vec![AnalysedType::Handle(TypeHandle {
                 resource_id: 1,
-                mode: ResourceMode::Owned,
+                mode: AnalysedResourceMode::Owned,
             })],
         );
 
