@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use poem_openapi::types::ParseFromJSON;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -30,8 +30,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
     InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
     InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
@@ -39,7 +40,6 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
 };
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
-use golem_common::precise_json::PreciseJson;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
@@ -664,12 +664,6 @@ impl WorkerGrpcApi {
         request: InvokeAndAwaitJsonRequest,
     ) -> Result<String, GrpcWorkerError> {
         let worker_id = make_crate_worker_id(request.worker_id)?;
-
-        let calling_convention: golem_common::model::CallingConvention = request
-            .calling_convention
-            .try_into()
-            .map_err(bad_request_error)?;
-
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
         let idempotency_key = request
@@ -684,13 +678,20 @@ impl WorkerGrpcApi {
                 Some(idempotency_key),
                 request.function,
                 params,
-                &calling_convention,
                 request.context,
                 empty_worker_metadata(),
             )
             .await?;
 
-        Ok(result.to_string())
+        Ok(serde_json::to_value(result)
+            .map_err(|err| GrpcWorkerError {
+                error: Some(worker_error::Error::InternalError(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: format!("Failed to serialize response: {err:?}"),
+                    })),
+                })),
+            })?
+            .to_string())
     }
 
     async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {
@@ -875,10 +876,10 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
 
 fn parse_json_invoke_parameters(
     parameters: &[String],
-) -> Result<Vec<PreciseJson>, GrpcWorkerError> {
+) -> Result<Vec<TypeAnnotatedValue>, GrpcWorkerError> {
     parameters
         .iter()
-        .map(|param| PreciseJson::parse_from_json_string(param))
+        .map(|param| serde_json::from_str(param))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| bad_request_error(format!("Failed to parse JSON parameters: {err:?}")))
 }

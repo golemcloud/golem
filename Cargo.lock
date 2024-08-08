@@ -3732,7 +3732,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-ast"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#bc5cf3158c0b0e6023eb003c8cdb63e286f26b7c"
+source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#3c2a1e0cb80af7b645fa739767ac88cf1b22da73"
 dependencies = [
  "bincode",
  "leb128",
@@ -3751,7 +3751,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/type-annotated-value-json#f6b29b8db549dfa96971ca75fa917dc0c748298d"
+source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/type-annotated-value-json#d74c7f61f594c4472d7b34d3900becca9c7716ec"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3760,6 +3760,7 @@ dependencies = [
  "bincode",
  "cargo_metadata",
  "golem-wasm-ast",
+ "poem-openapi",
  "prost",
  "prost-build",
  "serde 1.0.205",
@@ -3773,7 +3774,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc-stubgen"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/type-annotated-value-json#f6b29b8db549dfa96971ca75fa917dc0c748298d"
+source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/type-annotated-value-json#d74c7f61f594c4472d7b34d3900becca9c7716ec"
 dependencies = [
  "anyhow",
  "cargo-component",

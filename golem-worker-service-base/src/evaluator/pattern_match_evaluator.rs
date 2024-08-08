@@ -2,7 +2,7 @@ use crate::evaluator::evaluator_context::EvaluationContext;
 use crate::evaluator::{internal, DefaultEvaluator, Evaluator};
 use crate::evaluator::{EvaluationError, ExprEvaluationResult};
 use crate::worker_bridge_execution::WorkerRequestExecutor;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue as ProtoResultValue;
 use golem_wasm_rpc::protobuf::NameValuePair as ProtoNameValuePair;
@@ -306,7 +306,7 @@ fn handle_none(
                 binding_variable: None,
                 result: TypeAnnotatedValue::Option(Box::new(TypedOption {
                     value: None,
-                    typ: Some((&AnalysedType::Str).into()),
+                    typ: Some((&AnalysedType::Str(TypeStr)).into()),
                 })),
             })),
         },

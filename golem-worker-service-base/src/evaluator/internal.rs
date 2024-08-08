@@ -4,9 +4,8 @@ use crate::evaluator::EvaluationContext;
 use crate::evaluator::EvaluationError;
 use crate::primitive::GetPrimitive;
 use crate::worker_bridge_execution::{RefinedWorkerResponse, WorkerRequest, WorkerRequestExecutor};
-use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{ComponentId, IdempotencyKey};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType, TypeTuple};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use golem_wasm_rpc::protobuf::NameValuePair;
@@ -119,7 +118,7 @@ pub(crate) fn create_list(
         }
         None => Ok(TypeAnnotatedValue::List(TypedList {
             values: vec![],
-            typ: Some((&AnalysedType::Tuple(vec![])).into()),
+            typ: Some((&AnalysedType::Tuple(TypeTuple { items: vec![] })).into()),
         })),
     }
 }
@@ -162,7 +161,7 @@ pub(crate) fn create_record(
 pub(crate) async fn call_worker_function(
     runtime: &EvaluationContext,
     function_name: &ParsedFunctionName,
-    json_params: Vec<TypeAnnotatedValue>,
+    function_params: Vec<TypeAnnotatedValue>,
     executor: &Arc<dyn WorkerRequestExecutor + Sync + Send>,
 ) -> Result<RefinedWorkerResponse, EvaluationError> {
     let variables = runtime.clone().variables.ok_or(EvaluationError::Message(
@@ -206,16 +205,11 @@ pub(crate) async fn call_worker_function(
     let component_id = ComponentId::from_str(component_id_string.as_str())
         .map_err(|err| EvaluationError::Message(err.to_string()))?;
 
-    let precise_jsons = json_params
-        .into_iter()
-        .map(PreciseJson::from)
-        .collect::<Vec<_>>();
-
     let worker_request = WorkerRequest {
         component_id,
         worker_name,
         function_name: function_name.clone(),
-        function_params: precise_jsons,
+        function_params,
         idempotency_key,
     };
 

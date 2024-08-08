@@ -1379,7 +1379,6 @@ impl RunningWorker {
                                                         let function_results = export_function
                                                             .results
                                                             .into_iter()
-                                                            .map(|t| t.into())
                                                             .collect();
 
                                                         let result = interpret_function_results(

@@ -1,6 +1,4 @@
-use golem_wasm_ast::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysedInstance,
-};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 
 use rib::ParsedFunctionName;
 

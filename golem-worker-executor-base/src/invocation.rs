@@ -323,15 +323,15 @@ async fn invoke<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let param_types = function.params(&store);
 
-            if function_input.len() != param_types.len() {
-                return Err(GolemError::ParamTypeMismatch {
-                    details: format!(
-                        "expected {}, got {} parameters",
-                        param_types.len(),
-                        function_input.len()
-                    ),
-                });
-            }
+    if function_input.len() != param_types.len() {
+        return Err(GolemError::ParamTypeMismatch {
+            details: format!(
+                "expected {}, got {} parameters",
+                param_types.len(),
+                function_input.len()
+            ),
+        });
+    }
 
     let mut params = Vec::new();
     let mut resources_to_drop = Vec::new();

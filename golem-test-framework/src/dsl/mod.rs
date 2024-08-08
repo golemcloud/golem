@@ -499,7 +499,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
                 function: function_name.to_string(),
                 invoke_parameters: params,
-                calling_convention: CallingConvention::Component.into(),
                 context: None,
             })
             .await?;

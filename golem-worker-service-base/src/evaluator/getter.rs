@@ -1,4 +1,4 @@
-use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
 
@@ -46,8 +46,7 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                         }
                         _ => Err(GetError::NotRecord {
                             key_name: key.0.clone(),
-                            found: get_json_from_typed_value(&type_annotated_value.clone())
-                                .to_string(),
+                            found: type_annotated_value.to_json_value().to_string(),
                         }),
                     },
                     PathComponent::Index(value_index) => match get_array(type_annotated_value) {
@@ -60,7 +59,7 @@ impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
                         }
                         None => Err(GetError::NotArray {
                             index: value_index.0,
-                            found: get_json_from_typed_value(type_annotated_value).to_string(),
+                            found: type_annotated_value.to_json_value().to_string(),
                         }),
                     },
                 }

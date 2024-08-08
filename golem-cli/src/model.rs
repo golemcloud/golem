@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod component;
+pub mod conversions;
 pub mod invoke_result_view;
 pub mod text;
 pub mod wave;

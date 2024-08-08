@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &[
                 &format!("{wasm_rpc_root}/proto"),
                 &format!("{wasm_ast_root}/proto"),
-                &"proto".to_string()
+                &"proto".to_string(),
             ],
         )
         .unwrap();

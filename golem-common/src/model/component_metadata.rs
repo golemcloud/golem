@@ -254,11 +254,7 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             .map(|producers| producers.into())
             .collect::<Vec<_>>();
 
-        let exports = value
-            .exports
-            .into_iter()
-            .map(|export| export.into())
-            .collect::<Vec<_>>();
+        let exports = value.exports.into_iter().collect::<Vec<_>>();
 
         let memories = value.memories.into_iter().map(LinearMemory::from).collect();
 
@@ -372,8 +368,8 @@ impl Display for ComponentProcessingError {
         match self {
             ComponentProcessingError::Parsing(e) => write!(f, "Parsing error: {}", e),
             ComponentProcessingError::Analysis(source) => {
-                let AnalysisFailure::Failed(error) = source;
-                write!(f, "Analysis error: {}", error)
+                let AnalysisFailure { reason } = source;
+                write!(f, "Analysis error: {}", reason)
             }
         }
     }
@@ -412,7 +408,7 @@ fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
     let drop_name = constructor.name.replace("[constructor]", "[drop]");
     AnalysedFunction {
         name: drop_name,
-        params: constructor
+        parameters: constructor
             .results
             .iter()
             .map(|result| AnalysedFunctionParameter {

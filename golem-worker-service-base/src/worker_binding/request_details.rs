@@ -3,8 +3,8 @@ use crate::merge::Merge;
 
 use crate::primitive::GetPrimitive;
 use golem_service_base::type_inference::infer_analysed_type;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::get_typed_value_from_json;
+use golem_wasm_ast::analysis::{AnalysedType, TypeRecord};
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 use golem_wasm_rpc::protobuf::{Type, TypeAnnotatedValue as RootTypeAnnotatedValue};
@@ -213,7 +213,7 @@ pub struct TypedRequestBody(TypeAnnotatedValue);
 impl TypedRequestBody {
     fn from(request_body: &Value) -> Result<TypedRequestBody, Vec<String>> {
         let inferred_type = infer_analysed_type(request_body);
-        let typed_value = get_typed_value_from_json(request_body, &inferred_type)?;
+        let typed_value = TypeAnnotatedValue::parse_with_type(request_body, &inferred_type)?;
 
         Ok(TypedRequestBody(typed_value))
     }
@@ -232,17 +232,17 @@ impl TypedKeyValueCollection {
 
 impl From<TypedKeyValueCollection> for AnalysedType {
     fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
-        let mut typ: Vec<(String, AnalysedType)> = vec![];
+        let mut fields = Vec::new();
 
         for record in &typed_key_value_collection.fields {
-            typ.push((
-                record.name.clone(),
-                AnalysedType::try_from(&record.value)
+            fields.push(golem_wasm_ast::analysis::NameTypePair {
+                name: record.name.clone(),
+                typ: AnalysedType::try_from(&record.value)
                     .expect("Internal error: Failed to retrieve type from Type Annotated Value"),
-            ));
+            });
         }
 
-        AnalysedType::Record(typ)
+        AnalysedType::Record(TypeRecord { fields })
     }
 }
 

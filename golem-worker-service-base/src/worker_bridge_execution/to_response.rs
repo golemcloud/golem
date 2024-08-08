@@ -45,18 +45,17 @@ mod internal {
     use crate::worker_bridge_execution::content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
-    use golem_wasm_rpc::json::get_json_from_typed_value;
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::TypedRecord;
-    use poem::{Body, IntoResponse, ResponseParts};
-    use std::collections::HashMap;
-
     use crate::evaluator::getter::GetterExt;
     use crate::evaluator::path::Path;
+    use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::TypedRecord;
     use poem::web::headers::ContentType;
+    use poem::{Body, IntoResponse, ResponseParts};
+    use std::collections::HashMap;
 
     pub(crate) struct IntermediateHttpResponse {
         body: Option<TypeAnnotatedValue>,
@@ -183,7 +182,7 @@ mod internal {
                 }),
                 _ => Err(EvaluationError::Message(format!(
                     "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
-                    get_json_from_typed_value(status_code)
+                    status_code.to_json_value()
                 )))
             };
 
@@ -228,7 +227,7 @@ mod internal {
 
                 _ => Err(format!(
                     "Header expression is not a record. It is resolved to {}",
-                    get_json_from_typed_value(header_map)
+                    header_map.to_json_value()
                 )),
             }
         }
