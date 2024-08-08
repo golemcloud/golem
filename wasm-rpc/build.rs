@@ -7,6 +7,10 @@ fn main() -> Result<()> {
     let mut config = prost_build::Config::new();
     config.extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf");
     config.type_attribute(".", "#[cfg(feature = \"protobuf\")]");
+    config.type_attribute(
+        ".",
+        "#[cfg_attr(feature=\"bincode\", derive(bincode::Encode, bincode::Decode))]",
+    );
     config.compile_protos(
         &[
             "proto/wasm/rpc/val.proto",

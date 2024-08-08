@@ -1767,7 +1767,7 @@ checksum = "40ecd4077b5ae9fd2e9e169b102c6c330d0605168eb0e8bf79952b256dbefffd"
 [[package]]
 name = "golem-wasm-ast"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#d5e7124271a6e9c2de18e18c9cc2143b29db3b5e"
+source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#3c2a1e0cb80af7b645fa739767ac88cf1b22da73"
 dependencies = [
  "bincode",
  "leb128",
