@@ -394,7 +394,10 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                                 }
                             }
 
-                            Ok(AnalysedInstance { name, functions: funcs })
+                            Ok(AnalysedInstance {
+                                name,
+                                functions: funcs,
+                            })
                         }
                         _ => Err(AnalysisFailure::failed(format!(
                             "Expected component, but got {} instead",
