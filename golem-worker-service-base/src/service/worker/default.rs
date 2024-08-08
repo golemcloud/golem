@@ -420,7 +420,7 @@ where
                     }
                 }
             },
-            |error| WorkerServiceError::internal(error)
+            WorkerServiceError::internal
         ).await?;
 
         Ok(invoke_response)
@@ -480,7 +480,7 @@ where
                     }
                 }
             },
-            |error| WorkerServiceError::internal(error)
+            WorkerServiceError::internal
         ).await?;
 
         Ok(invoke_response)
@@ -627,7 +627,7 @@ where
                         }
                     }
                 },
-                |error| WorkerServiceError::internal(error)
+                WorkerServiceError::internal
             )
             .await?;
         Ok(result)
@@ -710,7 +710,7 @@ where
                     }
                 }
             },
-            |error| WorkerServiceError::internal(error)
+            WorkerServiceError::internal
         ).await?;
 
         Ok(metadata)
@@ -906,7 +906,7 @@ where
                     }
                 }).collect::<Result<Vec<_>, ResponseMapResult>>()
             },
-            |error| WorkerServiceError::internal(error)
+            WorkerServiceError::internal
         ).await?;
 
         Ok(result.into_iter().flatten().collect())
