@@ -266,23 +266,30 @@ fn worker_invoke_and_await(
 
     let expected_args = json!(
         {
-            "type": "Tuple",
-            "value": [
-                {
-                    "type": "Result",
-                    "value": {
-                        "Ok": {
-                            "type": "List",
-                            "value": [
-                                {
-                                    "type": "Str",
-                                    "value": "test-arg"
-                                }
-                            ]
-                        }
-                    }
-                }
-            ]
+          "typ": {
+            "items": [
+              {
+                "err": {
+                  "type": "Str"
+                },
+                "ok": {
+                  "inner": {
+                    "type": "Str"
+                  },
+                  "type": "List"
+                },
+                "type": "Result"
+              }
+            ],
+            "type": "Tuple"
+          },
+          "value": [
+            {
+              "ok": [
+                "test-arg"
+              ]
+            }
+          ]
         }
     );
 
@@ -301,27 +308,13 @@ fn worker_invoke_and_await(
     cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
     let env = cli.run_json(&cli_args)?;
 
-    let path = serde_json_path::JsonPath::parse("$.value[0].value.Ok.value")?;
+    let path = serde_json_path::JsonPath::parse("$.value[0].ok")?;
     let node = path.query(&env).exactly_one()?;
 
     assert!(
         node.as_array()
-            .expect("$.value[0].value.Ok.value is array")
-            .contains(&json!(
-                {
-                    "type": "Tuple",
-                    "value": [
-                        {
-                            "type": "Str",
-                            "value": "TEST_ENV"
-                        },
-                        {
-                            "type": "Str",
-                            "value": "test-value"
-                        }
-                ]
-                }
-            )),
+            .expect("$.value[0].ok is array")
+            .contains(&json!(["TEST_ENV", "test-value"])),
         "Env contains TEST_ENV=test-value. Env: {env}"
     );
 
@@ -412,7 +405,7 @@ fn worker_invoke_drop(
 
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let hello: WorkerUrn = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
@@ -423,7 +416,6 @@ fn worker_invoke_drop(
         "TEST_ENV=test-value",
         "test-arg",
     ])?;
-    dbg!(hello.clone());
     let args_key: IdempotencyKey = IdempotencyKey::fresh();
 
     let mut cli_args = vec![
@@ -432,14 +424,20 @@ fn worker_invoke_drop(
         cfg.arg('f', "function"),
         "rpc:counters/api.{[constructor]counter}".to_string(),
         cfg.arg('j', "parameters"),
-        "[{\"type\" : \"Str\", \"value\" : \"counter1\"}]".to_string(),
+        "[{\"typ\" : { \"type\": \"Str\" }, \"value\" : \"counter1\"}]".to_string(),
         cfg.arg('k', "idempotency-key"),
         args_key.0.clone(),
     ];
     cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
     let result = cli.run_json(&cli_args)?;
 
-    // result is a JSON response containing a tuple with a single element holding the resource handle.
+    println!("JSON: {result}");
+
+    // result is a JSON response containing a tuple with a single element holding the resource handle:
+    // {"result": {
+    //   "typ":  {"items":[{"mode":{"type":"Owned"},"resource_id":0,"type":"Handle"}],"type":"Tuple"},
+    //   "value":["urn:worker:fcb5d2d4-d6db-4eca-99ec-6260ae9270db/CLI_short_name_worker_invoke_and_await/0"]}
+    // }
     // we only need this inner element:
     let counter1 = result
         .as_object()
@@ -980,7 +978,10 @@ fn worker_invoke_indexed_resource(
     cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
     let result = cli.run_json(&cli_args)?;
 
-    assert_eq!(result, json!([3]));
+    assert_eq!(
+        result,
+        json!({"typ":{"items":[{"type":"U64"}],"type":"Tuple"},"value":[3]})
+    );
 
     Ok(())
 }

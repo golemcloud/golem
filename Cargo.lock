@@ -3732,7 +3732,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-ast"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#3c2a1e0cb80af7b645fa739767ac88cf1b22da73"
+source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#4d1c8d6c21a62fd5379151f34300b5bf7b44388e"
 dependencies = [
  "bincode",
  "leb128",

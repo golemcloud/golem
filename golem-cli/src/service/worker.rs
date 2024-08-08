@@ -304,7 +304,7 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
                     .into_iter()
                     .map(encode_type_annotated_value_json)
                     .collect::<Result<Vec<_>, _>>()?,
-                None,
+                Some(component),
             ))
         }
     } else {
@@ -331,7 +331,7 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
                 .into_iter()
                 .map(encode_type_annotated_value_json)
                 .collect::<Result<Vec<_>, _>>()?,
-            None,
+            Some(component),
         ))
     }
 }

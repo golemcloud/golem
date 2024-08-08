@@ -75,7 +75,7 @@ async fn dynamic_worker_creation() {
 #[tokio::test]
 #[tracing::instrument]
 async fn counter_resource_test_1() {
-    let component_id = DEPS.store_component("counters").await;
+    let component_id = DEPS.store_unique_component("counters").await;
     let worker_id = DEPS.start_worker(&component_id, "counters-1").await;
     DEPS.log_output(&worker_id).await;
 
@@ -177,7 +177,7 @@ async fn counter_resource_test_1() {
 #[tokio::test]
 #[tracing::instrument]
 async fn counter_resource_test_1_json() {
-    let component_id = DEPS.store_component("counters").await;
+    let component_id = DEPS.store_unique_component("counters").await;
     let worker_id = DEPS.start_worker(&component_id, "counters-1j").await;
     DEPS.log_output(&worker_id).await;
 
@@ -185,14 +185,32 @@ async fn counter_resource_test_1_json() {
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{[constructor]counter}",
-            vec![json!({ "type": "Str", "value": "counter1" })],
+            vec![json!({ "typ": { "type": "Str" }, "value": "counter1" })],
         )
         .await
         .unwrap();
 
-    // counter1 is a JSON response containing a tuple with a single element holding the resource handle.
-    // we only need this inner element:
-    let counter1 = counter1
+    // counter1 is a JSON response containing a tuple with a single element holding the resource handle:
+    // {
+    //   "typ":  {"items":[{"mode":{"type":"Owned"},"resource_id":0,"type":"Handle"}],"type":"Tuple"},
+    //   "value":["urn:worker:fcb5d2d4-d6db-4eca-99ec-6260ae9270db/CLI_short_name_worker_invoke_and_await/0"]}
+    // }
+    // we only need this inner element and it's type:
+
+    let counter1_type = counter1
+        .as_object()
+        .unwrap()
+        .get("typ")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .get("items")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap();
+    let counter1_value = counter1
         .as_object()
         .unwrap()
         .get("value")
@@ -201,6 +219,12 @@ async fn counter_resource_test_1_json() {
         .unwrap()
         .first()
         .unwrap();
+    let counter1 = json!(
+        {
+            "typ": counter1_type,
+            "value": counter1_value
+        }
+    );
 
     info!("Using counter1 resource handle {counter1}");
 
@@ -208,7 +232,10 @@ async fn counter_resource_test_1_json() {
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{[method]counter.inc-by}",
-            vec![counter1.clone(), json!({ "type": "U64", "value": 5 })],
+            vec![
+                counter1.clone(),
+                json!({ "typ": { "type": "U64"}, "value": 5 }),
+            ],
         )
         .await;
 
@@ -240,8 +267,11 @@ async fn counter_resource_test_1_json() {
         result1
             == Ok(json!(
                 {
-                    "type": "Tuple",
-                    "value": [{ "type": "U64", "value": 5 }]
+                    "typ": {
+                        "type": "Tuple",
+                        "items": [ { "type": "U64" } ]
+                    },
+                    "value": [5]
                 }
             ))
     );
@@ -250,19 +280,30 @@ async fn counter_resource_test_1_json() {
         result2
             == Ok(json!(
             {
+              "typ": {
                 "type": "Tuple",
-                "value": [{
+                "items": [
+                  {
                     "type": "List",
-                    "value": [
+                    "inner": {
+                      "type": "Tuple",
+                      "items": [
                         {
-                            "type": "Tuple",
-                            "value": [
-                                { "type": "Str", "value": "counter1" },
-                                { "type": "U64", "value": 5 }
-                            ]
+                          "type": "Str"
+                        },
+                        {
+                          "type": "U64"
                         }
-                    ]
-                }]
+                      ]
+                    }
+                  }
+                ]
+              },
+                "value": [
+                            [
+                                ["counter1",5]
+                            ]
+                        ]
             }))
     );
 
@@ -396,7 +437,11 @@ async fn counter_resource_test_2_json() {
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").inc-by}",
-            vec![json!({ "type": "U64", "value": 5 })],
+            vec![json!(
+                {
+                    "typ": { "type": "U64" }, "value": 5
+                }
+            )],
         )
         .await;
 
@@ -404,14 +449,22 @@ async fn counter_resource_test_2_json() {
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").inc-by}",
-            vec![json!({ "type": "U64", "value": 1 })],
+            vec![json!(
+                {
+                    "typ": { "type": "U64" }, "value": 1
+                }
+            )],
         )
         .await;
     let _ = DEPS
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").inc-by}",
-            vec![json!({ "type": "U64", "value": 2 })],
+            vec![json!(
+                {
+                    "typ": { "type": "U64" }, "value": 2
+                }
+            )],
         )
         .await;
 
@@ -453,8 +506,11 @@ async fn counter_resource_test_2_json() {
         result1
             == Ok(json!(
                 {
-                    "type": "Tuple",
-                    "value": [{ "type": "U64", "value": 5 }]
+                    "typ": {
+                        "type": "Tuple",
+                        "items": [ { "type": "U64" } ]
+                    },
+                    "value": [5]
                 }
             ))
     );
@@ -462,23 +518,45 @@ async fn counter_resource_test_2_json() {
         result2
             == Ok(json!(
                 {
-                    "type": "Tuple",
-                    "value": [{ "type": "U64", "value": 3 }]
+                    "typ": {
+                        "type": "Tuple",
+                        "items": [ { "type": "U64" } ]
+                    },
+                    "value": [3]
                 }
             ))
     );
+
     check!(
         result3
             == Ok(json!(
-                    {
+                {
+              "typ": {
                 "type": "Tuple",
-                "value": [{
+                "items": [
+                  {
                     "type": "List",
-                    "value": [
-                        { "type": "Tuple", "value": [ { "type": "Str", "value": "counter1" }, { "type": "U64", "value": 5 } ] },
-                        { "type": "Tuple", "value": [ { "type": "Str", "value": "counter2" }, { "type": "U64", "value": 3 } ] }
-                    ]
-                }]}
+                    "inner": {
+                      "type": "Tuple",
+                      "items": [
+                        {
+                          "type": "Str"
+                        },
+                        {
+                          "type": "U64"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+                "value": [
+                            [
+                                ["counter1",5],
+                                ["counter2",3]
+                            ]
+                        ]
+            }
             ))
     );
 }
