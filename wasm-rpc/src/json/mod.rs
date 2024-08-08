@@ -87,9 +87,10 @@ mod tests {
             json,
             json!({
                 "typ": {
-                    "Tuple": [
-                            { "U32": {} },
-                            { "Str": {} }
+                    "type": "Tuple",
+                    "items": [
+                            { "type": "U32" },
+                            { "type": "Str" }
                     ]
                 },
                 "value": [10, "hello"]

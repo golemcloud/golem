@@ -1766,8 +1766,9 @@ checksum = "40ecd4077b5ae9fd2e9e169b102c6c330d0605168eb0e8bf79952b256dbefffd"
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#3c2a1e0cb80af7b645fa739767ac88cf1b22da73"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f07bc0b7328974d964e47d8d107c53dae814b541643faf5e4c5039253a137205"
 dependencies = [
  "bincode",
  "leb128",
