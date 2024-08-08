@@ -31,6 +31,10 @@ mod extractor;
 #[cfg(feature = "json")]
 pub mod json;
 
+/// Poem OpenAPI integration for some types
+#[cfg(feature = "poem_openapi")]
+pub mod poem;
+
 /// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
@@ -39,12 +43,15 @@ pub mod protobuf;
 #[cfg(feature = "serde")]
 pub mod serde;
 
+/// Conversion to/from the WAVE format
 #[cfg(feature = "text")]
 mod text;
 
+/// A version of values annotated with golem-wasm-ast generated type information
 #[cfg(feature = "typeinfo")]
 mod type_annotated_value;
 
+/// Conversion to/from wasmtime's value representation
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 

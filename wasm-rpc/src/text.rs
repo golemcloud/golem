@@ -1,11 +1,12 @@
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::protobuf::typed_result::ResultValue;
 use crate::protobuf::{
-    NameOptionTypePair, NameTypePair, NameValuePair, TypeVariant, TypedEnum, TypedFlags, TypedList,
-    TypedOption, TypedRecord, TypedTuple, TypedVariant,
+    NameValuePair, TypedEnum, TypedFlags, TypedList, TypedOption, TypedRecord, TypedTuple,
+    TypedVariant,
 };
 use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{protobuf, TypeEnum, TypeFlags};
+use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeRecord, TypeTuple, TypeVariant};
 use std::borrow::Cow;
 use std::ops::Deref;
 use wasm_wave::wasm::{WasmType, WasmTypeKind, WasmValue, WasmValueError};
@@ -98,7 +99,7 @@ impl WasmValue for TypeAnnotatedValuePrintable {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        if let AnalysedType::List(typ) = ty {
+        if let AnalysedType::List(TypeList { inner: typ }) = ty {
             let list = TypedList {
                 values: vals
                     .into_iter()
@@ -122,7 +123,7 @@ impl WasmValue for TypeAnnotatedValuePrintable {
         ty: &Self::Type,
         fields: impl IntoIterator<Item = (&'a str, Self)>,
     ) -> Result<Self, WasmValueError> {
-        if let AnalysedType::Record(types) = ty {
+        if let AnalysedType::Record(TypeRecord { fields: types }) = ty {
             let record = TypedRecord {
                 value: fields
                     .into_iter()
@@ -135,9 +136,9 @@ impl WasmValue for TypeAnnotatedValuePrintable {
                     .collect(),
                 typ: types
                     .iter()
-                    .map(|(name, typ)| NameTypePair {
-                        name: name.clone(),
-                        typ: Some(typ.into()),
+                    .map(|pair| protobuf::NameTypePair {
+                        name: pair.name.clone(),
+                        typ: Some((&pair.typ).into()),
                     })
                     .collect(),
             };
@@ -156,7 +157,7 @@ impl WasmValue for TypeAnnotatedValuePrintable {
         ty: &Self::Type,
         vals: impl IntoIterator<Item = Self>,
     ) -> Result<Self, WasmValueError> {
-        if let AnalysedType::Tuple(types) = ty {
+        if let AnalysedType::Tuple(TypeTuple { items: types }) = ty {
             let tuple = TypedTuple {
                 value: vals
                     .into_iter()
@@ -182,25 +183,22 @@ impl WasmValue for TypeAnnotatedValuePrintable {
         case: &str,
         val: Option<Self>,
     ) -> Result<Self, WasmValueError> {
-        if let AnalysedType::Variant(cases) = ty {
-            let case_type =
-                cases.iter().find_map(
-                    |(name, case_type)| {
-                        if name == case {
-                            Some(case_type)
-                        } else {
-                            None
-                        }
-                    },
-                );
+        if let AnalysedType::Variant(TypeVariant { cases }) = ty {
+            let case_type = cases.iter().find_map(|pair| {
+                if pair.name == case {
+                    Some(&pair.typ)
+                } else {
+                    None
+                }
+            });
             if case_type.is_some() {
                 let variant = TypedVariant {
-                    typ: Some(TypeVariant {
+                    typ: Some(protobuf::TypeVariant {
                         cases: cases
                             .iter()
-                            .map(|(name, case_type)| NameOptionTypePair {
-                                name: name.clone(),
-                                typ: case_type.as_ref().map(|v| v.into()),
+                            .map(|pair| protobuf::NameOptionTypePair {
+                                name: pair.name.clone(),
+                                typ: pair.typ.as_ref().map(|v| v.into()),
                             })
                             .collect(),
                     }),
@@ -226,7 +224,7 @@ impl WasmValue for TypeAnnotatedValuePrintable {
     }
 
     fn make_enum(ty: &Self::Type, case: &str) -> Result<Self, WasmValueError> {
-        if let AnalysedType::Enum(cases) = ty {
+        if let AnalysedType::Enum(TypeEnum { cases }) = ty {
             if cases.contains(&case.to_string()) {
                 let enum_value = TypedEnum {
                     typ: cases.to_vec(),
@@ -265,10 +263,10 @@ impl WasmValue for TypeAnnotatedValuePrintable {
         ty: &Self::Type,
         val: Result<Option<Self>, Option<Self>>,
     ) -> Result<Self, WasmValueError> {
-        if let AnalysedType::Result { ok, error } = ty {
+        if let AnalysedType::Result(golem_wasm_ast::analysis::TypeResult { ok, err }) = ty {
             let result0 = TypedResult {
                 ok: ok.clone().map(|v| v.deref().into()),
-                error: error.clone().map(|v| v.deref().into()),
+                error: err.clone().map(|v| v.deref().into()),
                 result_value: match val {
                     Ok(Some(v)) => Some(ResultValue::OkValue(Box::new(RootTypeAnnotatedValue {
                         type_annotated_value: Some(v.0),
@@ -297,7 +295,7 @@ impl WasmValue for TypeAnnotatedValuePrintable {
         ty: &Self::Type,
         names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, WasmValueError> {
-        if let AnalysedType::Flags(all_names) = ty {
+        if let AnalysedType::Flags(TypeFlags { names: all_names }) = ty {
             let names: Vec<String> = names.into_iter().map(|name| name.to_string()).collect();
 
             let invalid_names: Vec<String> = names
@@ -530,11 +528,15 @@ impl WasmValue for TypeAnnotatedValuePrintable {
 mod tests {
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::text::type_annotated_value_from_str;
-    use crate::{create, type_annotated_value_to_string, Value};
-    use golem_wasm_ast::analysis::AnalysedType;
+    use crate::{type_annotated_value_to_string, TypeAnnotatedValueConstructors, Value};
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
+        TypeF64, TypeFlags, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8,
+        TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+    };
 
     fn round_trip(value: Value, typ: AnalysedType) {
-        let typed_value = create(&value, &typ).unwrap();
+        let typed_value = TypeAnnotatedValue::create(&value, &typ).unwrap();
         println!("{:?}", typed_value.clone());
 
         let s = type_annotated_value_to_string(&typed_value).unwrap();
@@ -547,74 +549,82 @@ mod tests {
 
     #[test]
     fn round_trip_u8() {
-        round_trip(Value::U8(42), AnalysedType::U8);
+        round_trip(Value::U8(42), AnalysedType::U8(TypeU8));
     }
 
     #[test]
     fn round_trip_u16() {
-        round_trip(Value::U16(1234), AnalysedType::U16);
+        round_trip(Value::U16(1234), AnalysedType::U16(TypeU16));
     }
 
     #[test]
     fn round_trip_u32() {
-        round_trip(Value::U32(123456), AnalysedType::U32);
+        round_trip(Value::U32(123456), AnalysedType::U32(TypeU32));
     }
 
     #[test]
     fn round_trip_u64() {
-        round_trip(Value::U64(1234567890123456), AnalysedType::U64);
+        round_trip(Value::U64(1234567890123456), AnalysedType::U64(TypeU64));
     }
 
     #[test]
     fn round_trip_s8() {
-        round_trip(Value::S8(-42), AnalysedType::S8);
+        round_trip(Value::S8(-42), AnalysedType::S8(TypeS8));
     }
 
     #[test]
     fn round_trip_s16() {
-        round_trip(Value::S16(-1234), AnalysedType::S16);
+        round_trip(Value::S16(-1234), AnalysedType::S16(TypeS16));
     }
 
     #[test]
     fn round_trip_s32() {
-        round_trip(Value::S32(-123456), AnalysedType::S32);
+        round_trip(Value::S32(-123456), AnalysedType::S32(TypeS32));
     }
 
     #[test]
     fn round_trip_s64() {
-        round_trip(Value::S64(-1234567890123456), AnalysedType::S64);
+        round_trip(Value::S64(-1234567890123456), AnalysedType::S64(TypeS64));
     }
 
     #[test]
     fn round_trip_f32() {
-        round_trip(Value::F32(1234.5678), AnalysedType::F32);
+        round_trip(Value::F32(1234.5678), AnalysedType::F32(TypeF32));
     }
 
     #[test]
     fn round_trip_f64() {
-        round_trip(Value::F64(1_234_567_890_123_456.8), AnalysedType::F64);
+        round_trip(
+            Value::F64(1_234_567_890_123_456.8),
+            AnalysedType::F64(TypeF64),
+        );
     }
 
     #[test]
     fn round_trip_bool() {
-        round_trip(Value::Bool(true), AnalysedType::Bool);
+        round_trip(Value::Bool(true), AnalysedType::Bool(TypeBool));
     }
 
     #[test]
     fn round_trip_char() {
-        round_trip(Value::Char('a'), AnalysedType::Chr);
+        round_trip(Value::Char('a'), AnalysedType::Chr(TypeChr));
     }
 
     #[test]
     fn round_trip_string() {
-        round_trip(Value::String("hello".to_string()), AnalysedType::Str);
+        round_trip(
+            Value::String("hello".to_string()),
+            AnalysedType::Str(TypeStr),
+        );
     }
 
     #[test]
     fn round_trip_list_1() {
         round_trip(
             Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
-            AnalysedType::List(Box::new(AnalysedType::U8)),
+            AnalysedType::List(golem_wasm_ast::analysis::TypeList {
+                inner: Box::new(AnalysedType::U8(TypeU8)),
+            }),
         );
     }
 
@@ -625,7 +635,11 @@ mod tests {
                 Value::String("hello".to_string()),
                 Value::String("world".to_string()),
             ])]),
-            AnalysedType::List(Box::new(AnalysedType::List(Box::new(AnalysedType::Str)))),
+            AnalysedType::List(golem_wasm_ast::analysis::TypeList {
+                inner: Box::new(AnalysedType::List(golem_wasm_ast::analysis::TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                })),
+            }),
         );
     }
 
@@ -637,11 +651,22 @@ mod tests {
                 Value::String("hello".to_string()),
                 Value::Bool(true),
             ]),
-            AnalysedType::Record(vec![
-                ("a".to_string(), AnalysedType::U8),
-                ("b".to_string(), AnalysedType::Str),
-                ("c".to_string(), AnalysedType::Bool),
-            ]),
+            AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "a".to_string(),
+                        typ: AnalysedType::U8(TypeU8),
+                    },
+                    NameTypePair {
+                        name: "b".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "c".to_string(),
+                        typ: AnalysedType::Bool(TypeBool),
+                    },
+                ],
+            }),
         );
     }
 
@@ -653,11 +678,13 @@ mod tests {
                 Value::String("hello".to_string()),
                 Value::Bool(true),
             ]),
-            AnalysedType::Tuple(vec![
-                AnalysedType::U8,
-                AnalysedType::Str,
-                AnalysedType::Bool,
-            ]),
+            AnalysedType::Tuple(TypeTuple {
+                items: vec![
+                    AnalysedType::U8(TypeU8),
+                    AnalysedType::Str(TypeStr),
+                    AnalysedType::Bool(TypeBool),
+                ],
+            }),
         );
     }
 
@@ -668,10 +695,18 @@ mod tests {
                 case_idx: 1,
                 case_value: Some(Box::new(Value::String("hello".to_string()))),
             },
-            AnalysedType::Variant(vec![
-                ("A".to_string(), None),
-                ("B".to_string(), Some(AnalysedType::Str)),
-            ]),
+            AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "A".to_string(),
+                        typ: None,
+                    },
+                    NameOptionTypePair {
+                        name: "B".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                ],
+            }),
         );
     }
 
@@ -679,7 +714,9 @@ mod tests {
     fn round_trip_enum() {
         round_trip(
             Value::Enum(1),
-            AnalysedType::Enum(vec!["A".to_string(), "B".to_string()]),
+            AnalysedType::Enum(TypeEnum {
+                cases: vec!["A".to_string(), "B".to_string()],
+            }),
         );
     }
 
@@ -687,7 +724,9 @@ mod tests {
     fn round_trip_option() {
         round_trip(
             Value::Option(Some(Box::new(Value::U8(1)))),
-            AnalysedType::Option(Box::new(AnalysedType::U8)),
+            AnalysedType::Option(TypeOption {
+                inner: Box::new(AnalysedType::U8(TypeU8)),
+            }),
         );
     }
 
@@ -695,10 +734,10 @@ mod tests {
     fn round_trip_result_ok() {
         round_trip(
             Value::Result(Ok(Some(Box::new(Value::U8(1))))),
-            AnalysedType::Result {
-                ok: Some(Box::new(AnalysedType::U8)),
-                error: None,
-            },
+            AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::U8(TypeU8))),
+                err: None,
+            }),
         );
     }
 
@@ -706,10 +745,10 @@ mod tests {
     fn round_trip_result_err() {
         round_trip(
             Value::Result(Err(Some(Box::new(Value::U8(1))))),
-            AnalysedType::Result {
-                error: Some(Box::new(AnalysedType::U8)),
+            AnalysedType::Result(TypeResult {
+                err: Some(Box::new(AnalysedType::U8(TypeU8))),
                 ok: None,
-            },
+            }),
         );
     }
 
@@ -717,7 +756,9 @@ mod tests {
     fn round_trip_flags() {
         round_trip(
             Value::Flags(vec![true, false, true]),
-            AnalysedType::Flags(vec!["A".to_string(), "B".to_string(), "C".to_string()]),
+            AnalysedType::Flags(TypeFlags {
+                names: vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            }),
         );
     }
 }
