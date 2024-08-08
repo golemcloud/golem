@@ -10,7 +10,7 @@ use crate::merge::Merge;
 use crate::primitive::GetPrimitive;
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, IdempotencyKey};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 use std::collections::HashMap;
@@ -67,11 +67,11 @@ impl WorkerDetail {
             typ: vec![
                 NameTypePair {
                     name: "component_id".to_string(),
-                    typ: Some((&AnalysedType::Str).into()),
+                    typ: Some((&AnalysedType::Str(TypeStr)).into()),
                 },
                 NameTypePair {
                     name: "name".to_string(),
-                    typ: Some((&AnalysedType::Str).into()),
+                    typ: Some((&AnalysedType::Str(TypeStr)).into()),
                 },
             ],
             value: vec![
@@ -102,7 +102,7 @@ impl WorkerDetail {
                 typ: {
                     vec![NameTypePair {
                         name: "idempotency-key".to_string(),
-                        typ: Some((&AnalysedType::Str).into()),
+                        typ: Some((&AnalysedType::Str(TypeStr)).into()),
                     }]
                 },
                 value: vec![NameValuePair {

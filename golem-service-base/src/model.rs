@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{
     ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
 };
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
@@ -754,21 +754,27 @@ impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::worker::v1::I
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[error("Parameter type mismatch")]
-pub struct GolemErrorParamTypeMismatch {}
+pub struct GolemErrorParamTypeMismatch {
+    pub details: String,
+}
 
 impl From<golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch>
     for GolemErrorParamTypeMismatch
 {
-    fn from(_value: golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch) -> Self {
-        Self {}
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch) -> Self {
+        Self {
+            details: value.details,
+        }
     }
 }
 
 impl From<GolemErrorParamTypeMismatch>
     for golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch
 {
-    fn from(_value: GolemErrorParamTypeMismatch) -> Self {
-        Self {}
+    fn from(value: GolemErrorParamTypeMismatch) -> Self {
+        Self {
+            details: value.details,
+        }
     }
 }
 
@@ -983,7 +989,7 @@ impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::v1
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
-    pub params: Vec<PreciseJson>,
+    pub params: Vec<TypeAnnotatedValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -1293,9 +1299,9 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeResult {
-    pub result: serde_json::value::Value,
+    pub result: TypeAnnotatedValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]

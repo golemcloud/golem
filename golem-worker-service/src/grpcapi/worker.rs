@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -20,16 +21,18 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_worker_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError as GrpcWorkerError, WorkerExecutionError,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response,
+    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
+    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
@@ -235,6 +238,37 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    async fn invoke_and_await_json(
+        &self,
+        request: Request<InvokeAndAwaitJsonRequest>,
+    ) -> Result<Response<InvokeAndAwaitJsonResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_and_await_json",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            function = request.function,
+            context_parent_worker_id =
+                proto_invocation_context_parent_worker_id_string(&request.context)
+        );
+
+        let response = match self
+            .invoke_and_await_json(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(invoke_and_await_json_response::Result::Success(result)),
+            Err(error) => record.fail(
+                invoke_and_await_json_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InvokeAndAwaitJsonResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn invoke(
         &self,
         request: Request<InvokeRequest>,
@@ -250,6 +284,37 @@ impl GrpcWorkerService for WorkerGrpcApi {
         );
 
         let response = match self.invoke(request).instrument(record.span.clone()).await {
+            Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                invoke_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InvokeResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn invoke_json(
+        &self,
+        request: Request<InvokeJsonRequest>,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_json",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            function = request.function,
+            context_parent_worker_id =
+                proto_invocation_context_parent_worker_id_string(&request.context)
+        );
+
+        let response = match self
+            .invoke_json(request)
+            .instrument(record.span.clone())
+            .await
+        {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
@@ -545,6 +610,30 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
+    async fn invoke_json(&self, request: InvokeJsonRequest) -> Result<(), GrpcWorkerError> {
+        let worker_id = make_crate_worker_id(request.worker_id)?;
+
+        let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
+            .into();
+
+        self.worker_service
+            .invoke_function_json(
+                &worker_id,
+                Some(idempotency_key),
+                request.function,
+                params,
+                request.context,
+                empty_worker_metadata(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
@@ -568,6 +657,41 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(result)
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        request: InvokeAndAwaitJsonRequest,
+    ) -> Result<String, GrpcWorkerError> {
+        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
+            .into();
+
+        let result = self
+            .worker_service
+            .invoke_and_await_function_json(
+                &worker_id,
+                Some(idempotency_key),
+                request.function,
+                params,
+                request.context,
+                empty_worker_metadata(),
+            )
+            .await?;
+
+        Ok(serde_json::to_value(result)
+            .map_err(|err| GrpcWorkerError {
+                error: Some(worker_error::Error::InternalError(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: format!("Failed to serialize response: {err:?}"),
+                    })),
+                })),
+            })?
+            .to_string())
     }
 
     async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {
@@ -748,4 +872,14 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
         }
         None => Status::unknown("Unknown error"),
     }
+}
+
+fn parse_json_invoke_parameters(
+    parameters: &[String],
+) -> Result<Vec<TypeAnnotatedValue>, GrpcWorkerError> {
+    parameters
+        .iter()
+        .map(|param| serde_json::from_str(param))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| bad_request_error(format!("Failed to parse JSON parameters: {err:?}")))
 }

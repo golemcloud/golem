@@ -9,8 +9,8 @@ mod pattern_match_evaluator;
 
 mod internal;
 
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::TypedOption;
 
@@ -233,7 +233,7 @@ impl Evaluator for DefaultEvaluator {
                         ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(value)) => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Bool(!value))),
                         _ => Err(EvaluationError::Message(format!(
                             "The text is evaluated to {} but it is not a boolean value to apply not (!) operator on",
-                           &evaluated_expr.get_value().map_or("unit".to_string(), |eval_result| get_json_from_typed_value(&eval_result).to_string())
+                           &evaluated_expr.get_value().map_or("unit".to_string(), |eval_result| eval_result.to_json_value().to_string())
                         ))),
                     }
                 }
@@ -254,7 +254,7 @@ impl Evaluator for DefaultEvaluator {
                         _ => Err(EvaluationError::Message(format!(
                             "The predicate text is evaluated to {} but it is not a boolean value",
                             &pred.get_value().map_or("unit".to_string(), |eval_result| {
-                                get_json_from_typed_value(&eval_result).to_string()
+                                eval_result.to_json_value().to_string()
                             })
                         ))),
                     }
@@ -349,7 +349,7 @@ impl Evaluator for DefaultEvaluator {
                                     return Err(EvaluationError::Message(format!(
                                         "Cannot append a complex text {} or unit to form text",
                                         &value.get_value().map_or("unit".to_string(), |v| {
-                                            get_json_from_typed_value(&v).to_string()
+                                            v.to_json_value().to_string()
                                         })
                                     )));
                                 }
@@ -393,7 +393,7 @@ impl Evaluator for DefaultEvaluator {
                         None => Ok(ExprEvaluationResult::Value(TypeAnnotatedValue::Option(
                             Box::new(TypedOption {
                                 value: None,
-                                typ: Some((&AnalysedType::Str).into()),
+                                typ: Some((&AnalysedType::Str(TypeStr)).into()),
                             }),
                         ))),
                     }
@@ -465,8 +465,8 @@ mod tests {
     use std::str::FromStr;
 
     use golem_service_base::type_inference::infer_analysed_type;
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::json::get_typed_value_from_json;
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeOption, TypeRecord, TypeStr};
+    use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedVariant};
     use http::{HeaderMap, Uri};
@@ -892,9 +892,13 @@ mod tests {
         .expect("Failed to parse json");
 
         let expected_type = infer_analysed_type(&value);
-        let result_as_typed_value =
-            get_typed_value_from_json(&value, &AnalysedType::Option(Box::new(expected_type)))
-                .unwrap();
+        let result_as_typed_value = TypeAnnotatedValue::parse_with_type(
+            &value,
+            &AnalysedType::Option(TypeOption {
+                inner: Box::new(expected_type),
+            }),
+        )
+        .unwrap();
         let worker_response = RefinedWorkerResponse::from_worker_response(&WorkerResponse::new(
             internal::create_tuple(vec![result_as_typed_value.clone()]).unwrap(),
         ))
@@ -1165,7 +1169,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
-        let expected = test_utils::create_none(&AnalysedType::Str);
+        let expected = test_utils::create_none(&AnalysedType::Str(TypeStr));
 
         assert_eq!(result, Ok(expected));
     }
@@ -1189,7 +1193,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, &worker_response.to_refined_worker_response())
             .await;
 
-        let internal_opt = test_utils::create_none(&AnalysedType::Str);
+        let internal_opt = test_utils::create_none(&AnalysedType::Str(TypeStr));
         let expected = internal::create_option(internal_opt).unwrap();
         assert_eq!(result, Ok(expected));
     }
@@ -1291,7 +1295,7 @@ mod tests {
             .await
             .unwrap();
 
-        let output_json = golem_wasm_rpc::json::get_json_from_typed_value(&result);
+        let output_json = result.to_json_value();
 
         let expected_json = json!({
             "p": {
@@ -1331,7 +1335,12 @@ mod tests {
                     cases: vec![NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            (&AnalysedType::Record(vec![("id".to_string(), AnalysedType::Str)]))
+                            (&AnalysedType::Record(TypeRecord {
+                                fields: vec![NameTypePair {
+                                    name: "id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr),
+                                }],
+                            }))
                                 .into(),
                         ),
                     }],
@@ -1373,20 +1382,28 @@ mod tests {
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
-                                "id".to_string(),
-                                AnalysedType::Str,
-                            )]))))
+                            (&AnalysedType::Option(TypeOption {
+                                inner: Box::new(AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                })),
+                            }))
                                 .into(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
-                                "id".to_string(),
-                                AnalysedType::Str,
-                            )]))))
+                            (&AnalysedType::Option(TypeOption {
+                                inner: Box::new(AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                })),
+                            }))
                                 .into(),
                         ),
                     },
@@ -1461,30 +1478,42 @@ mod tests {
         let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(test_utils::create_none(&AnalysedType::Record(vec![(
-                    "id".to_string(),
-                    AnalysedType::Str,
-                )]))),
+                type_annotated_value: Some(test_utils::create_none(&AnalysedType::Record(
+                    TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "id".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    },
+                ))),
             })),
             typ: Some(TypeVariant {
                 cases: vec![
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
-                                "id".to_string(),
-                                AnalysedType::Str,
-                            )]))))
+                            (&AnalysedType::Option(TypeOption {
+                                inner: Box::new(AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                })),
+                            }))
                                 .into(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            (&AnalysedType::Option(Box::new(AnalysedType::Record(vec![(
-                                "id".to_string(),
-                                AnalysedType::Str,
-                            )]))))
+                            (&AnalysedType::Option(TypeOption {
+                                inner: Box::new(AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "id".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                })),
+                            }))
                                 .into(),
                         ),
                     },
@@ -1655,8 +1684,10 @@ mod tests {
         use crate::worker_binding::RequestDetails;
         use crate::worker_bridge_execution::WorkerResponse;
         use golem_service_base::type_inference::infer_analysed_type;
-        use golem_wasm_ast::analysis::AnalysedType;
-        use golem_wasm_rpc::json::get_typed_value_from_json;
+        use golem_wasm_ast::analysis::{
+            AnalysedType, NameTypePair, TypeOption, TypeRecord, TypeResult, TypeStr,
+        };
+        use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::{
             NameOptionTypePair, TypeVariant, TypedOption, TypedVariant,
@@ -1688,26 +1719,34 @@ mod tests {
                     NameOptionTypePair {
                         name: "Foo".to_string(),
                         typ: Some(
-                            (&AnalysedType::Option(Box::new(AnalysedType::Result {
-                                ok: Some(Box::new(AnalysedType::Record(vec![(
-                                    "id".to_string(),
-                                    AnalysedType::Str,
-                                )]))),
-                                error: None,
-                            })))
+                            (&AnalysedType::Option(TypeOption {
+                                inner: Box::new(AnalysedType::Result(TypeResult {
+                                    ok: Some(Box::new(AnalysedType::Record(TypeRecord {
+                                        fields: vec![NameTypePair {
+                                            name: "id".to_string(),
+                                            typ: AnalysedType::Str(TypeStr),
+                                        }],
+                                    }))),
+                                    err: None,
+                                })),
+                            }))
                                 .into(),
                         ),
                     },
                     NameOptionTypePair {
                         name: "Bar".to_string(),
                         typ: Some(
-                            (&AnalysedType::Option(Box::new(AnalysedType::Result {
-                                ok: Some(Box::new(AnalysedType::Record(vec![(
-                                    "id".to_string(),
-                                    AnalysedType::Str,
-                                )]))),
-                                error: None,
-                            })))
+                            (&AnalysedType::Option(TypeOption {
+                                inner: Box::new(AnalysedType::Result(TypeResult {
+                                    ok: Some(Box::new(AnalysedType::Record(TypeRecord {
+                                        fields: vec![NameTypePair {
+                                            name: "id".to_string(),
+                                            typ: AnalysedType::Str(TypeStr),
+                                        }],
+                                    }))),
+                                    err: None,
+                                })),
+                            }))
                                 .into(),
                         ),
                     },
@@ -1724,15 +1763,17 @@ mod tests {
         }
 
         pub(crate) fn get_err_worker_response() -> WorkerResponse {
-            let worker_response_value = get_typed_value_from_json(
+            let worker_response_value = TypeAnnotatedValue::parse_with_type(
                 &json!({"err": { "id" : "afsal"} }),
-                &AnalysedType::Result {
-                    error: Some(Box::new(AnalysedType::Record(vec![(
-                        "id".to_string(),
-                        AnalysedType::Str,
-                    )]))),
+                &AnalysedType::Result(TypeResult {
+                    err: Some(Box::new(AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "id".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    }))),
                     ok: None,
-                },
+                }),
             )
             .unwrap();
 
@@ -1743,7 +1784,8 @@ mod tests {
             let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
             let expected_type = infer_analysed_type(&value);
-            let result_as_typed_value = get_typed_value_from_json(&value, &expected_type).unwrap();
+            let result_as_typed_value =
+                TypeAnnotatedValue::parse_with_type(&value, &expected_type).unwrap();
             WorkerResponse::new(result_as_typed_value)
         }
 

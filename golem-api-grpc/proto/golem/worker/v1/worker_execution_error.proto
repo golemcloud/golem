@@ -86,7 +86,9 @@ message Interrupted {
   bool recover_immediately = 1;
 }
 
-message ParamTypeMismatch {}
+message ParamTypeMismatch {
+  string details = 1;
+}
 
 message NoValueInMessage {}
 

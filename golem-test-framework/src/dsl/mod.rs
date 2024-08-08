@@ -21,10 +21,11 @@ use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response,
-    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
-    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitRequest, InvokeRequest,
+    invoke_and_await_json_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, update_worker_response,
+    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetWorkerMetadataRequest,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
     LaunchNewWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest, UpdateWorkerResponse,
     WorkerError, WorkerExecutionError,
 };
@@ -130,6 +131,12 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> crate::Result<Result<serde_json::Value, Error>>;
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
     async fn capture_output_forever(
         &self,
@@ -473,6 +480,39 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 Ok(Err(error))
             }
             Some(invoke_and_await_response::Result::Error(_)) => {
+                Err(anyhow!("Empty error response from invoke_and_await"))
+            }
+        }
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> crate::Result<Result<serde_json::Value, Error>> {
+        let params = params.into_iter().map(|p| p.to_string()).collect();
+        let invoke_response = self
+            .worker_service()
+            .invoke_and_await_json(InvokeAndAwaitJsonRequest {
+                worker_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                function: function_name.to_string(),
+                invoke_parameters: params,
+                context: None,
+            })
+            .await?;
+
+        match invoke_response.result {
+            None => Err(anyhow!("No response from invoke_and_await_json")),
+            Some(invoke_and_await_json_response::Result::Success(response)) => {
+                let response = serde_json::from_str(&response).map_err(|err| anyhow!(err))?;
+                Ok(Ok(response))
+            }
+            Some(invoke_and_await_json_response::Result::Error(WorkerError {
+                error: Some(error),
+            })) => Ok(Err(error)),
+            Some(invoke_and_await_json_response::Result::Error(_)) => {
                 Err(anyhow!("Empty error response from invoke_and_await"))
             }
         }
@@ -1080,6 +1120,12 @@ pub trait TestDslUnsafe {
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error>;
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, Error>;
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent>;
     async fn capture_output_forever(
         &self,
@@ -1213,6 +1259,17 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error> {
         <T as TestDsl>::invoke_and_await(self, worker_id, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, Error> {
+        <T as TestDsl>::invoke_and_await_json(self, worker_id, function_name, params)
             .await
             .expect("Failed to invoke function")
     }

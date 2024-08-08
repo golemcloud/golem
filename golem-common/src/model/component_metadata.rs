@@ -15,7 +15,7 @@
 use bincode::{Decode, Encode};
 use std::fmt::{self, Display, Formatter};
 
-use crate::model::exports::Export;
+use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct ComponentMetadata {
-    pub exports: Vec<Export>,
+    pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
 }
@@ -254,11 +254,7 @@ impl From<RawComponentMetadata> for ComponentMetadata {
             .map(|producers| producers.into())
             .collect::<Vec<_>>();
 
-        let exports = value
-            .exports
-            .into_iter()
-            .map(|export| export.into())
-            .collect::<Vec<_>>();
+        let exports = value.exports.into_iter().collect::<Vec<_>>();
 
         let memories = value.memories.into_iter().map(LinearMemory::from).collect();
 
@@ -372,8 +368,8 @@ impl Display for ComponentProcessingError {
         match self {
             ComponentProcessingError::Parsing(e) => write!(f, "Parsing error: {}", e),
             ComponentProcessingError::Analysis(source) => {
-                let AnalysisFailure::Failed(error) = source;
-                write!(f, "Analysis error: {}", error)
+                let AnalysisFailure { reason } = source;
+                write!(f, "Analysis error: {}", reason)
             }
         }
     }
@@ -390,28 +386,36 @@ fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
         match export {
             AnalysedExport::Function(fun) => {
                 if fun.is_constructor() {
-                    let drop_name = fun.name.replace("[constructor]", "[drop]");
-                    to_add.push(AnalysedExport::Function(AnalysedFunction {
-                        name: drop_name,
-                        ..fun.clone()
-                    }));
+                    to_add.push(AnalysedExport::Function(drop_from_constructor(fun)));
                 }
             }
             AnalysedExport::Instance(instance) => {
                 let mut to_add = Vec::new();
-                for fun in &instance.funcs {
+                for fun in &instance.functions {
                     if fun.is_constructor() {
-                        let drop_name = fun.name.replace("[constructor]", "[drop]");
-                        to_add.push(AnalysedFunction {
-                            name: drop_name,
-                            ..fun.clone()
-                        });
+                        to_add.push(drop_from_constructor(fun));
                     }
                 }
-                instance.funcs.extend(to_add.into_iter());
+                instance.functions.extend(to_add.into_iter());
             }
         }
     }
 
     exports.extend(to_add);
+}
+
+fn drop_from_constructor(constructor: &AnalysedFunction) -> AnalysedFunction {
+    let drop_name = constructor.name.replace("[constructor]", "[drop]");
+    AnalysedFunction {
+        name: drop_name,
+        parameters: constructor
+            .results
+            .iter()
+            .map(|result| AnalysedFunctionParameter {
+                name: "self".to_string(),
+                typ: result.typ.clone(),
+            })
+            .collect(),
+        results: vec![],
+    }
 }

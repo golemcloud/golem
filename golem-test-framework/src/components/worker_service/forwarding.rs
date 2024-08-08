@@ -22,7 +22,8 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
+    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
+    InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
     ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
     WorkerError,
@@ -317,6 +318,17 @@ impl WorkerService for ForwardingWorkerService {
                 })
             }
         }
+    }
+
+    async fn invoke_json(&self, _request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
+        panic!("invoke_json can only be used through worker service");
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        _request: InvokeAndAwaitJsonRequest,
+    ) -> crate::Result<InvokeAndAwaitJsonResponse> {
+        panic!("invoke_and_await_json can only be used through worker service");
     }
 
     async fn connect_worker(

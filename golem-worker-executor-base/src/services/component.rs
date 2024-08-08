@@ -38,9 +38,9 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::exports::Export;
 use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::retries::with_retries;
+use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
@@ -55,7 +55,7 @@ pub struct ComponentMetadata {
     pub version: ComponentVersion,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
-    pub exports: Vec<Export>,
+    pub exports: Vec<AnalysedExport>,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -447,12 +447,8 @@ async fn get_metadata_via_grpc(
                         .metadata
                         .map(|metadata| {
                             let export = metadata.exports;
-                            let vec: Vec<Result<Export, String>> = export
-                                .into_iter()
-                                .map(|proto_export| {
-                                    golem_common::model::exports::Export::try_from(proto_export)
-                                })
-                                .collect();
+                            let vec: Vec<Result<AnalysedExport, String>> =
+                                export.into_iter().map(AnalysedExport::try_from).collect();
                             vec.into_iter().collect()
                         })
                         .unwrap_or_else(|| Ok(Vec::new()))
@@ -637,7 +633,7 @@ impl ComponentServiceLocalFileSystem {
     async fn analyze_memories_and_exports(
         component_id: &ComponentId,
         path: &PathBuf,
-    ) -> Result<(Vec<LinearMemory>, Vec<Export>), GolemError> {
+    ) -> Result<(Vec<LinearMemory>, Vec<AnalysedExport>), GolemError> {
         // check if component metadata is already available in a corresponding `json` file in a target directory
         // otherwise, try to analyse the component file.
         let component_metadata_opt: Option<
@@ -674,7 +670,6 @@ impl ComponentServiceLocalFileSystem {
             let exports = raw_component_metadata
                 .exports
                 .into_iter()
-                .map(|export| export.into())
                 .collect::<Vec<_>>();
 
             let linear_memories: Vec<LinearMemory> = raw_component_metadata

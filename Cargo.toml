@@ -91,8 +91,8 @@ fred = { version = "9.0.3", features = [
 futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
-golem-wasm-ast = "0.3.2"
-golem-wasm-rpc = { version = "0.0.36", default-features = false, features = ["host"] }
+golem-wasm-ast = "0.4.0"
+golem-wasm-rpc = { version = "0.0.39", default-features = false, features = ["host"] }
 http = "1.0.0" # keep in sync with wasmtime
 http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"
@@ -123,8 +123,8 @@ poem = { version = "3.0.1", features = ["prometheus", "opentelemetry", "test"] }
 postgres = "0.19.7"
 prometheus = { version = "0.13.3", features = ["process"] }
 proptest = "1.4.0"
-prost = "0.12.3"
-prost-types = "0.12.3"
+prost = "0.12.6"
+prost-types = "0.12.6"
 redis = { version = "0.25.2", features = ["default"] }
 regex = "1.10.3"
 reqwest = { version = "0.12.5", features = [

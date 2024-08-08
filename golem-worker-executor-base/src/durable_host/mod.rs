@@ -53,7 +53,6 @@ use golem_common::model::{
     ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
@@ -1088,20 +1087,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 ) {
                                     Ok(value) => {
                                         if let Some(value) = value {
-                                            let function_results: Vec<AnalysedFunctionResult> =
-                                                value
-                                                    .results
-                                                    .into_iter()
-                                                    .map(|t| t.into())
-                                                    .collect();
-
-                                            let result = interpret_function_results(
-                                                output,
-                                                function_results,
-                                            )
-                                            .map_err(|e| GolemError::ValueMismatch {
-                                                details: e.join(", "),
-                                            })?;
+                                            let result =
+                                                interpret_function_results(output, value.results)
+                                                    .map_err(|e| GolemError::ValueMismatch {
+                                                    details: e.join(", "),
+                                                })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
                                                 .data_mut()

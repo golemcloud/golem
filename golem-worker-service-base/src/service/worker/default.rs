@@ -15,11 +15,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use golem_wasm_rpc::json::get_json_from_typed_value;
+use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
-use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
@@ -35,8 +34,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
-use golem_common::model::exports::FunctionResult;
-use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, ScanCursor,
     Timestamp, WorkerFilter, WorkerStatus,
@@ -85,24 +82,13 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
-    // Accepts Json Params and Returns Json (with no type information)
+    // Accepts Vec<TypeAnnotatedValue> and returns TypeAnnotatedValue
     async fn invoke_and_await_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
-        invocation_context: Option<InvocationContext>,
-        metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<Value>;
-
-    // Accepts Json Params and Returns TypeAnnotatedValue (a Json with more type Info)
-    async fn invoke_and_await_function_typed(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<PreciseJson>,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue>;
@@ -118,13 +104,13 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult>;
 
-    // Accepts Json parameters as input
+    // Accepts Vec<TypeAnnotatedValue> parameters as input
     async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
@@ -201,7 +187,7 @@ pub trait WorkerService<AuthCtx> {
 
 pub struct TypedResult {
     pub result: TypeAnnotatedValue,
-    pub function_result_types: Vec<FunctionResult>,
+    pub function_result_types: Vec<AnalysedFunctionResult>,
 }
 
 #[derive(Clone, Debug)]
@@ -358,38 +344,12 @@ where
         Ok(())
     }
 
-    // Accepts Json Params and Returns Json (with no type information)
     async fn invoke_and_await_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
-        invocation_context: Option<InvocationContext>,
-        metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<Value> {
-        let result = self
-            .invoke_and_await_function_typed(
-                worker_id,
-                idempotency_key,
-                function_name,
-                params,
-                invocation_context,
-                metadata,
-            )
-            .await?;
-
-        let json = get_json_from_typed_value(&result);
-
-        Ok(json)
-    }
-
-    async fn invoke_and_await_function_typed(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<PreciseJson>,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
@@ -397,10 +357,12 @@ where
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
 
-        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
-            .into_iter()
-            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
-            .collect::<Vec<_>>();
+        let mut params_ = Vec::new();
+        for param in params {
+            params_.push(golem_wasm_rpc::protobuf::Val::from(
+                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?,
+            ));
+        }
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
@@ -514,17 +476,18 @@ where
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
 
-        let params_: Vec<golem_wasm_rpc::protobuf::Val> = params
-            .into_iter()
-            .map(|v| golem_wasm_rpc::protobuf::Val::from(golem_wasm_rpc::Value::from(v)))
-            .collect::<Vec<_>>();
-
+        let mut params_ = Vec::new();
+        for param in params {
+            params_.push(golem_wasm_rpc::protobuf::Val::from(
+                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?,
+            ));
+        }
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
@@ -1052,19 +1015,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<PreciseJson>,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<Value> {
-        Ok(Value::default())
-    }
-
-    async fn invoke_and_await_function_typed(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<PreciseJson>,
+        _params: Vec<TypeAnnotatedValue>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
@@ -1091,7 +1042,7 @@ where
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<PreciseJson>,
+        _params: Vec<TypeAnnotatedValue>,
         _invocation_context: Option<InvocationContext>,
         _metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()> {

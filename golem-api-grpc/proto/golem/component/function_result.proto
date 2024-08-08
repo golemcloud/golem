@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package golem.component;
 
-import "wasm/rpc/type.proto";
+import "wasm/ast/type.proto";
 
 message FunctionResult {
   optional string name = 1;
-  wasm.rpc.Type typ = 2;
+  wasm.ast.Type typ = 2;
 }

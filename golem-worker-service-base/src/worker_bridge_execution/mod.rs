@@ -1,5 +1,5 @@
-use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 mod content_type_mapper;
 mod refined_worker_response;
@@ -14,6 +14,6 @@ pub struct WorkerRequest {
     pub component_id: ComponentId,
     pub worker_name: String,
     pub function_name: ParsedFunctionName,
-    pub function_params: Vec<PreciseJson>,
+    pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,
 }

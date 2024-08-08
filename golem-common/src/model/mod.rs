@@ -47,7 +47,6 @@ use crate::newtype_uuid;
 pub mod component_metadata;
 pub mod exports;
 pub mod oplog;
-pub mod precise_json;
 pub mod regions;
 
 use crate::uri::oss::urn::WorkerUrn;

@@ -72,7 +72,9 @@ pub enum GolemError {
     Interrupted {
         kind: InterruptKind,
     },
-    ParamTypeMismatch,
+    ParamTypeMismatch {
+        details: String,
+    },
     NoValueInMessage,
     ValueMismatch {
         details: String,
@@ -225,8 +227,8 @@ impl Display for GolemError {
             GolemError::Interrupted { kind } => {
                 write!(f, "{kind}")
             }
-            GolemError::ParamTypeMismatch => {
-                write!(f, "Parameter type mismatch")
+            GolemError::ParamTypeMismatch { details } => {
+                write!(f, "Parameter type mismatch: {details}")
             }
             GolemError::NoValueInMessage => {
                 write!(f, "No value in message")
@@ -279,7 +281,7 @@ impl Error for GolemError {
             GolemError::PromiseDropped { .. } => "Promise dropped",
             GolemError::PromiseAlreadyCompleted { .. } => "Promise already completed",
             GolemError::Interrupted { .. } => "Interrupted",
-            GolemError::ParamTypeMismatch => "Parameter type mismatch",
+            GolemError::ParamTypeMismatch { .. } => "Parameter type mismatch",
             GolemError::NoValueInMessage => "No value in message",
             GolemError::ValueMismatch { .. } => "Value mismatch",
             GolemError::UnexpectedOplogEntry { .. } => "Unexpected oplog entry",
@@ -310,7 +312,7 @@ impl TraceErrorKind for GolemError {
             GolemError::PromiseDropped { .. } => "PromiseDropped",
             GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
             GolemError::Interrupted { .. } => "Interrupted",
-            GolemError::ParamTypeMismatch => "ParamTypeMismatch",
+            GolemError::ParamTypeMismatch { .. } => "ParamTypeMismatch",
             GolemError::NoValueInMessage => "NoValueInMessage",
             GolemError::ValueMismatch { .. } => "ValueMismatch",
             GolemError::UnexpectedOplogEntry { .. } => "UnexpectedOplogEntry",
@@ -351,14 +353,14 @@ impl From<GolemError> for Status {
                 "Worker not found: {worker_id}",
                 worker_id = worker_id
             )),
-            GolemError::ParamTypeMismatch => {
-                Status::invalid_argument("Parameter type mismatch".to_string())
+            GolemError::ParamTypeMismatch { details } => {
+                Status::invalid_argument(format!("Parameter type mismatch: {details}"))
             }
             GolemError::NoValueInMessage => {
                 Status::invalid_argument("No value in message".to_string())
             }
             GolemError::ValueMismatch { details } => {
-                Status::invalid_argument(format!("Value mismatch: {details}", details = details))
+                Status::invalid_argument(format!("Value mismatch: {details}"))
             }
             GolemError::Unknown { details } => Status::unknown(details),
             _ => Status::internal(format!("{value}")),
@@ -497,10 +499,10 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     },
                 )),
             },
-            GolemError::ParamTypeMismatch => golem::worker::v1::WorkerExecutionError {
+            GolemError::ParamTypeMismatch { details } => golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ParamTypeMismatch(
-                        golem::worker::v1::ParamTypeMismatch {},
+                        golem::worker::v1::ParamTypeMismatch { details },
                     ),
                 ),
             },
@@ -690,7 +692,9 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
                 })
             }
             Some(golem::worker::v1::worker_execution_error::Error::ParamTypeMismatch(_)) => {
-                Ok(GolemError::ParamTypeMismatch)
+                Ok(GolemError::ParamTypeMismatch {
+                    details: "".to_string(),
+                })
             }
             Some(golem::worker::v1::worker_execution_error::Error::NoValueInMessage(_)) => {
                 Ok(GolemError::NoValueInMessage)
@@ -744,7 +748,9 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
 impl From<EncodingError> for GolemError {
     fn from(value: EncodingError) -> Self {
         match value {
-            EncodingError::ParamTypeMismatch => GolemError::ParamTypeMismatch,
+            EncodingError::ParamTypeMismatch { details } => {
+                GolemError::ParamTypeMismatch { details }
+            }
             EncodingError::ValueMismatch { details } => GolemError::ValueMismatch { details },
             EncodingError::Unknown { details } => GolemError::Unknown { details },
         }

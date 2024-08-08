@@ -6,10 +6,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let wasm_rpc_root = find_package_root("golem-wasm-rpc");
+    let wasm_ast_root = find_package_root("golem-wasm-ast");
 
     tonic_build::configure()
         .file_descriptor_set_path(out_dir.join("services.bin"))
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
+        .extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf")
         .type_attribute(
             "golem.worker.LogEvent",
             "#[derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize)]",
@@ -87,7 +89,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/apidefinition/v1/api_definition_error.proto",
                 "proto/grpc/health/v1/health.proto",
             ],
-            &[&format!("{wasm_rpc_root}/proto"), &"proto".to_string()],
+            &[
+                &format!("{wasm_rpc_root}/proto"),
+                &format!("{wasm_ast_root}/proto"),
+                &"proto".to_string(),
+            ],
         )
         .unwrap();
 

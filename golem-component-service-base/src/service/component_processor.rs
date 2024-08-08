@@ -28,7 +28,6 @@ pub fn process_component(data: &[u8]) -> Result<ComponentMetadata, ComponentProc
     let exports = raw_component_metadata
         .exports
         .into_iter()
-        .map(|export| export.into())
         .collect::<Vec<_>>();
 
     let memories = raw_component_metadata

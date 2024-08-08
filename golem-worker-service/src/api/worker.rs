@@ -8,6 +8,7 @@ use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
+use poem_openapi::types::ToJSON;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
@@ -147,6 +148,10 @@ impl WorkerApi {
             .map_err(|e| e.into())
             .map(|result| Json(InvokeResult { result }));
 
+        println!(
+            "RETURNING RESPONSE JSON: {}",
+            response.clone().unwrap().to_json_string()
+        );
         record.result(response)
     }
 
