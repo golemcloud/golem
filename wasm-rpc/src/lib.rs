@@ -31,6 +31,10 @@ mod extractor;
 #[cfg(feature = "json")]
 pub mod json;
 
+/// Poem OpenAPI integration for some types
+#[cfg(feature = "poem_openapi")]
+pub mod poem;
+
 /// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
