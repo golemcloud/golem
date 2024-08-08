@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::ComponentIdOrName;
+use crate::model::ComponentUriArg;
 use crate::oss::model::OssContext;
+use golem_common::uri::oss::uri::ComponentUri;
 
 pub mod api_definition;
 pub mod api_deployment;
@@ -22,11 +23,11 @@ pub mod profile;
 pub mod worker;
 
 pub trait ComponentRefSplit<ProjectRef> {
-    fn split(self) -> (ComponentIdOrName, Option<ProjectRef>);
+    fn split(self) -> (ComponentUri, Option<ProjectRef>);
 }
 
-impl ComponentRefSplit<OssContext> for ComponentIdOrName {
-    fn split(self) -> (ComponentIdOrName, Option<OssContext>) {
-        (self, None)
+impl ComponentRefSplit<OssContext> for ComponentUriArg {
+    fn split(self) -> (ComponentUri, Option<OssContext>) {
+        (self.uri, None)
     }
 }

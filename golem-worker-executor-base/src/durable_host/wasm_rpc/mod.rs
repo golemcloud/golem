@@ -27,7 +27,8 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::{ComponentId, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
@@ -47,7 +48,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::wasm-rpc", "new");
 
-        match location.parse_as_golem_uri() {
+        match location.parse_as_golem_urn() {
             Some((remote_worker_id, None)) => {
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
@@ -61,7 +62,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Ok(entry)
             }
             _ => Err(anyhow!(
-                "Invalid URI: {}. Must be worker://component-id/worker-name",
+                "Invalid URI: {}. Must be urn:worker:component-id/worker-name",
                 location.value
             )),
         }
@@ -541,51 +542,30 @@ pub struct WasmRpcEntryPayload {
     remote_worker_id: OwnedWorkerId,
 }
 
-pub trait UriExtensions {
-    fn parse_as_golem_uri(&self) -> Option<(WorkerId, Option<String>)>;
+pub trait UrnExtensions {
+    fn parse_as_golem_urn(&self) -> Option<(WorkerId, Option<String>)>;
 
-    fn golem_uri(worker_id: &WorkerId, function_name: Option<&str>) -> Self;
+    fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self;
 }
 
-impl UriExtensions for Uri {
-    fn parse_as_golem_uri(&self) -> Option<(WorkerId, Option<String>)> {
-        if self.value.starts_with("worker://") {
-            let parts = self.value[9..].split('/').collect::<Vec<_>>();
-            match parts.len() {
-                2 => {
-                    let component_id = ComponentId::from_str(parts[0]).ok()?;
-                    let worker_name = parts[1].to_string();
-                    Some((
-                        WorkerId {
-                            component_id,
-                            worker_name,
-                        },
-                        None,
-                    ))
-                }
-                3 => {
-                    let component_id = ComponentId::from_str(parts[0]).ok()?;
-                    let worker_name = parts[1].to_string();
-                    let function_name = parts[2].to_string();
-                    Some((
-                        WorkerId {
-                            component_id,
-                            worker_name,
-                        },
-                        Some(function_name),
-                    ))
-                }
-                _ => None,
-            }
-        } else {
-            None
+impl UrnExtensions for Uri {
+    fn parse_as_golem_urn(&self) -> Option<(WorkerId, Option<String>)> {
+        let urn = WorkerOrFunctionUrn::from_str(&self.value).ok()?;
+
+        match urn {
+            WorkerOrFunctionUrn::Worker(w) => Some((w.id, None)),
+            WorkerOrFunctionUrn::Function(f) => Some((f.id, Some(f.function))),
         }
     }
 
-    fn golem_uri(worker_id: &WorkerId, function_name: Option<&str>) -> Self {
+    fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self {
         Self {
             value: match function_name {
-                Some(function_name) => format!("{}/{}", worker_id.uri(), function_name),
+                Some(function_name) => WorkerFunctionUrn {
+                    id: worker_id.clone(),
+                    function: function_name.to_string(),
+                }
+                .to_string(),
                 None => worker_id.uri(),
             },
         }

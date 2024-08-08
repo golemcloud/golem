@@ -26,7 +26,7 @@ fn with_api<T>(f: impl FnOnce(&Api) -> T) -> T {
                 let remote_worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
                 let uri = Uri {
-                    value: format!("worker://{remote_component_id}/{remote_worker_name}"),
+                    value: format!("urn:worker:{remote_component_id}/{remote_worker_name}"),
                 };
 
                 let api = Api::new(&uri);

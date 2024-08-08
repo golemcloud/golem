@@ -3,7 +3,7 @@
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
 "update-test-v1" "update-test-v2" "update-test-v3" "update-test-v4" "rust-echo" "golem-rust-tests" "durability-overhead")
-zig_test_components=("zig-1" "zig-3")
+zig_test_components=("zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
 js_test_components=("js-1" "js-2" "js-3" "js-4" "js-echo")

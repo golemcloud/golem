@@ -2,6 +2,7 @@ use crate::model::component::{function_result_types, Component};
 use crate::model::wave::{type_to_analysed, type_wave_compatible};
 use crate::model::GolemError;
 use golem_client::model::{InvokeResult, Type};
+use golem_common::precise_json::PreciseJson;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_to_string;
 use serde::{Deserialize, Serialize};
@@ -30,15 +31,18 @@ impl InvokeResultView {
         component: &Component,
         function: &str,
     ) -> Result<InvokeResultView, GolemError> {
-        let results = match res.result.as_array() {
-            None => {
-                info!("Can't parse InvokeResult - array expected.");
+        let json: PreciseJson = serde_json::from_value(res.result.clone())
+            .map_err(|err| GolemError("Failed to parse result JSON".to_string()))?;
+
+        let results = match json {
+            PreciseJson::Tuple(results) => results,
+            _ => {
+                info!("Can't parse InvokeResult - tuple expected.");
 
                 return Err(GolemError(
-                    "Can't parse InvokeResult - array expected.".to_string(),
+                    "Can't parse InvokeResult - tuple expected.".to_string(),
                 ));
             }
-            Some(results) => results,
         };
 
         let result_types = function_result_types(component, function)?;
@@ -58,16 +62,15 @@ impl InvokeResultView {
         }
 
         let wave = results
-            .iter()
-            .zip(result_types.iter())
-            .map(|(json, typ)| Self::try_wave_format(json, typ))
+            .into_iter()
+            .map(Self::try_wave_format)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(InvokeResultView::Wave(wave))
     }
 
-    fn try_wave_format(json: &Value, typ: &Type) -> Result<String, GolemError> {
-        let parsed = Self::try_parse_single(json, typ)?;
+    fn try_wave_format(json: PreciseJson) -> Result<String, GolemError> {
+        let parsed = json.into();
 
         match type_annotated_value_to_string(&parsed) {
             Ok(res) => Ok(res),
@@ -77,17 +80,6 @@ impl InvokeResultView {
                 Err(GolemError(
                     "Failed to format parsed value as wave".to_string(),
                 ))
-            }
-        }
-    }
-
-    fn try_parse_single(json: &Value, typ: &Type) -> Result<TypeAnnotatedValue, GolemError> {
-        match golem_wasm_rpc::json::get_typed_value_from_json(json, &type_to_analysed(typ)) {
-            Ok(res) => Ok(res),
-            Err(errs) => {
-                info!("Failed to parse typed value: {errs:?}");
-
-                Err(GolemError("Failed to parse typed value".to_string()))
             }
         }
     }

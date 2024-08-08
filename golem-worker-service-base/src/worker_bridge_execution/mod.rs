@@ -1,5 +1,5 @@
+use golem_common::model::precise_json::PreciseJson;
 use golem_common::model::{ComponentId, IdempotencyKey};
-use golem_common::precise_json::PreciseJson;
 
 mod content_type_mapper;
 mod refined_worker_response;

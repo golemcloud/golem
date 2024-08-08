@@ -367,6 +367,7 @@ dependencies = [
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
+    "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-cli",
 ]
@@ -408,6 +409,18 @@ args = [
     "publish",
     "-p",
     "golem-common",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-service-base]
+description = "Publishes golem-service-base package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-service-base",
     "--all-features",
     "--allow-dirty",
     "--no-verify",

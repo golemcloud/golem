@@ -15,7 +15,6 @@
 use bincode::{Decode, Encode};
 use std::fmt::{self, Display, Formatter};
 
-use crate::exports::Export;
 use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
@@ -29,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, Encode, Decode)]
 pub struct ComponentMetadata {
-    pub exports: Vec<Export>,
+    pub exports: Vec<AnalysedExport>,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
 }
@@ -55,7 +54,6 @@ impl ComponentMetadata {
     Encode,
     Decode,
 )]
-
 pub struct ProducerField {
     pub name: String,
     pub values: Vec<VersionedName>,
@@ -397,12 +395,12 @@ fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
             }
             AnalysedExport::Instance(instance) => {
                 let mut to_add = Vec::new();
-                for fun in &instance.funcs {
+                for fun in &instance.functions {
                     if fun.is_constructor() {
                         to_add.push(drop_from_constructor(fun));
                     }
                 }
-                instance.funcs.extend(to_add.into_iter());
+                instance.functions.extend(to_add.into_iter());
             }
         }
     }

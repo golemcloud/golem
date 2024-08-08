@@ -14,6 +14,7 @@
 
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
+    use golem_wasm_ast::analysis::AnalysedFunctionResult;
     use uuid::Uuid;
 
     tonic::include_proto!("mod");
@@ -35,6 +36,28 @@ pub mod proto {
             let high_bits = value.high_bits;
             let low_bits = value.low_bits;
             Uuid::from_u64_pair(high_bits, low_bits)
+        }
+    }
+
+    impl TryFrom<crate::proto::golem::component::FunctionResult> for AnalysedFunctionResult {
+        type Error = String;
+
+        fn try_from(
+            value: crate::proto::golem::component::FunctionResult,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                name: value.name,
+                typ: value.typ.ok_or("Missing typ")?.try_into()?,
+            })
+        }
+    }
+
+    impl From<AnalysedFunctionResult> for crate::proto::golem::component::FunctionResult {
+        fn from(value: AnalysedFunctionResult) -> Self {
+            Self {
+                name: value.name,
+                typ: Some(value.typ.into()),
+            }
         }
     }
 

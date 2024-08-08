@@ -17,11 +17,12 @@ use std::io::Read;
 use async_trait::async_trait;
 
 use crate::clients::component::ComponentClient;
+use golem_common::uri::oss::urn::ComponentUrn;
 use tokio::fs::File;
 use tracing::info;
 
 use crate::model::component::Component;
-use crate::model::{ComponentId, ComponentName, GolemError, PathBufOrStdin};
+use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use crate::oss::model::OssContext;
 
 #[derive(Debug, Clone)]
@@ -37,27 +38,27 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
 
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError> {
         info!("Getting component version");
 
         Ok(self
             .client
-            .get_component_metadata(&component_id.0, &version.to_string())
+            .get_component_metadata(&component_urn.id.0, &version.to_string())
             .await?
             .into())
     }
 
     async fn get_latest_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError> {
         info!("Getting latest component version");
 
         Ok(self
             .client
-            .get_latest_component_metadata(&component_id.0)
+            .get_latest_component_metadata(&component_urn.id.0)
             .await?
             .into())
     }
@@ -105,8 +106,12 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         Ok(component.into())
     }
 
-    async fn update(&self, id: ComponentId, path: PathBufOrStdin) -> Result<Component, GolemError> {
-        info!("Updating component {id:?} from {path:?}");
+    async fn update(
+        &self,
+        urn: ComponentUrn,
+        path: PathBufOrStdin,
+    ) -> Result<Component, GolemError> {
+        info!("Updating component {urn} from {path:?}");
 
         let component = match path {
             PathBufOrStdin::Path(path) => {
@@ -114,7 +119,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
-                self.client.update_component(&id.0, file).await?
+                self.client.update_component(&urn.id.0, file).await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -123,7 +128,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .read_to_end(&mut bytes)
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.update_component(&id.0, bytes).await?
+                self.client.update_component(&urn.id.0, bytes).await?
             }
         };
 

@@ -644,11 +644,6 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or(bad_request_error("Missing invoke parameters"))?;
 
-        let calling_convention: golem_common::model::CallingConvention = request
-            .calling_convention
-            .try_into()
-            .map_err(bad_request_error)?;
-
         let result = self
             .worker_service
             .invoke_and_await_function_proto(
@@ -656,7 +651,6 @@ impl WorkerGrpcApi {
                 request.idempotency_key,
                 request.function,
                 params.params,
-                &calling_convention,
                 request.context,
                 empty_worker_metadata(),
             )

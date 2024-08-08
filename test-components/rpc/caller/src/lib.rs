@@ -25,7 +25,7 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let counters_uri = Uri {
-            value: format!("worker://{component_id}/counters_test1"),
+            value: format!("urn:worker:{component_id}/counters_test1"),
         };
 
         create_use_and_drop_counters(&counters_uri);
@@ -45,7 +45,7 @@ impl Guest for Component {
                 let component_id =
                     env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
                 let counters_uri = Uri {
-                    value: format!("worker://{component_id}/counters_test2"),
+                    value: format!("urn:worker:{component_id}/counters_test2"),
                 };
                 let counter = Counter::new(&counters_uri, "counter");
                 counter.inc_by(1);
@@ -60,7 +60,7 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let counters_uri = Uri {
-            value: format!("worker://{component_id}/counters_test3"),
+            value: format!("urn:worker:{component_id}/counters_test3"),
         };
         let api = Api::new(&counters_uri);
         api.blocking_inc_global_by(1);
@@ -71,7 +71,7 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let counters_uri = Uri {
-            value: format!("worker://{component_id}/counters_test4"),
+            value: format!("urn:worker:{component_id}/counters_test4"),
         };
         let counter = Counter::new(&counters_uri, "counter-test4");
         (counter.blocking_get_args(), counter.blocking_get_env())
@@ -91,7 +91,7 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let counters_uri = Uri {
-            value: format!("worker://{component_id}/bug32"),
+            value: format!("urn:worker:{component_id}/bug32"),
         };
         let api = Api::new(&counters_uri);
         api.blocking_bug_wasm_rpc_i32(in_)
@@ -123,19 +123,19 @@ fn create_use_and_drop_counters(counters_uri: &Uri) {
 fn create_use_and_drop_counters_non_blocking(component_id: &str) -> [u64; 3] {
     let counter1 = Counter::new(
         &Uri {
-            value: format!("worker://{component_id}/counters_test51"),
+            value: format!("urn:worker:{component_id}/counters_test51"),
         },
         "counter",
     );
     let counter2 = Counter::new(
         &Uri {
-            value: format!("worker://{component_id}/counters_test52"),
+            value: format!("urn:worker:{component_id}/counters_test52"),
         },
         "counter2",
     );
     let counter3 = Counter::new(
         &Uri {
-            value: format!("worker://{component_id}/counters_test53"),
+            value: format!("urn:worker:{component_id}/counters_test53"),
         },
         "counter3",
     );

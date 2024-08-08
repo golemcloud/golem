@@ -18,7 +18,7 @@ use std::sync::Arc;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
-use golem_common::component_metadata::ComponentProcessingError;
+use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::ComponentId;
 use tap::TapFallible;
 use tracing::{error, info};
@@ -26,7 +26,7 @@ use tracing::{error, info};
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
-use golem_common::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_service_base::model::{
     ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
 };

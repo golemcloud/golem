@@ -499,12 +499,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             let result_values = worker
-                .invoke_and_await(
-                    idempotency_key,
-                    golem_common::model::CallingConvention::Component,
-                    function_name,
-                    input_values,
-                )
+                .invoke_and_await(idempotency_key, function_name, input_values)
                 .await?;
 
             let result_value = golem_wasm_rpc::Value::try_from(result_values).unwrap();
@@ -560,12 +555,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             worker
-                .invoke(
-                    idempotency_key,
-                    golem_common::model::CallingConvention::Component,
-                    function_name,
-                    input_values,
-                )
+                .invoke(idempotency_key, function_name, input_values)
                 .await?;
             Ok(())
         } else {

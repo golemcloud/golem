@@ -17,7 +17,6 @@ pub mod benchmark;
 use crate::config::TestDependencies;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::ErrorsBody;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -31,7 +30,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{
-    log_event, CallingConvention, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
+    log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
@@ -119,18 +118,11 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> crate::Result<Result<serde_json::Value, Error>>;
     async fn invoke_and_await_custom(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom_with_key(
         &self,
@@ -138,7 +130,6 @@ pub trait TestDsl {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_json(
         &self,
@@ -420,14 +411,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
-        TestDsl::invoke_and_await_custom(
-            self,
-            worker_id,
-            function_name,
-            params,
-            CallingConvention::Component,
-        )
-        .await
+        TestDsl::invoke_and_await_custom(self, worker_id, function_name, params).await
     }
 
     async fn invoke_and_await_with_key(
@@ -443,47 +427,8 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             idempotency_key,
             function_name,
             params,
-            CallingConvention::Component,
         )
         .await
-    }
-
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> crate::Result<Result<serde_json::Value, Error>> {
-        let json_string = params.to_string();
-        let vals = TestDsl::invoke_and_await_custom(
-            self,
-            worker_id,
-            function_name,
-            vec![Value::String(json_string)],
-            CallingConvention::Stdio,
-        )
-        .await?;
-        Ok(vals.and_then(|vals| {
-        if vals.len() == 1 {
-            let value_opt = &vals[0];
-
-            match value_opt {
-                        Value::String(s) => {
-                            if s.is_empty() {
-                                Ok(serde_json::Value::Null)
-                            } else {
-                                let result: serde_json::Value = serde_json::from_str(s).unwrap_or(serde_json::Value::String(s.to_string()));
-                                Ok(result)
-                            }
-                        }
-                        _ => Err(Error::BadRequest(
-                            ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }
-                        )),
-                    }
-        } else {
-            Err(Error::BadRequest(
-                        ErrorsBody { errors: vec!["Expecting a single string as the result value when using stdio calling convention".to_string()] }))
-        }}))
     }
 
     async fn invoke_and_await_custom(
@@ -491,7 +436,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
         TestDsl::invoke_and_await_custom_with_key(
@@ -500,7 +444,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             &idempotency_key,
             function_name,
             params,
-            cc,
         )
         .await
     }
@@ -511,7 +454,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-        cc: CallingConvention,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
         let invoke_response = self
             .worker_service()
@@ -522,7 +464,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
                 invoke_parameters: Some(InvokeParameters {
                     params: params.into_iter().map(|v| v.into()).collect(),
                 }),
-                calling_convention: cc.into(),
                 context: None,
             })
             .await?;
@@ -1081,11 +1022,12 @@ pub fn to_worker_metadata(
     }
 }
 
-fn dump_component_info(path: &Path) -> golem_common::component_metadata::ComponentMetadata {
+fn dump_component_info(path: &Path) -> golem_common::model::component_metadata::ComponentMetadata {
     let data = std::fs::read(path).unwrap();
 
-    let component_metadata: golem_common::component_metadata::ComponentMetadata =
-        golem_common::component_metadata::ComponentMetadata::analyse_component(&data).unwrap();
+    let component_metadata: golem_common::model::component_metadata::ComponentMetadata =
+        golem_common::model::component_metadata::ComponentMetadata::analyse_component(&data)
+            .unwrap();
 
     let exports = &component_metadata.exports;
     let mems = &component_metadata.memories;
@@ -1097,7 +1039,7 @@ fn dump_component_info(path: &Path) -> golem_common::component_metadata::Compone
 }
 
 async fn log_and_save_component_metadata(path: &Path) {
-    let component_metadata: golem_common::component_metadata::ComponentMetadata =
+    let component_metadata: golem_common::model::component_metadata::ComponentMetadata =
         dump_component_info(path);
 
     let json_data = serde_json::to_string(&component_metadata).unwrap();
@@ -1178,27 +1120,6 @@ pub trait TestDslUnsafe {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<Value>, Error>;
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error>;
-    async fn invoke_and_await_custom(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error>;
-    async fn invoke_and_await_custom_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_json(
         &self,
@@ -1367,49 +1288,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             idempotency_key,
             function_name,
             params,
-        )
-        .await
-        .expect("Failed to invoke function")
-    }
-
-    async fn invoke_and_await_stdio(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, Error> {
-        <T as TestDsl>::invoke_and_await_stdio(self, worker_id, function_name, params)
-            .await
-            .expect("Failed to invoke function")
-    }
-
-    async fn invoke_and_await_custom(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error> {
-        <T as TestDsl>::invoke_and_await_custom(self, worker_id, function_name, params, cc)
-            .await
-            .expect("Failed to invoke function")
-    }
-
-    async fn invoke_and_await_custom_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<Value>,
-        cc: CallingConvention,
-    ) -> Result<Vec<Value>, Error> {
-        <T as TestDsl>::invoke_and_await_custom_with_key(
-            self,
-            worker_id,
-            idempotency_key,
-            function_name,
-            params,
-            cc,
         )
         .await
         .expect("Failed to invoke function")

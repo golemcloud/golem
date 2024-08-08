@@ -36,16 +36,16 @@ use crate::services::{
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
-use golem_common::exports;
+use golem_common::model::exports;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    CallingConvention, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
+    Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -424,7 +424,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke(
         &self,
         idempotency_key: IdempotencyKey,
-        calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<Option<Result<TypeAnnotatedValue, GolemError>>, GolemError> {
@@ -436,13 +435,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Pending => Ok(None),
             LookupResult::New => {
                 // Invoke the function in the background
-                self.enqueue(
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                    calling_convention,
-                )
-                .await;
+                self.enqueue(idempotency_key, full_function_name, function_input)
+                    .await;
                 Ok(None)
             }
         }
@@ -451,17 +445,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
-        calling_convention: CallingConvention,
         full_function_name: String,
         function_input: Vec<Value>,
     ) -> Result<TypeAnnotatedValue, GolemError> {
         match self
-            .invoke(
-                idempotency_key.clone(),
-                calling_convention,
-                full_function_name,
-                function_input,
-            )
+            .invoke(idempotency_key.clone(), full_function_name, function_input)
             .await?
         {
             Some(Ok(output)) => Ok(output),
@@ -721,17 +709,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        calling_convention: CallingConvention,
     ) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running
-                    .enqueue(
-                        idempotency_key,
-                        full_function_name,
-                        function_input,
-                        calling_convention,
-                    )
+                    .enqueue(idempotency_key, full_function_name, function_input)
                     .await;
             }
             WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
@@ -740,7 +722,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     idempotency_key,
                     full_function_name,
                     function_input,
-                    calling_convention,
                 };
                 let entry = OplogEntry::pending_worker_invocation(invocation.clone());
                 let timestamped_invocation = TimestampedWorkerInvocation {
@@ -1109,13 +1090,11 @@ impl RunningWorker {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
-        calling_convention: CallingConvention,
     ) {
         let invocation = WorkerInvocation::ExportedFunction {
             idempotency_key,
             full_function_name,
             function_input,
-            calling_convention,
         };
         self.enqueue_worker_invocation(invocation).await;
     }
@@ -1344,7 +1323,6 @@ impl RunningWorker {
                                     idempotency_key: invocation_key,
                                     full_function_name,
                                     function_input,
-                                    calling_convention,
                                 } => {
                                     let span = span!(
                                         Level::INFO,
@@ -1379,7 +1357,6 @@ impl RunningWorker {
                                             function_input.clone(),
                                             store,
                                             &instance,
-                                            calling_convention,
                                             true, // We are always in live mode at this point
                                         )
                                         .await;
@@ -1408,7 +1385,6 @@ impl RunningWorker {
                                                         let result = interpret_function_results(
                                                             output,
                                                             function_results,
-                                                            calling_convention,
                                                         )
                                                         .map_err(|e| GolemError::ValueMismatch {
                                                             details: e.join(", "),
@@ -1520,94 +1496,93 @@ impl RunningWorker {
                                         target_version = target_version.to_string()
                                     );
                                     let do_break = async {
-                                    let _idempotency_key = {
-                                        let ctx = store.data_mut();
-                                        let idempotency_key = IdempotencyKey::fresh();
-                                        ctx.set_current_idempotency_key(idempotency_key.clone())
+                                        let _idempotency_key = {
+                                            let ctx = store.data_mut();
+                                            let idempotency_key = IdempotencyKey::fresh();
+                                            ctx.set_current_idempotency_key(idempotency_key.clone())
+                                                .await;
+                                            idempotency_key
+                                        };
+                                        store.data_mut().begin_call_snapshotting_function();
+                                        let result = invoke_worker(
+                                            "golem:api/save-snapshot@0.2.0.{save}".to_string(),
+                                            vec![],
+                                            store,
+                                            &instance,
+                                            true,
+                                        )
                                             .await;
-                                        idempotency_key
-                                    };
-                                    store.data_mut().begin_call_snapshotting_function();
-                                    let result = invoke_worker(
-                                        "golem:api/save-snapshot@0.2.0.{save}".to_string(),
-                                        vec![],
-                                        store,
-                                        &instance,
-                                        CallingConvention::Component,
-                                        true,
-                                    )
-                                        .await;
-                                    store.data_mut().end_call_snapshotting_function();
+                                        store.data_mut().end_call_snapshotting_function();
 
-                                    match result {
-                                        Ok(InvokeResult::Succeeded { output, .. }) =>
-                                            if let Some(bytes) = Self::decode_snapshot_result(output) {
-                                                match store
-                                                    .data_mut()
-                                                    .get_public_state()
-                                                    .oplog()
-                                                    .create_snapshot_based_update_description(
-                                                        target_version,
-                                                        &bytes,
-                                                    )
-                                                    .await
-                                                {
-                                                    Ok(update_description) => {
-                                                        // Enqueue the update
-                                                        parent.enqueue_update(update_description).await;
+                                        match result {
+                                            Ok(InvokeResult::Succeeded { output, .. }) =>
+                                                if let Some(bytes) = Self::decode_snapshot_result(output) {
+                                                    match store
+                                                        .data_mut()
+                                                        .get_public_state()
+                                                        .oplog()
+                                                        .create_snapshot_based_update_description(
+                                                            target_version,
+                                                            &bytes,
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(update_description) => {
+                                                            // Enqueue the update
+                                                            parent.enqueue_update(update_description).await;
 
-                                                        // Make sure to update the pending updates queue
-                                                        store.data_mut().update_pending_updates().await;
+                                                            // Make sure to update the pending updates queue
+                                                            store.data_mut().update_pending_updates().await;
 
-                                                        // Reactivate the worker
-                                                        final_decision = RetryDecision::Immediate;
+                                                            // Reactivate the worker
+                                                            final_decision = RetryDecision::Immediate;
 
-                                                        // Stop processing the queue to avoid race conditions
-                                                        true
+                                                            // Stop processing the queue to avoid race conditions
+                                                            true
+                                                        }
+                                                        Err(error) => {
+                                                            Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
+                                                            false
+                                                        }
                                                     }
-                                                    Err(error) => {
-                                                        Self::fail_update(target_version, format!("failed to store the snapshot for manual update: {error}"), store).await;
-                                                        false
-                                                    }
-                                                }
-                                            } else {
-                                                Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
+                                                } else {
+                                                    Self::fail_update(target_version, "failed to get a snapshot for manual update: invalid snapshot result".to_string(), store).await;
+                                                    false
+                                                },
+                                            Ok(InvokeResult::Failed { error, .. }) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    format!("failed to get a snapshot for manual update: {error}"),
+                                                    store,
+                                                ).await;
                                                 false
-                                            },
-                                        Ok(InvokeResult::Failed { error, .. }) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                format!("failed to get a snapshot for manual update: {error}"),
-                                                store,
-                                            ).await;
-                                            false
+                                            }
+                                            Ok(InvokeResult::Exited { .. }) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    "failed to get a snapshot for manual update: it called exit".to_string(),
+                                                    store,
+                                                ).await;
+                                                false
+                                            }
+                                            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
+                                                    store,
+                                                ).await;
+                                                false
+                                            }
+                                            Err(error) => {
+                                                Self::fail_update(
+                                                    target_version,
+                                                    format!("failed to get a snapshot for manual update: {error:?}"),
+                                                    store,
+                                                ).await;
+                                                false
+                                            }
                                         }
-                                        Ok(InvokeResult::Exited { .. }) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                "failed to get a snapshot for manual update: it called exit".to_string(),
-                                                store,
-                                            ).await;
-                                            false
-                                        }
-                                        Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
-                                                store,
-                                            ).await;
-                                            false
-                                        }
-                                        Err(error) => {
-                                            Self::fail_update(
-                                                target_version,
-                                                format!("failed to get a snapshot for manual update: {error:?}"),
-                                                store,
-                                            ).await;
-                                            false
-                                        }
-                                    }
-                                }.instrument(span).await;
+                                    }.instrument(span).await;
                                     if do_break {
                                         break;
                                     }
@@ -1732,7 +1707,7 @@ impl InvocationResult {
                 OplogEntry::Interrupted { .. } => Err(TrapType::Interrupt(InterruptKind::Interrupt)),
                 OplogEntry::Exited { .. } => Err(TrapType::Exit),
                 _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {oplog:?}")
-            } ;
+            };
 
             *self = Self::Cached { result, oplog_idx }
         }

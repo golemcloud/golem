@@ -1,16 +1,18 @@
 use crate::model::component::ComponentView;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{
-    ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadata, WorkersMetadataResponse,
+    ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadataView,
+    WorkersMetadataResponseView,
 };
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use golem_client::model::{HttpApiDefinition, Route, ScanCursor, WorkerId};
+use golem_client::model::{HttpApiDefinition, Route, ScanCursor};
+use golem_common::model::ComponentId;
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use uuid::Uuid;
 
 pub trait TextFormat {
     fn print(&self);
@@ -66,20 +68,23 @@ struct RouteView {
     pub method: String,
     #[table(title = "Path")]
     pub path: String,
-    #[table(title = "ComponentId", justify = "Justify::Right")]
-    pub component_id: String,
-    #[table(title = "WorkerName")]
+    #[table(title = "Component URN", justify = "Justify::Right")]
+    pub component_urn: String,
+    #[table(title = "Worker Name")]
     pub worker_name: String,
 }
 
 impl From<&Route> for RouteView {
     fn from(value: &Route) -> Self {
-        let component_str = value.binding.component_id.to_string();
-        let component_end = &component_str[component_str.len() - 7..];
+        let component_urn = ComponentUrn {
+            id: ComponentId(value.binding.component_id),
+        };
+        let component_str = component_urn.to_string();
+        let component_end = &component_str[component_str.len() - 12..];
         RouteView {
             method: value.method.to_string(),
             path: value.path.to_string(),
-            component_id: format!("*{component_end}"),
+            component_urn: format!("*{component_end}"),
             worker_name: value.binding.worker_name.to_string(),
         }
     }
@@ -171,11 +176,11 @@ impl TextFormat for ComponentAddView {
     fn print(&self) {
         printdoc!(
             "
-            New component created with ID {}, version {}, and size of {} bytes.
+            New component created with URN {}, version {}, and size of {} bytes.
             Component name: {}.
             Exports:
             ",
-            self.0.component_id,
+            self.0.component_urn,
             self.0.component_version,
             self.0.component_size,
             self.0.component_name
@@ -194,11 +199,11 @@ impl TextFormat for ComponentUpdateView {
     fn print(&self) {
         printdoc!(
             "
-            Updated component with ID {}. New version: {}. Component size is {} bytes.
+            Updated component with URN {}. New version: {}. Component size is {} bytes.
             Component name: {}.
             Exports:
             ",
-            self.0.component_id,
+            self.0.component_urn,
             self.0.component_version,
             self.0.component_size,
             self.0.component_name
@@ -217,11 +222,11 @@ impl TextFormat for ComponentGetView {
     fn print(&self) {
         printdoc!(
             "
-            Component with ID {}. Version: {}. Component size is {} bytes.
+            Component with URN {}. Version: {}. Component size is {} bytes.
             Component name: {}.
             Exports:
             ",
-            self.0.component_id,
+            self.0.component_urn,
             self.0.component_version,
             self.0.component_size,
             self.0.component_name
@@ -235,8 +240,8 @@ impl TextFormat for ComponentGetView {
 
 #[derive(Table)]
 struct ComponentListView {
-    #[table(title = "ID")]
-    pub component_id: String,
+    #[table(title = "URN")]
+    pub component_urn: String,
     #[table(title = "Name")]
     pub component_name: String,
     #[table(title = "Version", justify = "Justify::Right")]
@@ -250,7 +255,7 @@ struct ComponentListView {
 impl From<&ComponentView> for ComponentListView {
     fn from(value: &ComponentView) -> Self {
         Self {
-            component_id: value.component_id.to_string(),
+            component_urn: value.component_urn.to_string(),
             component_name: value.component_name.to_string(),
             component_version: value.component_version,
             component_size: value.component_size,
@@ -272,16 +277,21 @@ impl TextFormat for Vec<ComponentView> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerAddView(pub WorkerId);
+pub struct WorkerAddView(pub WorkerUrn);
 
 impl TextFormat for WorkerAddView {
     fn print(&self) {
+        let component_urn = ComponentUrn {
+            id: self.0.id.component_id.clone(),
+        };
+
         printdoc!(
             "
-            New worker created for component {}, with name {}.
+            New worker created for component {component_urn}, with name {}.
+            Worker URN: {}
             ",
-            self.0.component_id,
-            self.0.worker_name,
+            self.0.id.worker_name,
+            self.0,
         )
     }
 }
@@ -328,19 +338,23 @@ impl TextFormat for InvokeResultView {
     }
 }
 
-impl TextFormat for WorkerMetadata {
+impl TextFormat for WorkerMetadataView {
     fn print(&self) {
         printdoc!(
             r#"
             Worker "{}" of component {} with component version {}.
+            URN: {}.
             Status: {}.
             Startup arguments: {}.
             Environment variables: {}.
             Retry count: {}.
             "#,
-            self.worker_id.worker_name,
-            self.worker_id.component_id,
+            self.worker_urn.id.worker_name,
+            ComponentUrn {
+                id: self.worker_urn.id.component_id.clone()
+            },
             self.component_version,
+            self.worker_urn,
             self.status.to_string(),
             self.args.join(", "),
             self.env.iter().map(|(k, v)| format!("{k}={v}")).join(", "),
@@ -350,9 +364,9 @@ impl TextFormat for WorkerMetadata {
 }
 
 #[derive(Table)]
-struct WorkerMetadataView {
+struct WorkerMetadataListView {
     #[table(title = "Component")]
-    pub component_id: Uuid,
+    pub component_urn: ComponentUrn,
     #[table(title = "Name")]
     pub worker_name: String,
     #[table(title = "Status", justify = "Justify::Right")]
@@ -361,23 +375,25 @@ struct WorkerMetadataView {
     pub component_version: u64,
 }
 
-impl From<&WorkerMetadata> for WorkerMetadataView {
-    fn from(value: &WorkerMetadata) -> Self {
+impl From<&WorkerMetadataView> for WorkerMetadataListView {
+    fn from(value: &WorkerMetadataView) -> Self {
         Self {
-            component_id: value.worker_id.component_id,
-            worker_name: value.worker_id.worker_name.to_string(),
+            component_urn: ComponentUrn {
+                id: value.worker_urn.id.component_id.clone(),
+            },
+            worker_name: value.worker_urn.id.worker_name.to_string(),
             status: value.status.to_string(),
             component_version: value.component_version,
         }
     }
 }
 
-impl TextFormat for WorkersMetadataResponse {
+impl TextFormat for WorkersMetadataResponseView {
     fn print(&self) {
         print_stdout(
             self.workers
                 .iter()
-                .map(WorkerMetadataView::from)
+                .map(WorkerMetadataListView::from)
                 .collect::<Vec<_>>()
                 .with_title(),
         )
