@@ -15,11 +15,6 @@
 mod model;
 pub use model::*;
 
-/// Some analysed data types require alternative JSON representation for being compatible
-/// with the poem-openapi schema
-#[cfg(feature = "json")]
-mod json;
-
 /// Protobuf representation of analysis results
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
