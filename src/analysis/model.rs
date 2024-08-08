@@ -74,7 +74,7 @@ impl AnalysedFunction {
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct AnalysedInstance {
     pub name: String,
-    pub funcs: Vec<AnalysedFunction>,
+    pub functions: Vec<AnalysedFunction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -17,7 +17,7 @@ fn exports_shopping_cart_component() {
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api".to_string(),
-        funcs: vec![
+        functions: vec![
             AnalysedFunction {
                 name: "initialize-cart".to_string(),
                 params: vec![AnalysedFunctionParameter {
@@ -144,7 +144,7 @@ fn exports_file_service_component() {
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api".to_string(),
-        funcs: vec![
+        functions: vec![
             AnalysedFunction {
                 name: "read-file".to_string(),
                 params: vec![AnalysedFunctionParameter {
@@ -455,7 +455,7 @@ fn exports_auction_registry_composed_component() {
         metadata,
         vec![AnalysedExport::Instance(AnalysedInstance {
             name: "auction:registry/api".to_string(),
-            funcs: vec![
+            functions: vec![
                 AnalysedFunction {
                     name: "create-bidder".to_string(),
                     params: vec![
@@ -563,7 +563,7 @@ fn exports_shopping_cart_resource_component() {
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api".to_string(),
-        funcs: vec![
+        functions: vec![
             AnalysedFunction {
                 name: "[constructor]cart".to_string(),
                 params: vec![AnalysedFunctionParameter {
@@ -753,7 +753,7 @@ fn exports_shopping_cart_resource_versioned_component() {
 
     let expected = vec![AnalysedExport::Instance(AnalysedInstance {
         name: "golem:it/api@1.2.3".to_string(),
-        funcs: vec![
+        functions: vec![
             AnalysedFunction {
                 name: "[constructor]cart".to_string(),
                 params: vec![AnalysedFunctionParameter {
