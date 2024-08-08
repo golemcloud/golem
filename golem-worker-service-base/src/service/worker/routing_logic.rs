@@ -41,11 +41,12 @@ use crate::service::worker::WorkerServiceError;
 
 #[async_trait]
 pub trait RoutingLogic {
-    async fn call_worker_executor<Target, F, G, Out, R>(
+    async fn call_worker_executor<Target, F, G, H, Out, R>(
         &self,
         target: Target,
         remote_call: F,
         response_map: G,
+        error_map: H,
     ) -> Result<R, WorkerServiceError>
     where
         Out: Send + 'static,
@@ -59,7 +60,8 @@ pub trait RoutingLogic {
             + Sync
             + Clone
             + 'static,
-        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync;
+        G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
+        H: Fn(CallWorkerExecutorError) -> WorkerServiceError + Send + Sync;
 }
 
 #[async_trait]
@@ -338,11 +340,12 @@ impl From<WorkerExecutionError> for ResponseMapResult {
 
 #[async_trait]
 impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> RoutingLogic for T {
-    async fn call_worker_executor<Target, F, G, Out, R>(
+    async fn call_worker_executor<Target, F, G, H, Out, R>(
         &self,
         target: Target,
         remote_call: F,
         response_map: G,
+        error_map: H,
     ) -> Result<R, WorkerServiceError>
     where
         Out: Send + 'static,
@@ -357,6 +360,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             + Clone
             + 'static,
         G: Fn(Target::ResultOut) -> Result<R, ResponseMapResult> + Send + Sync,
+        H: Fn(CallWorkerExecutorError) -> WorkerServiceError + Send + Sync,
     {
         let mut retry = RetryState::new(self.worker_executor_retry_config());
         loop {
@@ -387,7 +391,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                         if error.is_retriable() {
                             retry.retry(self, &error, &pod).await
                         } else {
-                            retry.non_retryable_error(WorkerServiceError::internal(error), &pod)
+                            retry.non_retryable_error(error_map(error), &pod)
                         }
                     }
                 }
@@ -413,7 +417,7 @@ pub enum CallWorkerExecutorError {
     // TODO: Change to display
     #[error("Failed to get routing table: {0:?}")]
     FailedToGetRoutingTable(RoutingTableError),
-    #[error("Failed to connect to pod: {0}")]
+    #[error("Failed to connect to pod: {} {}", .0.code(), .0.message())]
     FailedToConnectToPod(Status),
 }
 
