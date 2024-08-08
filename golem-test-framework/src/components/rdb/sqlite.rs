@@ -23,17 +23,9 @@ pub struct SqliteRdb {
 impl SqliteRdb {
     pub fn new(path: &Path) -> Self {
         info!("Using SQLite at path {path:?}");
+
         remove_path(path);
-
-        let dir = if path.is_dir() {
-            Some(path)
-        } else {
-            path.parent()
-        };
-
-        if let Some(dir) = dir {
-            std::fs::create_dir_all(dir).expect("Failed to create SQLite database directory");
-        }
+        std::fs::create_dir_all(path).expect("Failed to create SQLite database directory");
 
         Self {
             path: path.to_path_buf(),
