@@ -12,6 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod model;
+pub use model::*;
+
+/// Protobuf representation of analysis results
+#[cfg(feature = "protobuf")]
+pub mod protobuf;
+
+/// Wave format support for types.
+///
+/// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
+#[cfg(feature = "wave")]
+pub mod wave;
+
 use crate::component::*;
 use crate::core::Mem;
 use crate::AstCustomization;
@@ -20,159 +33,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnalysedExport {
-    Function(AnalysedFunction),
-    Instance(AnalysedInstance),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalysedFunction {
-    pub name: String,
-    pub params: Vec<AnalysedFunctionParameter>,
-    pub results: Vec<AnalysedFunctionResult>,
-}
-
-impl AnalysedFunction {
-    pub fn is_constructor(&self) -> bool {
-        self.name.starts_with("[constructor]")
-            && self.results.len() == 1
-            && matches!(
-                &self.results[0].typ,
-                AnalysedType::Resource {
-                    resource_mode: AnalysedResourceMode::Owned,
-                    ..
-                }
-            )
-    }
-
-    pub fn is_method(&self) -> bool {
-        self.name.starts_with("[method]")
-            && !self.params.is_empty()
-            && matches!(
-                &self.params[0].typ,
-                AnalysedType::Resource {
-                    resource_mode: AnalysedResourceMode::Borrowed,
-                    ..
-                }
-            )
-    }
-
-    pub fn is_static_method(&self) -> bool {
-        self.name.starts_with("[static]")
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalysedInstance {
-    pub name: String,
-    pub funcs: Vec<AnalysedFunction>,
-}
-
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub enum AnalysedType {
-    Bool,
-    S8,
-    U8,
-    S16,
-    U16,
-    S32,
-    U32,
-    S64,
-    U64,
-    F32,
-    F64,
-    Chr,
-    Str,
-    List(Box<AnalysedType>),
-    Tuple(Vec<AnalysedType>),
-    Record(Vec<(String, AnalysedType)>),
-    Flags(Vec<String>),
-    Enum(Vec<String>),
-    Option(Box<AnalysedType>),
-    Result {
-        ok: Option<Box<AnalysedType>>,
-        error: Option<Box<AnalysedType>>,
-    },
-    Variant(Vec<(String, Option<AnalysedType>)>),
-    Resource {
-        id: AnalysedResourceId,
-        resource_mode: AnalysedResourceMode,
-    },
-}
-
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub enum AnalysedResourceMode {
-    Owned,
-    Borrowed,
-}
-
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub struct AnalysedResourceId {
-    pub value: u64,
-}
-
-impl From<&PrimitiveValueType> for AnalysedType {
-    fn from(value: &PrimitiveValueType) -> Self {
-        match value {
-            PrimitiveValueType::Bool => AnalysedType::Bool,
-            PrimitiveValueType::S8 => AnalysedType::S8,
-            PrimitiveValueType::U8 => AnalysedType::U8,
-            PrimitiveValueType::S16 => AnalysedType::S16,
-            PrimitiveValueType::U16 => AnalysedType::U16,
-            PrimitiveValueType::S32 => AnalysedType::S32,
-            PrimitiveValueType::U32 => AnalysedType::U32,
-            PrimitiveValueType::S64 => AnalysedType::S64,
-            PrimitiveValueType::U64 => AnalysedType::U64,
-            PrimitiveValueType::F32 => AnalysedType::F32,
-            PrimitiveValueType::F64 => AnalysedType::F64,
-            PrimitiveValueType::Chr => AnalysedType::Chr,
-            PrimitiveValueType::Str => AnalysedType::Str,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalysedFunctionParameter {
-    pub name: String,
-    pub typ: AnalysedType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalysedFunctionResult {
-    pub name: Option<String>,
-    pub typ: AnalysedType,
-}
-
-#[derive(Debug, Clone)]
-pub enum AnalysisWarning {
-    UnsupportedExport {
-        kind: ComponentExternalKind,
-        name: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum AnalysisFailure {
-    Failed(String),
-}
-
-impl AnalysisFailure {
-    pub fn failed(message: impl Into<String>) -> AnalysisFailure {
-        AnalysisFailure::Failed(message.into())
-    }
-
-    pub fn fail_on_missing<T>(value: Option<T>, description: impl AsRef<str>) -> AnalysisResult<T> {
-        match value {
-            Some(value) => Ok(value),
-            None => Err(AnalysisFailure::failed(format!(
-                "Missing {}",
-                description.as_ref()
-            ))),
-        }
-    }
-}
 
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 
@@ -224,10 +84,12 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                         self.analyse_instance_export(export.name.as_string(), export.idx)?;
                     result.push(AnalysedExport::Instance(instance));
                 }
-                _ => self.warning(AnalysisWarning::UnsupportedExport {
-                    kind: export.kind.clone(),
-                    name: export.name.as_string(),
-                }),
+                _ => self.warning(AnalysisWarning::UnsupportedExport(
+                    UnsupportedExportWarning {
+                        kind: export.kind.clone(),
+                        name: export.name.as_string(),
+                    },
+                )),
             }
         }
 
@@ -272,9 +134,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
         resource_ids
             .entry(key)
             .or_insert_with(|| {
-                AnalysedResourceId {
-                    value: new_unique_id, // We don't to associate all IDs in each component, so this simple method can always generate a unique one
-                }
+                AnalysedResourceId(new_unique_id) // We don't to associate all IDs in each component, so this simple method can always generate a unique one
             })
             .clone()
     }
@@ -353,7 +213,7 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 
         Ok(AnalysedFunction {
             name,
-            params,
+            parameters: params,
             results,
         })
     }
@@ -391,10 +251,10 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                     match analysed_resource_mode {
                         Some(resource_mode) => {
                             let id = next_ctx.get_resource_id(component_type_idx);
-                            Ok(AnalysedType::Resource {
-                                id,
-                                resource_mode,
-                            })
+                            Ok(AnalysedType::Handle(TypeHandle {
+                                resource_id: id,
+                                mode: resource_mode,
+                            }))
                         }
                         None => Err(AnalysisFailure::failed("Reached a sub-resource type bound without a surrounding borrowed/owned resource type")),
                     }
@@ -428,48 +288,56 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
             ComponentDefinedType::Record { fields } => {
                 let mut result = Vec::new();
                 for (name, typ) in fields {
-                    result.push((name.clone(), self.analyse_component_val_type(typ)?));
+                    result.push(NameTypePair {
+                        name: name.clone(),
+                        typ: self.analyse_component_val_type(typ)?,
+                    });
                 }
-                Ok(AnalysedType::Record(result))
+                Ok(AnalysedType::Record(TypeRecord { fields: result }))
             }
             ComponentDefinedType::Variant { cases } => {
                 let mut result = Vec::new();
                 for case in cases {
-                    result.push((
-                        case.name.clone(),
-                        case.typ
+                    result.push(NameOptionTypePair {
+                        name: case.name.clone(),
+                        typ: case
+                            .typ
                             .as_ref()
                             .map(|t| self.analyse_component_val_type(t))
                             .transpose()?,
-                    ));
+                    });
                 }
-                Ok(AnalysedType::Variant(result))
+                Ok(AnalysedType::Variant(TypeVariant { cases: result }))
             }
-            ComponentDefinedType::List { elem } => Ok(AnalysedType::List(Box::new(
-                self.analyse_component_val_type(elem)?,
-            ))),
+            ComponentDefinedType::List { elem } => Ok(AnalysedType::List(TypeList {
+                inner: Box::new(self.analyse_component_val_type(elem)?),
+            })),
             ComponentDefinedType::Tuple { elems } => {
                 let mut result = Vec::new();
                 for elem in elems {
                     result.push(self.analyse_component_val_type(elem)?);
                 }
-                Ok(AnalysedType::Tuple(result))
+                Ok(AnalysedType::Tuple(TypeTuple { items: result }))
             }
-            ComponentDefinedType::Flags { names } => Ok(AnalysedType::Flags(names.clone())),
-            ComponentDefinedType::Enum { names } => Ok(AnalysedType::Enum(names.clone())),
-            ComponentDefinedType::Option { typ } => Ok(AnalysedType::Option(Box::new(
-                self.analyse_component_val_type(typ)?,
-            ))),
-            ComponentDefinedType::Result { ok, err } => Ok(AnalysedType::Result {
+            ComponentDefinedType::Flags { names } => Ok(AnalysedType::Flags(TypeFlags {
+                names: names.clone(),
+            })),
+            ComponentDefinedType::Enum { names } => Ok(AnalysedType::Enum(TypeEnum {
+                cases: names.clone(),
+            })),
+            ComponentDefinedType::Option { typ } => Ok(AnalysedType::Option(TypeOption {
+                inner: Box::new(self.analyse_component_val_type(typ)?),
+            })),
+            ComponentDefinedType::Result { ok, err } => Ok(AnalysedType::Result(TypeResult {
                 ok: ok
                     .as_ref()
                     .map(|t| self.analyse_component_val_type(t).map(Box::new))
                     .transpose()?,
-                error: err
+                err: err
                     .as_ref()
                     .map(|t| self.analyse_component_val_type(t).map(Box::new))
                     .transpose()?,
-            }),
+            })),
             ComponentDefinedType::Owned { type_idx } => {
                 self.analyse_component_type_idx(type_idx, Some(AnalysedResourceMode::Owned))
             }
@@ -512,14 +380,19 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
                                         )?;
                                         funcs.push(func);
                                     }
-                                    _ => next_ctx.warning(AnalysisWarning::UnsupportedExport {
-                                        kind: export.kind.clone(),
-                                        name: export.name.as_string(),
-                                    }),
+                                    _ => next_ctx.warning(AnalysisWarning::UnsupportedExport(
+                                        UnsupportedExportWarning {
+                                            kind: export.kind.clone(),
+                                            name: export.name.as_string(),
+                                        },
+                                    )),
                                 }
                             }
 
-                            Ok(AnalysedInstance { name, funcs })
+                            Ok(AnalysedInstance {
+                                name,
+                                functions: funcs,
+                            })
                         }
                         _ => Err(AnalysisFailure::failed(format!(
                             "Expected component, but got {} instead",
@@ -820,88 +693,111 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 mod tests {
     use crate::analysis::{
         AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
-        AnalysedResourceMode, AnalysedType,
+        AnalysedResourceMode, AnalysedType, NameTypePair, TypeF32, TypeHandle, TypeRecord,
+        TypeResult, TypeStr, TypeU32, TypeU64,
     };
 
     #[test]
     fn analysed_function_kind() {
         let cons = AnalysedFunction {
             name: "[constructor]cart".to_string(),
-            params: vec![AnalysedFunctionParameter {
+            parameters: vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
-                typ: AnalysedType::Str,
+                typ: AnalysedType::Str(TypeStr),
             }],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Resource {
-                    id: AnalysedResourceId { value: 0 },
-                    resource_mode: AnalysedResourceMode::Owned,
-                },
+                typ: AnalysedType::Handle(TypeHandle {
+                    resource_id: AnalysedResourceId(0),
+                    mode: AnalysedResourceMode::Owned,
+                }),
             }],
         };
         let method = AnalysedFunction {
             name: "[method]cart.add-item".to_string(),
-            params: vec![
+            parameters: vec![
                 AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Resource {
-                        id: AnalysedResourceId { value: 0 },
-                        resource_mode: AnalysedResourceMode::Borrowed,
-                    },
+                    typ: AnalysedType::Handle(TypeHandle {
+                        resource_id: AnalysedResourceId(0),
+                        mode: AnalysedResourceMode::Borrowed,
+                    }),
                 },
                 AnalysedFunctionParameter {
                     name: "item".to_string(),
-                    typ: AnalysedType::Record(vec![
-                        ("product-id".to_string(), AnalysedType::Str),
-                        ("name".to_string(), AnalysedType::Str),
-                        ("price".to_string(), AnalysedType::F32),
-                        ("quantity".to_string(), AnalysedType::U32),
-                    ]),
+                    typ: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "product-id".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            NameTypePair {
+                                name: "name".to_string(),
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            NameTypePair {
+                                name: "price".to_string(),
+                                typ: AnalysedType::F32(TypeF32),
+                            },
+                            NameTypePair {
+                                name: "quantity".to_string(),
+                                typ: AnalysedType::U32(TypeU32),
+                            },
+                        ],
+                    }),
                 },
             ],
             results: vec![],
         };
         let static_method = AnalysedFunction {
             name: "[static]cart.merge".to_string(),
-            params: vec![
+            parameters: vec![
                 AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Resource {
-                        id: AnalysedResourceId { value: 0 },
-                        resource_mode: AnalysedResourceMode::Borrowed,
-                    },
+                    typ: AnalysedType::Handle(TypeHandle {
+                        resource_id: AnalysedResourceId(0),
+                        mode: AnalysedResourceMode::Borrowed,
+                    }),
                 },
                 AnalysedFunctionParameter {
                     name: "that".to_string(),
-                    typ: AnalysedType::Resource {
-                        id: AnalysedResourceId { value: 0 },
-                        resource_mode: AnalysedResourceMode::Borrowed,
-                    },
+                    typ: AnalysedType::Handle(TypeHandle {
+                        resource_id: AnalysedResourceId(0),
+                        mode: AnalysedResourceMode::Borrowed,
+                    }),
                 },
             ],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Resource {
-                    id: AnalysedResourceId { value: 0 },
-                    resource_mode: AnalysedResourceMode::Owned,
-                },
+                typ: AnalysedType::Handle(TypeHandle {
+                    resource_id: AnalysedResourceId(0),
+                    mode: AnalysedResourceMode::Owned,
+                }),
             }],
         };
         let fun = AnalysedFunction {
             name: "hash".to_string(),
-            params: vec![AnalysedFunctionParameter {
+            parameters: vec![AnalysedFunctionParameter {
                 name: "path".to_string(),
-                typ: AnalysedType::Str,
+                typ: AnalysedType::Str(TypeStr),
             }],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Result {
-                    ok: Some(Box::new(AnalysedType::Record(vec![
-                        ("lower".to_string(), AnalysedType::U64),
-                        ("upper".to_string(), AnalysedType::U64),
-                    ]))),
-                    error: Some(Box::new(AnalysedType::Str)),
-                },
+                typ: AnalysedType::Result(TypeResult {
+                    ok: Some(Box::new(AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            NameTypePair {
+                                name: "lower".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                            NameTypePair {
+                                name: "upper".to_string(),
+                                typ: AnalysedType::U64(TypeU64),
+                            },
+                        ],
+                    }))),
+                    err: Some(Box::new(AnalysedType::Str(TypeStr))),
+                }),
             }],
         };
 
