@@ -6,3 +6,4 @@ mod expr;
 mod function_name;
 mod parser;
 mod text;
+mod type_registry;

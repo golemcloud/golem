@@ -22,14 +22,20 @@ use serde_json::Value;
 use std::fmt::Display;
 use std::str::FromStr;
 use golem_wasm_ast::analysis::AnalysedType;
+use crate::type_registry::FunctionTypeRegistry;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 enum InferredType {
-    AnalysedType(AnalysedType),
+    Leaf(AnalysedType),
     OneOf(Vec<InferredType>), // literal 1 --> u32 or u8?
     AllOf(Vec<InferredType>),
-    Unknown
+    Unknown,
+    Sequence(Vec<InferredType>)
 }
+
+// 
+// let my_input = request.path.user;
+// some_function_call(my_input)
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -56,10 +62,18 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, InferredType),
-    Call(ParsedFunctionName, Vec<crate::Expr>, InferredType),
+    Call(ParsedFunctionName, Vec<Expr>, InferredType),
 }
 
 impl Expr {
+    pub fn infer_function_types(&mut self, function_type_registry: &FunctionTypeRegistry) {
+        // look for calls , attach function parameters to call and result type to sequnc<inferrered-type>
+        // queue based visits
+    }
+
+    pub fn infer_no_arg_variants(&mut self, function_type_registry: &FunctionTypeRegistry) {
+        // look for identifers that might be no-arg variants , attach function parameters to call and result type to sequnc<inferrered-type>
+    }
     /// Parse a text directly as Rib expression
     /// Example of a Rib expression:
     ///
@@ -151,17 +165,22 @@ impl Expr {
         let input = format!("\"{}\"", input);
         Self::from_text(input.as_str())
     }
-    pub fn unsigned_integer(u64: u64) -> Expr {
-        Expr::Number(Number::Unsigned(u64))
-    }
 
-    pub fn signed_integer(i64: i64) -> Expr {
-        Expr::Number(Number::Signed(i64))
-    }
-
-    pub fn float(float: f64) -> Expr {
-        Expr::Number(Number::Float(float))
-    }
+    pub fn number(f64: f64) -> Expr { Expr::Number(Number {
+        value: f64
+    }, InferredType::AllOf(vec![
+        InferredType::Leaf(AnalysedType::U64),
+        InferredType::Leaf(AnalysedType::U32),
+        InferredType::Leaf(AnalysedType::U8),
+        InferredType::Leaf(AnalysedType::U16),
+        InferredType::Leaf(AnalysedType::S64),
+        InferredType::Leaf(AnalysedType::S32),
+        InferredType::Leaf(AnalysedType::S8),
+        InferredType::Leaf(AnalysedType::S16),
+        InferredType::Leaf(AnalysedType::F64),
+         InferredType::Leaf(AnalysedType::F32),
+        ])
+    ) }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
@@ -508,10 +527,9 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub enum Number {
-    Unsigned(u64),
-    Signed(i64),
-    Float(f64),
+pub struct Number {
+    pub value: f64 // Change to bigdecimal
+
 }
 
 impl Display for Number {

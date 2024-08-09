@@ -27,12 +27,8 @@ pub fn number<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             .and_then(|s: Vec<char>| {
                 let primitive = s.into_iter().collect::<String>();
 
-                if let Ok(u64) = primitive.parse::<u64>() {
-                    Ok(Expr::unsigned_integer(u64))
-                } else if let Ok(i64_value) = primitive.parse::<i64>() {
-                    Ok(Expr::signed_integer(i64_value))
-                } else if let Ok(f64_value) = primitive.parse::<f64>() {
-                    Ok(Expr::float(f64_value))
+                if let Ok(f64) = primitive.parse::<f64>() {
+                    Ok(Expr::number(f64))
                 } else {
                     Err(easy::Error::message_static_message(
                         "Unable to parse number",
