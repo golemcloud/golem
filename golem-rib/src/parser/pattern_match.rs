@@ -269,9 +269,7 @@ mod tests {
                     vec![MatchArm((
                         ArmPattern::Constructor(
                             "Foo".to_string(),
-                            vec![ArmPattern::Literal(Box::new(Expr::identifier(
-                                "x"
-                            )))]
+                            vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                         ),
                         Box::new(Expr::identifier("bar"))
                     ))]
@@ -291,20 +289,13 @@ mod tests {
                 Expr::pattern_match(
                     Expr::identifier("foo"),
                     vec![
+                        MatchArm((ArmPattern::WildCard, Box::new(Expr::identifier("bar")))),
                         MatchArm((
-                            ArmPattern::WildCard,
-                            Box::new(Expr::identifier("bar"))
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::ok(
-                                Expr::identifier("x")
-                            ))),
+                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
                             Box::new(Expr::identifier("x"))
                         )),
                         MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::error(
-                                Expr::identifier("x")
-                            ))),
+                            ArmPattern::Literal(Box::new(Expr::error(Expr::identifier("x")))),
                             Box::new(Expr::identifier("x"))
                         )),
                         MatchArm((
@@ -312,9 +303,9 @@ mod tests {
                             Box::new(Expr::identifier("foo"))
                         )),
                         MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::option(Some(
-                                Expr::identifier("x")
-                            )))),
+                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
+                                "x"
+                            ))))),
                             Box::new(Expr::identifier("x"))
                         )),
                     ]

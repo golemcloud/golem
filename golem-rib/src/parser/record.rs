@@ -76,10 +76,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::identifier("bar")
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
                 ""
             ))
         );
@@ -93,14 +90,8 @@ mod tests {
             result,
             Ok((
                 Expr::record(vec![
-                    (
-                        "foo".to_string(),
-                        Expr::identifier("bar")
-                    ),
-                    (
-                        "baz".to_string(),
-                        Expr::identifier("qux")
-                    )
+                    ("foo".to_string(), Expr::identifier("bar")),
+                    ("baz".to_string(), Expr::identifier("qux"))
                 ]),
                 ""
             ))
@@ -114,10 +105,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::literal("bar")
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::literal("bar"))]),
                 ""
             ))
         );
@@ -139,10 +127,7 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::record(vec![(
-                        "bar".to_string(),
-                        Expr::identifier("baz")
-                    )])
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
                 )]),
                 ""
             ))
@@ -158,10 +143,7 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::tuple(vec![
-                        Expr::identifier("bar"),
-                        Expr::identifier("baz")
-                    ])
+                    Expr::tuple(vec![Expr::identifier("bar"), Expr::identifier("baz")])
                 )]),
                 ""
             ))
@@ -177,10 +159,7 @@ mod tests {
             Ok((
                 Expr::record(vec![(
                     "foo".to_string(),
-                    Expr::sequence(vec![
-                        Expr::identifier("bar"),
-                        Expr::identifier("baz")
-                    ])
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
                 )]),
                 ""
             ))
@@ -194,12 +173,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::record(vec![(
-                    "foo".to_string(),
-                    Expr::ok(Expr::identifier(
-                        "bar"
-                    ))
-                )]),
+                Expr::record(vec![("foo".to_string(), Expr::ok(Expr::identifier("bar")))]),
                 ""
             ))
         );

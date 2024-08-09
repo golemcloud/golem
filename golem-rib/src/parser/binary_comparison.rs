@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::expr::Expr;
+use crate::InferredType;
 use combine::parser::char::{spaces, string};
 use combine::stream::easy;
 use combine::Parser;
-use crate::InferredType;
 
 pub fn greater_than<'t>(
     rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
@@ -28,7 +28,9 @@ pub fn greater_than<'t>(
             string(">").skip(spaces()),
             rib_expr2.skip(spaces()),
         )
-            .map(|(left, _, right)| Expr::GreaterThan(Box::new(left), Box::new(right), InferredType::Bool)),
+            .map(|(left, _, right)| {
+                Expr::GreaterThan(Box::new(left), Box::new(right), InferredType::Bool)
+            }),
     )
 }
 
@@ -42,7 +44,9 @@ pub fn greater_than_or_equal_to<'t>(
             string(">=").skip(spaces()),
             rib_expr2,
         )
-            .map(|(left, _, right)| Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)),
+            .map(|(left, _, right)| {
+                Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+            }),
     )
 }
 
@@ -56,7 +60,9 @@ pub fn less_than<'t>(
             string("<").skip(spaces()),
             rib_expr2,
         )
-            .map(|(left, _, right)| Expr::LessThan(Box::new(left), Box::new(right), InferredType::Bool)),
+            .map(|(left, _, right)| {
+                Expr::LessThan(Box::new(left), Box::new(right), InferredType::Bool)
+            }),
     )
 }
 
@@ -70,7 +76,9 @@ pub fn less_than_or_equal_to<'t>(
             string("<=").skip(spaces()),
             rib_expr2,
         )
-            .map(|(left, _, right)| Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)),
+            .map(|(left, _, right)| {
+                Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+            }),
     )
 }
 
@@ -84,7 +92,9 @@ pub fn equal_to<'t>(
             string("==").skip(spaces()),
             rib_expr2,
         )
-            .map(|(left, _, right)| Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)),
+            .map(|(left, _, right)| {
+                Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+            }),
     )
 }
 
@@ -101,10 +111,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::greater_than(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ),
+                Expr::greater_than(Expr::identifier("foo"), Expr::identifier("bar")),
                 ""
             ))
         );
@@ -117,10 +124,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::greater_than_or_equal_to(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ),
+                Expr::greater_than_or_equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
                 ""
             ))
         );
@@ -133,10 +137,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::less_than(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ),
+                Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar")),
                 ""
             ))
         );
@@ -149,10 +150,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::less_than_or_equal_to(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ),
+                Expr::less_than_or_equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
                 ""
             ))
         );
@@ -165,10 +163,7 @@ mod test {
         assert_eq!(
             result,
             Ok((
-                Expr::equal_to(
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ),
+                Expr::equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
                 ""
             ))
         );
@@ -183,14 +178,8 @@ mod test {
             Ok((
                 Expr::cond(
                     Expr::boolean(true),
-                    Expr::greater_than(
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar")
-                    ),
-                    Expr::equal_to(
-                        Expr::identifier("bar"),
-                        Expr::identifier("foo")
-                    ),
+                    Expr::greater_than(Expr::identifier("foo"), Expr::identifier("bar")),
+                    Expr::equal_to(Expr::identifier("bar"), Expr::identifier("foo")),
                 ),
                 ""
             ))
@@ -209,10 +198,7 @@ mod test {
                         Expr::identifier("foo"),
                         Expr::identifier("bar")
                     ),
-                    Expr::less_than(
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar")
-                    )
+                    Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar"))
                 ]),
                 ""
             ))

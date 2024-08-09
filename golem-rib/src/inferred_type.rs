@@ -4,7 +4,6 @@ use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
 use golem_wasm_rpc::protobuf::{TypedHandle, TypedResult};
 
-
 // The reason to replicate analysed_type types
 // in inferred_type can be explained with an example.
 // During  type_pull_down stage
@@ -74,7 +73,7 @@ impl InferredType {
                 let flattened_one_ofs = Self::flatten_one_of_list(one_of_types);
                 Self::unify_all_alternative_types(&flattened_one_ofs)
             }
-            _ => Ok(self.clone())
+            _ => Ok(self.clone()),
         }
     }
 
@@ -168,7 +167,8 @@ impl InferredType {
                 let mut fields = a_fields.clone();
 
                 for (field, typ) in fields.iter_mut() {
-                    if let Some((_, b_type)) = b_fields.iter().find(|(b_field, _)| b_field == field) {
+                    if let Some((_, b_type)) = b_fields.iter().find(|(b_field, _)| b_field == field)
+                    {
                         let unified_b_type = b_type.unify_types()?;
                         let unified_a_type = typ.unify_types()?;
                         if unified_a_type == unified_b_type {
@@ -239,7 +239,16 @@ impl InferredType {
                 }
             }
 
-            (InferredType::Result { ok: a_ok, error: a_error }, InferredType::Result { ok: b_ok, error: b_error }) => {
+            (
+                InferredType::Result {
+                    ok: a_ok,
+                    error: a_error,
+                },
+                InferredType::Result {
+                    ok: b_ok,
+                    error: b_error,
+                },
+            ) => {
                 let unified_b_ok = match (a_ok, b_ok) {
                     (Some(a_inner), Some(b_inner)) => {
                         let unified_b_inner = b_inner.unify_types()?;
@@ -252,7 +261,7 @@ impl InferredType {
                     }
                     (None, None) => None,
                     (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone()))
+                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
                 };
 
                 let unified_b_error = match (a_error, b_error) {
@@ -267,10 +276,13 @@ impl InferredType {
                     }
                     (None, None) => None,
                     (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone()))
+                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
                 };
 
-                Ok(InferredType::Result { ok: unified_b_ok, error: unified_b_error })
+                Ok(InferredType::Result {
+                    ok: unified_b_ok,
+                    error: unified_b_error,
+                })
             }
 
             // We hardly reach a situation where a variant can be OneOf, but if we happen to encounter this
@@ -283,7 +295,10 @@ impl InferredType {
                 let mut variants = a_variants.clone();
 
                 for (variant, a_type) in variants.iter_mut() {
-                    if let Some((_, b_type)) = b_variants.iter().find(|(b_variant, _)| b_variant == variant) {
+                    if let Some((_, b_type)) = b_variants
+                        .iter()
+                        .find(|(b_variant, _)| b_variant == variant)
+                    {
                         let unified_b_type = b_type.unify_types()?;
                         let unified_a_type = a_type.unify_types()?;
                         if unified_a_type == unified_b_type {
@@ -301,9 +316,21 @@ impl InferredType {
 
             // We shouldn't get into a situation where we have OneOf 2 different resource handles.
             // The only possibility of unification there is only if they match exact
-            (InferredType::Resource { resource_id: a_id, resource_mode: a_mode }, InferredType::Resource { resource_id: b_id, resource_mode: b_mode }) => {
+            (
+                InferredType::Resource {
+                    resource_id: a_id,
+                    resource_mode: a_mode,
+                },
+                InferredType::Resource {
+                    resource_id: b_id,
+                    resource_mode: b_mode,
+                },
+            ) => {
                 if a_id == b_id && a_mode == b_mode {
-                    Ok(InferredType::Resource { resource_id: a_id.clone(), resource_mode: a_mode.clone() })
+                    Ok(InferredType::Resource {
+                        resource_id: a_id.clone(),
+                        resource_mode: a_mode.clone(),
+                    })
                 } else {
                     Err("Resource id or mode do not match".to_string())
                 }
@@ -349,11 +376,14 @@ impl InferredType {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 let mut fields = HashMap::new();
                 for (a_name, a_type) in a_fields {
-                    if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name) {
+                    if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
+                    {
                         fields.insert(a_name.clone(), a_type.unify_with_required(b_type)?);
                     }
                 }
-                Ok(InferredType::Record(fields.iter().map(|(n, t)| (n.clone(), t.clone())).collect()))
+                Ok(InferredType::Record(
+                    fields.iter().map(|(n, t)| (n.clone(), t.clone())).collect(),
+                ))
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
@@ -365,9 +395,9 @@ impl InferredType {
                 }
                 Ok(InferredType::Tuple(types))
             }
-            (InferredType::List(a_type), InferredType::List(b_type)) => {
-                Ok(InferredType::List(Box::new(a_type.unify_with_required(b_type)?)))
-            }
+            (InferredType::List(a_type), InferredType::List(b_type)) => Ok(InferredType::List(
+                Box::new(a_type.unify_with_required(b_type)?),
+            )),
             (InferredType::Flags(a_flags), InferredType::Flags(b_flags)) => {
                 // It's hard to unify flags. Or the semantic meaning of unifying flags is hard
                 // so we simply expect them to be the same, as the ProtoVal expects a vector of boolean
@@ -390,23 +420,36 @@ impl InferredType {
                 }
                 Ok(InferredType::Enum(a_variants.clone()))
             }
-            (InferredType::Option(a_type), InferredType::Option(b_type)) => {
-                Ok(InferredType::Option(Box::new(a_type.unify_with_required(b_type)?)))
-            }
-            (InferredType::Result { ok: a_ok, error: a_error }, InferredType::Result { ok: b_ok, error: b_error }) => {
+            (InferredType::Option(a_type), InferredType::Option(b_type)) => Ok(
+                InferredType::Option(Box::new(a_type.unify_with_required(b_type)?)),
+            ),
+            (
+                InferredType::Result {
+                    ok: a_ok,
+                    error: a_error,
+                },
+                InferredType::Result {
+                    ok: b_ok,
+                    error: b_error,
+                },
+            ) => {
                 // here we basically replace the ones that are empty with the other that is non empty
                 let ok = match (a_ok, b_ok) {
-                    (Some(a_inner), Some(b_inner)) => Some(Box::new(a_inner.unify_with_required(b_inner)?)),
+                    (Some(a_inner), Some(b_inner)) => {
+                        Some(Box::new(a_inner.unify_with_required(b_inner)?))
+                    }
                     (None, None) => None,
                     (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone()))
+                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
                 };
 
                 let error = match (a_error, b_error) {
-                    (Some(a_inner), Some(b_inner)) => Some(Box::new(a_inner.unify_with_required(b_inner)?)),
+                    (Some(a_inner), Some(b_inner)) => {
+                        Some(Box::new(a_inner.unify_with_required(b_inner)?))
+                    }
                     (None, None) => None,
                     (Some(ok), None) => Some(Box::new(*ok.clone())),
-                    (None, Some(ok)) => Some(Box::new(*ok.clone()))
+                    (None, Some(ok)) => Some(Box::new(*ok.clone())),
                 };
                 Ok(InferredType::Result { ok, error })
             }
@@ -415,25 +458,45 @@ impl InferredType {
             (InferredType::Variant(a_variants), InferredType::Variant(b_variants)) => {
                 let mut variants = HashMap::new();
                 for (a_name, a_type) in a_variants {
-                    if let Some((_, b_type)) = b_variants.iter().find(|(b_name, _)| b_name == a_name) {
+                    if let Some((_, b_type)) =
+                        b_variants.iter().find(|(b_name, _)| b_name == a_name)
+                    {
                         let unified_type = match (a_type, b_type) {
-                            (Some(a_inner), Some(b_inner)) => Some(Box::new(a_inner.unify_with_required(b_inner)?)),
+                            (Some(a_inner), Some(b_inner)) => {
+                                Some(Box::new(a_inner.unify_with_required(b_inner)?))
+                            }
                             (None, None) => None,
                             (Some(_), None) => None,
-                            (None, Some(_)) => None
+                            (None, Some(_)) => None,
                         };
                         variants.insert(a_name.clone(), unified_type);
                     }
                 }
-                Ok(InferredType::Variant(variants.iter().map(|(n, t)| (n.clone(), t.clone().map(|v| *v))).collect()))
+                Ok(InferredType::Variant(
+                    variants
+                        .iter()
+                        .map(|(n, t)| (n.clone(), t.clone().map(|v| *v)))
+                        .collect(),
+                ))
             }
-            (InferredType::Resource { resource_id: a_id, resource_mode: a_mode }, InferredType::Resource { resource_id: b_id, resource_mode: b_mode }) => {
+            (
+                InferredType::Resource {
+                    resource_id: a_id,
+                    resource_mode: a_mode,
+                },
+                InferredType::Resource {
+                    resource_id: b_id,
+                    resource_mode: b_mode,
+                },
+            ) => {
                 if a_id != b_id || a_mode != b_mode {
                     return Err("Resource id or mode do not match".to_string());
                 }
-                Ok(InferredType::Resource { resource_id: a_id.clone(), resource_mode: a_mode.clone() })
+                Ok(InferredType::Resource {
+                    resource_id: a_id.clone(),
+                    resource_mode: a_mode.clone(),
+                })
             }
-
 
             // Given we always flatten AllOf and OneOf, in reality we can check if All of the types are part of the One ofs.
             (InferredType::AllOf(types), InferredType::OneOf(one_of_types)) => {
@@ -456,7 +519,6 @@ impl InferredType {
                 Self::unify_all_required_types(all_of_types)
             }
 
-
             (InferredType::OneOf(types), inferred_type) => {
                 if types.contains(inferred_type) {
                     Ok(inferred_type.clone())
@@ -477,7 +539,10 @@ impl InferredType {
                 if inferred_type1 == inferred_type2 {
                     Ok(inferred_type1.clone())
                 } else if inferred_type1.is_number() && inferred_type2.is_number() {
-                    Ok(InferredType::AllOf(vec![inferred_type1.clone(), inferred_type2.clone()]))
+                    Ok(InferredType::AllOf(vec![
+                        inferred_type1.clone(),
+                        inferred_type2.clone(),
+                    ]))
                 } else {
                     Err("Types do not match".to_string())
                 }
@@ -563,7 +628,8 @@ impl InferredType {
 
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 for (a_name, a_type) in a_fields {
-                    if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name) {
+                    if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
+                    {
                         if !self.are_compatible(a_type, b_type) {
                             return false;
                         }
@@ -574,8 +640,8 @@ impl InferredType {
                 true
             }
 
-            (InferredType::Flags(a_flags), InferredType::Flags(b_flags)) |
-            (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
+            (InferredType::Flags(a_flags), InferredType::Flags(b_flags))
+            | (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                 a_flags == b_flags || a_variants == b_variants
             }
 
@@ -583,26 +649,41 @@ impl InferredType {
                 self.are_compatible(a_type, b_type)
             }
 
-            (InferredType::Result { ok: a_ok, error: a_error }, InferredType::Result { ok: b_ok, error: b_error }) => {
+            (
+                InferredType::Result {
+                    ok: a_ok,
+                    error: a_error,
+                },
+                InferredType::Result {
+                    ok: b_ok,
+                    error: b_error,
+                },
+            ) => {
                 match (a_ok, b_ok) {
                     (Some(a_inner), Some(b_inner)) => self.are_compatible(a_inner, b_inner),
                     (None, None) => true,
                     (Some(_), None) => true,
-                    (None, Some(_)) => true
+                    (None, Some(_)) => true,
                 }
                 match (a_error, b_error) {
                     (Some(a_inner), Some(b_inner)) => self.are_compatible(a_inner, b_inner),
                     (None, None) => true,
                     (Some(_), None) => true,
-                    (None, Some(_)) => true
+                    (None, Some(_)) => true,
                 }
             }
 
             (InferredType::Variant(a_variants), InferredType::Variant(b_variants)) => {
                 for (a_name, a_type) in a_variants {
-                    if let Some((_, b_type)) = b_variants.iter().find(|(b_name, _)| b_name == a_name) {
+                    if let Some((_, b_type)) =
+                        b_variants.iter().find(|(b_name, _)| b_name == a_name)
+                    {
                         match (a_type, b_type) {
-                            (Some(a_inner), Some(b_inner)) => if !self.are_compatible(a_inner, b_inner) { return false; },
+                            (Some(a_inner), Some(b_inner)) => {
+                                if !self.are_compatible(a_inner, b_inner) {
+                                    return false;
+                                }
+                            }
                             (None, None) => {}
                             _ => return false,
                         }
@@ -613,14 +694,21 @@ impl InferredType {
                 true
             }
 
-            (InferredType::Resource { resource_id: a_id, resource_mode: a_mode }, InferredType::Resource { resource_id: b_id, resource_mode: b_mode }) => {
-                a_id == b_id && a_mode == b_mode
-            }
+            (
+                InferredType::Resource {
+                    resource_id: a_id,
+                    resource_mode: a_mode,
+                },
+                InferredType::Resource {
+                    resource_id: b_id,
+                    resource_mode: b_mode,
+                },
+            ) => a_id == b_id && a_mode == b_mode,
 
             (InferredType::OneOf(types), InferredType::AllOf(typ)) => {
                 for t in typ {
                     if !types.contains(t) {
-                        return false
+                        return false;
                     }
                 }
 
@@ -630,7 +718,7 @@ impl InferredType {
             (InferredType::AllOf(types), InferredType::OneOf(typ)) => {
                 for t in typ {
                     if !types.contains(t) {
-                        return false
+                        return false;
                     }
                 }
 
@@ -671,13 +759,9 @@ impl InferredType {
                 }
             }
 
-            (InferredType::Unknown, _) | (_, InferredType::Unknown) => {
-                true
-            }
+            (InferredType::Unknown, _) | (_, InferredType::Unknown) => true,
 
-            (a, b) => {
-                a.is_number() && b.is_number() || a.is_string() && b.is_string()
-            }
+            (a, b) => a.is_number() && b.is_number() || a.is_string() && b.is_string(),
 
             _ => false,
         }
@@ -690,26 +774,22 @@ impl InferredType {
             InferredType::Unknown => {
                 *self = new_inferred_type;
             }
-            InferredType::AllOf(types) => {
-                match new_inferred_type {
-                    InferredType::AllOf(new_types) => {
-                        types.extend(new_types);
-                    }
-                    _ => {
-                        types.push(new_inferred_type);
-                    }
+            InferredType::AllOf(types) => match new_inferred_type {
+                InferredType::AllOf(new_types) => {
+                    types.extend(new_types);
                 }
-            }
-            InferredType::OneOf(types) => {
-                match new_inferred_type {
-                    InferredType::OneOf(new_types) => {
-                        types.extend(new_types);
-                    }
-                    _ => {
-                        types.push(new_inferred_type);
-                    }
+                _ => {
+                    types.push(new_inferred_type);
                 }
-            }
+            },
+            InferredType::OneOf(types) => match new_inferred_type {
+                InferredType::OneOf(new_types) => {
+                    types.extend(new_types);
+                }
+                _ => {
+                    types.push(new_inferred_type);
+                }
+            },
 
             // Any other types simply indicates it can be all of those types
             // until type checked
@@ -722,7 +802,6 @@ impl InferredType {
         }
     }
 }
-
 
 impl From<AnalysedType> for InferredType {
     fn from(analysed_type: AnalysedType) -> Self {
@@ -750,7 +829,7 @@ impl From<AnalysedType> for InferredType {
             AnalysedType::Flags(vs) => InferredType::Flags(vs),
             AnalysedType::Enum(vs) => InferredType::Enum(vs),
             AnalysedType::Option(t) => InferredType::Option(Box::new(t.into())),
-            AnalysedType::Result(TypedResult {ok, error, ..}) => InferredType::Result {
+            AnalysedType::Result(TypedResult { ok, error, .. }) => InferredType::Result {
                 ok: ok.map(|t| Box::new(t.into())),
                 error: error.map(|t| Box::new(t.into())),
             },
@@ -759,17 +838,13 @@ impl From<AnalysedType> for InferredType {
                     .map(|(n, t)| (n, t.map(|t| t.into())))
                     .collect(),
             ),
-            AnalysedType::Handle(TypedHandle { typ, .. } ) => {
-                match typ {
-                    Some(type_handle) => {
-                        InferredType::Resource {
-                            resource_id: type_handle.resource_id,
-                            resource_mode: type_handle.mode,
-                        }
-                    }
-                    None => InferredType::Unknown
-                }
-            }
+            AnalysedType::Handle(TypedHandle { typ, .. }) => match typ {
+                Some(type_handle) => InferredType::Resource {
+                    resource_id: type_handle.resource_id,
+                    resource_mode: type_handle.mode,
+                },
+                None => InferredType::Unknown,
+            },
         }
     }
 }

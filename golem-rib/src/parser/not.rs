@@ -35,10 +35,7 @@ mod tests {
     fn test_not_identifier() {
         let input = "!foo";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((Expr::not(Expr::identifier("foo")), ""))
-        );
+        assert_eq!(result, Ok((Expr::not(Expr::identifier("foo")), "")));
     }
 
     #[test]
@@ -63,12 +60,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::not(Expr::not(Expr::identifier(
-                    "foo"
-                ))),
-                ""
-            ))
+            Ok((Expr::not(Expr::not(Expr::identifier("foo"))), ""))
         );
     }
 }

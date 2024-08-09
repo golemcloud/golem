@@ -28,9 +28,7 @@ pub fn conditional<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             string("else").skip(spaces()),
             rib_expr().skip(spaces()),
         )
-            .map(|(_, cond, _, then_expr, _, else_expr)| {
-                Expr::cond(cond, then_expr, else_expr)
-            }),
+            .map(|(_, cond, _, then_expr, _, else_expr)| Expr::cond(cond, then_expr, else_expr)),
     )
 }
 
@@ -87,10 +85,11 @@ mod tests {
                         Expr::identifier("baz"),
                         Expr::identifier("qux"),
                         Expr::identifier("quux")
-                    ))
-                ,
+                    )
+                ),
                 ""
-            )));
+            ))
+        );
     }
 
     #[test]

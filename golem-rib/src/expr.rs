@@ -15,8 +15,8 @@
 use crate::expr::internal::{IdentifierTypeState, IdentifierVariableIdState};
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
-use crate::{InferredType, text};
 use crate::type_registry::{FunctionTypeRegistry, RegistryKey, RegistryValue};
+use crate::{text, InferredType};
 use bincode::{Decode, Encode};
 use combine::EasyParser;
 use serde::{Deserialize, Serialize, Serializer};
@@ -25,7 +25,6 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 struct VariableId(Option<u16>);
@@ -71,7 +70,6 @@ pub enum Expr {
 }
 
 impl Expr {
-
     pub fn boolean(value: bool) -> Self {
         Expr::Boolean(value, InferredType::Bool)
     }
@@ -85,7 +83,12 @@ impl Expr {
     }
 
     pub fn cond(cond: Expr, then: Expr, else_: Expr) -> Self {
-        Expr::Cond(Box::new(cond), Box::new(then), Box::new(else_), InferredType::Unknown)
+        Expr::Cond(
+            Box::new(cond),
+            Box::new(then),
+            Box::new(else_),
+            InferredType::Unknown,
+        )
     }
 
     pub fn equal_to(left: Expr, right: Expr) -> Self {
@@ -94,10 +97,13 @@ impl Expr {
 
     pub fn error(expr: Expr) -> Self {
         let inferred_type = expr.inferred_type();
-        Expr::Result(Err(Box::new(expr)), InferredType::Result {
-            ok: Some(Box::new(InferredType::Unknown)),
-            error: Some(Box::new(inferred_type)),
-        })
+        Expr::Result(
+            Err(Box::new(expr)),
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::Unknown)),
+                error: Some(Box::new(inferred_type)),
+            },
+        )
     }
 
     pub fn flags(flags: Vec<String>) -> Self {
@@ -125,7 +131,12 @@ impl Expr {
     }
 
     pub fn let_binding(name: &str, expr: Expr) -> Self {
-        Expr::Let(VariableId::init(), name.to_string(), Box::new(expr), InferredType::Unknown)
+        Expr::Let(
+            VariableId::init(),
+            name.to_string(),
+            Box::new(expr),
+            InferredType::Unknown,
+        )
     }
 
     pub fn literal(value: impl AsRef<str>) -> Self {
@@ -138,10 +149,13 @@ impl Expr {
 
     pub fn ok(expr: Expr) -> Self {
         let inferred_type = expr.inferred_type();
-        Expr::Result(Ok(Box::new(expr)), InferredType::Result {
-            ok: Some(Box::new(inferred_type)),
-            error: Some(Box::new(InferredType::Unknown)),
-        })
+        Expr::Result(
+            Ok(Box::new(expr)),
+            InferredType::Result {
+                ok: Some(Box::new(inferred_type)),
+                error: Some(Box::new(InferredType::Unknown)),
+            },
+        )
     }
 
     pub fn option(expr: Option<Expr>) -> Self {
@@ -150,7 +164,10 @@ impl Expr {
             None => InferredType::Unknown,
         };
 
-        Expr::Option(expr.map(Box::new), InferredType::Option(Box::new(inferred_type)))
+        Expr::Option(
+            expr.map(Box::new),
+            InferredType::Option(Box::new(inferred_type)),
+        )
     }
 
     pub fn pattern_match(expr: Expr, match_arms: Vec<MatchArm>) -> Self {
@@ -170,10 +187,9 @@ impl Expr {
                 .into_iter()
                 .map(|(field_name, expr)| (field_name, Box::new(expr)))
                 .collect(),
-            inferred_type
+            inferred_type,
         )
     }
-
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
         Expr::Tuple(expressions, InferredType::Unknown)
@@ -182,7 +198,6 @@ impl Expr {
     pub fn sequence(expressions: Vec<Expr>) -> Self {
         Expr::Sequence(expressions, InferredType::Unknown)
     }
-
 
     pub fn inferred_type(&self) -> InferredType {
         match self {
@@ -448,9 +463,9 @@ impl Expr {
                 Expr::PatternMatch(_, match_arms, inferred_type) => {
                     // There is nothing to be done for condition_expr and match_arm's pattern
                     for match_arm in match_arms {
-                        let mut match_arm_expr = match_arm.0.1.clone();
+                        let mut match_arm_expr = match_arm.0 .1.clone();
                         match_arm_expr.add_infer_type(inferred_type.clone());
-                        let arm_pattern = match_arm.0.0.clone();
+                        let arm_pattern = match_arm.0 .0.clone();
                         *match_arm = MatchArm((arm_pattern, match_arm_expr));
                     }
                 }
@@ -801,7 +816,10 @@ impl Expr {
                 Expr::Identifier(variable_name, inferred_type, variable_id) => {
                     // We are only interested in global variables
                     if variable_id.is_none() {
-                        all_types_of_global_variables.entry(variable_name.clone()).or_insert(Vec::new()).push(inferred_type.clone());
+                        all_types_of_global_variables
+                            .entry(variable_name.clone())
+                            .or_insert(Vec::new())
+                            .push(inferred_type.clone());
                     }
                 }
                 _ => expr.visit_children(&mut queue),
@@ -912,7 +930,7 @@ impl Expr {
                     //Avoid this
                     let mut expr = expr.clone();
                     expr.visit_children(&mut queue)
-                },
+                }
             }
         }
 
@@ -987,7 +1005,6 @@ impl Expr {
 
         Ok(())
     }
-
 
     fn compile_to_ir(&mut self) {
         // Lower Level Stack basd instruction set with full type information , plus ProtoVal
@@ -1100,7 +1117,7 @@ impl Expr {
             }
             Expr::PatternMatch(expr, arms, _) => {
                 queue.push_back(expr);
-                queue.extend(arms.iter_mut().map(|arm| &mut arm.0.1));
+                queue.extend(arms.iter_mut().map(|arm| &mut arm.0 .1));
             }
             Expr::Option(Some(expr), _) => queue.push_back(expr),
             Expr::Result(Ok(expr), _) => queue.push_back(expr),
@@ -1627,13 +1644,12 @@ pub struct MatchArm(pub (ArmPattern, Box<Expr>));
 
 impl MatchArm {
     pub fn arm_pattern(&self) -> ArmPattern {
-        let arm_pattern = &self.0.0;
+        let arm_pattern = &self.0 .0;
         arm_pattern.clone()
     }
 
-
     pub fn arm_expr(&self) -> Expr {
-        self.0.1.deref().clone()
+        self.0 .1.deref().clone()
     }
 }
 
@@ -1813,8 +1829,8 @@ impl FromStr for Expr {
 
 impl<'de> Deserialize<'de> for Expr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
+    where
+        D: serde::Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
@@ -1833,8 +1849,8 @@ impl<'de> Deserialize<'de> for Expr {
 
 impl Serialize for Expr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
+    where
+        S: Serializer,
     {
         match text::to_string(self) {
             Ok(value) => serde_json::Value::serialize(&Value::String(value), serializer),

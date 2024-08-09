@@ -124,10 +124,7 @@ mod tests {
                 Expr::cond(
                     Expr::equal_to(
                         Expr::identifier("foo"),
-                        Expr::concat(vec![
-                            Expr::literal("bar-"),
-                            Expr::identifier("worker_id")
-                        ])
+                        Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
                     ),
                     Expr::number(1f64),
                     Expr::literal("baz"),

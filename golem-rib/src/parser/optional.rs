@@ -26,8 +26,7 @@ use combine::stream::easy;
 pub fn option<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
         spaces().with(
-            between(string("some("), char(')'), rib_expr())
-                .map(|expr| Expr::option(Some(expr))),
+            between(string("some("), char(')'), rib_expr()).map(|expr| Expr::option(Some(expr))),
         ),
         spaces().with(string("none").map(|_| Expr::option(None))),
     ))
@@ -44,10 +43,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::option(Some(Expr::identifier("foo"))),
-                ""
-            ))
+            Ok((Expr::option(Some(Expr::identifier("foo"))), ""))
         );
     }
 
@@ -65,9 +61,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::option(Some(Expr::option(Some(
-                    Expr::identifier("foo")
-                )))),
+                Expr::option(Some(Expr::option(Some(Expr::identifier("foo"))))),
                 ""
             ))
         );
@@ -95,10 +89,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::option(Some(Expr::literal("foo".to_string()))),
-                ""
-            ))
+            Ok((Expr::option(Some(Expr::literal("foo".to_string()))), ""))
         );
     }
 }

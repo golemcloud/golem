@@ -62,13 +62,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::identifier("bar")
-                ),
-                ""
-            ))
+            Ok((Expr::let_binding("foo", Expr::identifier("bar")), ""))
         );
     }
 
@@ -81,10 +75,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::sequence(vec![
-                        Expr::identifier("bar"),
-                        Expr::identifier("baz")
-                    ])
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
                 ),
                 ""
             ))
@@ -100,10 +91,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::equal_to(
-                        Expr::identifier("bar"),
-                        Expr::identifier("baz")
-                    )
+                    Expr::equal_to(Expr::identifier("bar"), Expr::identifier("baz"))
                 ),
                 ""
             ))
@@ -117,12 +105,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::option(Some(Expr::identifier(
-                        "bar"
-                    )))
-                ),
+                Expr::let_binding("foo", Expr::option(Some(Expr::identifier("bar")))),
                 ""
             ))
         );
@@ -135,12 +118,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::ok(Expr::identifier(
-                        "bar"
-                    ))
-                ),
+                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar"))),
                 ""
             ))
         );
@@ -152,13 +130,7 @@ mod tests {
         let result = let_binding().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::let_binding(
-                    "foo",
-                    Expr::literal("bar")
-                ),
-                ""
-            ))
+            Ok((Expr::let_binding("foo", Expr::literal("bar")), ""))
         );
     }
 
@@ -171,10 +143,7 @@ mod tests {
             Ok((
                 Expr::let_binding(
                     "foo",
-                    Expr::record(vec![(
-                        "bar".to_string(),
-                        Expr::identifier("baz")
-                    )])
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
                 ),
                 ""
             ))
