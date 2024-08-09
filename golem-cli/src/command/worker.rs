@@ -187,7 +187,7 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
 #[command()]
 pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     /// Creates a new idle worker
-    #[command()]
+    #[command(alias="start", alias="create")]
     Add {
         /// The Golem component to use for the worker
         #[command(flatten)]
