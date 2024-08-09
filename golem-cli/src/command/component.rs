@@ -22,7 +22,7 @@ use clap::Subcommand;
 #[command()]
 pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
     /// Creates a new component with a given name by uploading the component WASM
-    #[command()]
+    #[command(alias = "create")]
     Add {
         /// The newly created component's owner project
         #[command(flatten)]

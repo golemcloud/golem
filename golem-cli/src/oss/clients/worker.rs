@@ -125,6 +125,16 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         Ok(())
     }
 
+    async fn resume(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Resuming {worker_urn}");
+
+        let _ = self
+            .client
+            .resume_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .await?;
+        Ok(())
+    }
+
     async fn simulated_crash(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
         info!("Simulating crash of {worker_urn}");
 

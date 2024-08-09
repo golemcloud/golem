@@ -3563,12 +3563,13 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37409e49376d86d7e7911617ae3c4634ff9304fdc9f215eb9f2925067e4a0a31"
+checksum = "59523e7c4989eecddbd0ac114cbd003c9b34122e7aaa4caa44c076834bd1a6aa"
 dependencies = [
  "Inflector",
  "cargo_metadata",
+ "clap 4.5.13",
  "copy_dir",
  "derive_more",
  "dir-diff",
@@ -3731,8 +3732,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=analysis-type-features#4d1c8d6c21a62fd5379151f34300b5bf7b44388e"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f07bc0b7328974d964e47d8d107c53dae814b541643faf5e4c5039253a137205"
 dependencies = [
  "bincode",
  "leb128",
@@ -3750,8 +3752,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/type-annotated-value-json#d74c7f61f594c4472d7b34d3900becca9c7716ec"
+version = "0.0.39"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "724537ba6da8e69b89439a583f26aed72718dc92a2280ee6697f7489a93deaba"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3773,8 +3776,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/type-annotated-value-json#d74c7f61f594c4472d7b34d3900becca9c7716ec"
+version = "0.0.39"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "648daf25b18fe35fb5e824f50f352d8b09465df71f717aef64323e1f60262c12"
 dependencies = [
  "anyhow",
  "cargo-component",
