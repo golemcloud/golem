@@ -43,7 +43,7 @@ async fn write_stdout() {
 
     let mut rx = executor.capture_output(&worker_id).await;
 
-    let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
+    let _result = executor.invoke_and_await(&worker_id, "runn", vec![]).await;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut events = vec![];

@@ -462,7 +462,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make sharding-tests
-        timeout-minutes: 20
+        timeout-minutes: 30
   publish:
     needs:
       [

@@ -165,11 +165,6 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
 
-    let parsed = ParsedFunctionName::parse(&full_function_name)
-        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
-
-    let function = find_function(&mut store, instance, &parsed)?;
-
     if was_live_before {
         store
             .data_mut()
@@ -182,6 +177,11 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         .data_mut()
         .store_worker_status(WorkerStatus::Running)
         .await;
+
+    let parsed = ParsedFunctionName::parse(&full_function_name)
+        .map_err(|err| GolemError::invalid_request(format!("Invalid function name: {}", err)))?;
+
+    let function = find_function(&mut store, instance, &parsed)?;
 
     let context = format!("{worker_id}/{full_function_name}");
     let mut extra_fuel = 0;
