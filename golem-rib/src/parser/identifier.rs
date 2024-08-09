@@ -32,7 +32,7 @@ pub fn identifier<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
                     ))
                 }
             })
-            .map(|s: Vec<char>| Expr::identifier(s.into_iter().collect()))
+            .map(|s: Vec<char>| Expr::identifier(s.collect()))
             .message("Unable to parse identifier"),
     )
 }

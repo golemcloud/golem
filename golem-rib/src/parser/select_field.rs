@@ -71,14 +71,14 @@ mod internal {
     fn build_selector(base: Expr, nest: Expr) -> Option<Expr> {
         // a.b
         match nest {
-            Expr::Identifier(str) => Some(Expr::SelectField(Box::new(base), str)),
-            Expr::SelectField(second, last) => {
+            Expr::Identifier(str, _, _) => Some(Expr::select_field(base, str.as_str())),
+            Expr::SelectField(second, last, _) => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectField(Box::new(inner_select), last))
+                Some(Expr::select_field(inner_select, last.as_str()))
             }
-            Expr::SelectIndex(second, last_index) => {
+            Expr::SelectIndex(second, last_index, _) => {
                 let inner_select = build_selector(base, *second)?;
-                Some(Expr::SelectIndex(Box::new(inner_select), last_index))
+                Some(Expr::select_index(inner_select, last_index))
             }
             _ => None,
         }
@@ -88,7 +88,7 @@ mod internal {
         choice((
             attempt(select_index()),
             attempt(record()),
-            attempt(field_name().map(Expr::Identifier)),
+            attempt(field_name().map(|s| Expr::identifier(s.as_str()))),
         ))
     }
 

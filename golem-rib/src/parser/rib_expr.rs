@@ -49,7 +49,7 @@ pub fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         if expressions.len() == 1 {
             expressions.first().unwrap().clone()
         } else {
-            Expr::Multiple(expressions)
+            Expr::multiple(expressions)
         }
     })
 }

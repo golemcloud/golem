@@ -33,7 +33,7 @@ pub fn flag<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             char_('}').skip(spaces()),
             sep_by(flag_name.skip(spaces()), char_(',').skip(spaces())),
         )
-        .map(Expr::Flags)
+        .map(Expr::flags)
         .message("Unable to parse flag"),
     )
 }

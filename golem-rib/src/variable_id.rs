@@ -4,6 +4,10 @@ use bincode::{Decode, Encode};
 pub struct VariableId(Option<u16>);
 
 impl VariableId {
+    pub fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+
     pub fn init() -> Self {
         VariableId(None)
     }

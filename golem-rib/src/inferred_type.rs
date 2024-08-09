@@ -51,7 +51,7 @@ pub enum InferredType {
 struct TypeErrorMessage(String);
 
 impl InferredType {
-    pub fn unify_types(&self) -> Result<InferredType, String> {
+    pub fn unify_types(&self) -> Result<InferredType, Vec<String>> {
         match self {
             // AllOf types may include AllOf Types and OneOf types within itself
             // Semantic reasoning is possible for  such a type only if group all the one-ofs together
@@ -133,7 +133,7 @@ impl InferredType {
         one_of_types
     }
 
-    fn unify_all_alternative_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
+    fn unify_all_alternative_types(types: &Vec<InferredType>) -> Result<InferredType, Vec<String>> {
         let mut unified_type = InferredType::Unknown;
         for typ in types {
             unified_type.update(typ.unify_with_alternative(&typ)?);
@@ -142,7 +142,7 @@ impl InferredType {
         Ok(unified_type)
     }
 
-    fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
+    fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, Vec<String>> {
         let mut unified_type = InferredType::Unknown;
         for typ in types {
             unified_type.update(typ.unify_with_required(&typ)?);
@@ -157,7 +157,7 @@ impl InferredType {
     // However, if it says
     // OneOf(Record("a" -> AllOf(OneOf(TypeA, TypeB), TypeA), Record("a" -> TypeA))
     // these could be merged, since the types merge to TypeA on both sides
-    fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, String> {
+    fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, Vec<String>> {
         match (self, other) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 if a_fields.len() != b_fields.len() {
@@ -371,7 +371,7 @@ impl InferredType {
 
     // Unify types where both types do matter. Example in reality x can form to be both U64 and U32 in the IR, resulting in AllOf
     // Result of this type hardly becomes OneOf
-    fn unify_with_required(&self, other: &InferredType) -> Result<InferredType, String> {
+    fn unify_with_required(&self, other: &InferredType) -> Result<InferredType, Vec<String>> {
         match (self, other) {
             (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                 let mut fields = HashMap::new();
@@ -387,7 +387,7 @@ impl InferredType {
             }
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                 if a_types.len() != b_types.len() {
-                    return Err("Tuple lengths do not match".to_string());
+                    return Err(vec!["Tuple lengths do not match".to_string()]);
                 }
                 let mut types = Vec::new();
                 for (a_type, b_type) in a_types.iter().zip(b_types) {
@@ -404,7 +404,7 @@ impl InferredType {
                 // in the correct order when invoking worker function with flags. Unifying them has
                 // no guarantee it's in the right order
                 if a_flags != b_flags {
-                    return Err("Flags do not match".to_string());
+                    return Err(vec!["Flags do not match".to_string()]);
                 }
                 Ok(InferredType::Flags(a_flags.clone()))
             }
@@ -416,7 +416,7 @@ impl InferredType {
             // enum strings
             (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                 if a_variants != b_variants {
-                    return Err("Enum variants do not match".to_string());
+                    return Err(vec!["Enum variants do not match".to_string()]);
                 }
                 Ok(InferredType::Enum(a_variants.clone()))
             }
@@ -490,7 +490,7 @@ impl InferredType {
                 },
             ) => {
                 if a_id != b_id || a_mode != b_mode {
-                    return Err("Resource id or mode do not match".to_string());
+                    return Err(vec!["Resource id or mode do not match".to_string()]);
                 }
                 Ok(InferredType::Resource {
                     resource_id: a_id.clone(),
@@ -502,7 +502,7 @@ impl InferredType {
             (InferredType::AllOf(types), InferredType::OneOf(one_of_types)) => {
                 for typ in types {
                     if !one_of_types.contains(&typ) {
-                        return Err("AllOf types are not part of OneOf types".to_string());
+                        return Err(vec!["AllOf types are not part of OneOf types".to_string()]);
                     }
                 }
                 // Once we know the types in the AllOf are part of OneOf, we can simply return the unified all-of
@@ -513,7 +513,7 @@ impl InferredType {
             (InferredType::OneOf(one_of_types), InferredType::AllOf(all_of_types)) => {
                 for required_type in all_of_types {
                     if !one_of_types.contains(&required_type) {
-                        return Err("OneOf types are not part of AllOf types".to_string());
+                        return Err(vec!["OneOf types are not part of AllOf types".to_string()]);
                     }
                 }
                 Self::unify_all_required_types(all_of_types)
@@ -523,7 +523,7 @@ impl InferredType {
                 if types.contains(inferred_type) {
                     Ok(inferred_type.clone())
                 } else {
-                    Err("OneOf types do not match".to_string())
+                    Err(vec!["OneOf types do not match".to_string()])
                 }
             }
 
@@ -531,7 +531,7 @@ impl InferredType {
                 if types.contains(inferred_type) {
                     Ok(inferred_type.clone())
                 } else {
-                    Err("OneOf types do not match".to_string())
+                    Err(vec!["OneOf types do not match".to_string()])
                 }
             }
 
@@ -544,7 +544,7 @@ impl InferredType {
                         inferred_type2.clone(),
                     ]))
                 } else {
-                    Err("Types do not match".to_string())
+                    Err(vec!["Types do not match".to_string()])
                 }
             }
         }
@@ -640,9 +640,12 @@ impl InferredType {
                 true
             }
 
-            (InferredType::Flags(a_flags), InferredType::Flags(b_flags))
-            | (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
-                a_flags == b_flags || a_variants == b_variants
+            (InferredType::Flags(a_flags), InferredType::Flags(b_flags)) => {
+                a_flags == b_flags
+            }
+
+            (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
+                a_variants == b_variants
             }
 
             (InferredType::Option(a_type), InferredType::Option(b_type)) => {

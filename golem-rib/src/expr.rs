@@ -125,7 +125,7 @@ impl Expr {
     }
 
     pub fn literal(value: impl AsRef<str>) -> Self {
-        Expr::Literal(value.to_string(), InferredType::Str)
+        Expr::Literal(value.as_ref().to_string(), InferredType::Str)
     }
 
     pub fn multiple(expressions: Vec<Expr>) -> Self {
@@ -216,7 +216,7 @@ impl Expr {
             | Expr::Literal(_, inferred_type)
             | Expr::Number(_, inferred_type)
             | Expr::Flags(_, inferred_type)
-            | Expr::Identifier(_, _, _)
+            | Expr::Identifier(_, _, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
             | Expr::Multiple(_, inferred_type)
@@ -282,7 +282,7 @@ impl Expr {
                                 // Check if the argument types match
                                 if parameter_types.len() == args.len() {
                                     for (arg, param_type) in args.iter_mut().zip(parameter_types) {
-                                        arg.add_infer_type(param_type.into());
+                                        arg.add_infer_type(param_type.clone().into());
                                         // to handle the scenario of
                                         // let x = 1;
                                         // let y = 2;
@@ -292,7 +292,7 @@ impl Expr {
                                     }
                                     // Update inferred type with the function's return type
                                     *inferred_type = InferredType::Sequence(
-                                        return_types.iter().map(|t| t.into()).collect(),
+                                        return_types.iter().map(|t| t.clone().into()).collect(),
                                     );
                                     // Expr::Call(parsed_fn_name, args, InferredType::Sequence(return_types.iter().map(|t| InferredType::Leaf(t.clone())).collect()));
                                 }
@@ -853,19 +853,19 @@ impl Expr {
         while let Some(expr) = queue.pop_back() {
             match expr {
                 expr @ Expr::Record(vec, inferred_type) => {
-                    queue.extend(vec.iter().map(|(_, expr)| expr));
+                    queue.extend(vec.iter_mut().map(|(_, expr)| expr));
                     if !inferred_type.type_check() {
                         errors.push(format!("{} is inferred to have incompatible types", expr));
                     }
                 }
                 Expr::Tuple(vec, inferred_type) => {
-                    queue.extend(vec.iter());
+                    queue.extend(vec.iter_mut());
                     if !inferred_type.type_check() {
                         errors.push(format!("{} is inferred to have incompatible types", expr));
                     }
                 }
                 Expr::Sequence(vec, inferred_type) => {
-                    queue.extend(vec.iter());
+                    queue.extend(vec.iter_mut());
                     if !inferred_type.type_check() {
                         errors.push(format!("{} is inferred to have incompatible types", expr));
                     }
@@ -907,7 +907,7 @@ impl Expr {
                     }
                 }
                 Expr::Call(_, vec, inferred_type) => {
-                    queue.extend(vec.iter());
+                    queue.extend(vec.iter_mut());
                     if !inferred_type.type_check() {
                         errors.push(format!("{} is inferred to have incompatible types", expr));
                     }
@@ -1423,7 +1423,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     fn from(value: Expr) -> Self {
         let expr = match value {
-            Expr::Let(_, _, expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Let(Box::new(
+            Expr::Let(_, name, expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Let(Box::new(
                 golem_api_grpc::proto::golem::rib::LetExpr {
                     name,
                     expr: Some(Box::new((*expr).into())),
