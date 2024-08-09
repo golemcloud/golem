@@ -233,8 +233,9 @@ impl Expr {
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
     }
+
     // We make sure the let bindings name are properly
-    // binded to the named identifiers
+    // bound to the named identifiers.
     pub fn name_binding(&mut self) {
         let mut latest_identifier_identity = IdentifierVariableIdState::new();
         let mut queue = VecDeque::new();
@@ -260,7 +261,7 @@ impl Expr {
         }
     }
 
-    // At this point we simply update the types to the parameter type expressions and the call expression itself
+    // At this point we simply update the types to the parameter type expressions and the call expression itself.
     pub fn infer_function_types(&mut self, function_type_registry: &FunctionTypeRegistry) {
         let mut queue = VecDeque::new();
         queue.push_back(self);
@@ -305,10 +306,6 @@ impl Expr {
         }
     }
 
-    // selectField, and selectIndex -> specifying what each field is
-    // SelectField(SelectField(Expr::Identifier("request"), "body", InferredType::Unknown), "streetNumber", AnalysedType::U8)
-    // updated to
-    // SelectField(SelectField(Expr::Identifier("request")..., "body", InferredType::Record-having-street-number-which-is-u8), "streetNumber", Analysed)
     pub fn push_types_down(&mut self) {
         let mut queue = VecDeque::new();
         queue.push_back(self);
@@ -634,10 +631,10 @@ impl Expr {
     // Should updating the let binding be before or after pushing down/up the types?
     //
     // Here is an example where `before` works:
-    // let x = { a: 1, b: 2 };
+    // let x = {a: 1, b: 2 };
     // call(Box::Identifier(x))
-    // We update the let binding's expression type to be a record type with a and b fields
-    // Now we have type under let be identified as a record type with each fields' type specified
+    // We update the let binding expression type to be a record type with a and b fields
+    // Now we have type under let be identified as a record type with each fields' type specified,
     // and then we push down the types of that record to a and b.
     //
     // Here is an example where `after` works:
@@ -645,14 +642,14 @@ impl Expr {
     // call({ foo: x, bar: y })
     // Here we identified the expr in call to be a record type with foo and bar fields, with specific types
     // However, we haven't pushed down the types yet, such that x's type is still unknown.
-    // Therefore cannot update the let binding type yet.
+    // Therefore, cannot update the let binding type yet.
     // There we must push down the types first and then update the let binding type
-    // while pushing down the let binding type is a noop
+    // while pushing down the let binding type is a noop,
     // and then we later update the let binding type
 
-    // one answer here would be to pass it twice, i.e, before and after pushing down.
-    // or to avoid double pass, during type inference itself, we can call a push down function.
-    // and then update the let binding types, and then push down all the types altogether
+    // One answer here would be to pass it twice, i.e, before and after pushing down.
+    // Or to avoid double pass, during type inference itself, we can call a push down function.
+    // And then update the let binding types, and then push down all the types altogether
     pub fn update_let_binding_type(&mut self) {
         let mut identifier_lookup = IdentifierTypeState::new();
         let mut queue = VecDeque::new();
@@ -676,11 +673,6 @@ impl Expr {
         }
     }
 
-    // last line
-    // {body : {address: "foo", street_number: streetNumber}}}
-    // Start with leaf nodes and work the way up the tree.
-    // Record("body" -> Record("address" -> "foo": String, "street_number" -> streetNumber: U8))
-    // Record("body" -> Record("address" -> "foo", "street_number" -> streetNumber: U8), AnalysedType::Recpord("body" -> Record("address" -> "String", "street_number" -> streetNumber: U8)))
     pub fn pull_types_up(&mut self) {
         let mut queue = VecDeque::new();
         queue.push_back(self);
@@ -947,7 +939,6 @@ impl Expr {
         }
     }
 
-    // Once type checked we can unify the types without erroring out
     fn unify_types(&mut self) -> Result<(), Vec<String>> {
         let mut queue = VecDeque::new();
         queue.push_back(self);
@@ -1027,10 +1018,8 @@ impl Expr {
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            // Expr::Number(1, AnalysedType::U64)
             | Expr::Number(_, inferred_type)
             | Expr::Flags(_, inferred_type)
-            | Expr::Identifier(_, inferred_type, _)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
             | Expr::Multiple(_, inferred_type)
