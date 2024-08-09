@@ -32,11 +32,23 @@ use crate::service::worker::WorkerService;
 #[derive(clap::Args, Debug, Clone)]
 pub struct OssWorkerNameOrUriArg {
     /// Worker URI. Either URN or URL.
-    #[arg(short = 'W', long, conflicts_with_all(["worker_name", "component", "component_name"]), required = true, value_name = "URI")]
+    #[arg(
+        short = 'W',
+        long,
+        conflicts_with_all(["worker_name", "component", "component_name"]),
+        required = true,
+        value_name = "URI"
+    )]
     worker: Option<WorkerUri>,
 
     /// Component URI. Either URN or URL.
-    #[arg(short = 'C', long, conflicts_with_all(["component_name", "worker"]), required = true, value_name = "URI")]
+    #[arg(
+        short = 'C',
+        long,
+        conflicts_with_all(["component_name", "worker"]),
+        required = true,
+        value_name = "URI"
+    )]
     component: Option<ComponentUri>,
 
     #[arg(short, long, conflicts_with_all(["component", "worker"]), required = true)]
@@ -48,11 +60,13 @@ pub struct OssWorkerNameOrUriArg {
 }
 
 #[derive(clap::Args, Debug, Clone)]
-#[group(required = true, multiple = false)]
+#[group(required = false, multiple = false)]
 pub struct InvokeParameterList {
     /// JSON array representing the parameters to be passed to the function
-    #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), group="param")]
-    json: Option<serde_json::value::Value>,
+    #[arg(
+        short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), group = "param"
+    )]
+    parameters: Option<serde_json::value::Value>,
 
     /// Function parameter in WAVE format
     ///
@@ -397,7 +411,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                         worker_uri,
                         idempotency_key,
                         function,
-                        parameters.json,
+                        parameters.parameters,
                         parameters.wave,
                         project_id,
                     )
@@ -416,7 +430,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                         worker_uri,
                         idempotency_key,
                         function,
-                        parameters.json,
+                        parameters.parameters,
                         parameters.wave,
                         project_id,
                     )
