@@ -359,27 +359,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             None => RetryDecision::Immediate,
         }
     }
-
-    fn calculate_worker_status(
-        retry_config: &RetryConfig,
-        trap_type: &TrapType,
-        previous_tries: u64,
-    ) -> WorkerStatus {
-        match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => WorkerStatus::Interrupted,
-            TrapType::Interrupt(InterruptKind::Suspend) => WorkerStatus::Suspended,
-            TrapType::Interrupt(InterruptKind::Jump) => WorkerStatus::Running,
-            TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
-            TrapType::Exit => WorkerStatus::Exited,
-            TrapType::Error(error) => {
-                if is_worker_error_retriable(retry_config, error, previous_tries) {
-                    WorkerStatus::Retrying
-                } else {
-                    WorkerStatus::Failed
-                }
-            }
-        }
-    }
 }
 
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
@@ -723,28 +702,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        let needs_commit = match trap_type {
-            TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
-            TrapType::Interrupt(InterruptKind::Interrupt) => {
-                Some((OplogEntry::interrupted(), true))
-            }
-            TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
-            TrapType::Exit => Some((OplogEntry::exited(), true)),
-            _ => None,
-        };
-
-        let oplog_idx = if let Some((entry, store)) = needs_commit {
-            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
-
-            if store {
-                Some(oplog_idx)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
         let previous_tries = self.state.trailing_error_count().await;
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
@@ -760,24 +717,50 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             "Recovery decision after {} tries: {:?}",
             previous_tries, decision
         );
+        let (updated_worker_status, oplog_entry, store_result) = match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => (
+                WorkerStatus::Interrupted,
+                Some(OplogEntry::interrupted()),
+                true,
+            ),
+            TrapType::Interrupt(InterruptKind::Suspend) => {
+                (WorkerStatus::Suspended, Some(OplogEntry::suspend()), false)
+            }
+            TrapType::Interrupt(InterruptKind::Jump) => (WorkerStatus::Running, None, false),
+            TrapType::Interrupt(InterruptKind::Restart) => (WorkerStatus::Running, None, false),
+            TrapType::Exit => (WorkerStatus::Exited, Some(OplogEntry::exited()), true),
+            TrapType::Error(WorkerError::InvalidRequest(_)) => (WorkerStatus::Running, None, true),
+            TrapType::Error(error) => {
+                let status = if is_worker_error_retriable(&retry_config, error, previous_tries) {
+                    WorkerStatus::Retrying
+                } else {
+                    WorkerStatus::Failed
+                };
+                (status, Some(OplogEntry::error(error.clone())), true)
+            }
+        };
 
-        let updated_worker_status =
-            Self::calculate_worker_status(&retry_config, trap_type, previous_tries);
+        let oplog_idx = if let Some(entry) = oplog_entry {
+            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
+            Some(oplog_idx)
+        } else {
+            None
+        };
 
         self.store_worker_status(updated_worker_status.clone())
             .await;
 
-        if updated_worker_status != WorkerStatus::Retrying
-            && updated_worker_status != WorkerStatus::Running
-        {
+        if store_result {
             // Giving up, associating the stored result with the current and upcoming invocations
-            if let Some(oplog_idx) = oplog_idx {
-                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                    self.public_state
-                        .worker()
-                        .store_invocation_failure(&idempotency_key, trap_type, oplog_idx)
-                        .await;
-                }
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .worker()
+                    .store_invocation_failure(
+                        &idempotency_key,
+                        trap_type,
+                        oplog_idx.unwrap_or(OplogIndex::NONE),
+                    )
+                    .await;
             }
         }
 
@@ -1112,9 +1095,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 break Err(err);
                                             }
                                         } else {
-                                            let trap_type = TrapType::Error(WorkerError::Unknown(
-                                                format!("Function {full_function_name} not found"),
-                                            ));
+                                            let trap_type = TrapType::Error(
+                                                WorkerError::InvalidRequest(format!(
+                                                    "Function {full_function_name} not found"
+                                                )),
+                                            );
 
                                             let _ = store
                                                 .as_context_mut()
@@ -1129,7 +1114,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     }
                                     Err(err) => {
                                         let trap_type =
-                                            TrapType::Error(WorkerError::Unknown(format!(
+                                            TrapType::Error(WorkerError::InvalidRequest(format!(
                                                 "Function {full_function_name} not found: {err}"
                                             )));
 

@@ -2329,3 +2329,39 @@ async fn invocation_queue_is_persistent() {
 
     check!(result == vec![Value::U64(4)]);
 }
+
+#[tokio::test]
+#[tracing::instrument]
+async fn invoke_with_non_existing_function() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("option-service").await;
+    let worker_id = executor
+        .start_worker(&component_id, "invoke_with_non_existing_function")
+        .await;
+
+    // First we invoke a function that does not exist and expect a failure
+    let failure = executor.invoke_and_await(&worker_id, "WRONG", vec![]).await;
+
+    // Then we invoke an existing function, to prove the worker should not be in failed state
+    let success = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{echo}",
+            vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string(),
+            ))))],
+        )
+        .await;
+
+    drop(executor);
+
+    check!(failure.is_err());
+    check!(
+        success
+            == Ok(vec![Value::Option(Some(Box::new(Value::String(
+                "Hello".to_string()
+            ))))])
+    );
+}
