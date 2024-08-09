@@ -22,7 +22,6 @@ use crate::oss::model::OssContext;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 use golem_common::uri::oss::uri::ResourceUri;
-use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -51,32 +50,8 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
     },
 
     /// Create a new Golem component from built-in examples
-    #[command()]
-    New {
-        /// Name of the example to use
-        #[arg(short, long)]
-        example: ExampleName,
-
-        /// The new component's name
-        #[arg(short, long)]
-        component_name: golem_examples::model::ComponentName,
-
-        /// The package name of the generated component (in namespace:name format)
-        #[arg(short, long)]
-        package_name: Option<PackageName>,
-    },
-
-    /// Lists the built-in examples available for creating new components
-    #[command()]
-    ListExamples {
-        /// The minimum language tier to include in the list
-        #[arg(short, long)]
-        min_tier: Option<GuestLanguageTier>,
-
-        /// Filter examples by a given guest language
-        #[arg(short, long)]
-        language: Option<GuestLanguage>,
-    },
+    #[command(flatten)]
+    Examples(golem_examples::cli::Command),
 
     /// WASM RPC stub generator
     #[cfg(feature = "stubgen")]
