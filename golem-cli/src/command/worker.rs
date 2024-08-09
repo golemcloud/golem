@@ -274,6 +274,13 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         worker_ref: WorkerRef,
     },
 
+    /// Resume an interrupted worker
+    #[command()]
+    Resume {
+        #[command(flatten)]
+        worker_ref: WorkerRef,
+    },
+
     /// Simulates a crash on a worker for testing purposes.
     ///
     /// The worker starts recovering and resuming immediately.
@@ -424,6 +431,11 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service.interrupt(worker_uri, project_id).await
+            }
+            WorkerSubcommand::Resume { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service.resume(worker_uri, project_id).await
             }
             WorkerSubcommand::SimulatedCrash { worker_ref } => {
                 let (worker_uri, project_ref) = worker_ref.split();
