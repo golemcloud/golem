@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
+use golem_wasm_rpc::protobuf::{TypedHandle, TypedResult};
 
 
 // The reason to replicate analysed_type types
@@ -38,8 +39,8 @@ pub enum InferredType {
     },
     Variant(Vec<(String, Option<InferredType>)>),
     Resource {
-        id: AnalysedResourceId,
-        resource_mode: AnalysedResourceMode,
+        resource_id: u64,
+        resource_mode: i32,
     },
     OneOf(Vec<InferredType>), // literalOneOf 1 --> u32 or u8?
     AllOf(Vec<InferredType>),
@@ -300,9 +301,9 @@ impl InferredType {
 
             // We shouldn't get into a situation where we have OneOf 2 different resource handles.
             // The only possibility of unification there is only if they match exact
-            (InferredType::Resource { id: a_id, resource_mode: a_mode }, InferredType::Resource { id: b_id, resource_mode: b_mode }) => {
+            (InferredType::Resource { resource_id: a_id, resource_mode: a_mode }, InferredType::Resource { resource_id: b_id, resource_mode: b_mode }) => {
                 if a_id == b_id && a_mode == b_mode {
-                    Ok(InferredType::Resource { id: a_id.clone(), resource_mode: a_mode.clone() })
+                    Ok(InferredType::Resource { resource_id: a_id.clone(), resource_mode: a_mode.clone() })
                 } else {
                     Err("Resource id or mode do not match".to_string())
                 }
@@ -426,11 +427,11 @@ impl InferredType {
                 }
                 Ok(InferredType::Variant(variants.iter().map(|(n, t)| (n.clone(), t.clone().map(|v| *v))).collect()))
             }
-            (InferredType::Resource { id: a_id, resource_mode: a_mode }, InferredType::Resource { id: b_id, resource_mode: b_mode }) => {
+            (InferredType::Resource { resource_id: a_id, resource_mode: a_mode }, InferredType::Resource { resource_id: b_id, resource_mode: b_mode }) => {
                 if a_id != b_id || a_mode != b_mode {
                     return Err("Resource id or mode do not match".to_string());
                 }
-                Ok(InferredType::Resource { id: a_id.clone(), resource_mode: a_mode.clone() })
+                Ok(InferredType::Resource { resource_id: a_id.clone(), resource_mode: a_mode.clone() })
             }
 
 
@@ -612,7 +613,7 @@ impl InferredType {
                 true
             }
 
-            (InferredType::Resource { id: a_id, resource_mode: a_mode }, InferredType::Resource { id: b_id, resource_mode: b_mode }) => {
+            (InferredType::Resource { resource_id: a_id, resource_mode: a_mode }, InferredType::Resource { resource_id: b_id, resource_mode: b_mode }) => {
                 a_id == b_id && a_mode == b_mode
             }
 
@@ -726,19 +727,19 @@ impl InferredType {
 impl From<AnalysedType> for InferredType {
     fn from(analysed_type: AnalysedType) -> Self {
         match analysed_type {
-            AnalysedType::Bool => InferredType::Bool,
-            AnalysedType::S8 => InferredType::S8,
-            AnalysedType::U8 => InferredType::U8,
-            AnalysedType::S16 => InferredType::S16,
-            AnalysedType::U16 => InferredType::U16,
-            AnalysedType::S32 => InferredType::S32,
-            AnalysedType::U32 => InferredType::U32,
-            AnalysedType::S64 => InferredType::S64,
-            AnalysedType::U64 => InferredType::U64,
-            AnalysedType::F32 => InferredType::F32,
-            AnalysedType::F64 => InferredType::F64,
-            AnalysedType::Chr => InferredType::Chr,
-            AnalysedType::Str => InferredType::Str,
+            AnalysedType::Bool(_) => InferredType::Bool,
+            AnalysedType::S8(_) => InferredType::S8,
+            AnalysedType::U8(_) => InferredType::U8,
+            AnalysedType::S16(_) => InferredType::S16,
+            AnalysedType::U16(_) => InferredType::U16,
+            AnalysedType::S32(_) => InferredType::S32,
+            AnalysedType::U32(_) => InferredType::U32,
+            AnalysedType::S64(_) => InferredType::S64,
+            AnalysedType::U64(_) => InferredType::U64,
+            AnalysedType::F32(_) => InferredType::F32,
+            AnalysedType::F64(_) => InferredType::F64,
+            AnalysedType::Chr(_) => InferredType::Chr,
+            AnalysedType::Str(_) => InferredType::Str,
             AnalysedType::List(t) => InferredType::List(Box::new(t.into())),
             AnalysedType::Tuple(ts) => {
                 InferredType::Tuple(ts.into_iter().map(|t| t.into()).collect())
@@ -749,7 +750,7 @@ impl From<AnalysedType> for InferredType {
             AnalysedType::Flags(vs) => InferredType::Flags(vs),
             AnalysedType::Enum(vs) => InferredType::Enum(vs),
             AnalysedType::Option(t) => InferredType::Option(Box::new(t.into())),
-            AnalysedType::Result { ok, error } => InferredType::Result {
+            AnalysedType::Result(TypedResult {ok, error, ..}) => InferredType::Result {
                 ok: ok.map(|t| Box::new(t.into())),
                 error: error.map(|t| Box::new(t.into())),
             },
@@ -758,8 +759,16 @@ impl From<AnalysedType> for InferredType {
                     .map(|(n, t)| (n, t.map(|t| t.into())))
                     .collect(),
             ),
-            AnalysedType::Resource { id, resource_mode } => {
-                InferredType::Resource { id, resource_mode }
+            AnalysedType::Handle(TypedHandle { typ, .. } ) => {
+                match typ {
+                    Some(type_handle) => {
+                        InferredType::Resource {
+                            resource_id: type_handle.resource_id,
+                            resource_mode: type_handle.mode,
+                        }
+                    }
+                    None => InferredType::Unknown
+                }
             }
         }
     }
