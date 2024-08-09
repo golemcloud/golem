@@ -77,8 +77,7 @@ mod internal {
                 } else {
                     Ok(number.value as usize)
                 }
-
-            },
+            }
             _ => Err(easy::Error::message_static_message(
                 "Cannot use a float number to index",
             )),
@@ -102,10 +101,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_index(Expr::identifier("foo"), 0),
-                ""
-            ))
+            Ok((Expr::select_index(Expr::identifier("foo"), 0), ""))
         );
     }
 
@@ -116,13 +112,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::select_index(
-                    Expr::select_index(
-                        Expr::identifier("foo"),
-                        0
-                    ),
-                    1
-                ),
+                Expr::select_index(Expr::select_index(Expr::identifier("foo"), 0), 1),
                 ""
             ))
         );

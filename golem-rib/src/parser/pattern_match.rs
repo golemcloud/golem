@@ -295,7 +295,7 @@ mod tests {
                             Box::new(Expr::identifier("x"))
                         )),
                         MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::error(Expr::identifier("x")))),
+                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("x")))),
                             Box::new(Expr::identifier("x"))
                         )),
                         MatchArm((

@@ -50,10 +50,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::sequence(vec![Expr::identifier("foo")]),
-                ""
-            ))
+            Ok((Expr::sequence(vec![Expr::identifier("foo")]), ""))
         );
     }
 
@@ -64,10 +61,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::sequence(vec![
-                    Expr::identifier("foo"),
-                    Expr::identifier("bar")
-                ]),
+                Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
                 ""
             ))
         );
@@ -96,10 +90,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::sequence(vec![
-                    Expr::literal("foo"),
-                    Expr::literal("bar")
-                ]),
+                Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")]),
                 ""
             ))
         );
@@ -113,14 +104,8 @@ mod tests {
             result,
             Ok((
                 Expr::sequence(vec![
-                    Expr::sequence(vec![
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar")
-                    ]),
-                    Expr::sequence(vec![
-                        Expr::identifier("bar"),
-                        Expr::identifier("bar")
-                    ])
+                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("bar")])
                 ]),
                 ""
             ))
@@ -197,14 +182,8 @@ mod tests {
             result,
             Ok((
                 Expr::sequence(vec![
-                    Expr::tuple(vec![
-                        Expr::identifier("foo"),
-                        Expr::identifier("bar")
-                    ]),
-                    Expr::tuple(vec![
-                        Expr::identifier("baz"),
-                        Expr::identifier("qux")
-                    ])
+                    Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::tuple(vec![Expr::identifier("baz"), Expr::identifier("qux")])
                 ]),
                 ""
             ))

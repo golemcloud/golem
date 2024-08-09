@@ -31,7 +31,7 @@ pub fn tuple<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             char(')'),
             sep_by(rib_expr(), char(',').skip(spaces())),
         )
-        .map(Expr::Tuple),
+        .map(Expr::tuple),
     )
 }
 
@@ -44,17 +44,14 @@ mod tests {
     fn test_empty_tuple() {
         let input = "()";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Tuple(vec![]), "")));
+        assert_eq!(result, Ok((Expr::tuple(vec![]), "")));
     }
 
     #[test]
     fn test_singleton_tuple() {
         let input = "(foo)";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((Expr::Tuple(vec![Expr::Identifier("foo".to_string())]), ""))
-        );
+        assert_eq!(result, Ok((Expr::tuple(vec![Expr::identifier("foo")]), "")));
     }
 
     #[test]
@@ -64,10 +61,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Identifier("foo".to_string()),
-                    Expr::Identifier("bar".to_string())
-                ]),
+                Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
                 ""
             ))
         );
@@ -80,15 +74,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Sequence(vec![
-                        Expr::Identifier("foo".to_string()),
-                        Expr::Identifier("bar".to_string())
-                    ]),
-                    Expr::Sequence(vec![
-                        Expr::Identifier("baz".to_string()),
-                        Expr::Identifier("qux".to_string())
-                    ])
+                Expr::tuple(vec![
+                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::sequence(vec![Expr::identifier("baz"), Expr::identifier("qux")])
                 ]),
                 ""
             ))
@@ -102,15 +90,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Record(vec![(
-                        "foo".to_string(),
-                        Box::new(Expr::Identifier("bar".to_string()))
-                    )]),
-                    Expr::Record(vec![(
-                        "baz".to_string(),
-                        Box::new(Expr::Identifier("qux".to_string()))
-                    )])
+                Expr::tuple(vec![
+                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
+                    Expr::record(vec![("baz".to_string(), Expr::identifier("qux"))])
                 ]),
                 ""
             ))
@@ -124,10 +106,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Literal("foo".to_string()),
-                    Expr::Literal("bar".to_string())
-                ]),
+                Expr::tuple(vec![Expr::literal("foo"), Expr::literal("bar")]),
                 ""
             ))
         );
@@ -140,15 +119,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Tuple(vec![
-                        Expr::Identifier("foo".to_string()),
-                        Expr::Identifier("bar".to_string())
-                    ]),
-                    Expr::Tuple(vec![
-                        Expr::Identifier("baz".to_string()),
-                        Expr::Identifier("qux".to_string())
-                    ])
+                Expr::tuple(vec![
+                    Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::tuple(vec![Expr::identifier("baz"), Expr::identifier("qux")])
                 ]),
                 ""
             ))
@@ -162,9 +135,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Result(Ok(Box::new(Expr::Identifier("foo".to_string())))),
-                    Expr::Result(Err(Box::new(Expr::Identifier("bar".to_string()))))
+                Expr::tuple(vec![
+                    Expr::ok(Expr::identifier("foo")),
+                    Expr::err(Expr::identifier("bar"))
                 ]),
                 ""
             ))
@@ -178,9 +151,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Option(Some(Box::new(Expr::Identifier("foo".to_string())))),
-                    Expr::Option(None)
+                Expr::tuple(vec![
+                    Expr::option(Some(Expr::identifier("foo"))),
+                    Expr::option(None)
                 ]),
                 ""
             ))
@@ -194,16 +167,16 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Tuple(vec![
-                    Expr::Cond(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        Box::new(Expr::Identifier("bar".to_string())),
-                        Box::new(Expr::Identifier("baz".to_string()))
+                Expr::tuple(vec![
+                    Expr::cond(
+                        Expr::identifier("foo"),
+                        Expr::identifier("bar"),
+                        Expr::identifier("baz")
                     ),
-                    Expr::Cond(
-                        Box::new(Expr::Identifier("qux".to_string())),
-                        Box::new(Expr::Identifier("quux".to_string())),
-                        Box::new(Expr::Identifier("quuz".to_string()))
+                    Expr::cond(
+                        Expr::identifier("qux"),
+                        Expr::identifier("quux"),
+                        Expr::identifier("quuz")
                     )
                 ]),
                 ""

@@ -95,7 +95,7 @@ impl Expr {
         Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
-    pub fn error(expr: Expr) -> Self {
+    pub fn err(expr: Expr) -> Self {
         let inferred_type = expr.inferred_type();
         Expr::Result(
             Err(Box::new(expr)),
@@ -141,6 +141,14 @@ impl Expr {
 
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal(value.to_string(), InferredType::Str)
+    }
+
+    pub fn multiple(expressions: Vec<Expr>) -> Self {
+        let inferred_type = expressions
+            .last()
+            .map_or(InferredType::Unknown, |e| e.inferred_type());
+
+        Expr::Multiple(expressions, inferred_type)
     }
 
     pub fn not(expr: Expr) -> Self {
