@@ -20,7 +20,7 @@ pub enum RegistryKey {
     },
 }
 
-#[derive(Hash, PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum RegistryValue {
     Value(AnalysedType),
     Function {

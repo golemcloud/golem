@@ -16,7 +16,7 @@ use crate::expr::internal::{IdentifierTypeState, IdentifierVariableIdState};
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
 use crate::type_registry::{FunctionTypeRegistry, RegistryKey, RegistryValue};
-use crate::{text, InferredType};
+use crate::{text, InferredType, VariableId};
 use bincode::{Decode, Encode};
 use combine::EasyParser;
 use serde::{Deserialize, Serialize, Serializer};
@@ -27,24 +27,9 @@ use std::ops::Deref;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
-struct VariableId(Option<u16>);
-
-impl VariableId {
-    pub fn init() -> Self {
-        VariableId(None)
-    }
-    pub fn increment(&mut self) -> VariableId {
-        let new_variable_id = self.0.map_or(Some(0), |x| Some(x + 1));
-        self.0 = new_variable_id;
-        VariableId(new_variable_id)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
-    // Let(Option<variable-id>)
     Let(VariableId, String, Box<Expr>, InferredType),
-    SelectField(Box<Expr>, String, InferredType), // SelectField(SelectField(Expr::Identifier("request"), "body", InferredType::Record), "streetNumber", U8)
+    SelectField(Box<Expr>, String, InferredType),
     SelectIndex(Box<Expr>, usize, InferredType),
     Sequence(Vec<Expr>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
