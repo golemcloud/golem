@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
+use golem_wasm_ast::analysis::{AnalysedType};
 use golem_wasm_rpc::protobuf::{TypedHandle, TypedResult};
 
 // The reason to replicate analysed_type types
 // in inferred_type can be explained with an example.
-// During  type_pull_down stage
+// During the type_pull_down stage
 // we are yet unsure of a specific AnalysedType (it can be AllOf(...))
 // yet for a specific field
 // type, and yet be able to say that the root node is of the type record
-// with the field name, and tag their types as InferredTypes
+// with the field name, and tag their types as InferredTypes.
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum InferredType {
     Bool,
