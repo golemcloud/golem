@@ -22,6 +22,7 @@ use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
+use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
 use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
@@ -54,20 +55,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
     let ctx = &OssContext::EMPTY;
 
-    let version_check = factory.version_service(ctx)?.check().await;
-
-    if let Err(err) = version_check {
-        if cmd.verbosity.log_level() == Some(log::Level::Warn)
-            || cmd.verbosity.log_level() == Some(log::Level::Info)
-            || cmd.verbosity.log_level() == Some(log::Level::Debug)
-            || cmd.verbosity.log_level() == Some(log::Level::Trace)
-        {
-            eprintln!("{}", err.0.yellow())
-        }
-    }
-
     let res = match cmd.command {
         OssCommand::Component { subcommand } => {
+            check_version(&factory, &cmd.verbosity).await?;
+
             subcommand
                 .handle(
                     factory.component_service(ctx)?.as_ref(),
@@ -76,6 +67,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
         }
         OssCommand::Worker { subcommand } => {
+            check_version(&factory, &cmd.verbosity).await?;
+
             subcommand
                 .handle(
                     format,
@@ -99,6 +92,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         #[cfg(feature = "stubgen")]
         OssCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
         OssCommand::ApiDefinition { subcommand } => {
+            check_version(&factory, &cmd.verbosity).await?;
+
             subcommand
                 .handle(
                     factory.api_definition_service(ctx)?.as_ref(),
@@ -107,6 +102,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
         }
         OssCommand::ApiDeployment { subcommand } => {
+            check_version(&factory, &cmd.verbosity).await?;
+
             subcommand
                 .handle(
                     factory.api_deployment_service(ctx)?.as_ref(),
@@ -124,7 +121,11 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
                 .map(|_| GolemResult::Str("Profile created".to_string()))
         }
-        OssCommand::Get { uri } => get_resource_by_uri(uri, &factory).await,
+        OssCommand::Get { uri } => {
+            check_version(&factory, &cmd.verbosity).await?;
+
+            get_resource_by_uri(uri, &factory).await
+        }
     };
 
     match res {
@@ -134,6 +135,27 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }
         Err(err) => Err(Box::new(err)),
     }
+}
+
+async fn check_version(
+    factory: &OssServiceFactory,
+    verbosity: &Verbosity,
+) -> Result<(), GolemError> {
+    let ctx = &OssContext::EMPTY;
+
+    let version_check = factory.version_service(ctx)?.check().await;
+
+    if let Err(err) = version_check {
+        if verbosity.log_level() == Some(log::Level::Warn)
+            || verbosity.log_level() == Some(log::Level::Info)
+            || verbosity.log_level() == Some(log::Level::Debug)
+            || verbosity.log_level() == Some(log::Level::Trace)
+        {
+            eprintln!("{}", err.0.yellow())
+        }
+    }
+
+    Ok(())
 }
 
 async fn get_resource_by_urn(

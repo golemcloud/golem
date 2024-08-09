@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::api_definition::ApiDefinitionSubcommand;
+use crate::command::api_deployment::ApiDeploymentSubcommand;
+use crate::command::component::ComponentSubCommand;
 use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
+use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
 use crate::examples;
-use crate::model::{Format, GolemError, GolemResult};
+use crate::model::{ComponentUriArg, Format, GolemError, GolemResult};
+use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
+use golem_common::uri::oss::uri::ResourceUri;
 use indoc::formatdoc;
 use inquire::{Confirm, CustomType, Select};
 use serde::{Deserialize, Serialize};
@@ -54,6 +60,43 @@ pub enum InitCommand<ProfileAdd: clap::Args> {
     Stubgen {
         #[command(subcommand)]
         subcommand: golem_wasm_rpc_stubgen::Command,
+    },
+
+    /// Upload and manage Golem components
+    #[command()]
+    Component {
+        #[command(subcommand)]
+        subcommand: ComponentSubCommand<OssContext, ComponentUriArg>,
+    },
+
+    /// Manage Golem workers
+    #[command()]
+    Worker {
+        #[command(subcommand)]
+        subcommand: WorkerSubcommand<ComponentUriArg, OssWorkerUriArg>,
+    },
+
+    /// Get resource by URI
+    ///
+    /// Use resource URN or URL to get resource metadata.
+    #[command()]
+    Get {
+        #[arg(value_name = "URI")]
+        uri: ResourceUri,
+    },
+
+    /// Manage Golem api definitions
+    #[command()]
+    ApiDefinition {
+        #[command(subcommand)]
+        subcommand: ApiDefinitionSubcommand<OssContext>,
+    },
+
+    /// Manage Golem api deployments
+    #[command()]
+    ApiDeployment {
+        #[command(subcommand)]
+        subcommand: ApiDeploymentSubcommand<OssContext>,
     },
 }
 
@@ -134,6 +177,9 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }) => examples::process_list_examples(min_tier, language),
         #[cfg(feature = "stubgen")]
         InitCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
+        _ => Err(GolemError(
+            "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
+        )),
     };
 
     match res {
@@ -173,15 +219,25 @@ fn validate_profile_override(
 
 #[derive(Debug, Clone, Copy, EnumIter)]
 enum ProfileType {
-    Golem,
-    GolemCloud,
+    OssDefaultCompose,
+    OssCustom,
+    Cloud,
 }
 
 impl Display for ProfileType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProfileType::Golem => write!(f, "{}. For stand-alone installations", "Golem".bold()),
-            ProfileType::GolemCloud => write!(
+            ProfileType::OssDefaultCompose => write!(
+                f,
+                "{}. For default docker compose configuration",
+                "Golem Default".bold()
+            ),
+            ProfileType::OssCustom => write!(
+                f,
+                "{}. For stand-alone installations with custom configuration",
+                "Golem".bold()
+            ),
+            ProfileType::Cloud => write!(
                 f,
                 "{}. To use cloud version provided by https://golem.cloud/",
                 "Golem Cloud".bold()
@@ -192,6 +248,13 @@ impl Display for ProfileType {
 
 fn select_type() -> Result<ProfileType, GolemError> {
     let options = ProfileType::iter().collect::<Vec<_>>();
+    Select::new("Select profile type:", options)
+        .prompt()
+        .map_err(|err| GolemError(format!("Unexpected error: {err}")))
+}
+
+fn select_oss_type() -> Result<ProfileType, GolemError> {
+    let options = vec![ProfileType::OssDefaultCompose, ProfileType::OssCustom];
     Select::new("Select profile type:", options)
         .prompt()
         .map_err(|err| GolemError(format!("Unexpected error: {err}")))
@@ -309,7 +372,9 @@ async fn ask_auth_cloud() -> Result<bool, GolemError> {
 
 fn ask_for_component_url() -> Result<Url, GolemError> {
     CustomType::<Url>::new("Component service URL:")
-        .with_error_message("Please type a valid URL. For instance: http://localhost:9876")
+        .with_error_message(&format!(
+            "Please type a valid URL. For instance: {DEFAULT_OSS_URL}"
+        ))
         .prompt()
         .map_err(|err| GolemError(format!("Unexpected error: {err}")))
 }
@@ -346,7 +411,7 @@ fn ask_for_worker_url() -> Result<Option<Url>, GolemError> {
         .map_err(|err| GolemError(format!("Unexpected error: {err}")))
 }
 
-fn make_oss_profile() -> Result<Profile, GolemError> {
+fn make_oss_custom_profile() -> Result<Profile, GolemError> {
     let url = ask_for_component_url()?;
     let worker_url = ask_for_worker_url()?;
 
@@ -372,6 +437,21 @@ fn make_oss_profile() -> Result<Profile, GolemError> {
     }))
 }
 
+pub const DEFAULT_OSS_URL: &str = "http://localhost:9881";
+
+fn make_oss_default_profile() -> Result<Profile, GolemError> {
+    let url = Url::parse(DEFAULT_OSS_URL).unwrap();
+
+    let config = make_profile_config()?;
+
+    Ok(Profile::Golem(OssProfile {
+        url,
+        worker_url: None,
+        allow_insecure: false,
+        config,
+    }))
+}
+
 pub struct InitResult {
     pub profile_name: ProfileName,
     pub auth_required: bool,
@@ -385,20 +465,21 @@ pub async fn init_profile(
     validate_profile_override(&profile_name, config_dir)?;
     let typ = match cli_kind {
         CliKind::Universal => select_type()?,
-        CliKind::Golem => ProfileType::Golem,
-        CliKind::Cloud => ProfileType::GolemCloud,
+        CliKind::Golem => select_oss_type()?,
+        CliKind::Cloud => ProfileType::Cloud,
     };
 
     let profile = match typ {
-        ProfileType::Golem => make_oss_profile()?,
-        ProfileType::GolemCloud => make_cloud_profile()?,
+        ProfileType::OssDefaultCompose => make_oss_default_profile()?,
+        ProfileType::OssCustom => make_oss_custom_profile()?,
+        ProfileType::Cloud => make_cloud_profile()?,
     };
 
     Config::set_profile(profile_name.clone(), profile, config_dir)?;
 
     set_active_profile(cli_kind, &profile_name, config_dir)?;
 
-    let auth_required = if let ProfileType::GolemCloud = typ {
+    let auth_required = if let ProfileType::Cloud = typ {
         ask_auth_cloud().await?
     } else {
         false
