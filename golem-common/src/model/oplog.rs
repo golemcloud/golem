@@ -654,6 +654,7 @@ pub enum WrappedFunctionType {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WorkerError {
     Unknown(String),
+    InvalidRequest(String),
     StackOverflow,
     OutOfMemory,
 }
@@ -662,6 +663,7 @@ impl Display for WorkerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             WorkerError::Unknown(message) => write!(f, "{}", message),
+            WorkerError::InvalidRequest(message) => write!(f, "{}", message),
             WorkerError::StackOverflow => write!(f, "Stack overflow"),
             WorkerError::OutOfMemory => write!(f, "Out of memory"),
         }

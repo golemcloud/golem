@@ -1428,7 +1428,7 @@ impl RunningWorker {
                                                             .data_mut()
                                                             .on_invocation_failure(
                                                                 &TrapType::Error(
-                                                                    WorkerError::Unknown(
+                                                                    WorkerError::InvalidRequest(
                                                                         "Function not found"
                                                                             .to_string(),
                                                                     ),
@@ -2184,6 +2184,7 @@ pub fn is_worker_error_retriable(
 ) -> bool {
     match error {
         WorkerError::Unknown(_) => retry_count < (retry_config.max_attempts as u64),
+        WorkerError::InvalidRequest(_) => false,
         WorkerError::StackOverflow => false,
         WorkerError::OutOfMemory => true,
     }
