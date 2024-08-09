@@ -80,6 +80,10 @@ impl Expr {
         Expr::Call(parsed_fn_name, args, InferredType::Unknown)
     }
 
+    pub fn concat(expressions: Vec<Expr>) -> Self {
+        Expr::Concat(expressions, InferredType::Str)
+    }
+
     pub fn cond(cond: Expr, then: Expr, else_: Expr) -> Self {
         Expr::Cond(Box::new(cond), Box::new(then), Box::new(else_), InferredType::Unknown)
     }
@@ -112,6 +116,34 @@ impl Expr {
         Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
+    pub fn let_binding(name: &str, expr: Expr) -> Self {
+        Expr::Let(VariableId::init(), name.to_string(), Box::new(expr), InferredType::Unknown)
+    }
+
+    pub fn literal(value: impl AsRef<str>) -> Self {
+        Expr::Literal(value.to_string(), InferredType::Str)
+    }
+
+    pub fn not(expr: Expr) -> Self {
+        Expr::Not(Box::new(expr), InferredType::Bool)
+    }
+
+    pub fn ok(expr: Expr) -> Self {
+        Expr::Result(Ok(Box::new(expr)), InferredType::Result {
+            ok: Some(Box::new(InferredType::Unknown)),
+            error: Some(Box::new(InferredType::Unknown)),
+        })
+    }
+
+    pub fn option(expr: Option<Expr>) -> Self {
+        let inferred_type = match &expr {
+            Some(expr) => expr.inferred_type(),
+            None => InferredType::Unknown,
+        };
+
+        Expr::Option(expr.map(Box::new), InferredType::Option(Box::new(inferred_type)))
+    }
+
     pub fn record(expressions: Vec<(String, Expr)>) -> Self {
         Expr::Record(
             expressions
@@ -121,6 +153,7 @@ impl Expr {
             InferredType::Unknown,
         )
     }
+
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
         Expr::Tuple(expressions, InferredType::Unknown)

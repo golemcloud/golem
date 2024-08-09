@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_common::exports::Export;
-use golem_service_base::model::{ComponentMetadata};
+use golem_wasm_ast::analysis::AnalysedExport;
 
 // A type registry is a mapping from a function-name (global or that can be part of an interface in wit)
 // to the registry value which represents the type of the name.
@@ -38,16 +37,14 @@ pub struct  FunctionTypeRegistry {
 
 impl FunctionTypeRegistry {
 
-    pub fn analyse(component_metadata: &ComponentMetadata) -> Self {
-        let exports = &component_metadata.exports;
-
+    pub fn analyse(exports: &Vec<AnalysedExport>) -> Self {
         let mut map = HashMap::new();
 
         let mut types = HashSet::new();
 
         for export in exports {
             match export {
-                Export::Instance(ty) => {
+                AnalysedExport::Instance(ty) => {
                     let interface_name = &ty.name;
                     for fun in ty.functions {
                         let function_name = fun.name;
@@ -77,7 +74,7 @@ impl FunctionTypeRegistry {
                         map.entry(registry_key).or_insert_with(Vec::new).push(registry_value);
                     }
                 }
-                Export::Function(fun0) => {
+                AnalysedExport::Function(fun0) => {
                     let fun = fun0.clone();
                     let function_name = fun.name;
                     let parameter_types = fun.parameters.into_iter().map(|parameter| {
