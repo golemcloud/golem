@@ -191,12 +191,25 @@ impl Expr {
         )
     }
 
+    pub fn select_field(expr: Expr, field: &str) -> Self {
+        Expr::SelectField(Box::new(expr), field.to_string(), InferredType::Unknown)
+    }
+
+    pub fn select_index(expr: Expr, index: usize) -> Self {
+        Expr::SelectIndex(Box::new(expr), index, InferredType::Unknown)
+    }
+
     pub fn tuple(expressions: Vec<Expr>) -> Self {
         Expr::Tuple(expressions, InferredType::Unknown)
     }
 
     pub fn sequence(expressions: Vec<Expr>) -> Self {
-        Expr::Sequence(expressions, InferredType::Unknown)
+        let inferred_type = if expressions.is_empty() {
+            InferredType::Unknown
+        } else {
+            InferredType::List(Box::new(expressions.first().unwrap().inferred_type()))
+        };
+        Expr::Sequence(expressions, inferred_type)
     }
 
     pub fn inferred_type(&self) -> InferredType {
