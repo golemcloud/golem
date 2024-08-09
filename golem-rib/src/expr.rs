@@ -158,12 +158,19 @@ impl Expr {
     }
 
     pub fn record(expressions: Vec<(String, Expr)>) -> Self {
+        let inferred_type = InferredType::Record(
+            expressions
+                .iter()
+                .map(|(field_name, expr)| (field_name.to_string(), expr.inferred_type()))
+                .collect(),
+        );
+
         Expr::Record(
             expressions
                 .into_iter()
                 .map(|(field_name, expr)| (field_name, Box::new(expr)))
                 .collect(),
-            InferredType::Unknown,
+            inferred_type
         )
     }
 
