@@ -15,13 +15,18 @@
 use std::time::Duration;
 
 use crate::clients::worker::WorkerClient;
+use crate::model::{
+    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    WorkersMetadataResponse,
+};
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
+use golem_client::api::WorkerError;
 use golem_client::model::{
     InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest, WorkerCreationRequest,
     WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
-use golem_client::Context;
+use golem_client::{Context, Error};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use native_tls::TlsConnector;
 use serde::Deserialize;
@@ -30,11 +35,6 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 use tracing::{debug, info};
-
-use crate::model::{
-    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
-    WorkersMetadataResponse,
-};
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_client::api::WorkerClient + Sync + Send> {
@@ -265,16 +265,11 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .await
             .map_err(|e| match e {
                 tungstenite::error::Error::Http(http_error_response) => {
+                    let status = http_error_response.status().as_u16();
+
                     match http_error_response.body().clone() {
-                        Some(body) => GolemError(format!(
-                            "Failed Websocket. Http error: {}, {}",
-                            http_error_response.status(),
-                            String::from_utf8_lossy(&body)
-                        )),
-                        None => GolemError(format!(
-                            "Failed Websocket. Http error: {}",
-                            http_error_response.status()
-                        )),
+                        Some(body) => get_worker_golem_error(status, body),
+                        None => GolemError(format!("Failed Websocket. Http error: {}", status)),
                     }
                 }
                 _ => GolemError(format!("Failed Websocket. Error: {}", e)),
@@ -428,4 +423,17 @@ struct Log {
     pub level: i32,
     pub context: String,
     pub message: String,
+}
+
+fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {
+    let error: Result<Error<WorkerError>, serde_json::Error> = match status {
+        400 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error400(body))),
+        401 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error401(body))),
+        403 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error403(body))),
+        404 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error404(body))),
+        409 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error409(body))),
+        500 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error500(body))),
+        _ => Ok(Error::unexpected(status, body.into())),
+    };
+    error.unwrap_or_else(Error::from).into()
 }
