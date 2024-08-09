@@ -736,7 +736,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 } else {
                     WorkerStatus::Failed
                 };
-                (status, Some(OplogEntry::error(error.clone())), true)
+                let store_error = status == WorkerStatus::Failed;
+                (status, Some(OplogEntry::error(error.clone())), store_error)
             }
         };
 
