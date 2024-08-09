@@ -92,6 +92,14 @@ impl Expr {
         Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
+    pub fn error(expr: Expr) -> Self {
+        let inferred_type = expr.inferred_type();
+        Expr::Result(Err(Box::new(expr)), InferredType::Result {
+            ok: Some(Box::new(InferredType::Unknown)),
+            error: Some(Box::new(inferred_type)),
+        })
+    }
+
     pub fn flags(flags: Vec<String>) -> Self {
         Expr::Flags(flags, InferredType::Unknown)
     }
@@ -129,8 +137,9 @@ impl Expr {
     }
 
     pub fn ok(expr: Expr) -> Self {
+        let inferred_type = expr.inferred_type();
         Expr::Result(Ok(Box::new(expr)), InferredType::Result {
-            ok: Some(Box::new(InferredType::Unknown)),
+            ok: Some(Box::new(inferred_type)),
             error: Some(Box::new(InferredType::Unknown)),
         })
     }
@@ -142,6 +151,10 @@ impl Expr {
         };
 
         Expr::Option(expr.map(Box::new), InferredType::Option(Box::new(inferred_type)))
+    }
+
+    pub fn pattern_match(expr: Expr, match_arms: Vec<MatchArm>) -> Self {
+        Expr::PatternMatch(Box::new(expr), match_arms, InferredType::Unknown)
     }
 
     pub fn record(expressions: Vec<(String, Expr)>) -> Self {
