@@ -874,7 +874,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                 self.update_worker_status(move |status| {
                     status.owned_resources.remove(&id);
                 })
-                    .await;
+                .await;
             }
         }
         result
