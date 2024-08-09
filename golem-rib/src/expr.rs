@@ -1234,7 +1234,7 @@ impl Expr {
     pub fn number(f64: f64) -> Expr {
         Expr::Number(
             Number { value: f64 },
-            InferredType::AllOf(vec![
+            InferredType::OneOf(vec![
                 InferredType::U64,
                 InferredType::U32,
                 InferredType::U8,
@@ -1250,186 +1250,186 @@ impl Expr {
     }
 }
 
-// impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
-//     type Error = String;
-//
-//     fn try_from(value: golem_api_grpc::proto::golem::rib::Expr) -> Result<Self, Self::Error> {
-//         let expr = value.expr.ok_or("Missing expr")?;
-//
-//         let expr = match expr {
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
-//                 let name = expr.name;
-//                 let expr = *expr.expr.ok_or("Missing expr")?;
-//                 Expr::Let(name, Box::new(expr.try_into()?))
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
-//                 let expr = expr.expr.ok_or("Missing expr")?;
-//                 Expr::Not(Box::new((*expr).try_into()?))
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(expr) => {
-//                 let left = expr.left.ok_or("Missing left expr")?;
-//                 let right = expr.right.ok_or("Missing right expr")?;
-//                 Expr::GreaterThan(
-//                     Box::new((*left).try_into()?),
-//                     Box::new((*right).try_into()?),
-//                 )
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(expr) => {
-//                 let left = expr.left.ok_or("Missing left expr")?;
-//                 let right = expr.right.ok_or("Missing right expr")?;
-//                 Expr::GreaterThanOrEqualTo(
-//                     Box::new((*left).try_into()?),
-//                     Box::new((*right).try_into()?),
-//                 )
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(expr) => {
-//                 let left = expr.left.ok_or("Missing left expr")?;
-//                 let right = expr.right.ok_or("Missing right expr")?;
-//                 Expr::LessThan(
-//                     Box::new((*left).try_into()?),
-//                     Box::new((*right).try_into()?),
-//                 )
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(expr) => {
-//                 let left = expr.left.ok_or("Missing left expr")?;
-//                 let right = expr.right.ok_or("Missing right expr")?;
-//                 Expr::LessThanOrEqualTo(
-//                     Box::new((*left).try_into()?),
-//                     Box::new((*right).try_into()?),
-//                 )
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(expr) => {
-//                 let left = expr.left.ok_or("Missing left expr")?;
-//                 let right = expr.right.ok_or("Missing right expr")?;
-//                 Expr::EqualTo(
-//                     Box::new((*left).try_into()?),
-//                     Box::new((*right).try_into()?),
-//                 )
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Cond(expr) => {
-//                 let left = expr.left.ok_or("Missing left expr")?;
-//                 let cond = expr.cond.ok_or("Missing cond expr")?;
-//                 let right = expr.right.ok_or("Missing right expr")?;
-//                 Expr::Cond(
-//                     Box::new((*left).try_into()?),
-//                     Box::new((*cond).try_into()?),
-//                     Box::new((*right).try_into()?),
-//                 )
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
-//                 golem_api_grpc::proto::golem::rib::ConcatExpr { exprs },
-//             ) => {
-//                 let exprs: Vec<Expr> = exprs
-//                     .into_iter()
-//                     .map(|expr| expr.try_into())
-//                     .collect::<Result<Vec<_>, _>>()?;
-//                 Expr::Concat(exprs)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
-//                 golem_api_grpc::proto::golem::rib::MultipleExpr { exprs },
-//             ) => {
-//                 let exprs: Vec<Expr> = exprs
-//                     .into_iter()
-//                     .map(|expr| expr.try_into())
-//                     .collect::<Result<Vec<_>, _>>()?;
-//                 Expr::Multiple(exprs)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-//                 golem_api_grpc::proto::golem::rib::SequenceExpr { exprs },
-//             ) => {
-//                 let exprs: Vec<Expr> = exprs
-//                     .into_iter()
-//                     .map(|expr| expr.try_into())
-//                     .collect::<Result<Vec<_>, _>>()?;
-//                 Expr::Sequence(exprs)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
-//                 golem_api_grpc::proto::golem::rib::TupleExpr { exprs },
-//             ) => {
-//                 let exprs: Vec<Expr> = exprs
-//                     .into_iter()
-//                     .map(|expr| expr.try_into())
-//                     .collect::<Result<Vec<_>, _>>()?;
-//                 Expr::Tuple(exprs)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Record(
-//                 golem_api_grpc::proto::golem::rib::RecordExpr { fields },
-//             ) => {
-//                 let mut values: Vec<(String, Box<Expr>)> = vec![];
-//                 for record in fields.into_iter() {
-//                     let name = record.name;
-//                     let expr = record.expr.ok_or("Missing expr")?;
-//                     values.push((name, Box::new(expr.try_into()?)));
-//                 }
-//                 Expr::Record(values)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
-//                 golem_api_grpc::proto::golem::rib::FlagsExpr { values },
-//             ) => Expr::Flags(values),
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
-//                 golem_api_grpc::proto::golem::rib::LiteralExpr { value },
-//             ) => Expr::Literal(value),
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
-//                 golem_api_grpc::proto::golem::rib::IdentifierExpr { name },
-//             ) => Expr::Identifier(name),
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
-//                 golem_api_grpc::proto::golem::rib::BooleanExpr { value },
-//             ) => Expr::Boolean(value),
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Number(expr) => {
-//                 Expr::Number(expr.try_into()?)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
-//                 let expr = *expr;
-//                 let field = expr.field;
-//                 let expr = *expr.expr.ok_or(
-//                     "Mi\
-//                 ssing expr",
-//                 )?;
-//                 Expr::SelectField(Box::new(expr.try_into()?), field)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
-//                 let expr = *expr;
-//                 let index = expr.index as usize;
-//                 let expr = *expr.expr.ok_or("Missing expr")?;
-//                 Expr::SelectIndex(Box::new(expr.try_into()?), index)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => match expr.expr {
-//                 Some(expr) => Expr::Option(Some(Box::new((*expr).try_into()?))),
-//                 None => Expr::Option(None),
-//             },
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
-//                 let result = expr.result.ok_or("Missing result")?;
-//                 match result {
-//                     golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
-//                         Expr::Result(Ok(Box::new((*expr).try_into()?)))
-//                     }
-//                     golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
-//                         Expr::Result(Err(Box::new((*expr).try_into()?)))
-//                     }
-//                 }
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(expr) => {
-//                 let patterns: Vec<MatchArm> = expr
-//                     .patterns
-//                     .into_iter()
-//                     .map(|expr| expr.try_into())
-//                     .collect::<Result<Vec<_>, _>>()?;
-//                 let expr = expr.expr.ok_or("Missing expr")?;
-//                 Expr::PatternMatch(Box::new((*expr).try_into()?), patterns)
-//             }
-//             golem_api_grpc::proto::golem::rib::expr::Expr::Call(expr) => {
-//                 let params: Vec<Expr> = expr
-//                     .params
-//                     .into_iter()
-//                     .map(|expr| expr.try_into())
-//                     .collect::<Result<Vec<_>, _>>()?;
-//                 let name = expr.name.ok_or("Missing name")?;
-//                 Expr::Call(name.try_into()?, params)
-//             }
-//         };
-//         Ok(expr)
-//     }
-// }
+impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::rib::Expr) -> Result<Self, Self::Error> {
+        let expr = value.expr.ok_or("Missing expr")?;
+
+        let expr = match expr {
+            golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
+                let name = expr.name;
+                let expr = *expr.expr.ok_or("Missing expr")?;
+                Expr::let_binding(name.as_str(), expr.try_into()?)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
+                let expr = expr.expr.ok_or("Missing expr")?;
+                Expr::not((*expr).try_into()?)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::greater_than(
+                    (*left).try_into()?,
+                    (*right).try_into()?,
+                )
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::greater_than_or_equal_to(
+                    (*left).try_into()?,
+                    (*right).try_into()?,
+                )
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::less_than(
+                    (*left).try_into()?,
+                    (*right).try_into()?,
+                )
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::less_than_or_equal_to(
+                    (*left).try_into()?,
+                    (*right).try_into()?,
+                )
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::equal_to(
+                    (*left).try_into()?,
+                    (*right).try_into()?,
+                )
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Cond(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let cond = expr.cond.ok_or("Missing cond expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::cond(
+                    (*left).try_into()?,
+                    (*cond).try_into()?,
+                    (*right).try_into()?,
+                )
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
+                golem_api_grpc::proto::golem::rib::ConcatExpr { exprs },
+            ) => {
+                let exprs: Vec<Expr> = exprs
+                    .into_iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Expr::concat(exprs)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
+                golem_api_grpc::proto::golem::rib::MultipleExpr { exprs },
+            ) => {
+                let exprs: Vec<Expr> = exprs
+                    .into_iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Expr::multiple(exprs)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
+                golem_api_grpc::proto::golem::rib::SequenceExpr { exprs },
+            ) => {
+                let exprs: Vec<Expr> = exprs
+                    .into_iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Expr::sequence(exprs)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
+                golem_api_grpc::proto::golem::rib::TupleExpr { exprs },
+            ) => {
+                let exprs: Vec<Expr> = exprs
+                    .into_iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                Expr::tuple(exprs)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Record(
+                golem_api_grpc::proto::golem::rib::RecordExpr { fields },
+            ) => {
+                let mut values: Vec<(String, Expr)> = vec![];
+                for record in fields.into_iter() {
+                    let name = record.name;
+                    let expr = record.expr.ok_or("Missing expr")?;
+                    values.push((name, expr.try_into()?));
+                }
+                Expr::record(values)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
+                golem_api_grpc::proto::golem::rib::FlagsExpr { values },
+            ) => Expr::flags(values),
+            golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
+                golem_api_grpc::proto::golem::rib::LiteralExpr { value },
+            ) => Expr::literal(value),
+            golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
+                golem_api_grpc::proto::golem::rib::IdentifierExpr { name },
+            ) => Expr::identifier(name.as_str()),
+            golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
+                golem_api_grpc::proto::golem::rib::BooleanExpr { value },
+            ) => Expr::boolean(value),
+            golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
+                Expr::number(number.float)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
+                let expr = *expr;
+                let field = expr.field;
+                let expr = *expr.expr.ok_or(
+                    "Mi\
+                ssing expr",
+                )?;
+                Expr::select_field(expr.try_into()?, field.as_str())
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(expr) => {
+                let expr = *expr;
+                let index = expr.index as usize;
+                let expr = *expr.expr.ok_or("Missing expr")?;
+                Expr::select_index(expr.try_into()?, index)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Option(expr) => match expr.expr {
+                Some(expr) => Expr::option(Some((*expr).try_into()?)),
+                None => Expr::option(None),
+            },
+            golem_api_grpc::proto::golem::rib::expr::Expr::Result(expr) => {
+                let result = expr.result.ok_or("Missing result")?;
+                match result {
+                    golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(expr) => {
+                        Expr::ok((*expr).try_into()?)
+                    }
+                    golem_api_grpc::proto::golem::rib::result_expr::Result::Err(expr) => {
+                        Expr::err((*expr).try_into()?)
+                    }
+                }
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(expr) => {
+                let patterns: Vec<MatchArm> = expr
+                    .patterns
+                    .into_iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let expr = expr.expr.ok_or("Missing expr")?;
+                Expr::pattern_match((*expr).try_into()?, patterns)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::Call(expr) => {
+                let params: Vec<Expr> = expr
+                    .params
+                    .into_iter()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let name = expr.name.ok_or("Missing name")?;
+                Expr::call(name.try_into()?, params)
+            }
+        };
+        Ok(expr)
+    }
+}
 
 // impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
 //     fn from(value: Expr) -> Self {
@@ -1604,43 +1604,6 @@ impl Display for Number {
             Number::Unsigned(value) => write!(f, "{}", value),
             Number::Signed(value) => write!(f, "{}", value),
             Number::Float(value) => write!(f, "{}", value),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::rib::NumberExpr> for Number {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::rib::NumberExpr) -> Result<Self, Self::Error> {
-        let number = value.number.ok_or("Missing number")?;
-        match number {
-            golem_api_grpc::proto::golem::rib::number_expr::Number::Unsigned(value) => {
-                Ok(Number::Unsigned(value))
-            }
-            golem_api_grpc::proto::golem::rib::number_expr::Number::Signed(value) => {
-                Ok(Number::Signed(value))
-            }
-            golem_api_grpc::proto::golem::rib::number_expr::Number::Float(value) => {
-                Ok(Number::Float(value))
-            }
-        }
-    }
-}
-
-impl From<Number> for golem_api_grpc::proto::golem::rib::NumberExpr {
-    fn from(value: Number) -> Self {
-        golem_api_grpc::proto::golem::rib::NumberExpr {
-            number: Some(match value {
-                Number::Unsigned(value) => {
-                    golem_api_grpc::proto::golem::rib::number_expr::Number::Unsigned(value)
-                }
-                Number::Signed(value) => {
-                    golem_api_grpc::proto::golem::rib::number_expr::Number::Signed(value)
-                }
-                Number::Float(value) => {
-                    golem_api_grpc::proto::golem::rib::number_expr::Number::Float(value)
-                }
-            }),
         }
     }
 }

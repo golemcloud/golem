@@ -13,7 +13,7 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 combine = "4.6.7"
-golem-wasm-ast = { git = "https://github.com/golemcloud/golem-wasm-ast.git", branch = "typed_rib" }
+golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 semver = "1.0.23"
 serde = { workspace = true }

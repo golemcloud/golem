@@ -70,11 +70,7 @@ message LiteralExpr {
 }
 
 message NumberExpr {
-  oneof number {
-    uint64 unsigned = 1;
-    int64 signed = 2;
-    double float = 3;
-  }
+  double float = 1;
 }
 
 message FlagsExpr {
