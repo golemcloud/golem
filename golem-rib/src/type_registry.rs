@@ -1,8 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_service_base::model::{ComponentMetadata, Export, Type};
+use golem_common::exports::Export;
+use golem_service_base::model::{ComponentMetadata};
 
-#[derive(Hash, PartialEq, Clone, Debug)]
+// A type registry is a mapping from a function-name (global or that can be part of an interface in wit)
+// to the registry value which represents the type of the name.
+// Here registry-key names are called function names (and not really the name of the types),
+// as this is what component-model parser outputs (golem-wasm-ast) gives us.
+// We make sure if we bumped into any variant types (as part of processing the function parameter types)
+// we make sure to store it as a mapping from  FunctionName(name_of_variant) to a registry-value. If the variant
+// has parameters in it, then the RegistryValue is considered as a function type itself with parameter types,
+// and return type being the type the member variant represents. If the Variant has not parameters in it,
+// then the RegistryValue is nothing but a AnalysedType representing the variant type itself.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum RegistryKey {
     FunctionName(String),
     FunctionNameWithInterface {
@@ -11,7 +21,6 @@ pub enum RegistryKey {
     }
 }
 
-// TODO; Add Hash to AnalysedType
 #[derive(Hash, PartialEq, Clone, Debug)]
 pub enum RegistryValue {
     Value(AnalysedType),
@@ -22,9 +31,9 @@ pub enum RegistryValue {
 }
 
 
-#[derive(Hash, PartialEq, Clone, Debug)]
-pub struct FunctionTypeRegistry {
-    types: HashMap<RegistryKey, Vec<RegistryValue>>,
+#[derive(Clone, Debug)]
+pub struct  FunctionTypeRegistry {
+    pub types: HashMap<RegistryKey, Vec<RegistryValue>>,
 }
 
 impl FunctionTypeRegistry {

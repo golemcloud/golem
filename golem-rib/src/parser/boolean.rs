@@ -19,8 +19,8 @@ use combine::{choice, easy, Parser};
 
 pub fn boolean_literal<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        string("true").map(|_| Expr::Boolean(true)),
-        string("false").map(|_| Expr::Boolean(false)),
+        string("true").map(|_| Expr::boolean(true)),
+        string("false").map(|_| Expr::boolean(false)),
     ))
     .skip(spaces())
     .message("Unable to parse boolean literal")
@@ -36,20 +36,20 @@ mod tests {
     fn test_boolean_true() {
         let input = "true";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Boolean(true), "")));
+        assert_eq!(result, Ok((Expr::boolean(true), "")));
     }
 
     #[test]
     fn test_boolean_false() {
         let input = "false";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Boolean(false), "")));
+        assert_eq!(result, Ok((Expr::boolean(false), "")));
     }
 
     #[test]
     fn test_boolean_with_spaces() {
         let input = "true ";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Boolean(true), "")));
+        assert_eq!(result, Ok((Expr::boolean(true), "")));
     }
 }

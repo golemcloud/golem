@@ -29,7 +29,7 @@ pub fn conditional<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             rib_expr().skip(spaces()),
         )
             .map(|(_, cond, _, then_expr, _, else_expr)| {
-                Expr::Cond(Box::new(cond), Box::new(then_expr), Box::new(else_expr))
+                Expr::cond(cond, then_expr, else_expr)
             }),
     )
 }
@@ -46,10 +46,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Cond(
-                    Box::new(Expr::Identifier("foo".to_string())),
-                    Box::new(Expr::Identifier("bar".to_string())),
-                    Box::new(Expr::Identifier("baz".to_string()))
+                Expr::cond(
+                    Expr::identifier("foo"),
+                    Expr::identifier("bar"),
+                    Expr::identifier("baz")
                 ),
                 ""
             ))
@@ -63,10 +63,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Cond(
-                    Box::new(Expr::Identifier("foo".to_string())),
-                    Box::new(Expr::Sequence(vec![Expr::Identifier("bar".to_string())])),
-                    Box::new(Expr::Sequence(vec![Expr::Identifier("baz".to_string())]))
+                Expr::cond(
+                    Expr::identifier("foo"),
+                    Expr::sequence(vec![Expr::identifier("bar")]),
+                    Expr::sequence(vec![Expr::identifier("baz")])
                 ),
                 ""
             ))
@@ -80,18 +80,17 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Cond(
-                    Box::new(Expr::Identifier("foo".to_string())),
-                    Box::new(Expr::Identifier("bar".to_string())),
-                    Box::new(Expr::Cond(
-                        Box::new(Expr::Identifier("baz".to_string())),
-                        Box::new(Expr::Identifier("qux".to_string())),
-                        Box::new(Expr::Identifier("quux".to_string()))
+                Expr::cond(
+                    Expr::identifier("foo"),
+                    Expr::identifier("bar"),
+                    Expr::cond(
+                        Expr::identifier("baz"),
+                        Expr::identifier("qux"),
+                        Expr::identifier("quux")
                     ))
-                ),
+                ,
                 ""
-            ))
-        );
+            )));
     }
 
     #[test]
@@ -101,14 +100,14 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Cond(
-                    Box::new(Expr::Identifier("foo".to_string())),
-                    Box::new(Expr::Cond(
-                        Box::new(Expr::Identifier("bar".to_string())),
-                        Box::new(Expr::Identifier("baz".to_string())),
-                        Box::new(Expr::Identifier("qux".to_string()))
-                    )),
-                    Box::new(Expr::Identifier("quux".to_string()))
+                Expr::cond(
+                    Expr::identifier("foo"),
+                    Expr::cond(
+                        Expr::identifier("bar"),
+                        Expr::identifier("baz"),
+                        Expr::identifier("qux")
+                    ),
+                    Expr::identifier("quux")
                 ),
                 ""
             ))

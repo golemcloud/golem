@@ -1,9 +1,10 @@
 pub use expr::*;
 pub use function_name::*;
 pub use text::*;
-
+pub use inferred_type::*;
 mod expr;
 mod function_name;
 mod parser;
 mod text;
 mod type_registry;
+mod inferred_type;
