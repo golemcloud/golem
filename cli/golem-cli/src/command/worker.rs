@@ -32,11 +32,23 @@ use crate::service::worker::WorkerService;
 #[derive(clap::Args, Debug, Clone)]
 pub struct OssWorkerNameOrUriArg {
     /// Worker URI. Either URN or URL.
-    #[arg(short = 'W', long, conflicts_with_all(["worker_name", "component", "component_name"]), required = true, value_name = "URI")]
+    #[arg(
+        short = 'W',
+        long,
+        conflicts_with_all(["worker_name", "component", "component_name"]),
+        required = true,
+        value_name = "URI"
+    )]
     worker: Option<WorkerUri>,
 
     /// Component URI. Either URN or URL.
-    #[arg(short = 'C', long, conflicts_with_all(["component_name", "worker"]), required = true, value_name = "URI")]
+    #[arg(
+        short = 'C',
+        long,
+        conflicts_with_all(["component_name", "worker"]),
+        required = true,
+        value_name = "URI"
+    )]
     component: Option<ComponentUri>,
 
     #[arg(short, long, conflicts_with_all(["component", "worker"]), required = true)]
@@ -45,6 +57,22 @@ pub struct OssWorkerNameOrUriArg {
     /// Name of the worker
     #[arg(short, long, conflicts_with = "worker", required = true)]
     worker_name: Option<WorkerName>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+pub struct InvokeParameterList {
+    /// JSON array representing the parameters to be passed to the function
+    #[arg(
+        short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), group = "param"
+    )]
+    parameters: Option<serde_json::value::Value>,
+
+    /// Function parameter in WAVE format
+    ///
+    /// You can specify this argument multiple times for multiple parameters.
+    #[arg(short = 'a', long = "arg", value_name = "wave", group = "param")]
+    wave: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -187,7 +215,7 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
 #[command()]
 pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     /// Creates a new idle worker
-    #[command()]
+    #[command(alias = "start", alias = "create")]
     Add {
         /// The Golem component to use for the worker
         #[command(flatten)]
@@ -224,20 +252,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(short, long)]
         function: String,
 
-        /// JSON array representing the parameters to be passed to the function
-        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), conflicts_with = "wave")]
-        parameters: Option<serde_json::value::Value>,
-
-        /// Function parameter in WAVE format
-        ///
-        /// You can specify this argument multiple times for multiple parameters.
-        #[arg(
-            short = 'a',
-            long = "arg",
-            value_name = "wave",
-            conflicts_with = "parameters"
-        )]
-        wave: Vec<String>,
+        #[command(flatten)]
+        parameters: InvokeParameterList,
     },
 
     /// Triggers a function invocation on a worker without waiting for its completion
@@ -254,20 +270,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(short, long)]
         function: String,
 
-        /// JSON array representing the parameters to be passed to the function
-        #[arg(short = 'j', long, value_name = "json", value_parser = ValueParser::new(JsonValueParser), conflicts_with = "wave")]
-        parameters: Option<serde_json::value::Value>,
-
-        /// Function parameter in WAVE format
-        ///
-        /// You can specify this argument multiple times for multiple parameters.
-        #[arg(
-            short = 'a',
-            long = "arg",
-            value_name = "wave",
-            conflicts_with = "parameters"
-        )]
-        wave: Vec<String>,
+        #[command(flatten)]
+        parameters: InvokeParameterList,
     },
 
     /// Connect to a worker and live stream its standard output, error and log channels
@@ -280,6 +284,13 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     /// Interrupts a running worker
     #[command()]
     Interrupt {
+        #[command(flatten)]
+        worker_ref: WorkerRef,
+    },
+
+    /// Resume an interrupted worker
+    #[command()]
+    Resume {
         #[command(flatten)]
         worker_ref: WorkerRef,
     },
@@ -391,7 +402,6 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 idempotency_key,
                 function,
                 parameters,
-                wave,
             } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
@@ -401,8 +411,8 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                         worker_uri,
                         idempotency_key,
                         function,
-                        parameters,
-                        wave,
+                        parameters.parameters,
+                        parameters.wave,
                         project_id,
                     )
                     .await
@@ -412,7 +422,6 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 idempotency_key,
                 function,
                 parameters,
-                wave,
             } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
@@ -421,8 +430,8 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                         worker_uri,
                         idempotency_key,
                         function,
-                        parameters,
-                        wave,
+                        parameters.parameters,
+                        parameters.wave,
                         project_id,
                     )
                     .await
@@ -436,6 +445,11 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service.interrupt(worker_uri, project_id).await
+            }
+            WorkerSubcommand::Resume { worker_ref } => {
+                let (worker_uri, project_ref) = worker_ref.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service.resume(worker_uri, project_id).await
             }
             WorkerSubcommand::SimulatedCrash { worker_ref } => {
                 let (worker_uri, project_ref) = worker_ref.split();

@@ -95,6 +95,11 @@ pub trait WorkerService {
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+    async fn resume(
+        &self,
+        worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
     async fn simulated_crash(
         &self,
         worker_uri: WorkerUri,
@@ -553,6 +558,18 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         self.client.interrupt(worker_urn).await?;
 
         Ok(GolemResult::Str("Interrupted".to_string()))
+    }
+
+    async fn resume(
+        &self,
+        worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+
+        self.client.resume(worker_urn).await?;
+
+        Ok(GolemResult::Str("Resumed".to_string()))
     }
 
     async fn simulated_crash(

@@ -37,7 +37,7 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
     /// Creates an api definition
     ///
     /// Golem API definition file format expected
-    #[command()]
+    #[command(alias = "create")]
     Add {
         /// The newly created component's owner project
         #[command(flatten)]

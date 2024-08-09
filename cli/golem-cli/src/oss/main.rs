@@ -84,12 +84,16 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 )
                 .await
         }
-        OssCommand::New {
-            example,
+        OssCommand::Examples(golem_examples::cli::Command::New {
+            name_or_language,
             package_name,
             component_name,
-        } => examples::process_new(example, component_name, package_name),
-        OssCommand::ListExamples { min_tier, language } => {
+        }) => examples::process_new(
+            name_or_language.example_name(),
+            component_name,
+            package_name,
+        ),
+        OssCommand::Examples(golem_examples::cli::Command::ListExamples { min_tier, language }) => {
             examples::process_list_examples(min_tier, language)
         }
         #[cfg(feature = "stubgen")]

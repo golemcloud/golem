@@ -216,18 +216,20 @@ impl clap::Args for ComponentUriArg {
 }
 
 #[derive(clap::Args, Debug, Clone)]
+#[group(required = true, multiple = false)]
 struct ComponentUriOrNameArgs {
     /// Component URI. Either URN or URL.
     #[arg(
         short = 'C',
         long,
-        conflicts_with = "component_name",
+        group = "component_group",
         required = true,
         value_name = "URI"
     )]
     component: Option<ComponentUri>,
 
-    #[arg(short, long, conflicts_with = "component", required = true)]
+    /// Name of the component
+    #[arg(short, long, group = "component_group", required = true)]
     component_name: Option<String>,
 }
 

@@ -47,6 +47,7 @@ pub trait WorkerClient {
     ) -> Result<(), GolemError>;
 
     async fn interrupt(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
+    async fn resume(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
     async fn simulated_crash(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
     async fn delete(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
     async fn get_metadata(&self, worker_urn: WorkerUrn) -> Result<WorkerMetadata, GolemError>;
