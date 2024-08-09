@@ -20,6 +20,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use poem_openapi::types::ToJSON;
 use tonic::transport::Channel;
+use tonic::Code;
 use tracing::{error, info};
 
 use golem_api_grpc::proto::golem::worker::UpdateMode;
@@ -50,8 +51,8 @@ use golem_service_base::{
 use crate::service::component::ComponentService;
 
 use super::{
-    AllExecutors, ConnectWorkerStream, HasWorkerExecutorClients, RandomExecutor, ResponseMapResult,
-    RoutingLogic, WorkerServiceError,
+    AllExecutors, CallWorkerExecutorError, ConnectWorkerStream, HasWorkerExecutorClients,
+    RandomExecutor, ResponseMapResult, RoutingLogic, WorkerServiceError,
 };
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
@@ -277,6 +278,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
 
@@ -290,6 +292,7 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream> {
         let worker_id = worker_id.clone();
+        let worker_id_err: golem_common::model::WorkerId = worker_id.clone().into();
         let stream = self
             .call_worker_executor(
                 worker_id.clone(),
@@ -298,10 +301,19 @@ where
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
+
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                     }))
                 },
                 |response| Ok(ConnectWorkerStream::new(response.into_inner())),
+                |error| match error {
+                    CallWorkerExecutorError::FailedToConnectToPod(status)
+                        if status.code() == Code::NotFound =>
+                    {
+                        WorkerServiceError::WorkerNotFound(worker_id_err.clone())
+                    }
+                    _ => WorkerServiceError::internal(error),
+                },
             )
             .await?;
 
@@ -338,6 +350,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::DeleteWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
 
@@ -407,6 +420,7 @@ where
                     }
                 }
             },
+            WorkerServiceError::internal
         ).await?;
 
         Ok(invoke_response)
@@ -466,6 +480,7 @@ where
                     }
                 }
             },
+            WorkerServiceError::internal
         ).await?;
 
         Ok(invoke_response)
@@ -513,6 +528,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
         Ok(())
@@ -557,6 +573,7 @@ where
                 }
                 workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
         Ok(())
@@ -610,6 +627,7 @@ where
                         }
                     }
                 },
+                WorkerServiceError::internal
             )
             .await?;
         Ok(result)
@@ -646,6 +664,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::InterruptWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
 
@@ -691,6 +710,7 @@ where
                     }
                 }
             },
+            WorkerServiceError::internal
         ).await?;
 
         Ok(metadata)
@@ -752,6 +772,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::ResumeWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
         Ok(())
@@ -787,6 +808,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::UpdateWorkerResponse { .. } => Err("Empty response".into()),
             },
+            WorkerServiceError::internal,
         )
         .await?;
         Ok(())
@@ -884,6 +906,7 @@ where
                     }
                 }).collect::<Result<Vec<_>, ResponseMapResult>>()
             },
+            WorkerServiceError::internal
         ).await?;
 
         Ok(result.into_iter().flatten().collect())
@@ -908,25 +931,25 @@ where
                         component_id.clone().into();
                     let account_id = metadata.account_id.clone().map(|id| id.into());
                     Box::pin(worker_executor_client.get_workers_metadata(
-                    golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest {
-                        component_id: Some(component_id),
-                        filter: filter.clone().map(|f| f.into()),
-                        cursor: Some(cursor.clone().into()),
-                        count,
-                        precise,
-                        account_id,
-                    }
-                ))
+                        golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest {
+                            component_id: Some(component_id),
+                            filter: filter.clone().map(|f| f.into()),
+                            cursor: Some(cursor.clone().into()),
+                            count,
+                            precise,
+                            account_id,
+                        }
+                    ))
                 },
                 |response| match response.into_inner() {
                     workerexecutor::v1::GetWorkersMetadataResponse {
                         result:
-                            Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(
-                                workerexecutor::v1::GetWorkersMetadataSuccessResponse {
-                                    workers,
-                                    cursor,
-                                },
-                            )),
+                        Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(
+                                 workerexecutor::v1::GetWorkersMetadataSuccessResponse {
+                                     workers,
+                                     cursor,
+                                 },
+                             )),
                     } => {
                         let workers = workers
                             .into_iter()
@@ -941,14 +964,15 @@ where
                     }
                     workerexecutor::v1::GetWorkersMetadataResponse {
                         result:
-                            Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(
-                                err,
-                            )),
+                        Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(
+                                 err,
+                             )),
                     } => Err(err.into()),
                     workerexecutor::v1::GetWorkersMetadataResponse { .. } => {
                         Err("Empty response".into())
                     }
                 },
+                WorkerServiceError::internal,
             )
             .await?;
 

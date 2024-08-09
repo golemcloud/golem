@@ -20,11 +20,13 @@ use futures::StreamExt;
 use golem_common::model::ComponentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
-use golem_service_base::model::WorkerId;
+use golem_service_base::model::{ErrorsBody, WorkerId};
+use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::service::worker::{proxy_worker_connection, ConnectWorkerStream};
 use poem::web::websocket::WebSocket;
-use poem::web::Data;
+use poem::web::{Data, Path};
 use poem::*;
+use poem_openapi::payload::Json;
 use tracing::Instrument;
 
 #[derive(Clone)]
@@ -40,13 +42,11 @@ impl ConnectService {
 
 #[handler]
 pub async fn ws(
-    req: &Request,
+    Path((component_id, worker_name)): Path<(ComponentId, String)>,
     websocket: WebSocket,
     Data(service): Data<&ConnectService>,
 ) -> Response {
-    tracing::info!("Connect request: {:?} {:?}", req.uri(), req);
-
-    get_worker_stream(service, req)
+    get_worker_stream(service, component_id, worker_name)
         .await
         .map(|(worker_id, worker_stream)| {
             websocket
@@ -74,12 +74,15 @@ const PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 async fn get_worker_stream(
     service: &ConnectService,
-    req: &Request,
+    component_id: ComponentId,
+    worker_name: String,
 ) -> Result<(WorkerId, ConnectWorkerStream), Response> {
-    let worker_id = match get_worker_id(req) {
-        Ok(worker_id) => worker_id,
-        Err(err) => return Err((http::StatusCode::BAD_REQUEST, err).into_response()),
-    };
+    let worker_id = WorkerId::new(component_id, worker_name).map_err(|e| {
+        let error = WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+            errors: vec![format!("Invalid worker id: {e}")],
+        }));
+        error.into_response()
+    })?;
 
     let record = recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
 
@@ -96,23 +99,10 @@ async fn get_worker_stream(
     match result {
         Ok(worker_stream) => record.succeed(Ok((worker_id, worker_stream))),
         Err(error) => {
-            let error = error.to_string();
-            record.fail(error.clone(), &("InternalError"));
-            Err((http::StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
+            tracing::error!("Error connecting to worker: {error}");
+            let error = WorkerApiBaseError::from(error);
+            let error = record.fail(error.clone(), &error);
+            Err(error.into_response())
         }
     }
-}
-
-fn get_worker_id(req: &Request) -> Result<WorkerId, String> {
-    let (component_id, worker_name) = req.path_params::<(String, String)>().map_err(|_| {
-        "Valid path parameters (component_id and worker_name) are required ".to_string()
-    })?;
-
-    let component_id = ComponentId::try_from(component_id.as_str())
-        .map_err(|error| format!("Invalid component id: {error}"))?;
-
-    let worker_id = WorkerId::new(component_id, worker_name)
-        .map_err(|error| format!("Invalid worker name: {error}"))?;
-
-    Ok(worker_id)
 }
