@@ -62,8 +62,7 @@ fn make(
             format!("worker_connect{suffix}"),
             ctx.clone(),
             worker_connect,
-        )
-        .with_ignored_flag(true),
+        ),
         Trial::test_in_context(
             format!("worker_connect_failed{suffix}"),
             ctx.clone(),
