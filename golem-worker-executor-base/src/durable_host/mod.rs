@@ -359,27 +359,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             None => RetryDecision::Immediate,
         }
     }
-
-    fn calculate_worker_status(
-        retry_config: &RetryConfig,
-        trap_type: &TrapType,
-        previous_tries: u64,
-    ) -> WorkerStatus {
-        match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => WorkerStatus::Interrupted,
-            TrapType::Interrupt(InterruptKind::Suspend) => WorkerStatus::Suspended,
-            TrapType::Interrupt(InterruptKind::Jump) => WorkerStatus::Running,
-            TrapType::Interrupt(InterruptKind::Restart) => WorkerStatus::Running,
-            TrapType::Exit => WorkerStatus::Exited,
-            TrapType::Error(error) => {
-                if is_worker_error_retriable(retry_config, error, previous_tries) {
-                    WorkerStatus::Retrying
-                } else {
-                    WorkerStatus::Failed
-                }
-            }
-        }
-    }
 }
 
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
@@ -723,28 +702,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        let needs_commit = match trap_type {
-            TrapType::Error(error) => Some((OplogEntry::error(error.clone()), true)),
-            TrapType::Interrupt(InterruptKind::Interrupt) => {
-                Some((OplogEntry::interrupted(), true))
-            }
-            TrapType::Interrupt(InterruptKind::Suspend) => Some((OplogEntry::suspend(), false)),
-            TrapType::Exit => Some((OplogEntry::exited(), true)),
-            _ => None,
-        };
-
-        let oplog_idx = if let Some((entry, store)) = needs_commit {
-            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
-
-            if store {
-                Some(oplog_idx)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
         let previous_tries = self.state.trailing_error_count().await;
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
@@ -760,24 +717,51 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             "Recovery decision after {} tries: {:?}",
             previous_tries, decision
         );
+        let (updated_worker_status, oplog_entry, store_result) = match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt) => (
+                WorkerStatus::Interrupted,
+                Some(OplogEntry::interrupted()),
+                true,
+            ),
+            TrapType::Interrupt(InterruptKind::Suspend) => {
+                (WorkerStatus::Suspended, Some(OplogEntry::suspend()), false)
+            }
+            TrapType::Interrupt(InterruptKind::Jump) => (WorkerStatus::Running, None, false),
+            TrapType::Interrupt(InterruptKind::Restart) => (WorkerStatus::Running, None, false),
+            TrapType::Exit => (WorkerStatus::Exited, Some(OplogEntry::exited()), true),
+            TrapType::Error(WorkerError::InvalidRequest(_)) => (WorkerStatus::Running, None, true),
+            TrapType::Error(error) => {
+                let status = if is_worker_error_retriable(&retry_config, error, previous_tries) {
+                    WorkerStatus::Retrying
+                } else {
+                    WorkerStatus::Failed
+                };
+                let store_error = status == WorkerStatus::Failed;
+                (status, Some(OplogEntry::error(error.clone())), store_error)
+            }
+        };
 
-        let updated_worker_status =
-            Self::calculate_worker_status(&retry_config, trap_type, previous_tries);
+        let oplog_idx = if let Some(entry) = oplog_entry {
+            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
+            Some(oplog_idx)
+        } else {
+            None
+        };
 
         self.store_worker_status(updated_worker_status.clone())
             .await;
 
-        if updated_worker_status != WorkerStatus::Retrying
-            && updated_worker_status != WorkerStatus::Running
-        {
+        if store_result {
             // Giving up, associating the stored result with the current and upcoming invocations
-            if let Some(oplog_idx) = oplog_idx {
-                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                    self.public_state
-                        .worker()
-                        .store_invocation_failure(&idempotency_key, trap_type, oplog_idx)
-                        .await;
-                }
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .worker()
+                    .store_invocation_failure(
+                        &idempotency_key,
+                        trap_type,
+                        oplog_idx.unwrap_or(OplogIndex::NONE),
+                    )
+                    .await;
             }
         }
 
@@ -848,18 +832,20 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     async fn add(&mut self, resource: ResourceAny) -> u64 {
         let id = self.state.add(resource).await;
         let resource_id = WorkerResourceId(id);
-        let entry = OplogEntry::create_resource(resource_id);
-        self.state.oplog.add(entry.clone()).await;
-        self.update_worker_status(move |status| {
-            status.owned_resources.insert(
-                resource_id,
-                WorkerResourceDescription {
-                    created_at: entry.timestamp(),
-                    indexed_resource_key: None,
-                },
-            );
-        })
-        .await;
+        if self.state.is_live() {
+            let entry = OplogEntry::create_resource(resource_id);
+            self.state.oplog.add(entry.clone()).await;
+            self.update_worker_status(move |status| {
+                status.owned_resources.insert(
+                    resource_id,
+                    WorkerResourceDescription {
+                        created_at: entry.timestamp(),
+                        indexed_resource_key: None,
+                    },
+                );
+            })
+            .await;
+        }
         id
     }
 
@@ -867,11 +853,13 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let result = self.state.borrow(resource_id).await;
         if result.is_some() {
             let id = WorkerResourceId(resource_id);
-            self.state.oplog.add(OplogEntry::drop_resource(id)).await;
-            self.update_worker_status(move |status| {
-                status.owned_resources.remove(&id);
-            })
-            .await;
+            if self.state.is_live() {
+                self.state.oplog.add(OplogEntry::drop_resource(id)).await;
+                self.update_worker_status(move |status| {
+                    status.owned_resources.remove(&id);
+                })
+                .await;
+            }
         }
         result
     }
@@ -971,16 +959,18 @@ impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
             resource_params: resource_params.to_vec(),
         };
         self.state.indexed_resources.insert(key.clone(), resource);
-        self.state
-            .oplog
-            .add(OplogEntry::describe_resource(resource, key.clone()))
+        if self.state.is_live() {
+            self.state
+                .oplog
+                .add(OplogEntry::describe_resource(resource, key.clone()))
+                .await;
+            self.update_worker_status(|status| {
+                if let Some(description) = status.owned_resources.get_mut(&resource) {
+                    description.indexed_resource_key = Some(key);
+                }
+            })
             .await;
-        self.update_worker_status(|status| {
-            if let Some(description) = status.owned_resources.get_mut(&resource) {
-                description.indexed_resource_key = Some(key);
-            }
-        })
-        .await;
+        }
     }
 
     fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
@@ -1106,9 +1096,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 break Err(err);
                                             }
                                         } else {
-                                            let trap_type = TrapType::Error(WorkerError::Unknown(
-                                                format!("Function {full_function_name} not found"),
-                                            ));
+                                            let trap_type = TrapType::Error(
+                                                WorkerError::InvalidRequest(format!(
+                                                    "Function {full_function_name} not found"
+                                                )),
+                                            );
 
                                             let _ = store
                                                 .as_context_mut()
@@ -1123,7 +1115,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     }
                                     Err(err) => {
                                         let trap_type =
-                                            TrapType::Error(WorkerError::Unknown(format!(
+                                            TrapType::Error(WorkerError::InvalidRequest(format!(
                                                 "Function {full_function_name} not found: {err}"
                                             )));
 
@@ -1289,7 +1281,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
         let result = loop {
             let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
             match oplog_entry.first_key_value()
-                .unwrap_or_else(|| panic!("Internal error: op log for {} has size greater than zero but no entry at last index", owned_worker_id.worker_id)) {
+                .unwrap_or_else(|| panic!("Internal error: oplog for {} has size greater than zero but no entry at last index", owned_worker_id.worker_id)) {
                 (_, OplogEntry::Error { error, .. }) => {
                     retry_count += 1;
                     if first_error.is_none() {
@@ -1305,6 +1297,18 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                                 retry_count,
                             }
                         );
+                    }
+                }
+                (_, entry) if entry.is_hint() => {
+                    // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
+                    if idx > OplogIndex::INITIAL {
+                        idx = idx.previous();
+                        continue;
+                    } else {
+                        match first_error {
+                            Some(error) => break Some(LastError { error, retry_count }),
+                            None => break None
+                        }
                     }
                 }
                 _ => {

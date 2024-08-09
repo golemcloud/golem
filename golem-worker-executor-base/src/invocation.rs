@@ -110,7 +110,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
             let mut exported_instance =
                 exports
                     .instance(interface_name)
-                    .ok_or(GolemError::runtime(format!(
+                    .ok_or(GolemError::invalid_request(format!(
                         "could not load exports for interface {}",
                         interface_name
                     )))?;
@@ -125,14 +125,14 @@ fn find_function<'a, Ctx: WorkerCtx>(
                         Ok(None)
                     } else {
                         match parsed_function_name.method_as_static() {
-                            None => Err(GolemError::runtime(format!(
+                            None => Err(GolemError::invalid_request(format!(
                                 "could not load function {} for interface {}",
                                 &parsed_function_name.function().function_name(),
                                 interface_name
                             ))),
                             Some(parsed_static) => exported_instance
                                 .func(&parsed_static.function().function_name())
-                                .ok_or(GolemError::runtime(format!(
+                                .ok_or(GolemError::invalid_request(format!(
                                     "could not load function {} or {} for interface {}",
                                     &parsed_function_name.function().function_name(),
                                     &parsed_static.function().function_name(),
@@ -146,7 +146,7 @@ fn find_function<'a, Ctx: WorkerCtx>(
         }
         None => instance
             .get_func(store, &parsed_function_name.function().function_name())
-            .ok_or(GolemError::runtime(format!(
+            .ok_or(GolemError::invalid_request(format!(
                 "could not load function {}",
                 &parsed_function_name.function().function_name()
             )))
@@ -242,7 +242,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
         },
     );
     let resource_constructor = find_function(store, instance, &resource_constructor_name)?.ok_or(
-        GolemError::runtime(format!(
+        GolemError::invalid_request(format!(
             "could not find resource constructor for resource {}",
             resource_name
         )),

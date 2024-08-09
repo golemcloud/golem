@@ -216,7 +216,12 @@ impl TrapType {
                     Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
                     _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
                         Some(_) => TrapType::Error(WorkerError::OutOfMemory),
-                        None => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                        None => match error.root_cause().downcast_ref::<GolemError>() {
+                            Some(GolemError::InvalidRequest { details }) => {
+                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                            }
+                            _ => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                        },
                     },
                 },
             },
@@ -228,7 +233,10 @@ impl TrapType {
             TrapType::Interrupt(InterruptKind::Interrupt) => {
                 Some(GolemError::runtime("Interrupted via the Golem API"))
             }
-            TrapType::Error(error) => Some(GolemError::runtime(error.to_string())),
+            TrapType::Error(error) => match error {
+                WorkerError::InvalidRequest(msg) => Some(GolemError::invalid_request(msg.clone())),
+                _ => Some(GolemError::runtime(error.to_string())),
+            },
             TrapType::Exit => Some(GolemError::runtime("Process exited")),
             _ => None,
         }
