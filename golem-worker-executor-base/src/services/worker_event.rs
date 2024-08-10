@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bincode::{Decode, Encode};
 use ringbuf::*;
 use std::fmt::{Display, Formatter};
 use tokio::sync::broadcast::error::RecvError;
@@ -19,7 +20,7 @@ use tokio::sync::broadcast::*;
 
 use crate::metrics::events::{record_broadcast_event, record_event};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -29,7 +30,7 @@ pub enum LogLevel {
     Critical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum WorkerEvent {
     StdOut(Vec<u8>),
     StdErr(Vec<u8>),

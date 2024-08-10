@@ -23,7 +23,7 @@ use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
-use crate::model::PersistenceLevel;
+use crate::services::worker_event::WorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogIndex, WrappedFunctionType};
 use wasmtime_wasi::bindings::io::streams::{
@@ -173,35 +173,43 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         HostOutputStream::check_write(&mut self.as_wasi_view(), self_)
     }
 
-    fn write(
+    async fn write(
         &mut self,
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "write");
 
-        let event_service = self.public_state.event_service.clone();
-
-        let mut is_std = false;
-        let is_live = self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing;
         let output = self.table().get(&self_)?;
-        if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            if is_live {
-                event_service.emit_stdout(contents.clone());
-            }
-            is_std = true;
+        let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
+            Some(WorkerEvent::StdOut(contents.clone()))
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            if is_live {
-                event_service.emit_stderr(contents.clone());
-            }
-            is_std = true;
-        }
-
-        if !is_std || is_live {
-            HostOutputStream::write(&mut self.as_wasi_view(), self_, contents)
+            Some(WorkerEvent::StdErr(contents.clone()))
         } else {
-            Ok(())
+            None
+        };
+
+        if let Some(event) = event {
+            // Stdout and stderr writes are persistent and overwritten by sending the data to the event
+            // service instead of the real output stream
+
+            let _ = Durability::<Ctx, WorkerEvent, SerializableStreamError>::wrap(
+                self,
+                WrappedFunctionType::WriteRemote, // emitting logs is considered WriteRemote
+                "io::streams::output_stream::write",
+                move |ctx| {
+                    Box::pin(async move {
+                        ctx.public_state.event_service.emit_event(event.clone());
+                        Ok::<_, StreamError>(event) // By returning the event, it's persisted in the oplog entry
+                    })
+                },
+            )
+            .await?;
+            Ok::<(), StreamError>(())
+        } else {
+            // Non-stdout writes are non persistent and always executed
+            HostOutputStream::write(&mut self.as_wasi_view(), self_, contents).await
         }
     }
 
@@ -210,38 +218,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
-        let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("io::streams::output_stream", "blocking_write_and_flush");
-
-        let event_service = self.public_state.event_service.clone();
-
-        let mut is_std = false;
-        let is_live = self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing;
-        let output = self.table().get(&self_)?;
-        if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            if is_live {
-                event_service.emit_stdout(contents.clone());
-            }
-            is_std = true;
-        } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            if is_live {
-                event_service.emit_stderr(contents.clone());
-            }
-            is_std = true;
-        }
-
-        if !is_std || is_live {
-            HostOutputStream::blocking_write_and_flush(&mut self.as_wasi_view(), self_, contents)
-                .await
-        } else {
-            Ok(())
-        }
+        let self2 = Resource::new_borrow(self_.rep());
+        self.write(self_, contents).await?;
+        self.flush(self2).await?;
+        Ok(())
     }
 
-    fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+    async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "flush");
-        HostOutputStream::flush(&mut self.as_wasi_view(), self_)
+        HostOutputStream::flush(&mut self.as_wasi_view(), self_).await
     }
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
@@ -255,9 +241,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         HostOutputStream::subscribe(&mut self.as_wasi_view(), self_)
     }
 
-    fn write_zeroes(&mut self, self_: Resource<OutputStream>, len: u64) -> Result<(), StreamError> {
+    async fn write_zeroes(
+        &mut self,
+        self_: Resource<OutputStream>,
+        len: u64,
+    ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "write_zeroeas");
-        HostOutputStream::write_zeroes(&mut self.as_wasi_view(), self_, len)
+        HostOutputStream::write_zeroes(&mut self.as_wasi_view(), self_, len).await
     }
 
     async fn blocking_write_zeroes_and_flush(
@@ -357,12 +348,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for &mut DurableWorkerCtx<Ctx> {
         (*self).check_write(self_)
     }
 
-    fn write(
+    async fn write(
         &mut self,
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
-        (*self).write(self_, contents)
+        (*self).write(self_, contents).await
     }
 
     async fn blocking_write_and_flush(
@@ -373,8 +364,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for &mut DurableWorkerCtx<Ctx> {
         (*self).blocking_write_and_flush(self_, contents).await
     }
 
-    fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
-        (*self).flush(self_)
+    async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        (*self).flush(self_).await
     }
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
@@ -385,8 +376,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for &mut DurableWorkerCtx<Ctx> {
         HostOutputStream::subscribe(*self, self_)
     }
 
-    fn write_zeroes(&mut self, self_: Resource<OutputStream>, len: u64) -> Result<(), StreamError> {
-        (*self).write_zeroes(self_, len)
+    async fn write_zeroes(
+        &mut self,
+        self_: Resource<OutputStream>,
+        len: u64,
+    ) -> Result<(), StreamError> {
+        (*self).write_zeroes(self_, len).await
     }
 
     async fn blocking_write_zeroes_and_flush(

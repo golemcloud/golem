@@ -12,37 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::worker_event::LogLevel;
-use async_trait::async_trait;
-
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
-use crate::model::PersistenceLevel;
 use crate::preview2::wasi::logging::logging::{Host, Level};
+use crate::services::worker_event::{LogLevel, WorkerEvent};
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
+use golem_common::model::oplog::WrappedFunctionType;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("logging::handler", "log");
-        if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
-        {
-            let event_service = &self.public_state.event_service;
-            let log_level = match level {
-                Level::Critical => LogLevel::Critical,
-                Level::Error => LogLevel::Error,
-                Level::Warn => LogLevel::Warn,
-                Level::Info => LogLevel::Info,
-                Level::Debug => LogLevel::Debug,
-                Level::Trace => LogLevel::Trace,
-            };
-            event_service.emit_log(log_level, &context, &message);
 
-            Host::log(&mut self.as_wasi_view(), level, context, message).await
-        } else {
-            Ok(())
-        }
+        let log_level = match level {
+            Level::Critical => LogLevel::Critical,
+            Level::Error => LogLevel::Error,
+            Level::Warn => LogLevel::Warn,
+            Level::Info => LogLevel::Info,
+            Level::Debug => LogLevel::Debug,
+            Level::Trace => LogLevel::Trace,
+        };
+        let event = WorkerEvent::Log {
+            level: log_level,
+            context,
+            message,
+        };
+
+        let _ = Durability::<Ctx, WorkerEvent, SerializableError>::wrap(
+            self,
+            WrappedFunctionType::WriteRemote, // emitting logs is considered WriteRemote
+            "logging::handler::log",
+            move |ctx| {
+                Box::pin(async move {
+                    ctx.public_state.event_service.emit_event(event.clone());
+                    Ok::<WorkerEvent, anyhow::Error>(event) // By returning the event, it's persisted in the oplog entry
+                })
+            },
+        )
+        .await?;
+        Ok(())
     }
 }
 
