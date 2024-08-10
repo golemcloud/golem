@@ -15,7 +15,6 @@
 pub mod clients;
 pub mod cloud;
 pub mod command;
-pub mod completion;
 pub mod config;
 pub mod examples;
 pub mod factory;
