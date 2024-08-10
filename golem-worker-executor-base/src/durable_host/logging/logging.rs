@@ -43,7 +43,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let _ = Durability::<Ctx, WorkerEvent, SerializableError>::wrap(
             self,
-            WrappedFunctionType::WriteRemote, // emitting logs is considered WriteRemote
+            WrappedFunctionType::WriteLocal, // emitting logs is considered WriteLocal -
+            // WriteRemote would too strict as it would interfere with batched writes which would feel unexpected
             "logging::handler::log",
             move |ctx| {
                 Box::pin(async move {

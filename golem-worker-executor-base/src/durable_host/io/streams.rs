@@ -196,7 +196,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
             let _ = Durability::<Ctx, WorkerEvent, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::WriteRemote, // emitting logs is considered WriteRemote
+                WrappedFunctionType::WriteLocal, // emitting logs is considered WriteLocal -
+                // WriteRemote would too strict as it would interfere with batched writes which would feel unexpected
                 "io::streams::output_stream::write",
                 move |ctx| {
                     Box::pin(async move {
