@@ -126,6 +126,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
             get_resource_by_uri(uri, &factory).await
         }
+        OssCommand::Completion { .. } => return Ok(()),
     };
 
     match res {

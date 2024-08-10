@@ -14,18 +14,18 @@
 
 extern crate derive_more;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use clap_verbosity_flag::{Level, Verbosity};
 use golem_cli::command::profile::OssProfileAdd;
+use golem_cli::completion::print_completions;
 use golem_cli::config::{Config, NamedProfile, Profile};
+use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand};
+use golem_cli::oss;
+use golem_cli::oss::command::{GolemOssCommand, OssCommand};
 use indoc::eprintdoc;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
-
-use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand};
-use golem_cli::oss;
-use golem_cli::oss::command::GolemOssCommand;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap();
@@ -61,9 +61,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
+    // use clap_complete::{generate, Generator, Shell};
+    //
+    // fn build_cli() -> clap::Command {
+    //
+    //     GolemOssCommand::<OssProfileAdd>::command().subcommand(
+    //         clap::Command::new("completion")
+    //             .arg(
+    //                 clap::Arg::new("generator")
+    //                     .long("generate")
+    //                     .value_parser(clap::value_parser!(Shell)),
+    //             ))
+    //
+    // }
+    //
+    // fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
+    //     generate(gen, cmd, cmd.get_name().to_string(), &mut std::io::stdout());
+    // }
+    //
+    // let matches = build_cli().get_matches();
+    //
+    // let completion_matches = matches.subcommand().filter(|(c, _)| *c == "completion").map(|(_, m)| m);
+    // let generate = completion_matches.and_then(|m| m.try_get_one::<Shell>("generator").ok().flatten());
+    //
+    //
+    // if let Some(generator) = generate {
+    //     let mut cmd = build_cli();
+    //     eprintln!("Generating completion file for {generator}...");
+    //     print_completions(*generator, &mut cmd);
+    //     return Ok(());
+    // }
+
+    let command = GolemOssCommand::<OssProfileAdd>::parse();
+
+    if let OssCommand::Completion { generator } = command.command {
+        let mut command = GolemOssCommand::<OssProfileAdd>::command();
+        eprintln!("Generating completion file for {generator:?}...");
+        print_completions(generator, &mut command);
+        return Ok(());
+    }
+
     if let Some((name, p)) = oss_profile {
         let command = GolemOssCommand::<OssProfileAdd>::parse();
-
         init_tracing(&command.verbosity);
         info!("Golem CLI with profile: {}", name);
 
