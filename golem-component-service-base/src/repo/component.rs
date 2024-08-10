@@ -20,9 +20,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::ComponentId;
-use golem_service_base::model::{
-    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
-};
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
 
@@ -51,12 +49,6 @@ where
             component_id: ComponentId(value.component_id),
             version: value.version as u64,
         };
-        let protected_component_id: ProtectedComponentId = ProtectedComponentId {
-            versioned_component_id: versioned_component_id.clone(),
-        };
-        let user_component_id: UserComponentId = UserComponentId {
-            versioned_component_id: versioned_component_id.clone(),
-        };
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
         Ok(Component {
             namespace,
@@ -64,8 +56,6 @@ where
             component_size: value.size as u64,
             metadata,
             versioned_component_id,
-            user_component_id,
-            protected_component_id,
         })
     }
 }

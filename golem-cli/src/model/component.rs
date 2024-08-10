@@ -5,8 +5,7 @@ use crate::model::GolemError;
 use golem_client::model::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedInstance,
     AnalysedResourceMode, AnalysedType, ComponentMetadata, NameOptionTypePair, NameTypePair,
-    ProtectedComponentId, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, UserComponentId,
-    VersionedComponentId,
+    TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
 };
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
@@ -18,8 +17,6 @@ use tracing::info;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
     pub versioned_component_id: VersionedComponentId,
-    pub user_component_id: UserComponentId,
-    pub protected_component_id: ProtectedComponentId,
     pub component_name: String,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
@@ -30,8 +27,6 @@ impl From<golem_client::model::Component> for Component {
     fn from(value: golem_client::model::Component) -> Self {
         let golem_client::model::Component {
             versioned_component_id,
-            user_component_id,
-            protected_component_id,
             component_name,
             component_size,
             metadata,
@@ -39,8 +34,6 @@ impl From<golem_client::model::Component> for Component {
 
         Component {
             versioned_component_id,
-            user_component_id,
-            protected_component_id,
             component_name,
             component_size,
             metadata,

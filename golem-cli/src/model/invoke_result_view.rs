@@ -105,8 +105,7 @@ mod tests {
 
     use golem_client::model::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedResourceMode,
-        AnalysedType, ComponentMetadata, InvokeResult, ProtectedComponentId, TypeBool, TypeHandle,
-        UserComponentId, VersionedComponentId,
+        AnalysedType, ComponentMetadata, InvokeResult, TypeBool, TypeHandle, VersionedComponentId,
     };
 
     use crate::model::component::Component;
@@ -144,18 +143,6 @@ mod tests {
             versioned_component_id: VersionedComponentId {
                 component_id: Uuid::max(),
                 version: 0,
-            },
-            user_component_id: UserComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: Uuid::max(),
-                    version: 0,
-                },
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: Uuid::max(),
-                    version: 0,
-                },
             },
             component_name: String::new(),
             component_size: 0,
