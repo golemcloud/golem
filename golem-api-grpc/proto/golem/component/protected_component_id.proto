@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.component;
-
-import "golem/component/versioned_component_id.proto";
-
-message ProtectedComponentId {
-  VersionedComponentId versioned_component_id = 1;
-}

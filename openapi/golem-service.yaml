@@ -3617,10 +3617,6 @@ components:
       properties:
         versionedComponentId:
           $ref: '#/components/schemas/VersionedComponentId'
-        userComponentId:
-          $ref: '#/components/schemas/UserComponentId'
-        protectedComponentId:
-          $ref: '#/components/schemas/ProtectedComponentId'
         componentName:
           type: string
         componentSize:
@@ -3630,8 +3626,6 @@ components:
           $ref: '#/components/schemas/ComponentMetadata'
       required:
       - versionedComponentId
-      - userComponentId
-      - protectedComponentId
       - componentName
       - componentSize
       - metadata
@@ -3688,20 +3682,6 @@ components:
             $ref: '#/components/schemas/ProducerField'
       required:
       - fields
-    ProtectedComponentId:
-      type: object
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-      required:
-      - versionedComponentId
-    UserComponentId:
-      type: object
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-      required:
-      - versionedComponentId
     VersionedName:
       type: object
       properties:
