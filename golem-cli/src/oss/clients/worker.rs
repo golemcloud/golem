@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use crate::clients::worker::WorkerClient;
+use crate::connect_output::ConnectOutput;
 use crate::model::{
     GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
@@ -34,7 +35,7 @@ use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_client::api::WorkerClient + Sync + Send> {
@@ -304,69 +305,70 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             }
         });
 
-        let read_res = read.for_each(|message_or_error| async {
-            match message_or_error {
-                Err(error) => {
-                    print!("Error reading message: {}", error);
-                }
-                Ok(message) => {
-                    let instance_connect_msg = match message {
-                        Message::Text(str) => {
-                            let parsed: serde_json::Result<InstanceConnectMessage> =
-                                serde_json::from_str(&str);
-                            Some(parsed.unwrap()) // TODO: error handling
-                        }
-                        Message::Binary(data) => {
-                            let parsed: serde_json::Result<InstanceConnectMessage> =
-                                serde_json::from_slice(&data);
-                            Some(parsed.unwrap()) // TODO: error handling
-                        }
-                        Message::Ping(_) => {
-                            debug!("Ignore ping");
-                            None
-                        }
-                        Message::Pong(_) => {
-                            debug!("Ignore pong");
-                            None
-                        }
-                        Message::Close(details) => {
-                            match details {
-                                Some(closed_frame) => {
-                                    print!("Connection Closed: {}", closed_frame);
-                                }
-                                None => {
-                                    print!("Connection Closed");
-                                }
-                            }
-                            None
-                        }
-                        Message::Frame(_) => {
-                            info!("Ignore unexpected frame");
-                            None
-                        }
-                    };
+        let output = ConnectOutput::new();
 
-                    match instance_connect_msg {
-                        None => {}
-                        Some(msg) => match msg.event {
-                            WorkerEvent::Stdout(StdOutLog { message }) => {
-                                print!("{message}")
+        let read_res = read.for_each(move |message_or_error|{
+            let output = output.clone();
+            async move {
+                match message_or_error {
+                    Err(error) => {
+                        error!("Error reading message: {}", error);
+                    }
+                    Ok(message) => {
+                        let instance_connect_msg = match message {
+                            Message::Text(str) => {
+                                let parsed: serde_json::Result<InstanceConnectMessage> =
+                                    serde_json::from_str(&str);
+                                Some(parsed.unwrap()) // TODO: error handling
                             }
-                            WorkerEvent::Stderr(StdErrLog { message }) => {
-                                print!("{message}")
+                            Message::Binary(data) => {
+                                let parsed: serde_json::Result<InstanceConnectMessage> =
+                                    serde_json::from_slice(&data);
+                                Some(parsed.unwrap()) // TODO: error handling
                             }
-                            WorkerEvent::Log(Log {
-                                level,
-                                context,
-                                message,
-                            }) => match level {
-                                0 => tracing::trace!(message, context = context),
-                                1 => tracing::debug!(message, context = context),
-                                2 => tracing::info!(message, context = context),
-                                3 => tracing::warn!(message, context = context),
-                                _ => tracing::error!(message, context = context),
+                            Message::Ping(_) => {
+                                debug!("Ignore ping");
+                                None
+                            }
+                            Message::Pong(_) => {
+                                debug!("Ignore pong");
+                                None
+                            }
+                            Message::Close(details) => {
+                                match details {
+                                    Some(closed_frame) => {
+                                        info!("Connection Closed: {}", closed_frame);
+                                    }
+                                    None => {
+                                        info!("Connection Closed");
+                                    }
+                                }
+                                None
+                            }
+                            Message::Frame(f) => {
+                                debug!("Ignored unexpected frame {f:?}");
+                                None
+                            }
+                        };
+
+                        match instance_connect_msg {
+                            None => {}
+                            Some(msg) => match msg.event {
+                                WorkerEvent::Stdout(StdOutLog { message }) => {
+                                    output.emit_stdout(message).await;
+                                }
+                                WorkerEvent::Stderr(StdErrLog { message }) => {
+                                    output.emit_stderr(message).await;
+                                }
+                                WorkerEvent::Log(Log {
+                                                     level,
+                                                     context,
+                                                     message,
+                                                 }) => {
+                                    output.emit_log(level, context, message);
+                                }
                             },
-                        },
+                        }
                     }
                 }
             }
