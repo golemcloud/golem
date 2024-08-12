@@ -27,9 +27,7 @@ use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::repo::RepoError;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_service_base::model::{
-    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
-};
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 
@@ -79,21 +77,12 @@ where
         version: 0,
     };
 
-    let user_component_id = UserComponentId {
-        versioned_component_id: versioned_component_id.clone(),
-    };
-    let protected_component_id = ProtectedComponentId {
-        versioned_component_id: versioned_component_id.clone(),
-    };
-
     Ok(Component {
         namespace: namespace.clone(),
         component_name: component_name.clone(),
         component_size: data.len() as u64,
         metadata,
         versioned_component_id,
-        user_component_id,
-        protected_component_id,
     })
 }
 
@@ -221,8 +210,8 @@ where
         info!(namespace = %namespace,"Uploaded component - exports {:?}",component.metadata.exports
         );
         tokio::try_join!(
-            self.upload_user_component(&component.user_component_id, data.clone()),
-            self.upload_protected_component(&component.protected_component_id, data)
+            self.upload_user_component(&component.versioned_component_id, data.clone()),
+            self.upload_protected_component(&component.versioned_component_id, data)
         )?;
 
         let record = component
@@ -270,8 +259,8 @@ where
             .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
 
         tokio::try_join!(
-            self.upload_user_component(&next_component.user_component_id, data.clone()),
-            self.upload_protected_component(&next_component.protected_component_id, data)
+            self.upload_user_component(&next_component.versioned_component_id, data.clone()),
+            self.upload_protected_component(&next_component.versioned_component_id, data)
         )?;
 
         let component = Component {
@@ -306,12 +295,8 @@ where
 
         info!(namespace = %namespace, "Download component");
 
-        let id = ProtectedComponentId {
-            versioned_component_id: versioned_component_id.clone(),
-        };
-
         self.object_store
-            .get(&self.get_protected_object_store_key(&id))
+            .get(&self.get_protected_object_store_key(&versioned_component_id))
             .await
             .tap_err(
                 |e| error!(namespace = %namespace, "Error downloading component - error: {}", e),
@@ -332,12 +317,9 @@ where
 
         info!(namespace = %namespace, "Download component as stream");
 
-        let id = ProtectedComponentId {
-            versioned_component_id,
-        };
         let stream = self
             .object_store
-            .get_stream(&self.get_protected_object_store_key(&id))
+            .get_stream(&self.get_protected_object_store_key(&versioned_component_id))
             .await;
 
         Ok(stream)
@@ -357,12 +339,9 @@ where
 
         match versioned_component_id {
             Some(versioned_component_id) => {
-                let id = ProtectedComponentId {
-                    versioned_component_id: versioned_component_id.clone(),
-                };
                 let data = self
                     .object_store
-                    .get(&self.get_protected_object_store_key(&id))
+                    .get(&self.get_protected_object_store_key(&versioned_component_id))
                     .await
                     .tap_err(|e| error!(namespace = %namespace, "Error getting component data - error: {}", e))
                     .map_err(|e| {
@@ -513,17 +492,13 @@ where
         if !versioned_component_ids.is_empty() {
             for versioned_component_id in versioned_component_ids {
                 self.object_store
-                    .delete(&self.get_protected_object_store_key(&ProtectedComponentId {
-                        versioned_component_id: versioned_component_id.clone(),
-                    }))
+                    .delete(&self.get_protected_object_store_key(&versioned_component_id))
                     .await
                     .map_err(|e| {
                         ComponentError::internal(e.to_string(), "Failed to delete component")
                     })?;
                 self.object_store
-                    .delete(&self.get_user_object_store_key(&UserComponentId {
-                        versioned_component_id: versioned_component_id.clone(),
-                    }))
+                    .delete(&self.get_user_object_store_key(&versioned_component_id))
                     .await
                     .map_err(|e| {
                         ComponentError::internal(e.to_string(), "Failed to delete component")
@@ -540,17 +515,17 @@ where
 }
 
 impl ComponentServiceDefault {
-    fn get_user_object_store_key(&self, id: &UserComponentId) -> String {
-        id.slug()
+    fn get_user_object_store_key(&self, id: &VersionedComponentId) -> String {
+        format!("{id}:user")
     }
 
-    fn get_protected_object_store_key(&self, id: &ProtectedComponentId) -> String {
-        id.slug()
+    fn get_protected_object_store_key(&self, id: &VersionedComponentId) -> String {
+        format!("{id}:protected")
     }
 
     async fn upload_user_component(
         &self,
-        user_component_id: &UserComponentId,
+        user_component_id: &VersionedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
@@ -561,7 +536,7 @@ impl ComponentServiceDefault {
 
     async fn upload_protected_component(
         &self,
-        protected_component_id: &ProtectedComponentId,
+        protected_component_id: &VersionedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
@@ -632,18 +607,6 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
                 component_id: component_id.clone(),
                 version: 0,
             },
-            user_component_id: UserComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
-            },
         };
 
         Ok(fake_component)
@@ -667,18 +630,6 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
             versioned_component_id: VersionedComponentId {
                 component_id: component_id.clone(),
                 version: 0,
-            },
-            user_component_id: UserComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
             },
         };
 

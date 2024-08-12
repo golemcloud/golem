@@ -53,12 +53,6 @@ pub struct VersionedComponentId {
     pub version: ComponentVersion,
 }
 
-impl VersionedComponentId {
-    pub fn slug(&self) -> String {
-        format!("{}#{}", self.component_id.0, self.version)
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
     for VersionedComponentId
 {
@@ -89,80 +83,6 @@ impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::Ver
 impl std::fmt::Display for VersionedComponentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}#{}", self.component_id, self.version)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct UserComponentId {
-    pub versioned_component_id: VersionedComponentId,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::UserComponentId> for UserComponentId {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::UserComponentId,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            versioned_component_id: value
-                .versioned_component_id
-                .ok_or("Missing versioned_component_id")?
-                .try_into()?,
-        })
-    }
-}
-
-impl From<UserComponentId> for golem_api_grpc::proto::golem::component::UserComponentId {
-    fn from(value: UserComponentId) -> Self {
-        Self {
-            versioned_component_id: Some(value.versioned_component_id.into()),
-        }
-    }
-}
-
-impl UserComponentId {
-    pub fn slug(&self) -> String {
-        format!("{}:user", self.versioned_component_id.slug())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ProtectedComponentId {
-    pub versioned_component_id: VersionedComponentId,
-}
-
-impl ProtectedComponentId {
-    pub fn slug(&self) -> String {
-        format!("{}:protected", self.versioned_component_id.slug())
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::ProtectedComponentId>
-    for ProtectedComponentId
-{
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::ProtectedComponentId,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            versioned_component_id: value
-                .versioned_component_id
-                .ok_or("Missing versioned_component_id")?
-                .try_into()?,
-        })
-    }
-}
-
-impl From<ProtectedComponentId> for golem_api_grpc::proto::golem::component::ProtectedComponentId {
-    fn from(value: ProtectedComponentId) -> Self {
-        Self {
-            versioned_component_id: Some(value.versioned_component_id.into()),
-        }
     }
 }
 
@@ -1563,8 +1483,6 @@ impl From<golem_api_grpc::proto::golem::common::ErrorsBody> for ErrorsBody {
 #[oai(rename_all = "camelCase")]
 pub struct Component {
     pub versioned_component_id: VersionedComponentId,
-    pub user_component_id: UserComponentId,
-    pub protected_component_id: ProtectedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
@@ -1581,14 +1499,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .versioned_component_id
                 .ok_or("Missing versioned_component_id")?
                 .try_into()?,
-            user_component_id: value
-                .user_component_id
-                .ok_or("Missing user_component_id")?
-                .try_into()?,
-            protected_component_id: value
-                .protected_component_id
-                .ok_or("Missing protected_component_id")?
-                .try_into()?,
             component_name: ComponentName(value.component_name),
             component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
@@ -1600,8 +1510,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
     fn from(value: Component) -> Self {
         Self {
             versioned_component_id: Some(value.versioned_component_id.into()),
-            user_component_id: Some(value.user_component_id.into()),
-            protected_component_id: Some(value.protected_component_id.into()),
             component_name: value.component_name.0,
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
@@ -1618,12 +1526,6 @@ impl Component {
         };
         Self {
             versioned_component_id: new_version.clone(),
-            user_component_id: UserComponentId {
-                versioned_component_id: new_version.clone(),
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: new_version,
-            },
             ..self
         }
     }

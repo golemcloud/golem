@@ -199,9 +199,7 @@ pub struct ComponentServiceNoop {}
 impl ComponentServiceNoop {
     pub fn test_component() -> Component {
         use golem_common::model::component_metadata::ComponentMetadata;
-        use golem_service_base::model::{
-            ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
-        };
+        use golem_service_base::model::{ComponentName, VersionedComponentId};
 
         let id = VersionedComponentId {
             component_id: ComponentId::new_v4(),
@@ -210,12 +208,6 @@ impl ComponentServiceNoop {
 
         Component {
             versioned_component_id: id.clone(),
-            user_component_id: UserComponentId {
-                versioned_component_id: id.clone(),
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: id.clone(),
-            },
             component_name: ComponentName("test".to_string()),
             component_size: 0,
             metadata: ComponentMetadata {

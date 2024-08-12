@@ -162,10 +162,6 @@ pub trait ComponentService {
             Some(create_component_response::Result::Success(component)) => {
                 info!("Created component {component:?}");
                 Ok(component
-                    .protected_component_id
-                    .ok_or(AddComponentError::Other(
-                        "Missing protected_component_id field".to_string(),
-                    ))?
                     .versioned_component_id
                     .ok_or(AddComponentError::Other(
                         "Missing versioned_component_id field".to_string(),
@@ -237,12 +233,7 @@ pub trait ComponentService {
             }
             Some(update_component_response::Result::Success(component)) => {
                 info!("Created component {component:?}");
-                component
-                    .protected_component_id
-                    .unwrap()
-                    .versioned_component_id
-                    .unwrap()
-                    .version
+                component.versioned_component_id.unwrap().version
             }
             Some(update_component_response::Result::Error(error)) => {
                 panic!("Failed to update component in golem-component-service: {error:?}");
