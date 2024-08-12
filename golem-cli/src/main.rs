@@ -18,14 +18,14 @@ use clap::Parser;
 use clap_verbosity_flag::{Level, Verbosity};
 use golem_cli::command::profile::OssProfileAdd;
 use golem_cli::config::{Config, NamedProfile, Profile};
+use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand};
+use golem_cli::oss;
+use golem_cli::oss::command::GolemOssCommand;
+use golem_cli::oss::completion::PrintOssCompletion;
 use indoc::eprintdoc;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
-
-use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand};
-use golem_cli::oss;
-use golem_cli::oss::command::GolemOssCommand;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap();
@@ -71,7 +71,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(oss::main::async_main(command, p, cli_kind, config_dir))
+            .block_on(oss::main::async_main(
+                command,
+                p,
+                cli_kind,
+                config_dir,
+                Box::new(PrintOssCompletion()),
+            ))
     } else {
         let command = GolemInitCommand::<OssProfileAdd>::parse();
 
@@ -87,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cli_kind,
                 config_dir,
                 Box::new(DummyProfileAuth {}),
+                Box::new(PrintOssCompletion()),
             ))
     }
 }

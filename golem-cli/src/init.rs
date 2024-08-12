@@ -98,6 +98,13 @@ pub enum InitCommand<ProfileAdd: clap::Args> {
         #[command(subcommand)]
         subcommand: ApiDeploymentSubcommand<OssContext>,
     },
+
+    /// Generate shell completions
+    #[command()]
+    Completion {
+        #[arg(long = "generate", value_enum)]
+        generator: clap_complete::Shell,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -139,11 +146,16 @@ impl ProfileAuth for DummyProfileAuth {
     }
 }
 
+pub trait PrintCompletion {
+    fn print_completion(&self, shell: clap_complete::Shell);
+}
+
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     cmd: GolemInitCommand<ProfileAdd>,
     cli_kind: CliKind,
     config_dir: PathBuf,
     profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
+    print_completion: Box<dyn PrintCompletion>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let res = match cmd.command {
         InitCommand::Init {} => {
@@ -175,6 +187,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             min_tier,
             language,
         }) => examples::process_list_examples(min_tier, language),
+        InitCommand::Completion { generator } => {
+            print_completion.print_completion(generator);
+            Ok(GolemResult::Str("".to_string()))
+        }
         #[cfg(feature = "stubgen")]
         InitCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
         _ => Err(GolemError(

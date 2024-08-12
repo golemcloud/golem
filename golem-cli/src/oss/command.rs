@@ -84,6 +84,13 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
     /// Interactively creates default profile
     #[command()]
     Init {},
+
+    /// Generate shell completions
+    #[command()]
+    Completion {
+        #[arg(long = "generate", value_enum)]
+        generator: clap_complete::Shell,
+    },
 }
 
 #[derive(Parser, Debug)]
