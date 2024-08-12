@@ -191,22 +191,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         };
 
         if let Some(event) = event {
-            // Stdout and stderr writes are persistent and overwritten by sending the data to the event
-            // service instead of the real output stream
-
-            let _ = Durability::<Ctx, WorkerEvent, SerializableStreamError>::wrap(
-                self,
-                WrappedFunctionType::WriteLocal, // emitting logs is considered WriteLocal -
-                // WriteRemote would too strict as it would interfere with batched writes which would feel unexpected
-                "io::streams::output_stream::write",
-                move |ctx| {
-                    Box::pin(async move {
-                        ctx.public_state.event_service.emit_event(event.clone());
-                        Ok::<_, StreamError>(event) // By returning the event, it's persisted in the oplog entry
-                    })
-                },
-            )
-            .await?;
+            self.emit_log_event(event).await;
             Ok::<(), StreamError>(())
         } else {
             // Non-stdout writes are non persistent and always executed
@@ -221,7 +206,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<(), StreamError> {
         let self2 = Resource::new_borrow(self_.rep());
         self.write(self_, contents).await?;
-        self.flush(self2).await?;
+        self.blocking_flush(self2).await?;
         Ok(())
     }
 

@@ -206,6 +206,17 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             id,
             indexed_resource,
         },
+        OplogEntry::Log {
+            timestamp,
+            level,
+            context,
+            message,
+        } => OplogEntry::Log {
+            timestamp: rounded_ts(timestamp),
+            level,
+            context,
+            message,
+        },
     }
 }
 

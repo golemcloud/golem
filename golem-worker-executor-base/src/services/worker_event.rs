@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::events::{record_broadcast_event, record_event};
 use bincode::{Decode, Encode};
+use golem_common::model::oplog::OplogEntry;
 use ringbuf::*;
 use std::fmt::{Display, Formatter};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
-
-use crate::metrics::events::{record_broadcast_event, record_event};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum LogLevel {
@@ -40,6 +40,40 @@ pub enum WorkerEvent {
         message: String,
     },
     Close,
+}
+
+impl WorkerEvent {
+    pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
+        match self {
+            WorkerEvent::StdOut(bytes) => Some(OplogEntry::log(
+                golem_common::model::oplog::LogLevel::Stdout,
+                String::new(),
+                String::from_utf8_lossy(bytes).to_string(),
+            )),
+            WorkerEvent::StdErr(bytes) => Some(OplogEntry::log(
+                golem_common::model::oplog::LogLevel::Stderr,
+                String::new(),
+                String::from_utf8_lossy(bytes).to_string(),
+            )),
+            WorkerEvent::Log {
+                level,
+                context,
+                message,
+            } => Some(OplogEntry::log(
+                match level {
+                    LogLevel::Trace => golem_common::model::oplog::LogLevel::Trace,
+                    LogLevel::Debug => golem_common::model::oplog::LogLevel::Debug,
+                    LogLevel::Info => golem_common::model::oplog::LogLevel::Info,
+                    LogLevel::Warn => golem_common::model::oplog::LogLevel::Warn,
+                    LogLevel::Error => golem_common::model::oplog::LogLevel::Error,
+                    LogLevel::Critical => golem_common::model::oplog::LogLevel::Critical,
+                },
+                context.clone(),
+                message.clone(),
+            )),
+            WorkerEvent::Close => None,
+        }
+    }
 }
 
 impl Display for WorkerEvent {

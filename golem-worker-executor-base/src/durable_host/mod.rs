@@ -33,7 +33,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
-use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_event::{WorkerEvent, WorkerEventService};
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::workerctx::{
     ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement,
@@ -357,6 +357,49 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
             None => RetryDecision::Immediate,
+        }
+    }
+
+    async fn emit_log_event(&self, event: WorkerEvent) {
+        if let Some(entry) = event.as_oplog_entry() {
+            if let OplogEntry::Log {
+                level,
+                context,
+                message,
+                ..
+            } = &entry
+            {
+                // Stdout and stderr writes are persistent and overwritten by sending the data to the event
+                // service instead of the real output stream
+
+                if self.state.is_live()
+                // If the worker is still in replay mode we never emit events.
+                {
+                    if self.state.persistence_level == PersistenceLevel::PersistNothing
+                    // If persistence is off, we always emit events
+                    {
+                        // Emit the event and write a special oplog entry
+                        self.public_state.event_service.emit_event(event.clone());
+                        self.state.oplog.add(entry).await;
+                    } else if !self
+                        .state
+                        .replay_state
+                        .seen_log(*level, context, message)
+                        .await
+                    {
+                        // haven't seen this log before
+                        self.public_state.event_service.emit_event(event.clone());
+                        self.state.oplog.add(entry).await;
+                    } else {
+                        // we have persisted emitting this log before, so we don't do it again but
+                        // remove the entry from the seen log set.
+                        self.state
+                            .replay_state
+                            .remove_seen_log(*level, context, message)
+                            .await;
+                    }
+                }
+            }
         }
     }
 }

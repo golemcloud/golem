@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::logging::logging::{Host, Level};
 use crate::services::worker_event::{LogLevel, WorkerEvent};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::oplog::WrappedFunctionType;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -40,20 +38,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             context,
             message,
         };
-
-        let _ = Durability::<Ctx, WorkerEvent, SerializableError>::wrap(
-            self,
-            WrappedFunctionType::WriteLocal, // emitting logs is considered WriteLocal -
-            // WriteRemote would too strict as it would interfere with batched writes which would feel unexpected
-            "logging::handler::log",
-            move |ctx| {
-                Box::pin(async move {
-                    ctx.public_state.event_service.emit_event(event.clone());
-                    Ok::<WorkerEvent, anyhow::Error>(event) // By returning the event, it's persisted in the oplog entry
-                })
-            },
-        )
-        .await?;
+        self.emit_log_event(event).await;
         Ok(())
     }
 }

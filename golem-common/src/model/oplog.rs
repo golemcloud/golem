@@ -210,6 +210,20 @@ impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for Ind
     }
 }
 
+/// Worker log levels including the special stdout and stderr channels
+#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode)]
+#[repr(u8)]
+pub enum LogLevel {
+    Stdout,
+    Stderr,
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Critical,
+}
+
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
     Create {
@@ -329,6 +343,13 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         id: WorkerResourceId,
         indexed_resource: IndexedResourceKey,
+    },
+    /// The worker emitted a log message
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
     },
 }
 
@@ -492,6 +513,15 @@ impl OplogEntry {
         }
     }
 
+    pub fn log(level: LogLevel, context: String, message: String) -> OplogEntry {
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            level,
+            context,
+            message,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -539,6 +569,7 @@ impl OplogEntry {
                 | OplogEntry::CreateResource { .. }
                 | OplogEntry::DropResource { .. }
                 | OplogEntry::DescribeResource { .. }
+                | OplogEntry::Log { .. }
         )
     }
 
@@ -567,6 +598,7 @@ impl OplogEntry {
             | OplogEntry::CreateResource { timestamp, .. }
             | OplogEntry::DropResource { timestamp, .. }
             | OplogEntry::DescribeResource { timestamp, .. } => *timestamp,
+            OplogEntry::Log { timestamp, .. } => *timestamp,
         }
     }
 }
