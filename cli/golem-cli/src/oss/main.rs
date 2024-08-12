@@ -16,7 +16,7 @@ use crate::command::profile::UniversalProfileAdd;
 use crate::config::{OssProfile, ProfileName};
 use crate::examples;
 use crate::factory::ServiceFactory;
-use crate::init::{CliKind, DummyProfileAuth};
+use crate::init::{CliKind, DummyProfileAuth, PrintCompletion};
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
@@ -34,6 +34,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     profile: OssProfile,
     cli_kind: CliKind,
     config_dir: PathBuf,
+    print_completion: Box<dyn PrintCompletion>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let OssProfile {
         url,
@@ -125,6 +126,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             check_version(&factory, &cmd.verbosity).await?;
 
             get_resource_by_uri(uri, &factory).await
+        }
+        OssCommand::Completion { generator } => {
+            print_completion.print_completion(generator);
+            Ok(GolemResult::Str("".to_string()))
         }
     };
 
