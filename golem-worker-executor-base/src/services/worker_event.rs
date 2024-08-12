@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::events::{record_broadcast_event, record_event};
+use futures_util::{stream, StreamExt};
+use ringbuf::storage::Heap;
+use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
 use std::fmt::{Display, Formatter};
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
-
-use crate::metrics::events::{record_broadcast_event, record_event};
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::Stream;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogLevel {
@@ -107,19 +113,28 @@ impl WorkerEventReceiver {
             None => self.receiver.recv().await,
         }
     }
+
+    pub fn to_stream(self) -> impl Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> {
+        let Self { history, receiver } = self;
+        stream::iter(history.into_iter().map(Ok)).chain(BroadcastStream::new(receiver))
+    }
 }
 
 pub struct WorkerEventServiceDefault {
     sender: Sender<WorkerEvent>,
-    ring: HeapRb<WorkerEvent>,
+    ring_prod: Arc<Mutex<<SharedRb<Heap<WorkerEvent>> as Split>::Prod>>,
+    ring_cons: Arc<Mutex<<SharedRb<Heap<WorkerEvent>> as Split>::Cons>>,
 }
 
 impl WorkerEventServiceDefault {
     pub fn new(channel_capacity: usize, ring_capacity: usize) -> WorkerEventServiceDefault {
         let (tx, _) = channel(channel_capacity);
-        let ring = HeapRb::new(ring_capacity);
-        // ring.sub
-        WorkerEventServiceDefault { sender: tx, ring }
+        let (ring_prod, ring_cons) = HeapRb::new(ring_capacity).split();
+        WorkerEventServiceDefault {
+            sender: tx,
+            ring_prod: Arc::new(Mutex::new(ring_prod)),
+            ring_cons: Arc::new(Mutex::new(ring_cons)),
+        }
     }
 }
 
@@ -138,12 +153,18 @@ impl WorkerEventService for WorkerEventServiceDefault {
 
             let _ = self.sender.send(event.clone());
         }
-        let _ = unsafe { Producer::new(&self.ring) }.push(event);
+
+        let mut ring_prod = self.ring_prod.lock().unwrap();
+        while ring_prod.try_push(event.clone()).is_err() {
+            let mut ring_cons = self.ring_cons.lock().unwrap();
+            let _ = ring_cons.try_pop();
+        }
     }
 
     fn receiver(&self) -> WorkerEventReceiver {
         let receiver = self.sender.subscribe();
-        let history = self.ring.iter().cloned().rev().collect();
+        let ring_cons = self.ring_cons.lock().unwrap();
+        let history = ring_cons.iter().cloned().collect();
         WorkerEventReceiver { history, receiver }
     }
 }

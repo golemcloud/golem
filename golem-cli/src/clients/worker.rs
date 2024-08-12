@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::worker::WorkerConnectOptions;
 use crate::model::{
     GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
@@ -67,7 +68,22 @@ pub trait WorkerClient {
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<WorkersMetadataResponse, GolemError>;
-    async fn connect(&self, worker_urn: WorkerUrn) -> Result<(), GolemError>;
+    async fn connect(
+        &self,
+        worker_urn: WorkerUrn,
+        connect_options: WorkerConnectOptions,
+    ) -> Result<(), GolemError>;
+
+    async fn connect_forever(
+        &self,
+        worker_urn: WorkerUrn,
+        connect_options: WorkerConnectOptions,
+    ) -> Result<(), GolemError> {
+        loop {
+            self.connect(worker_urn.clone(), connect_options.clone())
+                .await?;
+        }
+    }
 
     async fn update(
         &self,

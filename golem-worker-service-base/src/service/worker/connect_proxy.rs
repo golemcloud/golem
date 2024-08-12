@@ -18,11 +18,11 @@ use std::{
 };
 
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use poem::web::websocket::Message;
-use tonic::Status;
-
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_service_base::model::WorkerId;
+use poem::web::websocket::Message;
+use tonic::Status;
+use tracing::info;
 
 /// Proxies a worker connection, listening for either connection to close. Websocket sink will be closed at the end.
 ///
@@ -65,7 +65,9 @@ pub async fn proxy_worker_connection(
                         tracing::info!(error=error.to_string(), "Received WebSocket Error");
                         break Err(error);
                     },
-                    Some(Ok(_)) => {}
+                    Some(Ok(other)) => {
+                        tracing::info!(message = ?other, "Received unexpected WebSocket message"); // TODO: remove
+                    }
                     None => {
                         tracing::info!("WebSocket connection closed");
                         break Ok(());
@@ -77,7 +79,8 @@ pub async fn proxy_worker_connection(
                 if let Some(message) = worker_message {
                     if let Err(error) = forward_worker_message(message, &mut websocket).await {
                         tracing::info!(error=error.to_string(), "Error forwarding message to WebSocket client");
-                        break(Err(error))
+                        break Err(error)
+
                     }
                 } else {
                     tracing::info!("Worker stream ended");
@@ -87,6 +90,7 @@ pub async fn proxy_worker_connection(
         }
     };
 
+    tracing::info!("Closing websocket connection");
     if let Err(error) = websocket.close().await {
         tracing::error!(
             error = error.to_string(),
@@ -108,6 +112,7 @@ where
 {
     let message = message?;
     let msg_json = serde_json::to_string(&message)?;
+    info!("forward_worker_message {msg_json}");
     socket.send(Message::Text(msg_json)).await?;
     Ok(())
 }

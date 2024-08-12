@@ -198,7 +198,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             is_std = true;
         }
 
-        if !is_std || is_live {
+        if !is_std {
             HostOutputStream::write(&mut self.as_wasi_view(), self_, contents)
         } else {
             Ok(())
@@ -231,7 +231,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             is_std = true;
         }
 
-        if !is_std || is_live {
+        if !is_std {
             HostOutputStream::blocking_write_and_flush(&mut self.as_wasi_view(), self_, contents)
                 .await
         } else {

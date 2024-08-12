@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::worker::WorkerConnectOptions;
+use colored::Colorize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct ConnectOutput {
     state: Arc<Mutex<ConnectOutputState>>,
+    options: WorkerConnectOptions,
 }
 
 struct ConnectOutputState {
@@ -28,12 +31,13 @@ struct ConnectOutputState {
 // TODO: configurable prefix (source, level, worker name, timestamp), use colors
 
 impl ConnectOutput {
-    pub fn new() -> Self {
+    pub fn new(options: WorkerConnectOptions) -> Self {
         ConnectOutput {
             state: Arc::new(Mutex::new(ConnectOutputState {
                 stdout: String::new(),
                 stderr: String::new(),
             })),
+            options,
         }
     }
 
@@ -67,7 +71,7 @@ impl ConnectOutput {
             if idx == (lines.len() - 1) {
                 // last line, if message did not end with newline, just store it
                 if message.ends_with('\n') {
-                    self.print_stdout(&format!("{}{}", state.stderr, line));
+                    self.print_stderr(&format!("{}{}", state.stderr, line));
                     state.stderr = String::new();
                 } else {
                     state.stderr = format!("{}{}", state.stderr, line);
@@ -84,7 +88,7 @@ impl ConnectOutput {
     }
 
     pub fn emit_log(&self, level: i32, context: String, message: String) {
-        let level = match level {
+        let level_prefix = match level {
             0 => "TRACE   ",
             1 => "DEBUG   ",
             2 => "INFO    ",
@@ -93,7 +97,7 @@ impl ConnectOutput {
             5 => "CRITICAL",
             _ => "        ",
         };
-        println!("[{level}] [{context}] {message}");
+        self.colored(level, &format!("[{level_prefix}] [{context}] {message}"));
     }
 
     pub async fn flush(&self) {
@@ -109,10 +113,27 @@ impl ConnectOutput {
     }
 
     fn print_stdout(&self, message: &str) {
-        println!("[STDOUT   ] {}", message);
+        self.colored(2, &format!("[STDOUT  ] {}", message));
     }
 
     fn print_stderr(&self, message: &str) {
-        println!("[STDERR   ] {}", message);
+        self.colored(4, &format!("[STDERR  ] {}", message));
+    }
+
+    fn colored(&self, level: i32, s: &str) {
+        if self.options.no_colors {
+            println!("{}", s);
+        } else {
+            let colored = match level {
+                0 => s.blue(),
+                1 => s.green(),
+                2 => s.white(),
+                3 => s.yellow(),
+                4 => s.red(),
+                5 => s.red().bold(),
+                _ => s.white(),
+            };
+            println!("{}", colored);
+        }
     }
 }

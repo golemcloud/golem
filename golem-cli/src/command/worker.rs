@@ -14,7 +14,7 @@
 
 use crate::command::ComponentRefSplit;
 use clap::builder::ValueParser;
-use clap::{ArgMatches, Error, FromArgMatches, Subcommand};
+use clap::{ArgMatches, Args, Error, FromArgMatches, Subcommand};
 use golem_client::model::ScanCursor;
 use golem_common::model::WorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
@@ -211,6 +211,13 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
     }
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct WorkerConnectOptions {
+    /// Do not use colored log lines in text mode
+    #[arg(short, long)]
+    pub no_colors: bool,
+}
+
 #[derive(Subcommand, Debug)]
 #[command()]
 pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
@@ -279,6 +286,8 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     Connect {
         #[command(flatten)]
         worker_ref: WorkerRef,
+        #[command(flatten)]
+        connect_options: WorkerConnectOptions,
     },
 
     /// Interrupts a running worker
@@ -436,10 +445,15 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                     )
                     .await
             }
-            WorkerSubcommand::Connect { worker_ref } => {
+            WorkerSubcommand::Connect {
+                worker_ref,
+                connect_options,
+            } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service.connect(worker_uri, project_id).await
+                service
+                    .connect(worker_uri, project_id, connect_options)
+                    .await
             }
             WorkerSubcommand::Interrupt { worker_ref } => {
                 let (worker_uri, project_ref) = worker_ref.split();

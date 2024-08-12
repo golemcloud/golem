@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use crate::clients::worker::WorkerClient;
+use crate::command::worker::WorkerConnectOptions;
 use crate::connect_output::ConnectOutput;
 use crate::model::{
     GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
@@ -35,7 +36,7 @@ use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_client::api::WorkerClient + Sync + Send> {
@@ -231,7 +232,11 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .into())
     }
 
-    async fn connect(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+    async fn connect(
+        &self,
+        worker_urn: WorkerUrn,
+        connect_options: WorkerConnectOptions,
+    ) -> Result<(), GolemError> {
         let mut url = self.context.base_url.clone();
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
@@ -272,6 +277,8 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             None
         };
 
+        info!("Connecting to {worker_urn}");
+
         let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| match e {
@@ -289,25 +296,29 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         let (mut write, read) = ws_stream.split();
 
         let pings = task::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(5)); // TODO configure
-
+            let mut interval = time::interval(Duration::from_secs(1)); // TODO configure
             let mut cnt: i32 = 1;
 
             loop {
                 interval.tick().await;
 
-                write
+                let ping_result = write
                     .send(Message::Ping(cnt.to_ne_bytes().to_vec()))
                     .await
-                    .unwrap(); // TODO: handle errors: map_err(|e| GolemError(format!("Ping failure: {e}")))?;
+                    .map_err(|err| GolemError(format!("Worker connection ping failure: {err}")));
+
+                if let Err(err) = ping_result {
+                    error!("{}", err);
+                    break err;
+                }
 
                 cnt += 1;
             }
         });
 
-        let output = ConnectOutput::new();
+        let output = ConnectOutput::new(connect_options);
 
-        let read_res = read.for_each(move |message_or_error|{
+        let read_res = read.for_each(move |message_or_error| {
             let output = output.clone();
             async move {
                 match message_or_error {
@@ -315,23 +326,37 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                         error!("Error reading message: {}", error);
                     }
                     Ok(message) => {
+                        trace!("Received message: {message:?}"); // TODO: remove
                         let instance_connect_msg = match message {
                             Message::Text(str) => {
                                 let parsed: serde_json::Result<InstanceConnectMessage> =
                                     serde_json::from_str(&str);
-                                Some(parsed.unwrap()) // TODO: error handling
+
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
                             }
                             Message::Binary(data) => {
                                 let parsed: serde_json::Result<InstanceConnectMessage> =
                                     serde_json::from_slice(&data);
-                                Some(parsed.unwrap()) // TODO: error handling
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
                             }
                             Message::Ping(_) => {
-                                debug!("Ignore ping");
+                                trace!("Ignore ping");
                                 None
                             }
                             Message::Pong(_) => {
-                                debug!("Ignore pong");
+                                trace!("Ignore pong");
                                 None
                             }
                             Message::Close(details) => {
@@ -361,10 +386,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                                     output.emit_stderr(message).await;
                                 }
                                 WorkerEvent::Log(Log {
-                                                     level,
-                                                     context,
-                                                     message,
-                                                 }) => {
+                                    level,
+                                    context,
+                                    message,
+                                }) => {
                                     output.emit_log(level, context, message);
                                 }
                             },
@@ -377,7 +402,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         pin_mut!(read_res, pings);
 
         future::select(pings, read_res).await;
-
         Ok(())
     }
 
