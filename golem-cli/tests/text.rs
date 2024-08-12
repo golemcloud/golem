@@ -207,7 +207,7 @@ fn text_component_update(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Updated component with URN {}. New version: 1. Component size is 71830 bytes.",
+            "Updated component with URN {}. New version: 1. Component size is 71828 bytes.",
             component.component_urn
         )
     );
@@ -258,7 +258,7 @@ fn text_component_get(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Component with URN {}. Version: 0. Component size is 71830 bytes.",
+            "Component with URN {}. Version: 0. Component size is 71828 bytes.",
             component.component_urn
         )
     );
@@ -309,7 +309,7 @@ fn text_component_list(
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         | URN                                                | Name                          | Version | Size  | Exports count |
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 71830 |             2 |
+        | {} | {} |       0 | 71828 |             2 |
         +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         ",
         component.component_urn,

@@ -1935,6 +1935,9 @@ fn calculate_latest_worker_status(
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::DescribeResource { .. } => {}
+            OplogEntry::Log { .. } => {
+                result = WorkerStatus::Running;
+            }
         }
     }
     result
