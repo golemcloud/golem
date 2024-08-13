@@ -46,7 +46,7 @@ fn render_error<T>(result: anyhow::Result<T>) -> Option<T> {
     match result {
         Ok(value) => Some(value),
         Err(err) => {
-            eprintln!("Error: {:?}", err);
+            eprintln!("Error: {}", err);
             None
         }
     }
