@@ -14,11 +14,15 @@
 
 use crate::error::GolemError;
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
-use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{IdempotencyKey, OwnedWorkerId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
+use metrohash::MetroHash128;
+use std::collections::HashSet;
+use std::hash::Hasher;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -32,12 +36,15 @@ pub struct ReplayState {
     /// The oplog index of the last replayed entry
     last_replayed_index: AtomicOplogIndex,
     internal: Arc<RwLock<InternalReplayState>>,
+    has_seen_logs: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
 struct InternalReplayState {
     pub deleted_regions: DeletedRegions,
     pub next_deleted_region: Option<OplogRegion>,
+    /// Hashes of log entries persisted since the last read non-hint oplog entry
+    pub log_hashes: HashSet<(u64, u64)>,
 }
 
 impl ReplayState {
@@ -58,7 +65,9 @@ impl ReplayState {
             internal: Arc::new(RwLock::new(InternalReplayState {
                 deleted_regions,
                 next_deleted_region,
+                log_hashes: HashSet::new(),
             })),
+            has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial deleted regions applied by manual updates correctly
         result
@@ -108,7 +117,8 @@ impl ReplayState {
         let read_idx = self.last_replayed_index.get().next();
         let entry = self.internal_get_next_oplog_entry().await;
 
-        // Skipping hint entries
+        // Skipping hint entries and recording log entries
+        let mut logs = HashSet::new();
         while self.is_replay() {
             let saved_replay_idx = self.last_replayed_index.get();
             let internal = self.internal.read().await;
@@ -121,10 +131,52 @@ impl ReplayState {
                 // TODO: cache the last hint entry to avoid reading it again
                 internal.next_deleted_region = saved_next_deleted_region;
                 break;
+            } else if let OplogEntry::Log {
+                level,
+                context,
+                message,
+                ..
+            } = &entry
+            {
+                let hash = Self::hash_log_entry(*level, context, message);
+                logs.insert(hash);
             }
         }
 
+        self.has_seen_logs
+            .store(!logs.is_empty(), Ordering::Relaxed);
+        let mut internal = self.internal.write().await;
+        internal.log_hashes = logs;
+
         (read_idx, entry)
+    }
+
+    /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
+    pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
+        if self.has_seen_logs.load(Ordering::Relaxed) {
+            let hash = Self::hash_log_entry(level, context, message);
+            let internal = self.internal.read().await;
+            internal.log_hashes.contains(&hash)
+        } else {
+            false
+        }
+    }
+
+    /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
+    pub async fn remove_seen_log(&self, level: LogLevel, context: &str, message: &str) {
+        let hash = Self::hash_log_entry(level, context, message);
+        let mut internal = self.internal.write().await;
+        internal.log_hashes.remove(&hash);
+        self.has_seen_logs
+            .store(!internal.log_hashes.is_empty(), Ordering::Relaxed);
+    }
+
+    fn hash_log_entry(level: LogLevel, context: &str, message: &str) -> (u64, u64) {
+        let mut hasher = MetroHash128::new();
+        hasher.write_u8(level as u8);
+        hasher.write(context.as_bytes());
+        hasher.write(message.as_bytes());
+        hasher.finish128()
     }
 
     /// Gets the next oplog entry, no matter if it is hint or not, following jumps
