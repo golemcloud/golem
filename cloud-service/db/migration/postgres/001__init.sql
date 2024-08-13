@@ -1,4 +1,4 @@
-CREATE EXTENSION pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS plans (
     plan_id UUID,
