@@ -745,12 +745,25 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     }
 }
 
-pub fn stdout_event(s: &str) -> LogEvent {
-    LogEvent {
-        event: Some(log_event::Event::Stdout(StdOutLog {
-            timestamp: Some(Timestamp::now_utc().into()),
-            message: s.to_string(),
-        })),
+pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
+    events
+        .flat_map(|event| match event {
+            LogEvent {
+                event: Some(log_event::Event::Stdout(StdOutLog { message, .. })),
+            } => Some(message),
+            _ => None,
+        })
+        .collect()
+}
+
+pub fn stdout_event_matching(event: &LogEvent, s: &str) -> bool {
+    if let LogEvent {
+        event: Some(log_event::Event::Stdout(StdOutLog { message, .. })),
+    } = event
+    {
+        message == s
+    } else {
+        false
     }
 }
 
@@ -765,13 +778,15 @@ pub fn stdout_event_starting_with(event: &LogEvent, s: &str) -> bool {
     }
 }
 
-pub fn stderr_event(s: &str) -> LogEvent {
-    LogEvent {
-        event: Some(log_event::Event::Stderr(StdErrLog {
-            timestamp: Some(Timestamp::now_utc().into()),
-            message: s.to_string(),
-        })),
-    }
+pub fn stderr_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
+    events
+        .flat_map(|event| match event {
+            LogEvent {
+                event: Some(log_event::Event::Stderr(StdErrLog { message, .. })),
+            } => Some(message),
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn log_event_to_string(event: &LogEvent) -> String {

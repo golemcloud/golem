@@ -22,7 +22,8 @@ use crate::common::{start, TestContext};
 use assert2::{assert, check};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_test_framework::dsl::{
-    drain_connection, stderr_event, stdout_event, worker_error_message, TestDslUnsafe,
+    drain_connection, stderr_event, stderr_events, stdout_events, worker_error_message,
+    TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
@@ -51,7 +52,7 @@ async fn write_stdout() {
 
     drop(executor);
 
-    check!(events == vec![stdout_event("Sample text written to the output\n")]);
+    check!(stdout_events(events.into_iter()) == vec!["Sample text written to the output\n"]);
 }
 
 #[tokio::test]
@@ -73,7 +74,7 @@ async fn write_stderr() {
 
     drop(executor);
 
-    check!(events == vec![stderr_event("Sample text written to the error output\n")]);
+    check!(stderr_events(events.into_iter()) == vec!["Sample text written to the error output\n"]);
 }
 
 #[tokio::test]
