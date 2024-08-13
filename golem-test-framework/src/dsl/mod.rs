@@ -38,8 +38,8 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, ScanCursor,
-    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatusRecord,
+    SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -748,6 +748,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 pub fn stdout_event(s: &str) -> LogEvent {
     LogEvent {
         event: Some(log_event::Event::Stdout(StdOutLog {
+            timestamp: Some(Timestamp::now_utc().into()),
             message: s.to_string(),
         })),
     }
@@ -755,7 +756,7 @@ pub fn stdout_event(s: &str) -> LogEvent {
 
 pub fn stdout_event_starting_with(event: &LogEvent, s: &str) -> bool {
     if let LogEvent {
-        event: Some(log_event::Event::Stdout(StdOutLog { message })),
+        event: Some(log_event::Event::Stdout(StdOutLog { message, .. })),
     } = event
     {
         message.starts_with(s)
@@ -767,6 +768,7 @@ pub fn stdout_event_starting_with(event: &LogEvent, s: &str) -> bool {
 pub fn stderr_event(s: &str) -> LogEvent {
     LogEvent {
         event: Some(log_event::Event::Stderr(StdErrLog {
+            timestamp: Some(Timestamp::now_utc().into()),
             message: s.to_string(),
         })),
     }

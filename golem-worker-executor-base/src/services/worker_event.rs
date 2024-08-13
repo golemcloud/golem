@@ -13,14 +13,11 @@
 // limitations under the License.
 
 use crate::metrics::events::{record_broadcast_event, record_event};
-use bincode::{Decode, Encode};
 use futures_util::{stream, StreamExt};
-use golem_common::model::oplog::OplogEntry;
-use golem_common::model::Timestamp;
+use golem_common::model::{LogLevel, WorkerEvent};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
-use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
@@ -28,128 +25,6 @@ use tokio::sync::broadcast::*;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Critical,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum WorkerEvent {
-    StdOut {
-        timestamp: Timestamp,
-        bytes: Vec<u8>,
-    },
-    StdErr {
-        timestamp: Timestamp,
-        bytes: Vec<u8>,
-    },
-    Log {
-        timestamp: Timestamp,
-        level: LogLevel,
-        context: String,
-        message: String,
-    },
-    Close,
-}
-
-impl WorkerEvent {
-    pub fn stdout(bytes: Vec<u8>) -> WorkerEvent {
-        WorkerEvent::StdOut {
-            timestamp: Timestamp::now_utc(),
-            bytes,
-        }
-    }
-
-    pub fn stderr(bytes: Vec<u8>) -> WorkerEvent {
-        WorkerEvent::StdErr {
-            timestamp: Timestamp::now_utc(),
-            bytes,
-        }
-    }
-
-    pub fn log(level: LogLevel, context: &str, message: &str) -> WorkerEvent {
-        WorkerEvent::Log {
-            timestamp: Timestamp::now_utc(),
-            level,
-            context: context.to_string(),
-            message: message.to_string(),
-        }
-    }
-
-    pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
-        match self {
-            WorkerEvent::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
-                timestamp: *timestamp,
-                level: golem_common::model::oplog::LogLevel::Stdout,
-                context: String::new(),
-                message: String::from_utf8_lossy(bytes).to_string(),
-            }),
-            WorkerEvent::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
-                timestamp: *timestamp,
-                level: golem_common::model::oplog::LogLevel::Stdout,
-                context: String::new(),
-                message: String::from_utf8_lossy(bytes).to_string(),
-            }),
-            WorkerEvent::Log {
-                timestamp,
-                level,
-                context,
-                message,
-            } => Some(OplogEntry::Log {
-                timestamp: *timestamp,
-                level: match level {
-                    LogLevel::Trace => golem_common::model::oplog::LogLevel::Trace,
-                    LogLevel::Debug => golem_common::model::oplog::LogLevel::Debug,
-                    LogLevel::Info => golem_common::model::oplog::LogLevel::Info,
-                    LogLevel::Warn => golem_common::model::oplog::LogLevel::Warn,
-                    LogLevel::Error => golem_common::model::oplog::LogLevel::Error,
-                    LogLevel::Critical => golem_common::model::oplog::LogLevel::Critical,
-                },
-                context: context.clone(),
-                message: message.clone(),
-            }),
-            WorkerEvent::Close => None,
-        }
-    }
-}
-
-impl Display for WorkerEvent {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerEvent::StdOut { bytes, .. } => {
-                write!(
-                    f,
-                    "<stdout> {}",
-                    String::from_utf8(bytes.clone()).unwrap_or_default()
-                )
-            }
-            WorkerEvent::StdErr { bytes, .. } => {
-                write!(
-                    f,
-                    "<stderr> {}",
-                    String::from_utf8(bytes.clone()).unwrap_or_default()
-                )
-            }
-            WorkerEvent::Log {
-                level,
-                context,
-                message,
-                ..
-            } => {
-                write!(f, "<log> {:?} {} {}", level, context, message)
-            }
-            WorkerEvent::Close => {
-                write!(f, "<close>")
-            }
-        }
-    }
-}
 
 /// Per-worker event stream
 pub trait WorkerEventService {

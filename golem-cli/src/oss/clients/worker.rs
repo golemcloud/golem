@@ -29,9 +29,9 @@ use golem_client::model::{
     WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
 use golem_client::{Context, Error};
+use golem_common::model::WorkerEvent;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use native_tls::TlsConnector;
-use serde::Deserialize;
 use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -329,7 +329,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                         trace!("Received message: {message:?}"); // TODO: remove
                         let instance_connect_msg = match message {
                             Message::Text(str) => {
-                                let parsed: serde_json::Result<InstanceConnectMessage> =
+                                let parsed: serde_json::Result<WorkerEvent> =
                                     serde_json::from_str(&str);
 
                                 match parsed {
@@ -341,7 +341,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                                 }
                             }
                             Message::Binary(data) => {
-                                let parsed: serde_json::Result<InstanceConnectMessage> =
+                                let parsed: serde_json::Result<WorkerEvent> =
                                     serde_json::from_slice(&data);
                                 match parsed {
                                     Ok(parsed) => Some(parsed),
@@ -378,20 +378,32 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
                         match instance_connect_msg {
                             None => {}
-                            Some(msg) => match msg.event {
-                                WorkerEvent::Stdout(StdOutLog { message }) => {
-                                    output.emit_stdout(message).await;
+                            Some(msg) => match msg {
+                                WorkerEvent::StdOut { timestamp, bytes } => {
+                                    output
+                                        .emit_stdout(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
                                 }
-                                WorkerEvent::Stderr(StdErrLog { message }) => {
-                                    output.emit_stderr(message).await;
+                                WorkerEvent::StdErr { timestamp, bytes } => {
+                                    output
+                                        .emit_stderr(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
                                 }
-                                WorkerEvent::Log(Log {
+                                WorkerEvent::Log {
+                                    timestamp,
                                     level,
                                     context,
                                     message,
-                                }) => {
-                                    output.emit_log(level, context, message);
+                                } => {
+                                    output.emit_log(timestamp, level, context, message);
                                 }
+                                WorkerEvent::Close => {}
                             },
                         }
                     }
@@ -430,35 +442,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .await?;
         Ok(())
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct InstanceConnectMessage {
-    pub event: WorkerEvent,
-}
-
-#[derive(Deserialize, Debug)]
-enum WorkerEvent {
-    Stdout(StdOutLog),
-    Stderr(StdErrLog),
-    Log(Log),
-}
-
-#[derive(Deserialize, Debug)]
-struct StdOutLog {
-    message: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct StdErrLog {
-    message: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Log {
-    pub level: i32,
-    pub context: String,
-    pub message: String,
 }
 
 fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {

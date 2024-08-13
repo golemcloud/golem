@@ -16,6 +16,13 @@ pub mod exports {
                 use super::super::super::super::_rt;
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
+                pub unsafe fn _export_init_cabi<T: Guest>() {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    T::init();
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
                 pub unsafe fn _export_forever_random_entries_cabi<T: Guest>() {
                     #[cfg(target_arch = "wasm32")]
                     _rt::run_ctors_once();
@@ -28,25 +35,42 @@ pub mod exports {
                     _rt::run_ctors_once();
                     T::some_random_entries();
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_forever_random_entries_with_log_cabi<T: Guest>() {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    T::forever_random_entries_with_log();
+                }
                 pub trait Guest {
+                    fn init();
                     fn forever_random_entries();
                     fn some_random_entries();
+                    fn forever_random_entries_with_log();
                 }
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-      ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+  ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-        #[export_name = "golem:it/api#forever-random-entries"]
-        unsafe extern "C" fn export_forever_random_entries() {
-          $($path_to_types)*::_export_forever_random_entries_cabi::<$ty>()
-        }
-        #[export_name = "golem:it/api#some-random-entries"]
-        unsafe extern "C" fn export_some_random_entries() {
-          $($path_to_types)*::_export_some_random_entries_cabi::<$ty>()
-        }
-      };);
+    #[export_name = "golem:it/api#init"]
+    unsafe extern "C" fn export_init() {
+      $($path_to_types)*::_export_init_cabi::<$ty>()
     }
+    #[export_name = "golem:it/api#forever-random-entries"]
+    unsafe extern "C" fn export_forever_random_entries() {
+      $($path_to_types)*::_export_forever_random_entries_cabi::<$ty>()
+    }
+    #[export_name = "golem:it/api#some-random-entries"]
+    unsafe extern "C" fn export_some_random_entries() {
+      $($path_to_types)*::_export_some_random_entries_cabi::<$ty>()
+    }
+    #[export_name = "golem:it/api#forever-random-entries-with-log"]
+    unsafe extern "C" fn export_forever_random_entries_with_log() {
+      $($path_to_types)*::_export_forever_random_entries_with_log_cabi::<$ty>()
+    }
+  };);
+}
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
             }
@@ -92,12 +116,13 @@ pub(crate) use __export_logging_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:logging:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 228] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07g\x01A\x02\x01A\x02\x01\
-B\x03\x01@\0\x01\0\x04\0\x16forever-random-entries\x01\0\x04\0\x13some-random-en\
-tries\x01\0\x04\x01\x0cgolem:it/api\x05\0\x04\x01\x10golem:it/logging\x04\0\x0b\x0d\
-\x01\0\x07logging\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-compone\
-nt\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 274] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x94\x01\x01A\x02\x01\
+A\x02\x01B\x05\x01@\0\x01\0\x04\0\x04init\x01\0\x04\0\x16forever-random-entries\x01\
+\0\x04\0\x13some-random-entries\x01\0\x04\0\x1fforever-random-entries-with-log\x01\
+\0\x04\x01\x0cgolem:it/api\x05\0\x04\x01\x10golem:it/logging\x04\0\x0b\x0d\x01\0\
+\x07logging\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
+0.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

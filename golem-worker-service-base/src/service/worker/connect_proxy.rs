@@ -19,6 +19,7 @@ use std::{
 
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::WorkerEvent;
 use golem_service_base::model::WorkerId;
 use poem::web::websocket::Message;
 use tonic::Status;
@@ -110,9 +111,9 @@ async fn forward_worker_message<E>(
 where
     ConnectProxyError: From<E>,
 {
-    let message = message?;
+    let message: WorkerEvent = message?.try_into().map_err(ConnectProxyError::Proto)?;
     let msg_json = serde_json::to_string(&message)?;
-    info!("forward_worker_message {msg_json}");
+    info!("forward_worker_message {msg_json}"); // TODO: remove
     socket.send(Message::Text(msg_json)).await?;
     Ok(())
 }
@@ -124,6 +125,9 @@ pub enum ConnectProxyError {
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    #[error("Internal protocol error: {0}")]
+    Proto(String),
 
     #[error(transparent)]
     Tonic(#[from] tonic::Status),

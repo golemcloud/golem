@@ -48,15 +48,15 @@ use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
-    TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
-use crate::services::worker_event::{LogLevel, WorkerEvent, WorkerEventReceiver};
+use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
@@ -223,7 +223,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     fn ensure_worker_belongs_to_this_executor(
         &self,
-        worker_id: &common_model::WorkerId,
+        worker_id: &WorkerId,
     ) -> Result<(), GolemError> {
         self.shard_service().check_worker(worker_id)
     }
@@ -1849,51 +1849,14 @@ impl Stream for WorkerEventStream {
         match inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
                 info!("Stream has event: {:?}", event); // TODO: remove
-                match event {
+                match &event {
                     WorkerEvent::Close => {
                         info!("Closing worker connection due to WorkerEvent::Close"); // TODO: remove
                         Poll::Ready(None)
                     }
-                    WorkerEvent::StdOut { timestamp, bytes } => {
-                        Poll::Ready(Some(Ok(golem::worker::LogEvent {
-                            event: Some(golem::worker::log_event::Event::Stdout(
-                                golem::worker::StdOutLog {
-                                    message: String::from_utf8_lossy(&bytes).to_string(),
-                                    timestamp: Some(timestamp.into()),
-                                },
-                            )),
-                        })))
-                    }
-                    WorkerEvent::StdErr { timestamp, bytes } => {
-                        Poll::Ready(Some(Ok(golem::worker::LogEvent {
-                            event: Some(golem::worker::log_event::Event::Stderr(
-                                golem::worker::StdErrLog {
-                                    message: String::from_utf8_lossy(&bytes).to_string(),
-                                    timestamp: Some(timestamp.into()),
-                                },
-                            )),
-                        })))
-                    }
-                    WorkerEvent::Log {
-                        timestamp,
-                        level,
-                        context,
-                        message,
-                    } => Poll::Ready(Some(Ok(golem::worker::LogEvent {
-                        event: Some(golem::worker::log_event::Event::Log(golem::worker::Log {
-                            level: match level {
-                                LogLevel::Trace => golem::worker::Level::Trace.into(),
-                                LogLevel::Debug => golem::worker::Level::Debug.into(),
-                                LogLevel::Info => golem::worker::Level::Info.into(),
-                                LogLevel::Warn => golem::worker::Level::Warn.into(),
-                                LogLevel::Error => golem::worker::Level::Error.into(),
-                                LogLevel::Critical => golem::worker::Level::Critical.into(),
-                            },
-                            context,
-                            message,
-                            timestamp: Some(timestamp.into()),
-                        })),
-                    }))),
+                    WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                    WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                    WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
                 }
             }
             Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => {

@@ -14,6 +14,7 @@
 
 use crate::command::worker::WorkerConnectOptions;
 use colored::Colorize;
+use golem_common::model::{LogLevel, Timestamp};
 use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -25,7 +26,9 @@ pub struct ConnectOutput {
 }
 
 struct ConnectOutputState {
+    pub last_stdout_timestamp: Timestamp,
     pub stdout: String,
+    pub last_stderr_timestamp: Timestamp,
     pub stderr: String,
 }
 
@@ -33,105 +36,115 @@ impl ConnectOutput {
     pub fn new(options: WorkerConnectOptions) -> Self {
         ConnectOutput {
             state: Arc::new(Mutex::new(ConnectOutputState {
+                last_stdout_timestamp: Timestamp::now_utc(),
                 stdout: String::new(),
+                last_stderr_timestamp: Timestamp::now_utc(),
                 stderr: String::new(),
             })),
             options,
         }
     }
 
-    pub async fn emit_stdout(&self, message: String) {
+    pub async fn emit_stdout(&self, timestamp: Timestamp, message: String) {
         let mut state = self.state.lock().await;
+        state.last_stdout_timestamp = timestamp;
+
         let lines = message.lines().collect::<Vec<_>>();
         for (idx, line) in lines.iter().enumerate() {
             if idx == (lines.len() - 1) {
                 // last line, if message did not end with newline, just store it
                 if message.ends_with('\n') {
-                    self.print_stdout(&format!("{}{}", state.stdout, line));
+                    self.print_stdout(timestamp, &format!("{}{}", state.stdout, line));
                     state.stdout = String::new();
                 } else {
                     state.stdout = format!("{}{}", state.stdout, line);
                 }
             } else if idx == 0 {
                 // first line, there are more
-                self.print_stdout(&format!("{}{}", state.stdout, line));
+                self.print_stdout(timestamp, &format!("{}{}", state.stdout, line));
                 state.stdout = String::new();
             } else {
                 // middle line
-                self.print_stdout(line);
+                self.print_stdout(timestamp, line);
             }
         }
     }
 
-    pub async fn emit_stderr(&self, message: String) {
+    pub async fn emit_stderr(&self, timestamp: Timestamp, message: String) {
         let mut state = self.state.lock().await;
+        state.last_stderr_timestamp = timestamp;
+
         let lines = message.lines().collect::<Vec<_>>();
         for (idx, line) in lines.iter().enumerate() {
             if idx == (lines.len() - 1) {
                 // last line, if message did not end with newline, just store it
                 if message.ends_with('\n') {
-                    self.print_stderr(&format!("{}{}", state.stderr, line));
+                    self.print_stderr(timestamp, &format!("{}{}", state.stderr, line));
                     state.stderr = String::new();
                 } else {
                     state.stderr = format!("{}{}", state.stderr, line);
                 }
             } else if idx == 0 {
                 // first line, there are more
-                self.print_stderr(&format!("{}{}", state.stderr, line));
+                self.print_stderr(timestamp, &format!("{}{}", state.stderr, line));
                 state.stderr = String::new();
             } else {
                 // middle line
-                self.print_stderr(line);
+                self.print_stderr(timestamp, line);
             }
         }
     }
 
-    pub fn emit_log(&self, level: i32, context: String, message: String) {
+    pub fn emit_log(
+        &self,
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
+    ) {
         let level_str = match level {
-            0 => "TRACE",
-            1 => "DEBUG",
-            2 => "INFO",
-            3 => "WARN",
-            4 => "ERROR",
-            5 => "CRITICAL",
-            _ => "",
+            LogLevel::Trace => "TRACE",
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Info => "INFO",
+            LogLevel::Warn => "WARN",
+            LogLevel::Error => "ERROR",
+            LogLevel::Critical => "CRITICAL",
         };
-        let prefix = self.prefix(level_str);
+        let prefix = self.prefix(timestamp, level_str);
         self.colored(level, &format!("{prefix}[{context}] {message}"));
     }
 
     pub async fn flush(&self) {
         let mut state = self.state.lock().await;
         if !state.stdout.is_empty() {
-            self.print_stdout(&state.stdout);
+            self.print_stdout(state.last_stdout_timestamp, &state.stdout);
             state.stdout = String::new();
         }
         if !state.stderr.is_empty() {
-            self.print_stderr(&state.stderr);
+            self.print_stderr(state.last_stdout_timestamp, &state.stderr);
             state.stderr = String::new();
         }
     }
 
-    fn print_stdout(&self, message: &str) {
-        let prefix = self.prefix("STDOUT");
-        self.colored(2, &format!("{prefix}{message}"));
+    fn print_stdout(&self, timestamp: Timestamp, message: &str) {
+        let prefix = self.prefix(timestamp, "STDOUT");
+        self.colored(LogLevel::Info, &format!("{prefix}{message}"));
     }
 
-    fn print_stderr(&self, message: &str) {
-        let prefix = self.prefix("STDERR");
-        self.colored(4, &format!("{prefix}{message}"));
+    fn print_stderr(&self, timestamp: Timestamp, message: &str) {
+        let prefix = self.prefix(timestamp, "STDERR");
+        self.colored(LogLevel::Error, &format!("{prefix}{message}"));
     }
 
-    fn colored(&self, level: i32, s: &str) {
+    fn colored(&self, level: LogLevel, s: &str) {
         if self.options.colors {
             let colored = match level {
-                0 => s.blue(),
-                1 => s.green(),
-                2 => s.white(),
-                3 => s.yellow(),
-                4 => s.red(),
-                5 => s.red().bold(),
-                _ => s.white(),
+                LogLevel::Trace => s.blue(),
+                LogLevel::Debug => s.green(),
+                LogLevel::Info => s.white(),
+                LogLevel::Warn => s.yellow(),
+                LogLevel::Error => s.red(),
+                LogLevel::Critical => s.red().bold(),
             };
             println!("{}", colored);
         } else {
@@ -139,8 +152,11 @@ impl ConnectOutput {
         }
     }
 
-    fn prefix(&self, level_or_source: &str) -> String {
+    fn prefix(&self, timestamp: Timestamp, level_or_source: &str) -> String {
         let mut result = String::new();
+        if self.options.show_timestamp {
+            let _ = write!(&mut result, "[{timestamp}] ");
+        }
         if self.options.show_level {
             let _ = result.write_char('[');
             let _ = result.write_str(level_or_source);
