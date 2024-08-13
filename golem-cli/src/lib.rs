@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use lenient_bool::LenientBool;
+
 pub mod clients;
 pub mod cloud;
 pub mod command;
@@ -32,4 +34,11 @@ pub fn parse_key_val(
         .find('=')
         .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
     Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+pub fn parse_bool(s: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    match s.parse::<LenientBool>() {
+        Ok(b) => Ok(b.into()),
+        Err(_) => Err(format!("invalid boolean: `{s}`"))?,
+    }
 }

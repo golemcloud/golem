@@ -14,6 +14,7 @@
 
 use crate::metrics::events::{record_broadcast_event, record_event};
 use futures_util::{stream, StreamExt};
+use golem_common::model::Timestamp;
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
@@ -37,9 +38,16 @@ pub enum LogLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WorkerEvent {
-    StdOut(Vec<u8>),
-    StdErr(Vec<u8>),
+    StdOut {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    StdErr {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
     Log {
+        timestamp: Timestamp,
         level: LogLevel,
         context: String,
         message: String,
@@ -47,17 +55,42 @@ pub enum WorkerEvent {
     Close,
 }
 
+impl WorkerEvent {
+    pub fn stdout(bytes: Vec<u8>) -> WorkerEvent {
+        WorkerEvent::StdOut {
+            timestamp: Timestamp::now_utc(),
+            bytes,
+        }
+    }
+
+    pub fn stderr(bytes: Vec<u8>) -> WorkerEvent {
+        WorkerEvent::StdErr {
+            timestamp: Timestamp::now_utc(),
+            bytes,
+        }
+    }
+
+    pub fn log(level: LogLevel, context: &str, message: &str) -> WorkerEvent {
+        WorkerEvent::Log {
+            timestamp: Timestamp::now_utc(),
+            level,
+            context: context.to_string(),
+            message: message.to_string(),
+        }
+    }
+}
+
 impl Display for WorkerEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerEvent::StdOut(bytes) => {
+            WorkerEvent::StdOut { bytes, .. } => {
                 write!(
                     f,
                     "<stdout> {}",
                     String::from_utf8(bytes.clone()).unwrap_or_default()
                 )
             }
-            WorkerEvent::StdErr(bytes) => {
+            WorkerEvent::StdErr { bytes, .. } => {
                 write!(
                     f,
                     "<stderr> {}",
@@ -68,6 +101,7 @@ impl Display for WorkerEvent {
                 level,
                 context,
                 message,
+                ..
             } => {
                 write!(f, "<log> {:?} {} {}", level, context, message)
             }
@@ -82,20 +116,16 @@ impl Display for WorkerEvent {
 pub trait WorkerEventService {
     fn emit_event(&self, event: WorkerEvent);
 
-    fn emit_stdout(&self, data: Vec<u8>) {
-        self.emit_event(WorkerEvent::StdOut(data))
+    fn emit_stdout(&self, bytes: Vec<u8>) {
+        self.emit_event(WorkerEvent::stdout(bytes))
     }
 
-    fn emit_stderr(&self, data: Vec<u8>) {
-        self.emit_event(WorkerEvent::StdErr(data))
+    fn emit_stderr(&self, bytes: Vec<u8>) {
+        self.emit_event(WorkerEvent::stderr(bytes))
     }
 
     fn emit_log(&self, log_level: LogLevel, context: &str, message: &str) {
-        self.emit_event(WorkerEvent::Log {
-            level: log_level,
-            context: context.to_string(),
-            message: message.to_string(),
-        })
+        self.emit_event(WorkerEvent::log(log_level, context, message))
     }
 
     fn receiver(&self) -> WorkerEventReceiver;
@@ -171,8 +201,8 @@ impl WorkerEventService for WorkerEventServiceDefault {
 
 fn label(event: &WorkerEvent) -> &'static str {
     match event {
-        WorkerEvent::StdOut(_) => "stdout",
-        WorkerEvent::StdErr(_) => "stderr",
+        WorkerEvent::StdOut { .. } => "stdout",
+        WorkerEvent::StdErr { .. } => "stderr",
         WorkerEvent::Log { .. } => "log",
         WorkerEvent::Close => "close",
     }
@@ -210,7 +240,7 @@ mod tests {
         });
 
         for b in 1..5u8 {
-            svc.emit_event(WorkerEvent::StdOut(vec![b]));
+            svc.emit_event(WorkerEvent::stdout(vec![b]));
         }
 
         let svc2 = svc.clone();
@@ -229,7 +259,7 @@ mod tests {
         });
 
         for b in 5..9u8 {
-            svc.emit_event(WorkerEvent::StdOut(vec![b]));
+            svc.emit_event(WorkerEvent::stdout(vec![b]));
         }
 
         drop(svc);
@@ -243,23 +273,23 @@ mod tests {
         assert_eq!(
             result1
                 == vec![
-                    WorkerEvent::StdOut(vec![1]),
-                    WorkerEvent::StdOut(vec![2]),
-                    WorkerEvent::StdOut(vec![3]),
-                    WorkerEvent::StdOut(vec![5]),
-                    WorkerEvent::StdOut(vec![6]),
-                    WorkerEvent::StdOut(vec![7]),
-                    WorkerEvent::StdOut(vec![8]),
+                    WorkerEvent::stdout(vec![1]),
+                    WorkerEvent::stdout(vec![2]),
+                    WorkerEvent::stdout(vec![3]),
+                    WorkerEvent::stdout(vec![5]),
+                    WorkerEvent::stdout(vec![6]),
+                    WorkerEvent::stdout(vec![7]),
+                    WorkerEvent::stdout(vec![8]),
                 ],
             result2
                 == vec![
-                    WorkerEvent::StdOut(vec![1]),
-                    WorkerEvent::StdOut(vec![2]),
-                    WorkerEvent::StdOut(vec![3]),
-                    WorkerEvent::StdOut(vec![5]),
-                    WorkerEvent::StdOut(vec![6]),
-                    WorkerEvent::StdOut(vec![7]),
-                    WorkerEvent::StdOut(vec![8]),
+                    WorkerEvent::stdout(vec![1]),
+                    WorkerEvent::stdout(vec![2]),
+                    WorkerEvent::stdout(vec![3]),
+                    WorkerEvent::stdout(vec![5]),
+                    WorkerEvent::stdout(vec![6]),
+                    WorkerEvent::stdout(vec![7]),
+                    WorkerEvent::stdout(vec![8]),
                 ]
         )
     }
@@ -287,7 +317,7 @@ mod tests {
 
         for b in 1..1001 {
             let s = format!("{}", b);
-            svc.emit_event(WorkerEvent::StdOut(s.as_bytes().into()));
+            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()));
         }
 
         let svc2 = svc.clone();
@@ -307,7 +337,7 @@ mod tests {
 
         for b in 1001..1005 {
             let s = format!("{}", b);
-            svc.emit_event(WorkerEvent::StdOut(s.as_bytes().into()));
+            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()));
         }
 
         drop(svc);
@@ -322,14 +352,14 @@ mod tests {
             result1.len() == 1004,
             result2
                 == vec![
-                    WorkerEvent::StdOut("997".as_bytes().into()),
-                    WorkerEvent::StdOut("998".as_bytes().into()),
-                    WorkerEvent::StdOut("999".as_bytes().into()),
-                    WorkerEvent::StdOut("1000".as_bytes().into()),
-                    WorkerEvent::StdOut("1001".as_bytes().into()),
-                    WorkerEvent::StdOut("1002".as_bytes().into()),
-                    WorkerEvent::StdOut("1003".as_bytes().into()),
-                    WorkerEvent::StdOut("1004".as_bytes().into()),
+                    WorkerEvent::stdout("997".as_bytes().into()),
+                    WorkerEvent::stdout("998".as_bytes().into()),
+                    WorkerEvent::stdout("999".as_bytes().into()),
+                    WorkerEvent::stdout("1000".as_bytes().into()),
+                    WorkerEvent::stdout("1001".as_bytes().into()),
+                    WorkerEvent::stdout("1002".as_bytes().into()),
+                    WorkerEvent::stdout("1003".as_bytes().into()),
+                    WorkerEvent::stdout("1004".as_bytes().into()),
                 ]
         )
     }

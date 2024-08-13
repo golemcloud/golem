@@ -3368,6 +3368,7 @@ dependencies = [
  "inquire",
  "iso8601",
  "itertools 0.13.0",
+ "lenient_bool",
  "libtest-mimic",
  "log",
  "native-tls",
@@ -5087,6 +5088,12 @@ name = "leb128"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
+
+[[package]]
+name = "lenient_bool"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57eeaed462e96d277051c219bf5e2ed22aedf7705d8945d2decb8b2db8fb954d"
 
 [[package]]
 name = "lexical-core"

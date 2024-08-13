@@ -25,9 +25,9 @@ use crate::model::{
     Format, GolemError, GolemResult, IdempotencyKey, JsonValueParser, WorkerName, WorkerUpdateMode,
 };
 use crate::oss::model::OssContext;
-use crate::parse_key_val;
 use crate::service::project::ProjectResolver;
 use crate::service::worker::WorkerService;
+use crate::{parse_bool, parse_key_val};
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct OssWorkerNameOrUriArg {
@@ -213,9 +213,38 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
 
 #[derive(Args, Debug, Clone)]
 pub struct WorkerConnectOptions {
-    /// Do not use colored log lines in text mode
-    #[arg(short, long)]
-    pub no_colors: bool,
+    /// Use colored log lines in text mode
+    #[arg(long,
+          action=clap::ArgAction::Set,
+          value_parser = parse_bool,
+          default_missing_value="true",
+          default_value_t=true,
+          num_args = 0..=1,
+          require_equals = false,
+    )]
+    pub colors: bool,
+
+    /// Show a timestamp for each log line
+    #[arg(long,
+          action=clap::ArgAction::Set,
+          value_parser = parse_bool,
+          default_missing_value="true",
+          default_value_t=true,
+          num_args = 0..=1,
+          require_equals = false,
+    )]
+    pub show_timestamp: bool,
+
+    /// Show the source or log level for each log line
+    #[arg(long,
+          action=clap::ArgAction::Set,
+          value_parser = parse_bool,
+          default_missing_value="true",
+          default_value_t=false,
+          num_args = 0..=1,
+          require_equals = false,
+    )]
+    pub show_level: bool,
 }
 
 #[derive(Subcommand, Debug)]

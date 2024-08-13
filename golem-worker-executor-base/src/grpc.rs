@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures_util::{FutureExt, Stream, StreamExt};
+use futures_util::Stream;
 use gethostname::gethostname;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
@@ -1854,21 +1854,28 @@ impl Stream for WorkerEventStream {
                         info!("Closing worker connection due to WorkerEvent::Close"); // TODO: remove
                         Poll::Ready(None)
                     }
-                    WorkerEvent::StdOut(line) => Poll::Ready(Some(Ok(golem::worker::LogEvent {
-                        event: Some(golem::worker::log_event::Event::Stdout(
-                            golem::worker::StdOutLog {
-                                message: String::from_utf8_lossy(&line).to_string(),
-                            },
-                        )),
-                    }))),
-                    WorkerEvent::StdErr(line) => Poll::Ready(Some(Ok(golem::worker::LogEvent {
-                        event: Some(golem::worker::log_event::Event::Stderr(
-                            golem::worker::StdErrLog {
-                                message: String::from_utf8_lossy(&line).to_string(),
-                            },
-                        )),
-                    }))),
+                    WorkerEvent::StdOut { timestamp, bytes } => {
+                        Poll::Ready(Some(Ok(golem::worker::LogEvent {
+                            event: Some(golem::worker::log_event::Event::Stdout(
+                                golem::worker::StdOutLog {
+                                    message: String::from_utf8_lossy(&bytes).to_string(),
+                                    timestamp: Some(timestamp.into()),
+                                },
+                            )),
+                        })))
+                    }
+                    WorkerEvent::StdErr { timestamp, bytes } => {
+                        Poll::Ready(Some(Ok(golem::worker::LogEvent {
+                            event: Some(golem::worker::log_event::Event::Stderr(
+                                golem::worker::StdErrLog {
+                                    message: String::from_utf8_lossy(&bytes).to_string(),
+                                    timestamp: Some(timestamp.into()),
+                                },
+                            )),
+                        })))
+                    }
                     WorkerEvent::Log {
+                        timestamp,
                         level,
                         context,
                         message,
@@ -1884,6 +1891,7 @@ impl Stream for WorkerEventStream {
                             },
                             context,
                             message,
+                            timestamp: Some(timestamp.into()),
                         })),
                     }))),
                 }

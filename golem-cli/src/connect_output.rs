@@ -14,6 +14,7 @@
 
 use crate::command::worker::WorkerConnectOptions;
 use colored::Colorize;
+use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -27,8 +28,6 @@ struct ConnectOutputState {
     pub stdout: String,
     pub stderr: String,
 }
-
-// TODO: configurable prefix (source, level, worker name, timestamp), use colors
 
 impl ConnectOutput {
     pub fn new(options: WorkerConnectOptions) -> Self {
@@ -88,16 +87,17 @@ impl ConnectOutput {
     }
 
     pub fn emit_log(&self, level: i32, context: String, message: String) {
-        let level_prefix = match level {
-            0 => "TRACE   ",
-            1 => "DEBUG   ",
-            2 => "INFO    ",
-            3 => "WARN    ",
-            4 => "ERROR   ",
+        let level_str = match level {
+            0 => "TRACE",
+            1 => "DEBUG",
+            2 => "INFO",
+            3 => "WARN",
+            4 => "ERROR",
             5 => "CRITICAL",
-            _ => "        ",
+            _ => "",
         };
-        self.colored(level, &format!("[{level_prefix}] [{context}] {message}"));
+        let prefix = self.prefix(level_str);
+        self.colored(level, &format!("{prefix}[{context}] {message}"));
     }
 
     pub async fn flush(&self) {
@@ -113,17 +113,17 @@ impl ConnectOutput {
     }
 
     fn print_stdout(&self, message: &str) {
-        self.colored(2, &format!("[STDOUT  ] {}", message));
+        let prefix = self.prefix("STDOUT");
+        self.colored(2, &format!("{prefix}{message}"));
     }
 
     fn print_stderr(&self, message: &str) {
-        self.colored(4, &format!("[STDERR  ] {}", message));
+        let prefix = self.prefix("STDERR");
+        self.colored(4, &format!("{prefix}{message}"));
     }
 
     fn colored(&self, level: i32, s: &str) {
-        if self.options.no_colors {
-            println!("{}", s);
-        } else {
+        if self.options.colors {
             let colored = match level {
                 0 => s.blue(),
                 1 => s.green(),
@@ -134,6 +134,22 @@ impl ConnectOutput {
                 _ => s.white(),
             };
             println!("{}", colored);
+        } else {
+            println!("{}", s);
         }
+    }
+
+    fn prefix(&self, level_or_source: &str) -> String {
+        let mut result = String::new();
+        if self.options.show_level {
+            let _ = result.write_char('[');
+            let _ = result.write_str(level_or_source);
+            for _ in level_or_source.len()..8 {
+                let _ = result.write_char(' ');
+            }
+            let _ = result.write_char(']');
+            let _ = result.write_char(' ');
+        }
+        result
     }
 }
