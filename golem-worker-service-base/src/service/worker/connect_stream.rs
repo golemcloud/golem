@@ -21,7 +21,7 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
-use tracing::{error, info, Instrument};
+use tracing::{error, Instrument};
 
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::metrics::api::{
