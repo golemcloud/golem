@@ -50,12 +50,10 @@ impl ConnectWorkerStream {
                 loop {
                     tokio::select! {
                         _ = cancel_clone.cancelled() => {
-                            info!("WorkerStream cancelled");
                             break;
                         }
                         message = streaming.next() => {
                             if let Some(message) = message {
-                                info!("ConnectWorkerStream received message {message:?}");
                                 if let Err(error) = sender.send(message).await {
                                     error!(
                                         error = error.to_string(),
@@ -64,17 +62,13 @@ impl ConnectWorkerStream {
                                     break;
                                 }
                             } else {
-                                info!("WorkerStream finished");
                                 break;
                             }
                         }
                     }
                 }
 
-                info!("WorkerStream dropping sender");
                 drop(sender);
-                info!("WorkerStream sender dropped");
-
                 record_closed_grpc_api_active_stream();
             }
             .in_current_span(),
