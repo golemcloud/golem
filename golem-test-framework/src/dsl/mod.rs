@@ -38,8 +38,8 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, ScanCursor,
-    SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatusRecord,
+    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;

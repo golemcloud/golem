@@ -22,8 +22,7 @@ use crate::common::{start, TestContext};
 use assert2::{assert, check};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_test_framework::dsl::{
-    drain_connection, stderr_event, stderr_events, stdout_events, worker_error_message,
-    TestDslUnsafe,
+    drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
