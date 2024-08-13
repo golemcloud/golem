@@ -20,6 +20,9 @@ use golem_common::model::WorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
+use std::sync::Arc;
+use tokio::join;
+use tokio::task::spawn;
 
 use crate::model::{
     Format, GolemError, GolemResult, IdempotencyKey, JsonValueParser, WorkerName, WorkerUpdateMode,
@@ -290,6 +293,13 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
 
         #[command(flatten)]
         parameters: InvokeParameterList,
+
+        /// Connect to the worker during the invocation and show its logs
+        #[arg(long)]
+        connect: bool,
+
+        #[command(flatten)]
+        connect_options: WorkerConnectOptions,
     },
 
     /// Triggers a function invocation on a worker without waiting for its completion
@@ -308,6 +318,13 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
 
         #[command(flatten)]
         parameters: InvokeParameterList,
+
+        /// Connect to the worker and show its logs
+        #[arg(long)]
+        connect: bool,
+
+        #[command(flatten)]
+        connect_options: WorkerConnectOptions,
     },
 
     /// Connect to a worker and live stream its standard output, error and log channels
@@ -411,11 +428,11 @@ impl WorkerRefSplit<OssContext> for OssWorkerUriArg {
 }
 
 impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<ComponentRef, WorkerRef> {
-    pub async fn handle<ProjectRef: Send + Sync + 'static, ProjectContext: Send + Sync>(
+    pub async fn handle<ProjectRef: Send + Sync + 'static, ProjectContext: Clone + Send + Sync + 'static>(
         self,
         format: Format,
-        service: &(dyn WorkerService<ProjectContext = ProjectContext> + Send + Sync),
-        projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
+        service: Arc<dyn WorkerService<ProjectContext = ProjectContext> + Send + Sync>,
+        projects: Arc<dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync>,
     ) -> Result<GolemResult, GolemError>
     where
         ComponentRef: ComponentRefSplit<ProjectRef>,
@@ -440,39 +457,84 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 idempotency_key,
                 function,
                 parameters,
+                connect,
+                connect_options,
             } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .invoke_and_await(
-                        format,
-                        worker_uri,
-                        idempotency_key,
-                        function,
-                        parameters.parameters,
-                        parameters.wave,
-                        project_id,
-                    )
-                    .await
+                if connect {
+                    let worker_uri_clone = worker_uri.clone();
+                    let project_id_clone = project_id.clone();
+                    let service_clone = service.clone();
+                    let connect_handle = spawn(async move {
+                        let _ = service_clone
+                            .connect(worker_uri_clone, project_id_clone, connect_options, format)
+                            .await;
+                    });
+                    let result = service
+                        .invoke_and_await(
+                            format,
+                            worker_uri,
+                            idempotency_key,
+                            function,
+                            parameters.parameters,
+                            parameters.wave,
+                            project_id,
+                        )
+                        .await;
+
+                    connect_handle.abort();
+                    result
+                } else {
+                    service
+                        .invoke_and_await(
+                            format,
+                            worker_uri,
+                            idempotency_key,
+                            function,
+                            parameters.parameters,
+                            parameters.wave,
+                            project_id,
+                        )
+                        .await
+                }
             }
             WorkerSubcommand::Invoke {
                 worker_ref,
                 idempotency_key,
                 function,
                 parameters,
+                connect,
+                connect_options,
             } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .invoke(
-                        worker_uri,
+
+                if connect {
+                    let invoke_future = service.invoke(
+                        worker_uri.clone(),
                         idempotency_key,
                         function,
                         parameters.parameters,
                         parameters.wave,
-                        project_id,
-                    )
-                    .await
+                        project_id.clone(),
+                    );
+                    let connect_future =
+                        service.connect(worker_uri, project_id, connect_options, format);
+
+                    join!(invoke_future, connect_future).0
+                } else {
+                    service
+                        .invoke(
+                            worker_uri,
+                            idempotency_key,
+                            function,
+                            parameters.parameters,
+                            parameters.wave,
+                            project_id,
+                        )
+                        .await
+                }
             }
             WorkerSubcommand::Connect {
                 worker_ref,
