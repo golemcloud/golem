@@ -18,7 +18,7 @@ use crate::clients::worker::WorkerClient;
 use crate::command::worker::WorkerConnectOptions;
 use crate::connect_output::ConnectOutput;
 use crate::model::{
-    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    Format, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
@@ -236,6 +236,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         &self,
         worker_urn: WorkerUrn,
         connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<(), GolemError> {
         let mut url = self.context.base_url.clone();
 
@@ -316,7 +317,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             }
         });
 
-        let output = ConnectOutput::new(connect_options);
+        let output = ConnectOutput::new(connect_options, format);
 
         let read_res = read.for_each(move |message_or_error| {
             let output = output.clone();

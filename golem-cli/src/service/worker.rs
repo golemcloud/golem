@@ -91,6 +91,7 @@ pub trait WorkerService {
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
         connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<GolemResult, GolemError>;
     async fn interrupt(
         &self,
@@ -543,11 +544,12 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
         connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<GolemResult, GolemError> {
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
         self.client
-            .connect_forever(worker_urn, connect_options)
+            .connect_forever(worker_urn, connect_options, format)
             .await?;
 
         Err(GolemError("Unexpected connection closure".to_string()))

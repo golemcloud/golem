@@ -481,7 +481,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
-                    .connect(worker_uri, project_id, connect_options)
+                    .connect(worker_uri, project_id, connect_options, format)
                     .await
             }
             WorkerSubcommand::Interrupt { worker_ref } => {

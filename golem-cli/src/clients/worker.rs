@@ -14,7 +14,7 @@
 
 use crate::command::worker::WorkerConnectOptions;
 use crate::model::{
-    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    Format, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
@@ -72,15 +72,17 @@ pub trait WorkerClient {
         &self,
         worker_urn: WorkerUrn,
         connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<(), GolemError>;
 
     async fn connect_forever(
         &self,
         worker_urn: WorkerUrn,
         connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<(), GolemError> {
         loop {
-            self.connect(worker_urn.clone(), connect_options.clone())
+            self.connect(worker_urn.clone(), connect_options.clone(), format)
                 .await?;
         }
     }

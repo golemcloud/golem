@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::command::worker::WorkerConnectOptions;
+use crate::model::Format;
 use colored::Colorize;
 use golem_common::model::{LogLevel, Timestamp};
 use std::fmt::Write;
@@ -23,6 +24,7 @@ use tokio::sync::Mutex;
 pub struct ConnectOutput {
     state: Arc<Mutex<ConnectOutputState>>,
     options: WorkerConnectOptions,
+    format: Format,
 }
 
 struct ConnectOutputState {
@@ -33,7 +35,7 @@ struct ConnectOutputState {
 }
 
 impl ConnectOutput {
-    pub fn new(options: WorkerConnectOptions) -> Self {
+    pub fn new(options: WorkerConnectOptions, format: Format) -> Self {
         ConnectOutput {
             state: Arc::new(Mutex::new(ConnectOutputState {
                 last_stdout_timestamp: Timestamp::now_utc(),
@@ -42,6 +44,7 @@ impl ConnectOutput {
                 stderr: String::new(),
             })),
             options,
+            format,
         }
     }
 
@@ -110,8 +113,15 @@ impl ConnectOutput {
             LogLevel::Error => "ERROR",
             LogLevel::Critical => "CRITICAL",
         };
-        let prefix = self.prefix(timestamp, level_str);
-        self.colored(level, &format!("{prefix}[{context}] {message}"));
+
+        match self.format {
+            Format::Json => self.json(level_str, &context, &message),
+            Format::Yaml => self.yaml(level_str, &context, &message),
+            Format::Text => {
+                let prefix = self.prefix(timestamp, level_str);
+                self.colored(level, &format!("{prefix}[{context}] {message}"));
+            }
+        }
     }
 
     pub async fn flush(&self) {
@@ -127,13 +137,44 @@ impl ConnectOutput {
     }
 
     fn print_stdout(&self, timestamp: Timestamp, message: &str) {
-        let prefix = self.prefix(timestamp, "STDOUT");
-        self.colored(LogLevel::Info, &format!("{prefix}{message}"));
+        match self.format {
+            Format::Json => self.json("STDOUT", "", message),
+            Format::Yaml => self.yaml("STDOUT", "", message),
+            Format::Text => {
+                let prefix = self.prefix(timestamp, "STDOUT");
+                self.colored(LogLevel::Info, &format!("{prefix}{message}"));
+            }
+        }
     }
 
     fn print_stderr(&self, timestamp: Timestamp, message: &str) {
-        let prefix = self.prefix(timestamp, "STDERR");
-        self.colored(LogLevel::Error, &format!("{prefix}{message}"));
+        match self.format {
+            Format::Json => self.json("STDERR", "", message),
+            Format::Yaml => self.yaml("STDERR", "", message),
+            Format::Text => {
+                let prefix = self.prefix(timestamp, "STDERR");
+                self.colored(LogLevel::Error, &format!("{prefix}{message}"));
+            }
+        }
+    }
+
+    fn json(&self, level_or_source: &str, context: &str, message: &str) {
+        let json = self.json_value(level_or_source, context, message);
+        println!("{}", json);
+    }
+
+    fn yaml(&self, level_or_source: &str, context: &str, message: &str) {
+        let json = self.json_value(level_or_source, context, message);
+        println!("{}", serde_yaml::to_string(&json).unwrap());
+    }
+
+    fn json_value(&self, level_or_source: &str, context: &str, message: &str) -> serde_json::Value {
+        serde_json::json!({
+            "timestamp": Timestamp::now_utc(),
+            "level": level_or_source,
+            "context": context,
+            "message": message,
+        })
     }
 
     fn colored(&self, level: LogLevel, s: &str) {
