@@ -1,0 +1,12 @@
+package golem:it;
+
+interface api {
+    init: func();
+    forever-random-entries: func();
+    some-random-entries: func();
+    forever-random-entries-with-log: func();
+}
+
+world logging {
+  export api;
+}

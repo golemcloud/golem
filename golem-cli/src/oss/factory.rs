@@ -28,6 +28,7 @@ use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
 use crate::service::project::{ProjectResolver, ProjectResolverOss};
 use golem_client::Context;
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -109,10 +110,10 @@ impl ServiceFactory for OssServiceFactory {
         &self,
         _auth: &Self::SecurityContext,
     ) -> Result<
-        Box<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
+        Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
         GolemError,
     > {
-        Ok(Box::new(ProjectResolverOss::DUMMY))
+        Ok(Arc::new(ProjectResolverOss::DUMMY))
     }
 
     fn component_client(

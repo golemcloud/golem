@@ -15,9 +15,9 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::logging::logging::{Host, Level};
-use crate::services::worker_event::{LogLevel, WorkerEvent};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::{LogLevel, WorkerEvent};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -33,11 +33,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Level::Debug => LogLevel::Debug,
             Level::Trace => LogLevel::Trace,
         };
-        let event = WorkerEvent::Log {
-            level: log_level,
-            context,
-            message,
-        };
+        let event = WorkerEvent::log(log_level, &context, &message);
         self.emit_log_event(event).await;
         Ok(())
     }

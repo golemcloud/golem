@@ -20,6 +20,12 @@ use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config::RetryConfig;
+use crate::model::oplog::{
+    IndexedResourceKey, OplogEntry, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
+};
+use crate::model::regions::DeletedRegions;
+use crate::newtype_uuid;
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -27,6 +33,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
+use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::Cursor;
 use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
@@ -36,13 +43,6 @@ use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
-
-use crate::config::RetryConfig;
-use crate::model::oplog::{
-    IndexedResourceKey, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
-};
-use crate::model::regions::DeletedRegions;
-use crate::newtype_uuid;
 
 pub mod component_metadata;
 pub mod exports;
@@ -1861,6 +1861,236 @@ impl From<ScanCursor> for Cursor {
         Self {
             cursor: value.cursor,
             layer: value.layer as u64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Critical,
+}
+
+impl From<golem_api_grpc::proto::golem::worker::Level> for LogLevel {
+    fn from(value: golem_api_grpc::proto::golem::worker::Level) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::Level::Trace => LogLevel::Trace,
+            golem_api_grpc::proto::golem::worker::Level::Debug => LogLevel::Debug,
+            golem_api_grpc::proto::golem::worker::Level::Info => LogLevel::Info,
+            golem_api_grpc::proto::golem::worker::Level::Warn => LogLevel::Warn,
+            golem_api_grpc::proto::golem::worker::Level::Error => LogLevel::Error,
+            golem_api_grpc::proto::golem::worker::Level::Critical => LogLevel::Critical,
+        }
+    }
+}
+
+impl From<LogLevel> for golem_api_grpc::proto::golem::worker::Level {
+    fn from(value: LogLevel) -> Self {
+        match value {
+            LogLevel::Trace => golem_api_grpc::proto::golem::worker::Level::Trace,
+            LogLevel::Debug => golem_api_grpc::proto::golem::worker::Level::Debug,
+            LogLevel::Info => golem_api_grpc::proto::golem::worker::Level::Info,
+            LogLevel::Warn => golem_api_grpc::proto::golem::worker::Level::Warn,
+            LogLevel::Error => golem_api_grpc::proto::golem::worker::Level::Error,
+            LogLevel::Critical => golem_api_grpc::proto::golem::worker::Level::Critical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+pub enum WorkerEvent {
+    StdOut {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    StdErr {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
+    },
+    Close,
+}
+
+impl WorkerEvent {
+    pub fn stdout(bytes: Vec<u8>) -> WorkerEvent {
+        WorkerEvent::StdOut {
+            timestamp: Timestamp::now_utc(),
+            bytes,
+        }
+    }
+
+    pub fn stderr(bytes: Vec<u8>) -> WorkerEvent {
+        WorkerEvent::StdErr {
+            timestamp: Timestamp::now_utc(),
+            bytes,
+        }
+    }
+
+    pub fn log(level: LogLevel, context: &str, message: &str) -> WorkerEvent {
+        WorkerEvent::Log {
+            timestamp: Timestamp::now_utc(),
+            level,
+            context: context.to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
+        match self {
+            WorkerEvent::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
+                timestamp: *timestamp,
+                level: oplog::LogLevel::Stdout,
+                context: String::new(),
+                message: String::from_utf8_lossy(bytes).to_string(),
+            }),
+            WorkerEvent::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
+                timestamp: *timestamp,
+                level: oplog::LogLevel::Stdout,
+                context: String::new(),
+                message: String::from_utf8_lossy(bytes).to_string(),
+            }),
+            WorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Some(OplogEntry::Log {
+                timestamp: *timestamp,
+                level: match level {
+                    LogLevel::Trace => oplog::LogLevel::Trace,
+                    LogLevel::Debug => oplog::LogLevel::Debug,
+                    LogLevel::Info => oplog::LogLevel::Info,
+                    LogLevel::Warn => oplog::LogLevel::Warn,
+                    LogLevel::Error => oplog::LogLevel::Error,
+                    LogLevel::Critical => oplog::LogLevel::Critical,
+                },
+                context: context.clone(),
+                message: message.clone(),
+            }),
+            WorkerEvent::Close => None,
+        }
+    }
+}
+
+impl Display for WorkerEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerEvent::StdOut { bytes, .. } => {
+                write!(
+                    f,
+                    "<stdout> {}",
+                    String::from_utf8(bytes.clone()).unwrap_or_default()
+                )
+            }
+            WorkerEvent::StdErr { bytes, .. } => {
+                write!(
+                    f,
+                    "<stderr> {}",
+                    String::from_utf8(bytes.clone()).unwrap_or_default()
+                )
+            }
+            WorkerEvent::Log {
+                level,
+                context,
+                message,
+                ..
+            } => {
+                write!(f, "<log> {:?} {} {}", level, context, message)
+            }
+            WorkerEvent::Close => {
+                write!(f, "<close>")
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for WorkerEvent {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::LogEvent,
+    ) -> Result<Self, Self::Error> {
+        match value.event {
+            Some(event) => match event {
+                golem_api_grpc::proto::golem::worker::log_event::Event::Stdout(event) => {
+                    Ok(WorkerEvent::StdOut {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        bytes: event.message.into_bytes(),
+                    })
+                }
+                golem_api_grpc::proto::golem::worker::log_event::Event::Stderr(event) => {
+                    Ok(WorkerEvent::StdErr {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        bytes: event.message.into_bytes(),
+                    })
+                }
+                golem_api_grpc::proto::golem::worker::log_event::Event::Log(event) => {
+                    Ok(WorkerEvent::Log {
+                        timestamp: event.timestamp.clone().ok_or("Missing timestamp")?.into(),
+                        level: event.level().into(),
+                        context: event.context,
+                        message: event.message,
+                    })
+                }
+            },
+            None => Err("Missing event".to_string()),
+        }
+    }
+}
+
+impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
+    type Error = String;
+
+    fn try_from(value: WorkerEvent) -> Result<Self, Self::Error> {
+        match value {
+            WorkerEvent::StdOut { timestamp, bytes } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::Stdout(
+                    golem::worker::StdOutLog {
+                        message: String::from_utf8_lossy(&bytes).to_string(),
+                        timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            WorkerEvent::StdErr { timestamp, bytes } => Ok(golem::worker::LogEvent {
+                event: Some(
+                    golem_api_grpc::proto::golem::worker::log_event::Event::Stderr(
+                        golem::worker::StdErrLog {
+                            message: String::from_utf8_lossy(&bytes).to_string(),
+                            timestamp: Some(timestamp.into()),
+                        },
+                    ),
+                ),
+            }),
+            WorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::Log(golem::worker::Log {
+                    level: match level {
+                        LogLevel::Trace => golem::worker::Level::Trace.into(),
+                        LogLevel::Debug => golem::worker::Level::Debug.into(),
+                        LogLevel::Info => golem::worker::Level::Info.into(),
+                        LogLevel::Warn => golem::worker::Level::Warn.into(),
+                        LogLevel::Error => golem::worker::Level::Error.into(),
+                        LogLevel::Critical => golem::worker::Level::Critical.into(),
+                    },
+                    context,
+                    message,
+                    timestamp: Some(timestamp.into()),
+                })),
+            }),
+            WorkerEvent::Close => Err("Close event is not supported via protobuf".to_string()),
         }
     }
 }

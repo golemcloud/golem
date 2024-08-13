@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package golem.worker;
 
+import "google/protobuf/timestamp.proto";
+
 message LogEvent {
   oneof event {
     StdOutLog stdout = 1;
@@ -12,10 +14,12 @@ message LogEvent {
 
 message StdOutLog {
   string message = 1;
+  google.protobuf.Timestamp timestamp = 2;
 }
 
 message StdErrLog {
   string message = 1;
+  google.protobuf.Timestamp timestamp = 2;
 }
 
 enum Level {
@@ -31,4 +35,5 @@ message Log {
   Level level = 1;
   string context = 2;
   string message = 3;
+  google.protobuf.Timestamp timestamp = 4;
 }

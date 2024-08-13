@@ -15,8 +15,10 @@
 use std::time::Duration;
 
 use crate::clients::worker::WorkerClient;
+use crate::command::worker::WorkerConnectOptions;
+use crate::connect_output::ConnectOutput;
 use crate::model::{
-    GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    Format, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
@@ -27,14 +29,14 @@ use golem_client::model::{
     WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
 use golem_client::{Context, Error};
+use golem_common::model::WorkerEvent;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use native_tls::TlsConnector;
-use serde::Deserialize;
 use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
-use tracing::{debug, info};
+use tracing::{debug, error, info, trace};
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_client::api::WorkerClient + Sync + Send> {
@@ -230,7 +232,12 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .into())
     }
 
-    async fn connect(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+    async fn connect(
+        &self,
+        worker_urn: WorkerUrn,
+        connect_options: WorkerConnectOptions,
+        format: Format,
+    ) -> Result<(), GolemError> {
         let mut url = self.context.base_url.clone();
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
@@ -271,6 +278,8 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             None
         };
 
+        info!("Connecting to {worker_urn}");
+
         let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| match e {
@@ -288,85 +297,115 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         let (mut write, read) = ws_stream.split();
 
         let pings = task::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(5)); // TODO configure
-
+            let mut interval = time::interval(Duration::from_secs(1)); // TODO configure
             let mut cnt: i32 = 1;
 
             loop {
                 interval.tick().await;
 
-                write
+                let ping_result = write
                     .send(Message::Ping(cnt.to_ne_bytes().to_vec()))
                     .await
-                    .unwrap(); // TODO: handle errors: map_err(|e| GolemError(format!("Ping failure: {e}")))?;
+                    .map_err(|err| GolemError(format!("Worker connection ping failure: {err}")));
+
+                if let Err(err) = ping_result {
+                    error!("{}", err);
+                    break err;
+                }
 
                 cnt += 1;
             }
         });
 
-        let read_res = read.for_each(|message_or_error| async {
-            match message_or_error {
-                Err(error) => {
-                    print!("Error reading message: {}", error);
-                }
-                Ok(message) => {
-                    let instance_connect_msg = match message {
-                        Message::Text(str) => {
-                            let parsed: serde_json::Result<InstanceConnectMessage> =
-                                serde_json::from_str(&str);
-                            Some(parsed.unwrap()) // TODO: error handling
-                        }
-                        Message::Binary(data) => {
-                            let parsed: serde_json::Result<InstanceConnectMessage> =
-                                serde_json::from_slice(&data);
-                            Some(parsed.unwrap()) // TODO: error handling
-                        }
-                        Message::Ping(_) => {
-                            debug!("Ignore ping");
-                            None
-                        }
-                        Message::Pong(_) => {
-                            debug!("Ignore pong");
-                            None
-                        }
-                        Message::Close(details) => {
-                            match details {
-                                Some(closed_frame) => {
-                                    print!("Connection Closed: {}", closed_frame);
-                                }
-                                None => {
-                                    print!("Connection Closed");
-                                }
-                            }
-                            None
-                        }
-                        Message::Frame(_) => {
-                            info!("Ignore unexpected frame");
-                            None
-                        }
-                    };
+        let output = ConnectOutput::new(connect_options, format);
 
-                    match instance_connect_msg {
-                        None => {}
-                        Some(msg) => match msg.event {
-                            WorkerEvent::Stdout(StdOutLog { message }) => {
-                                print!("{message}")
+        let read_res = read.for_each(move |message_or_error| {
+            let output = output.clone();
+            async move {
+                match message_or_error {
+                    Err(error) => {
+                        error!("Error reading message: {}", error);
+                    }
+                    Ok(message) => {
+                        let instance_connect_msg = match message {
+                            Message::Text(str) => {
+                                let parsed: serde_json::Result<WorkerEvent> =
+                                    serde_json::from_str(&str);
+
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
                             }
-                            WorkerEvent::Stderr(StdErrLog { message }) => {
-                                print!("{message}")
+                            Message::Binary(data) => {
+                                let parsed: serde_json::Result<WorkerEvent> =
+                                    serde_json::from_slice(&data);
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
                             }
-                            WorkerEvent::Log(Log {
-                                level,
-                                context,
-                                message,
-                            }) => match level {
-                                0 => tracing::trace!(message, context = context),
-                                1 => tracing::debug!(message, context = context),
-                                2 => tracing::info!(message, context = context),
-                                3 => tracing::warn!(message, context = context),
-                                _ => tracing::error!(message, context = context),
+                            Message::Ping(_) => {
+                                trace!("Ignore ping");
+                                None
+                            }
+                            Message::Pong(_) => {
+                                trace!("Ignore pong");
+                                None
+                            }
+                            Message::Close(details) => {
+                                match details {
+                                    Some(closed_frame) => {
+                                        info!("Connection Closed: {}", closed_frame);
+                                    }
+                                    None => {
+                                        info!("Connection Closed");
+                                    }
+                                }
+                                None
+                            }
+                            Message::Frame(f) => {
+                                debug!("Ignored unexpected frame {f:?}");
+                                None
+                            }
+                        };
+
+                        match instance_connect_msg {
+                            None => {}
+                            Some(msg) => match msg {
+                                WorkerEvent::StdOut { timestamp, bytes } => {
+                                    output
+                                        .emit_stdout(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
+                                }
+                                WorkerEvent::StdErr { timestamp, bytes } => {
+                                    output
+                                        .emit_stderr(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
+                                }
+                                WorkerEvent::Log {
+                                    timestamp,
+                                    level,
+                                    context,
+                                    message,
+                                } => {
+                                    output.emit_log(timestamp, level, context, message);
+                                }
+                                WorkerEvent::Close => {}
                             },
-                        },
+                        }
                     }
                 }
             }
@@ -375,7 +414,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         pin_mut!(read_res, pings);
 
         future::select(pings, read_res).await;
-
         Ok(())
     }
 
@@ -404,35 +442,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .await?;
         Ok(())
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct InstanceConnectMessage {
-    pub event: WorkerEvent,
-}
-
-#[derive(Deserialize, Debug)]
-enum WorkerEvent {
-    Stdout(StdOutLog),
-    Stderr(StdErrLog),
-    Log(Log),
-}
-
-#[derive(Deserialize, Debug)]
-struct StdOutLog {
-    message: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct StdErrLog {
-    message: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Log {
-    pub level: i32,
-    pub context: String,
-    pub message: String,
 }
 
 fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {

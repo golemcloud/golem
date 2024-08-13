@@ -16,7 +16,8 @@ use crate::common::{start, TestContext};
 use assert2::check;
 use bytes::Bytes;
 use golem_test_framework::dsl::{
-    drain_connection, stdout_event, stdout_event_starting_with, worker_error_message, TestDslUnsafe,
+    drain_connection, stdout_event_starting_with, stdout_events, worker_error_message,
+    TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
@@ -161,15 +162,15 @@ async fn jump() {
 
     check!(result == vec![Value::U64(5)]);
     check!(
-        events
+        stdout_events(events.into_iter().flatten())
             == vec![
-                Some(stdout_event("started: 0\n")),
-                Some(stdout_event("second: 2\n")),
-                Some(stdout_event("second: 2\n")),
-                Some(stdout_event("third: 3\n")),
-                Some(stdout_event("fourth: 4\n")),
-                Some(stdout_event("fourth: 4\n")),
-                Some(stdout_event("fifth: 5\n")),
+                "started: 0\n",
+                "second: 2\n",
+                "second: 2\n",
+                "third: 3\n",
+                "fourth: 4\n",
+                "fourth: 4\n",
+                "fifth: 5\n",
             ]
     );
 }
