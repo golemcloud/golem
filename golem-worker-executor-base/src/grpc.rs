@@ -1847,33 +1847,17 @@ impl Stream for WorkerEventStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let WorkerEventStream { inner } = self.get_mut();
         match inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(event))) => {
-                info!("Stream has event: {:?}", event); // TODO: remove
-                match &event {
-                    WorkerEvent::Close => {
-                        info!("Closing worker connection due to WorkerEvent::Close"); // TODO: remove
-                        Poll::Ready(None)
-                    }
-                    WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                    WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                    WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
-                }
-            }
-            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => {
-                info!("Stream lagged by {n}"); // TODO: remove
-                Poll::Ready(Some(Err(Status::data_loss(format!(
-                    "Lagged by {} events",
-                    n
-                )))))
-            }
-            Poll::Ready(None) => {
-                info!("Stream ended"); // TODO: remove
-                Poll::Ready(None)
-            }
-            Poll::Pending => {
-                info!("Stream pending"); // TODO: remove
-                Poll::Pending
-            }
+            Poll::Ready(Some(Ok(event))) => match &event {
+                WorkerEvent::Close => Poll::Ready(None),
+                WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+            },
+            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
+                Status::data_loss(format!("Lagged by {} events", n)),
+            ))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

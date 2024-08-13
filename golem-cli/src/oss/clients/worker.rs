@@ -327,7 +327,6 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                         error!("Error reading message: {}", error);
                     }
                     Ok(message) => {
-                        trace!("Received message: {message:?}"); // TODO: remove
                         let instance_connect_msg = match message {
                             Message::Text(str) => {
                                 let parsed: serde_json::Result<WorkerEvent> =
