@@ -428,7 +428,10 @@ impl WorkerRefSplit<OssContext> for OssWorkerUriArg {
 }
 
 impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<ComponentRef, WorkerRef> {
-    pub async fn handle<ProjectRef: Send + Sync + 'static, ProjectContext: Clone + Send + Sync + 'static>(
+    pub async fn handle<
+        ProjectRef: Send + Sync + 'static,
+        ProjectContext: Clone + Send + Sync + 'static,
+    >(
         self,
         format: Format,
         service: Arc<dyn WorkerService<ProjectContext = ProjectContext> + Send + Sync>,
