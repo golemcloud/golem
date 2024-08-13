@@ -1,3 +1,10 @@
 module golem.com/tinygo_wasi
 
-go 1.19
+go 1.20
+
+require github.com/golemcloud/golem-go v0.4.4 // indirect
+
+// TODO: update version and remove override before merge
+replace (
+	github.com/golemcloud/golem-go => ../../../golem-go
+)

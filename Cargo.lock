@@ -1591,7 +1591,7 @@ version = "4.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa3c596da3cf0983427b0df0dba359df9182c13bd5b519b585a482b0c351f4e8"
 dependencies = [
- "clap 4.5.13",
+ "clap 4.5.15",
 ]
 
 [[package]]
