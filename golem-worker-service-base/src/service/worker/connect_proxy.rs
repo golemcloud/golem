@@ -112,7 +112,6 @@ where
 {
     let message: WorkerEvent = message?.try_into().map_err(ConnectProxyError::Proto)?;
     let msg_json = serde_json::to_string(&message)?;
-    info!("forward_worker_message {msg_json}"); // TODO: remove
     socket.send(Message::Text(msg_json)).await?;
     Ok(())
 }
