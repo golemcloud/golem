@@ -37,7 +37,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
-use wit_parser::UnresolvedPackage;
+use wit_parser::{PackageName, UnresolvedPackage};
 
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
@@ -314,6 +314,22 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
 
     let main_wit = args.stub_wit_root.join("_stub.wit");
     let parsed = UnresolvedPackage::parse_file(&main_wit)?;
+
+    let destination_package_name = destination_wit_root.name.clone();
+    let stub_target_package_name = PackageName {
+        name: parsed
+            .name
+            .name
+            .strip_suffix("-stub")
+            .expect("Unexpected stub package name")
+            .to_string(),
+        ..parsed.name.clone()
+    };
+    if destination_package_name == stub_target_package_name {
+        return Err(anyhow!(
+            "Both the caller and the target components are using the same package name ({destination_package_name}), which is not supported."
+        ));
+    }
 
     let world_name = find_world_name(parsed)?;
     let mut actions = Vec::new();
