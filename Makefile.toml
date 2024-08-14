@@ -385,6 +385,20 @@ script = '''
 grep -rl --include '.*Cargo\.toml' '0\.0\.0' | xargs sed -i "" "s/0\.0\.0/${VERSION}/g"
 '''
 
+[tasks.set-version.windows]
+script_runner = "powershell"
+script_extension = "ps1"
+condition = { env_set = ["VERSION"] }
+script = '''
+$cargoFiles = Get-ChildItem . Cargo.toml -rec
+foreach ($file in $cargoFiles)
+{
+    (Get-Content $file.PSPath) |
+    Foreach-Object { $_ -replace "0.0.0", $Env:VERSION } |
+    Set-Content $file.PSPath
+}
+'''
+
 [tasks.publish-golem-client]
 description = "Publishes golem-client package to crates.io"
 command = "cargo"
