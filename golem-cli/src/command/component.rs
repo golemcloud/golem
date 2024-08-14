@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use crate::command::ComponentRefSplit;
-use crate::model::{ComponentName, GolemError, GolemResult, PathBufOrStdin};
+use crate::model::{
+    ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
+};
 use crate::service::component::ComponentService;
+use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
+use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -47,6 +51,14 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// The WASM file to be used as a new version of the Golem component
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: PathBufOrStdin, // TODO: validate exists
+
+        /// Try to automatically update all existing workers to the new version
+        #[arg(long, default_value_t = false)]
+        try_update_workers: bool,
+
+        /// Update mode - auto or manual
+        #[arg(long, default_value = "auto", requires = "try_update_workers")]
+        update_mode: WorkerUpdateMode,
     },
 
     /// Lists the existing components
@@ -71,6 +83,28 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(short = 't', long)]
         version: Option<u64>,
     },
+    /// Try to automatically update all existing workers to the latest version
+    #[command()]
+    TryUpdateWorkers {
+        /// The component to redeploy
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// Update mode - auto or manual
+        #[arg(long, default_value = "auto", requires = "try_update_workers")]
+        update_mode: WorkerUpdateMode,
+    },
+    /// Redeploy all workers of a component using the latest version
+    #[command()]
+    Redeploy {
+        /// The component to redeploy
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// Do not ask for confirmation
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
+    },
 }
 
 impl<
@@ -78,9 +112,11 @@ impl<
         ComponentRef: ComponentRefSplit<ProjectRef> + clap::Args,
     > ComponentSubCommand<ProjectRef, ComponentRef>
 {
-    pub async fn handle<ProjectContext: Send + Sync>(
+    pub async fn handle<ProjectContext: Clone + Send + Sync>(
         self,
-        service: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
+        format: Format,
+        service: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
+        deploy_service: Arc<dyn DeployService<ProjectContext = ProjectContext> + Send + Sync>,
         projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
     ) -> Result<GolemResult, GolemError> {
         match self {
@@ -97,12 +133,26 @@ impl<
             ComponentSubCommand::Update {
                 component_name_or_uri,
                 component_file,
+                try_update_workers,
+                update_mode,
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .update(component_name_or_uri, component_file, project_id)
-                    .await
+                let mut result = service
+                    .update(
+                        component_name_or_uri.clone(),
+                        component_file,
+                        project_id.clone(),
+                    )
+                    .await?;
+
+                if try_update_workers {
+                    let deploy_result = deploy_service
+                        .try_update_all_workers(component_name_or_uri, project_id, update_mode)
+                        .await?;
+                    result = result.merge(deploy_result);
+                }
+                Ok(result)
             }
             ComponentSubCommand::List {
                 project_ref,
@@ -119,6 +169,26 @@ impl<
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .get(component_name_or_uri, version, project_id)
+                    .await
+            }
+            ComponentSubCommand::TryUpdateWorkers {
+                component_name_or_uri,
+                update_mode,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                deploy_service
+                    .try_update_all_workers(component_name_or_uri, project_id, update_mode)
+                    .await
+            }
+            ComponentSubCommand::Redeploy {
+                component_name_or_uri,
+                non_interactive,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                deploy_service
+                    .redeploy(component_name_or_uri, project_id, non_interactive, format)
                     .await
             }
         }

@@ -1,4 +1,5 @@
 use crate::model::component::ComponentView;
+use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{
     ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadataView,
@@ -472,5 +473,48 @@ impl TextFormat for Vec<ApiDeployment> {
                 .with_title(),
         )
         .unwrap()
+    }
+}
+
+#[derive(Table)]
+struct WorkerUrnTableEntry {
+    #[table(title = "Worker URN")]
+    pub worker_urn: WorkerUrn,
+
+    #[table(title = "Name")]
+    pub worker_name: String,
+}
+
+impl TextFormat for TryUpdateAllWorkersResult {
+    fn print(&self) {
+        if !self.triggered.is_empty() {
+            println!("Triggered update for the following workers:");
+            print_stdout(
+                self.triggered
+                    .iter()
+                    .map(|worker_urn| WorkerUrnTableEntry {
+                        worker_urn: worker_urn.clone(),
+                        worker_name: worker_urn.id.worker_name.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .with_title(),
+            )
+            .unwrap();
+        }
+
+        if !self.failed.is_empty() {
+            println!("Failed to trigger update for the following workers:");
+            print_stdout(
+                self.failed
+                    .iter()
+                    .map(|worker_urn| WorkerUrnTableEntry {
+                        worker_urn: worker_urn.clone(),
+                        worker_name: worker_urn.id.worker_name.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .with_title(),
+            )
+            .unwrap();
+        }
     }
 }
