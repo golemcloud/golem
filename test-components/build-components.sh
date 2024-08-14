@@ -142,7 +142,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "tinygo" ]; then
       rm *.wasm
       rm -rf tinygo_wasi
     fi
-    wit-bindgen tiny-go --out-dir tinygo_wasi ./wit
+    wit-bindgen tiny-go --out-dir binding --rename-package binding ./wit
     tinygo build -target=wasi -tags=purego -o main.wasm main.go
 
     echo "Turning the module into a WebAssembly Component..."

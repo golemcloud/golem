@@ -62,7 +62,14 @@ async fn tinygo_example() {
     let executor = start(&context).await.unwrap();
 
     let component_id = executor.store_component("tinygo-wasi").await;
-    let worker_id = executor.start_worker(&component_id, "tinygo-wasi-1").await;
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "tinygo-wasi-1",
+            vec!["arg-1".to_string(), "arg-2".to_string()],
+            HashMap::from([("ENV_VAR_1".to_string(), "ENV_VAR_VALUE_1".to_string())]),
+        )
+        .await;
 
     let mut rx = executor.capture_output(&worker_id).await;
 
@@ -81,21 +88,29 @@ async fn tinygo_example() {
 
     drop(executor);
 
+    assert!(events.len() >= 4);
+
     let first_line = log_event_to_string(&events[0]);
     let second_line = log_event_to_string(&events[1]);
     let parts: Vec<_> = second_line.split(' ').collect();
     let last_part = parts.last().unwrap().trim();
     let now = chrono::Local::now();
     let year = now.year();
+    let third_line = log_event_to_string(&events[2]);
+    let fourth_line = log_event_to_string(&events[3]);
 
     check!(first_line == "Hello Go-lem\n".to_string());
     check!(second_line.starts_with(&format!("test {year}")));
+    check!(third_line.contains("arg-1 arg-2"));
+    check!(fourth_line.contains("ENV_VAR_1=ENV_VAR_VALUE_1"));
+    check!(fourth_line.contains("GOLEM_WORKER_NAME=tinygo-wasi-1"));
+    check!(fourth_line.contains("GOLEM_COMPONENT_ID="));
+    check!(fourth_line.contains("GOLEM_COMPONENT_VERSION=0"));
     check!(result == vec!(Value::S32(last_part.parse::<i32>().unwrap())));
 }
 
 #[tokio::test]
 #[tracing::instrument]
-#[ignore] // Temporarily ignored, see https://github.com/golemcloud/golem/issues/709
 async fn tinygo_http_client() {
     let context = TestContext::new();
     let executor = start(&context).await.unwrap();
@@ -331,7 +346,7 @@ async fn java_shopping_cart() {
                     Value::String("Mud Golem".to_string()),
                     Value::F32(11.0),
                     Value::U32(20),
-                ])
+                ]),
             ])])
     )
 }
