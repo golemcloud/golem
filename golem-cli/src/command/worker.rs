@@ -415,6 +415,28 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(short = 't', long)]
         target_version: u64,
     },
+    /// Updates a set of workers
+    #[command()]
+    UpdateMany {
+        /// The Golem component the workers to be retrieved belongs to
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// Filter for selecting workers by their metadata in form of `property op value`.
+        ///
+        /// Filter examples: `name = worker-name`, `version >= 0`, `status = Running`, `env.var1 = value`.
+        /// Can be used multiple times (AND condition is applied between them)
+        #[arg(short, long)]
+        filter: Option<Vec<String>>,
+
+        /// Update mode - auto or manual
+        #[arg(short, long)]
+        mode: WorkerUpdateMode,
+
+        /// The new version of the updated workers
+        #[arg(short = 't', long)]
+        target_version: u64,
+    },
 }
 
 pub trait WorkerRefSplit<ProjectRef> {
@@ -603,6 +625,24 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .update(worker_uri, target_version, mode, project_id)
+                    .await
+            }
+            WorkerSubcommand::UpdateMany {
+                component_name_or_uri,
+                filter,
+                mode,
+                target_version,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .update_many(
+                        component_name_or_uri,
+                        filter,
+                        target_version,
+                        mode,
+                        project_id,
+                    )
                     .await
             }
         }
