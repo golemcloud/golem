@@ -19,6 +19,7 @@ use crate::model::conversions::{
     analysed_type_client_to_model, decode_type_annotated_value_json,
     encode_type_annotated_value_json,
 };
+use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::WorkerAddView;
 use crate::model::{
@@ -166,6 +167,23 @@ pub trait WorkerService {
     async fn update_by_urn(
         &self,
         worker_urn: WorkerUrn,
+        target_version: u64,
+        mode: WorkerUpdateMode,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn update_many(
+        &self,
+        component_uri: ComponentUri,
+        filter: Option<Vec<String>>,
+        target_version: u64,
+        mode: WorkerUpdateMode,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn update_many_by_urn(
+        &self,
+        component_urn: ComponentUrn,
+        filter: Option<Vec<String>>,
         target_version: u64,
         mode: WorkerUpdateMode,
     ) -> Result<GolemResult, GolemError>;
@@ -761,6 +779,61 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let _ = self.client.update(worker_urn, mode, target_version).await?;
 
         Ok(GolemResult::Str("Updated".to_string()))
+    }
+
+    async fn update_many(
+        &self,
+        component_uri: ComponentUri,
+        filter: Option<Vec<String>>,
+        target_version: u64,
+        mode: WorkerUpdateMode,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let component_urn = self.components.resolve_uri(component_uri, project).await?;
+        self.update_many_by_urn(component_urn, filter, target_version, mode)
+            .await
+    }
+
+    async fn update_many_by_urn(
+        &self,
+        component_urn: ComponentUrn,
+        filter: Option<Vec<String>>,
+        target_version: u64,
+        mode: WorkerUpdateMode,
+    ) -> Result<GolemResult, GolemError> {
+        let known_workers = self
+            .list_worker_metadata(&component_urn, filter, Some(true))
+            .await?;
+
+        let to_update = known_workers
+            .into_iter()
+            .filter(|worker| worker.component_version < target_version)
+            .collect::<Vec<_>>();
+
+        let mut triggered = Vec::new();
+        let mut failed = Vec::new();
+        for worker in to_update {
+            let worker_urn = WorkerUrn {
+                id: WorkerId {
+                    component_id: ComponentId(worker.worker_id.component_id),
+                    worker_name: worker.worker_id.worker_name,
+                },
+            };
+            let result = self
+                .update_by_urn(worker_urn.clone(), target_version, mode.clone())
+                .await;
+
+            if result.is_ok() {
+                triggered.push(worker_urn);
+            } else {
+                failed.push(worker_urn);
+            }
+        }
+
+        Ok(GolemResult::Ok(Box::new(TryUpdateAllWorkersResult {
+            triggered,
+            failed,
+        })))
     }
 
     async fn list_worker_metadata(

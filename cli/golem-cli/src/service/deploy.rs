@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::{Format, GolemError, GolemResult, WorkerName, WorkerUpdateMode};
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
@@ -76,41 +75,9 @@ impl<ProjectContext: Display + Send + Sync> DeployService for DeployServiceLive<
             component_urn, target_version
         );
 
-        let known_workers = self
-            .worker_service
-            .list_worker_metadata(&component_urn, None, Some(true))
-            .await?;
-
-        let to_update = known_workers
-            .into_iter()
-            .filter(|worker| worker.component_version < target_version)
-            .collect::<Vec<_>>();
-
-        let mut triggered = Vec::new();
-        let mut failed = Vec::new();
-        for worker in to_update {
-            let worker_urn = WorkerUrn {
-                id: WorkerId {
-                    component_id: ComponentId(worker.worker_id.component_id),
-                    worker_name: worker.worker_id.worker_name,
-                },
-            };
-            let result = self
-                .worker_service
-                .update_by_urn(worker_urn.clone(), target_version, mode.clone())
-                .await;
-
-            if result.is_ok() {
-                triggered.push(worker_urn);
-            } else {
-                failed.push(worker_urn);
-            }
-        }
-
-        Ok(GolemResult::Ok(Box::new(TryUpdateAllWorkersResult {
-            triggered,
-            failed,
-        })))
+        self.worker_service
+            .update_many_by_urn(component_urn, None, target_version, mode)
+            .await
     }
 
     async fn redeploy(
