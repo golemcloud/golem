@@ -25,14 +25,14 @@ fi
 
 echo "Checking golem readiness in namespace: $NAMESPACE"
 
-required_pod_substrings=("shard-manager" "worker-executor" "worker-service" "component-service")
+required_pod_substrings=("shard-manager" "worker-executor" "worker-service" "component-service" "component-compilation-service")
 counter=0
 timeout=4
 
 while true; do
   missing=false
   for substring in "${required_pod_substrings[@]}"; do
-    if ! kubectl get pods --namespace $NAMESPACE -o go-component='{{range $index, $element := .items}}{{range .status.containerStatuses}}{{if .ready}}{{$element.metadata.name}}{{"\n"}}{{end}}{{end}}{{end}}' | grep -q "$substring"; then
+    if ! kubectl get pods --namespace $NAMESPACE -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | grep "\tTrue$" | grep -q "$substring"; then
       echo "Required pod with substring '$substring' is missing."
       missing=true
       break
