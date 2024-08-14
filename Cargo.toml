@@ -133,6 +133,7 @@ reqwest = { version = "0.12.5", features = [
     "json",
     "multipart",
     "stream",
+    "rustls-tls"
 ] }
 rustls = { version = "0.23.10" }
 rand = "0.8.5"
