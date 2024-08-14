@@ -53,7 +53,7 @@ jobs:
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install gcc-aarch64-linux-gnu
@@ -234,7 +234,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting and clippy rules
@@ -263,7 +263,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build all targets
@@ -292,7 +292,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check that OpenAPI specs are up-to-date
@@ -341,7 +341,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
@@ -376,7 +376,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
@@ -412,7 +412,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
@@ -448,7 +448,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
@@ -494,7 +494,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
@@ -537,15 +537,9 @@ jobs:
         with:
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release
-          cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - id: get_version
@@ -553,8 +547,6 @@ jobs:
       - name: Set version for all packages
         env:
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make set-version
       - run: cargo build -p golem-cli --release --target ${{ matrix.rust-target }}
         if: ${{ ! matrix.cross }}
