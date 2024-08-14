@@ -36,6 +36,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 clap-verbosity-flag = "2.1.1"
+clap_complete = {  version = "4.5.13" }
 derive_more = { workspace = true }
 dirs = "5.0.1"
 futures-util = { workspace = true }

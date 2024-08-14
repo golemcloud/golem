@@ -1,5 +1,6 @@
 use crate::cloud::clients::CloudAuthentication;
 use crate::cloud::command::{CloudCommand, GolemCloudCommand};
+use crate::cloud::completion::print_cloud_completion;
 use crate::cloud::factory::CloudServiceFactory;
 use async_trait::async_trait;
 use colored::Colorize;
@@ -248,6 +249,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             subcommand.handle(cli_kind, &config_dir, &factory).await
         }
         CloudCommand::Init {} => init(cli_kind, &config_dir, &factory).await,
+        CloudCommand::Completion { generator } => {
+            print_cloud_completion(generator); // FIXME needs to be fixed after OSS will be updated - using PrintCompletion
+            Ok(GolemResult::Str("".to_string()))
+        }
     };
 
     match res {

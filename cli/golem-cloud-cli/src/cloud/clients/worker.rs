@@ -11,6 +11,7 @@ use golem_cloud_client::model::{
     WorkerVersionFilter, WorkersMetadataRequest,
 };
 use golem_cloud_client::Context;
+use golem_cloud_client::Error;
 use native_tls::TlsConnector;
 use serde::Deserialize;
 use tokio::{task, time};
@@ -24,6 +25,7 @@ use crate::cloud::model::{ToCli, ToCloud, ToOss};
 use golem_cli::model::{
     ComponentId, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
 };
+use golem_cloud_client::api::WorkerError;
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_cloud_client::api::WorkerClient + Sync + Send> {
@@ -402,16 +404,10 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .await
             .map_err(|e| match e {
                 tungstenite::error::Error::Http(http_error_response) => {
+                    let status = http_error_response.status().as_u16();
                     match http_error_response.body().clone() {
-                        Some(body) => GolemError(format!(
-                            "Failed Websocket. Http error: {}, {}",
-                            http_error_response.status(),
-                            String::from_utf8_lossy(&body)
-                        )),
-                        None => GolemError(format!(
-                            "Failed Websocket. Http error: {}",
-                            http_error_response.status()
-                        )),
+                        Some(body) => get_worker_golem_error(status, body),
+                        None => GolemError(format!("Failed Websocket. Http error: {}", status)),
                     }
                 }
                 _ => GolemError(format!("Failed Websocket. Error: {}", e)),
@@ -567,4 +563,17 @@ struct Log {
     pub level: i32,
     pub context: String,
     pub message: String,
+}
+
+fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {
+    let error: Result<Error<WorkerError>, serde_json::Error> = match status {
+        400 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error400(body))),
+        401 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error401(body))),
+        403 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error403(body))),
+        404 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error404(body))),
+        409 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error409(body))),
+        500 => serde_json::from_slice(&body).map(|body| Error::Item(WorkerError::Error500(body))),
+        _ => Ok(Error::unexpected(status, body.into())),
+    };
+    CloudGolemError::from(error.unwrap_or_else(Error::from)).into()
 }
