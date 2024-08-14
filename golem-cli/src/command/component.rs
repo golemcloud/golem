@@ -83,6 +83,17 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(short = 't', long)]
         version: Option<u64>,
     },
+    /// Try to automatically update all existing workers to the latest version
+    #[command()]
+    TryUpdateWorkers {
+        /// The component to redeploy
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// Update mode - auto or manual
+        #[arg(long, default_value = "auto", requires = "try_update_workers")]
+        update_mode: WorkerUpdateMode,
+    },
     /// Redeploy all workers of a component using the latest version
     #[command()]
     Redeploy {
@@ -158,6 +169,16 @@ impl<
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 service
                     .get(component_name_or_uri, version, project_id)
+                    .await
+            }
+            ComponentSubCommand::TryUpdateWorkers {
+                component_name_or_uri,
+                update_mode,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                deploy_service
+                    .try_update_all_workers(component_name_or_uri, project_id, update_mode)
                     .await
             }
             ComponentSubCommand::Redeploy {
