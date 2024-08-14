@@ -21,6 +21,7 @@ use crate::model::GolemError;
 use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceLive};
 use crate::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceLive};
 use crate::service::component::{ComponentService, ComponentServiceLive};
+use crate::service::deploy::{DeployService, DeployServiceLive};
 use crate::service::project::ProjectResolver;
 use crate::service::version::{VersionService, VersionServiceLive};
 use crate::service::worker::{
@@ -38,6 +39,7 @@ pub trait ServiceFactory {
         &self,
         auth: &Self::SecurityContext,
     ) -> FactoryWithAuth<Self::ProjectRef, Self::ProjectContext, Self::SecurityContext>;
+
     fn project_resolver(
         &self,
         auth: &Self::SecurityContext,
@@ -45,6 +47,7 @@ pub trait ServiceFactory {
         Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
         GolemError,
     >;
+
     fn component_client(
         &self,
         auth: &Self::SecurityContext,
@@ -52,21 +55,24 @@ pub trait ServiceFactory {
         Box<dyn ComponentClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
         GolemError,
     >;
+
     fn component_service(
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<
-        Box<dyn ComponentService<ProjectContext = Self::ProjectContext> + Send + Sync>,
+        Arc<dyn ComponentService<ProjectContext = Self::ProjectContext> + Send + Sync>,
         GolemError,
     > {
-        Ok(Box::new(ComponentServiceLive {
+        Ok(Arc::new(ComponentServiceLive {
             client: self.component_client(auth)?,
         }))
     }
+
     fn worker_client(
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError>;
+
     fn worker_service(
         &self,
         auth: &Self::SecurityContext,
@@ -84,6 +90,7 @@ pub trait ServiceFactory {
             component_service_builder: Box::new(self.with_auth(auth)),
         }))
     }
+
     fn api_definition_client(
         &self,
         auth: &Self::SecurityContext,
@@ -91,6 +98,7 @@ pub trait ServiceFactory {
         Box<dyn ApiDefinitionClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
         GolemError,
     >;
+
     fn api_definition_service(
         &self,
         auth: &Self::SecurityContext,
@@ -102,6 +110,7 @@ pub trait ServiceFactory {
             client: self.api_definition_client(auth)?,
         }))
     }
+
     fn api_deployment_client(
         &self,
         auth: &Self::SecurityContext,
@@ -109,6 +118,7 @@ pub trait ServiceFactory {
         Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
         GolemError,
     >;
+
     fn api_deployment_service(
         &self,
         auth: &Self::SecurityContext,
@@ -125,12 +135,29 @@ pub trait ServiceFactory {
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<Vec<Box<dyn HealthCheckClient + Send + Sync>>, GolemError>;
+
     fn version_service(
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<Box<dyn VersionService + Send + Sync>, GolemError> {
         Ok(Box::new(VersionServiceLive {
             clients: self.health_check_clients(auth)?,
+        }))
+    }
+
+    fn deploy_service(
+        &self,
+        auth: &Self::SecurityContext,
+    ) -> Result<
+        Arc<dyn DeployService<ProjectContext = Self::ProjectContext> + Send + Sync>,
+        GolemError,
+    >
+    where
+        Self: Send + Sync + Sized + 'static,
+    {
+        Ok(Arc::new(DeployServiceLive {
+            component_service: self.component_service(auth)?,
+            worker_service: self.worker_service(auth)?,
         }))
     }
 }
@@ -161,7 +188,7 @@ impl<PR: Send + Sync, PC: Display + Send + Sync, S: Clone + Send + Sync> Compone
 {
     fn build(
         &self,
-    ) -> Result<Box<dyn ComponentService<ProjectContext = PC> + Send + Sync>, GolemError> {
+    ) -> Result<Arc<dyn ComponentService<ProjectContext = PC> + Send + Sync>, GolemError> {
         self.factory.component_service(&self.auth)
     }
 }

@@ -62,7 +62,9 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
             subcommand
                 .handle(
-                    factory.component_service(ctx)?.as_ref(),
+                    format,
+                    factory.component_service(ctx)?,
+                    factory.deploy_service(ctx)?,
                     factory.project_resolver(ctx)?.as_ref(),
                 )
                 .await

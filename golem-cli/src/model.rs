@@ -14,6 +14,7 @@
 
 pub mod component;
 pub mod conversions;
+pub mod deploy;
 pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
@@ -39,6 +40,7 @@ use golem_common::uri::oss::urn::WorkerUrn;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
@@ -54,7 +56,7 @@ impl GolemResult {
         Err(GolemError(s))
     }
 
-    pub fn print(self, format: Format) {
+    pub fn print(&self, format: Format) {
         match self {
             GolemResult::Ok(r) => r.println(&format),
             GolemResult::Str(s) => println!("{s}"),
@@ -66,10 +68,52 @@ impl GolemResult {
             },
         }
     }
+
+    pub fn as_json_value(&self) -> Value {
+        match self {
+            GolemResult::Ok(r) => r.as_json_value(),
+            GolemResult::Str(s) => Value::String(s.clone()),
+            GolemResult::Json(json) => json.clone(),
+        }
+    }
+
+    pub fn merge(self, other: GolemResult) -> GolemResult {
+        GolemResult::Ok(Box::new(MergedGolemResult {
+            result1: self,
+            result2: other,
+        }))
+    }
+}
+
+struct MergedGolemResult {
+    result1: GolemResult,
+    result2: GolemResult,
+}
+
+impl PrintRes for MergedGolemResult {
+    fn println(&self, format: &Format) {
+        match format {
+            Format::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&self.as_json_value()).unwrap()
+            ),
+            Format::Yaml => println!("{}", serde_yaml::to_string(&self.as_json_value()).unwrap()),
+            Format::Text => {
+                self.result1.print(*format);
+                println!();
+                self.result2.print(*format);
+            }
+        }
+    }
+
+    fn as_json_value(&self) -> Value {
+        json! {[self.result1.as_json_value(), self.result2.as_json_value()]}
+    }
 }
 
 pub trait PrintRes {
     fn println(&self, format: &Format);
+    fn as_json_value(&self) -> serde_json::Value;
 }
 
 impl<T> PrintRes for T
@@ -83,6 +127,10 @@ where
             Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
             Format::Text => self.print(),
         }
+    }
+
+    fn as_json_value(&self) -> Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 

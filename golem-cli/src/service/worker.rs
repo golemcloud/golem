@@ -40,6 +40,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use itertools::Itertools;
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -56,6 +57,15 @@ pub trait WorkerService {
         args: Vec<String>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
+    async fn add_by_urn(
+        &self,
+        component_urn: ComponentUrn,
+        worker_name: WorkerName,
+        env: Vec<(String, String)>,
+        args: Vec<String>,
+    ) -> Result<GolemResult, GolemError>;
+
     async fn idempotency_key(&self) -> Result<GolemResult, GolemError> {
         let key = IdempotencyKey(Uuid::new_v4().to_string());
         Ok(GolemResult::Ok(Box::new(key)))
@@ -77,6 +87,7 @@ pub trait WorkerService {
         wave: Vec<String>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn invoke(
         &self,
         worker_uri: WorkerUri,
@@ -86,6 +97,7 @@ pub trait WorkerService {
         wave: Vec<String>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn connect(
         &self,
         worker_uri: WorkerUri,
@@ -93,37 +105,46 @@ pub trait WorkerService {
         connect_options: WorkerConnectOptions,
         format: Format,
     ) -> Result<GolemResult, GolemError>;
+
     async fn interrupt(
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn resume(
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn simulated_crash(
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn delete(
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
+    async fn delete_by_urn(&self, worker_urn: WorkerUrn) -> Result<GolemResult, GolemError>;
+
     async fn get(
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn get_function(
         &self,
         worker_uri: WorkerUri,
         function: &str,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn list(
         &self,
         component_uri: ComponentUri,
@@ -133,6 +154,7 @@ pub trait WorkerService {
         precise: Option<bool>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn update(
         &self,
         worker_uri: WorkerUri,
@@ -140,6 +162,20 @@ pub trait WorkerService {
         mode: WorkerUpdateMode,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
+    async fn update_by_urn(
+        &self,
+        worker_urn: WorkerUrn,
+        target_version: u64,
+        mode: WorkerUpdateMode,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn list_worker_metadata(
+        &self,
+        component_urn: &ComponentUrn,
+        filter: Option<Vec<String>>,
+        precise: Option<bool>,
+    ) -> Result<Vec<WorkerMetadata>, GolemError>;
 }
 
 pub trait WorkerClientBuilder {
@@ -149,12 +185,12 @@ pub trait WorkerClientBuilder {
 pub trait ComponentServiceBuilder<ProjectContext: Send + Sync> {
     fn build(
         &self,
-    ) -> Result<Box<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>, GolemError>;
+    ) -> Result<Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>, GolemError>;
 }
 
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
     pub client: Box<dyn WorkerClient + Send + Sync>,
-    pub components: Box<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
+    pub components: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
     pub client_builder: Box<dyn WorkerClientBuilder + Send + Sync>,
     pub component_service_builder: Box<dyn ComponentServiceBuilder<ProjectContext> + Send + Sync>,
 }
@@ -162,7 +198,7 @@ pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
 // same as resolve_worker_component_version, but with no borrowing, so we can spawn it.
 async fn resolve_worker_component_version_no_ref<ProjectContext: Send + Sync>(
     worker_client: Box<dyn WorkerClient + Send + Sync>,
-    component_service: Box<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
+    component_service: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
     worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
     resolve_worker_component_version(
@@ -400,7 +436,16 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let component_urn = self.components.resolve_uri(component_uri, project).await?;
+        self.add_by_urn(component_urn, worker_name, env, args).await
+    }
 
+    async fn add_by_urn(
+        &self,
+        component_urn: ComponentUrn,
+        worker_name: WorkerName,
+        env: Vec<(String, String)>,
+        args: Vec<String>,
+    ) -> Result<GolemResult, GolemError> {
         let inst = self
             .client
             .new_worker(worker_name, component_urn, args, env)
@@ -597,7 +642,10 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        self.delete_by_urn(worker_urn).await
+    }
 
+    async fn delete_by_urn(&self, worker_urn: WorkerUrn) -> Result<GolemResult, GolemError> {
         self.client.delete(worker_urn).await?;
 
         Ok(GolemResult::Str("Deleted".to_string()))
@@ -683,30 +731,9 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
             Ok(GolemResult::Ok(Box::new(response)))
         } else {
-            let mut workers: Vec<WorkerMetadata> = vec![];
-            let mut new_cursor = cursor;
-
-            loop {
-                let response = self
-                    .client
-                    .list_metadata(
-                        component_urn.clone(),
-                        filter.clone(),
-                        new_cursor,
-                        Some(50),
-                        precise,
-                    )
-                    .await?;
-
-                workers.extend(response.workers);
-
-                new_cursor = response.cursor;
-
-                if new_cursor.is_none() {
-                    break;
-                }
-            }
-
+            let workers = self
+                .list_worker_metadata(&component_urn, filter, precise)
+                .await?;
             Ok(GolemResult::Ok(Box::new(WorkersMetadataResponseView {
                 workers: workers.into_iter().map_into().collect(),
                 cursor: None,
@@ -722,8 +749,50 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
+        self.update_by_urn(worker_urn, target_version, mode).await
+    }
+
+    async fn update_by_urn(
+        &self,
+        worker_urn: WorkerUrn,
+        target_version: u64,
+        mode: WorkerUpdateMode,
+    ) -> Result<GolemResult, GolemError> {
         let _ = self.client.update(worker_urn, mode, target_version).await?;
 
         Ok(GolemResult::Str("Updated".to_string()))
+    }
+
+    async fn list_worker_metadata(
+        &self,
+        component_urn: &ComponentUrn,
+        filter: Option<Vec<String>>,
+        precise: Option<bool>,
+    ) -> Result<Vec<WorkerMetadata>, GolemError> {
+        let mut workers: Vec<WorkerMetadata> = vec![];
+        let mut new_cursor = None;
+
+        loop {
+            let response = self
+                .client
+                .list_metadata(
+                    component_urn.clone(),
+                    filter.clone(),
+                    new_cursor,
+                    Some(50),
+                    precise,
+                )
+                .await?;
+
+            workers.extend(response.workers);
+
+            new_cursor = response.cursor;
+
+            if new_cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(workers)
     }
 }
