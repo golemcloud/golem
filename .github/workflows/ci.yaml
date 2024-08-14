@@ -483,6 +483,7 @@ jobs:
     name: Publish binaries of golem-cli
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - rust-target: x86_64-unknown-linux-gnu
