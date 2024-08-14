@@ -114,8 +114,8 @@ impl<'de> Deserialize<'de> for GolemUri {
 /// `resource_type` is case-insensitive
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct GolemUrn {
-    resource_type: String,
-    resource_name: String,
+    pub resource_type: String,
+    pub resource_name: String,
 }
 
 impl Display for GolemUrn {
@@ -239,7 +239,7 @@ pub trait TypedGolemUrn {
     fn to_name(&self) -> String;
 }
 
-fn try_from_golem_urn<T: TypedGolemUrn>(urn: &GolemUrn) -> Result<T, GolemUrnTransformError> {
+pub fn try_from_golem_urn<T: TypedGolemUrn>(urn: &GolemUrn) -> Result<T, GolemUrnTransformError> {
     let expected_type = T::resource_type();
 
     if urn.resource_type != expected_type {
@@ -507,7 +507,7 @@ pub trait TypedGolemUrl {
     }
 }
 
-fn try_from_golem_url<T: TypedGolemUrl>(url: &GolemUrl) -> Result<T, GolemUrlTransformError> {
+pub fn try_from_golem_url<T: TypedGolemUrl>(url: &GolemUrl) -> Result<T, GolemUrlTransformError> {
     let expected_type = T::resource_type();
 
     if url.resource_type != expected_type {
@@ -530,9 +530,9 @@ fn try_from_golem_url<T: TypedGolemUrl>(url: &GolemUrl) -> Result<T, GolemUrlTra
 /// URL authority is not supported.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct GolemUrl {
-    resource_type: String,
-    path: String,
-    query: Option<String>,
+    pub resource_type: String,
+    pub path: String,
+    pub query: Option<String>,
 }
 
 impl Display for GolemUrl {
@@ -627,7 +627,7 @@ impl GolemUrl {
     }
 }
 
-fn urldecode(s: &str) -> String {
+pub fn urldecode(s: &str) -> String {
     fn join(k: Cow<str>, v: Cow<str>) -> String {
         if v.is_empty() {
             k.into_owned()
@@ -641,7 +641,7 @@ fn urldecode(s: &str) -> String {
         .collect()
 }
 
-fn urlencode(s: &str) -> String {
+pub fn urlencode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
