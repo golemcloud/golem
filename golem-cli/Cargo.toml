@@ -41,6 +41,7 @@ http = { workspace = true }
 hyper = { workspace = true }
 indoc = "2.0.4"
 itertools = { workspace = true }
+lenient_bool = "0.1.1"
 log = { version = "0.4.22" }
 native-tls = "0.2.11"
 openapiv3 = { workspace = true }

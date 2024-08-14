@@ -27,6 +27,7 @@ use crate::service::worker::{
     ComponentServiceBuilder, WorkerClientBuilder, WorkerService, WorkerServiceLive,
 };
 use std::fmt::Display;
+use std::sync::Arc;
 
 pub trait ServiceFactory {
     type SecurityContext: Clone + Send + Sync + 'static;
@@ -41,7 +42,7 @@ pub trait ServiceFactory {
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<
-        Box<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
+        Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
         GolemError,
     >;
     fn component_client(
@@ -70,13 +71,13 @@ pub trait ServiceFactory {
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<
-        Box<dyn WorkerService<ProjectContext = Self::ProjectContext> + Send + Sync>,
+        Arc<dyn WorkerService<ProjectContext = Self::ProjectContext> + Send + Sync>,
         GolemError,
     >
     where
         Self: Send + Sync + Sized + 'static,
     {
-        Ok(Box::new(WorkerServiceLive {
+        Ok(Arc::new(WorkerServiceLive {
             client: self.worker_client(auth)?,
             components: self.component_service(auth)?,
             client_builder: Box::new(self.with_auth(auth)),

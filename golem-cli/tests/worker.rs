@@ -634,8 +634,17 @@ fn worker_connect(
     let _ = cli.run_json(&cli_args)?;
 
     let line = rx.recv_timeout(Duration::from_secs(5))?;
+    let json: serde_json::Value = serde_json::from_str(&line)?;
 
-    assert_eq!(line, "Sample text written to the output");
+    assert_eq!(
+        json.as_object()
+            .unwrap()
+            .get("message")
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        "Sample text written to the output"
+    );
 
     child.kill()?;
 

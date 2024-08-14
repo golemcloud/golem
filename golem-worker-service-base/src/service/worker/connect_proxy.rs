@@ -18,11 +18,12 @@ use std::{
 };
 
 use futures::{Sink, SinkExt, Stream, StreamExt};
+use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::WorkerEvent;
+use golem_service_base::model::WorkerId;
 use poem::web::websocket::Message;
 use tonic::Status;
-
-use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_service_base::model::WorkerId;
+use tracing::{error, info};
 
 /// Proxies a worker connection, listening for either connection to close. Websocket sink will be closed at the end.
 ///
@@ -37,7 +38,7 @@ pub async fn proxy_worker_connection(
     keep_alive_interval: Duration,
     max_pong_timeout: Duration,
 ) -> Result<(), ConnectProxyError> {
-    tracing::info!("Proxying worker connection");
+    info!("Proxying worker connection");
 
     let mut websocket = keep_alive::WebSocketKeepAlive::from_sink_and_stream(
         websocket_receiver,
@@ -53,7 +54,7 @@ pub async fn proxy_worker_connection(
             websocket_message = websocket.next() => {
                 match websocket_message {
                     Some(Ok(Message::Close(payload))) => {
-                        tracing::info!(
+                        info!(
                             close_code=payload.as_ref().map(|p| u16::from(p.0)),
                             close_message=payload.as_ref().map(|p| &p.1),
                             "Client closed WebSocket connection",
@@ -62,12 +63,13 @@ pub async fn proxy_worker_connection(
                     }
                     Some(Err(error)) => {
                         let error: ConnectProxyError = error.into();
-                        tracing::info!(error=error.to_string(), "Received WebSocket Error");
+                        info!(error=error.to_string(), "Received WebSocket Error");
                         break Err(error);
                     },
-                    Some(Ok(_)) => {}
+                    Some(Ok(_)) => {
+                    }
                     None => {
-                        tracing::info!("WebSocket connection closed");
+                        info!("WebSocket connection closed");
                         break Ok(());
                     }
                 }
@@ -76,24 +78,26 @@ pub async fn proxy_worker_connection(
             worker_message = worker_stream.next() => {
                 if let Some(message) = worker_message {
                     if let Err(error) = forward_worker_message(message, &mut websocket).await {
-                        tracing::info!(error=error.to_string(), "Error forwarding message to WebSocket client");
-                        break(Err(error))
+                        info!(error=error.to_string(), "Error forwarding message to WebSocket client");
+                        break Err(error)
+
                     }
                 } else {
-                    tracing::info!("Worker stream ended");
+                    info!("Worker stream ended");
                     break Ok(());
                 }
             },
         }
     };
 
+    info!("Closing websocket connection");
     if let Err(error) = websocket.close().await {
-        tracing::error!(
+        error!(
             error = error.to_string(),
             "Error closing WebSocket connection"
         );
     } else {
-        tracing::info!("WebSocket connection successfully closed");
+        info!("WebSocket connection successfully closed");
     }
 
     result
@@ -106,7 +110,7 @@ async fn forward_worker_message<E>(
 where
     ConnectProxyError: From<E>,
 {
-    let message = message?;
+    let message: WorkerEvent = message?.try_into().map_err(ConnectProxyError::Proto)?;
     let msg_json = serde_json::to_string(&message)?;
     socket.send(Message::Text(msg_json)).await?;
     Ok(())
@@ -119,6 +123,9 @@ pub enum ConnectProxyError {
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    #[error("Internal protocol error: {0}")]
+    Proto(String),
 
     #[error(transparent)]
     Tonic(#[from] tonic::Status),
@@ -151,6 +158,7 @@ mod keep_alive {
     use futures::{Future, Sink, SinkExt, Stream, StreamExt};
     use poem::web::websocket::Message;
     use tokio::time::Instant;
+    use tracing::debug;
 
     pub struct WebSocketKeepAlive<A, B> {
         sink: A,
@@ -220,36 +228,36 @@ mod keep_alive {
             if (self.pong_timeout.as_mut().poll(cx).is_ready() || self.pong_timeout.is_elapsed())
                 && self.last_ping.is_some()
             {
-                tracing::debug!("Ping confirmation timed out");
+                debug!("Ping confirmation timed out");
                 return Poll::Ready(Some(Err(KeepAliveError::Timeout)));
             }
 
             if self.ping_interval.poll_tick(cx).is_ready() && self.last_ping.is_none() {
-                tracing::debug!("Initiating WebSocket Ping");
+                debug!("Initiating WebSocket Ping");
 
                 let sink_ready = self.sink.poll_ready_unpin(cx).map_err(|e| {
-                    tracing::debug!("Error polling sink readiness");
+                    debug!("Error polling sink readiness");
                     KeepAliveError::Sink(e)
                 })?;
 
                 if sink_ready.is_pending() {
-                    tracing::debug!("Waiting for sink to be ready");
+                    debug!("Waiting for sink to be ready");
                     return Poll::Pending;
                 }
 
                 self.sink
                     .start_send_unpin(Message::Ping(Vec::new()))
                     .map_err(|e| {
-                        tracing::debug!("Error sending WebSocket Ping");
+                        debug!("Error sending WebSocket Ping");
                         KeepAliveError::Sink(e)
                     })?;
 
                 let _ = self.sink.poll_flush_unpin(cx).map_err(|e| {
-                    tracing::debug!("Error flushing WebSocket Ping");
+                    debug!("Error flushing WebSocket Ping");
                     KeepAliveError::Sink(e)
                 })?;
 
-                tracing::debug!("WebSocket Ping sent");
+                debug!("WebSocket Ping sent");
 
                 let now = Instant::now();
                 let timeout = now + self.max_pong_timeout;
@@ -260,7 +268,7 @@ mod keep_alive {
 
             match self.stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(Message::Pong(pong)))) => {
-                    tracing::debug!("Received WebSocket confirmation Pong");
+                    debug!("Received WebSocket confirmation Pong");
                     self.last_ping = None;
                     self.ping_interval.as_mut().reset();
 
@@ -314,20 +322,20 @@ mod keep_alive {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Once;
 
+        use super::*;
         use poem::web::websocket::Message;
         use tokio::sync::mpsc;
         use tokio::time::{timeout, Duration};
         use tokio_stream::wrappers::ReceiverStream;
         use tokio_util::sync::PollSender;
-
-        use super::*;
+        use tracing::Level;
 
         static TRACING_SETUP: Once = Once::new();
 
         fn setup_tracing() {
             TRACING_SETUP.call_once(|| {
                 let subscriber = tracing_subscriber::FmtSubscriber::builder()
-                    .with_max_level(tracing::Level::DEBUG)
+                    .with_max_level(Level::DEBUG)
                     .finish();
 
                 tracing::subscriber::set_global_default(subscriber)

@@ -13,118 +13,33 @@
 // limitations under the License.
 
 use crate::metrics::events::{record_broadcast_event, record_event};
-use bincode::{Decode, Encode};
-use golem_common::model::oplog::OplogEntry;
+use futures_util::{stream, StreamExt};
+use golem_common::model::{LogLevel, WorkerEvent};
+use ringbuf::storage::Heap;
+use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
-use std::fmt::{Display, Formatter};
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Critical,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub enum WorkerEvent {
-    StdOut(Vec<u8>),
-    StdErr(Vec<u8>),
-    Log {
-        level: LogLevel,
-        context: String,
-        message: String,
-    },
-    Close,
-}
-
-impl WorkerEvent {
-    pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
-        match self {
-            WorkerEvent::StdOut(bytes) => Some(OplogEntry::log(
-                golem_common::model::oplog::LogLevel::Stdout,
-                String::new(),
-                String::from_utf8_lossy(bytes).to_string(),
-            )),
-            WorkerEvent::StdErr(bytes) => Some(OplogEntry::log(
-                golem_common::model::oplog::LogLevel::Stderr,
-                String::new(),
-                String::from_utf8_lossy(bytes).to_string(),
-            )),
-            WorkerEvent::Log {
-                level,
-                context,
-                message,
-            } => Some(OplogEntry::log(
-                match level {
-                    LogLevel::Trace => golem_common::model::oplog::LogLevel::Trace,
-                    LogLevel::Debug => golem_common::model::oplog::LogLevel::Debug,
-                    LogLevel::Info => golem_common::model::oplog::LogLevel::Info,
-                    LogLevel::Warn => golem_common::model::oplog::LogLevel::Warn,
-                    LogLevel::Error => golem_common::model::oplog::LogLevel::Error,
-                    LogLevel::Critical => golem_common::model::oplog::LogLevel::Critical,
-                },
-                context.clone(),
-                message.clone(),
-            )),
-            WorkerEvent::Close => None,
-        }
-    }
-}
-
-impl Display for WorkerEvent {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerEvent::StdOut(bytes) => {
-                write!(
-                    f,
-                    "<stdout> {}",
-                    String::from_utf8(bytes.clone()).unwrap_or_default()
-                )
-            }
-            WorkerEvent::StdErr(bytes) => {
-                write!(
-                    f,
-                    "<stderr> {}",
-                    String::from_utf8(bytes.clone()).unwrap_or_default()
-                )
-            }
-            WorkerEvent::Log {
-                level,
-                context,
-                message,
-            } => {
-                write!(f, "<log> {:?} {} {}", level, context, message)
-            }
-            WorkerEvent::Close => {
-                write!(f, "<close>")
-            }
-        }
-    }
-}
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::Stream;
 
 /// Per-worker event stream
 pub trait WorkerEventService {
     fn emit_event(&self, event: WorkerEvent);
 
-    fn emit_stdout(&self, data: Vec<u8>) {
-        self.emit_event(WorkerEvent::StdOut(data))
+    fn emit_stdout(&self, bytes: Vec<u8>) {
+        self.emit_event(WorkerEvent::stdout(bytes))
     }
 
-    fn emit_stderr(&self, data: Vec<u8>) {
-        self.emit_event(WorkerEvent::StdErr(data))
+    fn emit_stderr(&self, bytes: Vec<u8>) {
+        self.emit_event(WorkerEvent::stderr(bytes))
     }
 
     fn emit_log(&self, log_level: LogLevel, context: &str, message: &str) {
-        self.emit_event(WorkerEvent::Log {
-            level: log_level,
-            context: context.to_string(),
-            message: message.to_string(),
-        })
+        self.emit_event(WorkerEvent::log(log_level, context, message))
     }
 
     fn receiver(&self) -> WorkerEventReceiver;
@@ -142,19 +57,28 @@ impl WorkerEventReceiver {
             None => self.receiver.recv().await,
         }
     }
+
+    pub fn to_stream(self) -> impl Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> {
+        let Self { history, receiver } = self;
+        stream::iter(history.into_iter().map(Ok)).chain(BroadcastStream::new(receiver))
+    }
 }
 
 pub struct WorkerEventServiceDefault {
     sender: Sender<WorkerEvent>,
-    ring: HeapRb<WorkerEvent>,
+    ring_prod: Arc<Mutex<<SharedRb<Heap<WorkerEvent>> as Split>::Prod>>,
+    ring_cons: Arc<Mutex<<SharedRb<Heap<WorkerEvent>> as Split>::Cons>>,
 }
 
 impl WorkerEventServiceDefault {
     pub fn new(channel_capacity: usize, ring_capacity: usize) -> WorkerEventServiceDefault {
         let (tx, _) = channel(channel_capacity);
-        let ring = HeapRb::new(ring_capacity);
-        // ring.sub
-        WorkerEventServiceDefault { sender: tx, ring }
+        let (ring_prod, ring_cons) = HeapRb::new(ring_capacity).split();
+        WorkerEventServiceDefault {
+            sender: tx,
+            ring_prod: Arc::new(Mutex::new(ring_prod)),
+            ring_cons: Arc::new(Mutex::new(ring_cons)),
+        }
     }
 }
 
@@ -173,20 +97,26 @@ impl WorkerEventService for WorkerEventServiceDefault {
 
             let _ = self.sender.send(event.clone());
         }
-        let _ = unsafe { Producer::new(&self.ring) }.push(event);
+
+        let mut ring_prod = self.ring_prod.lock().unwrap();
+        while ring_prod.try_push(event.clone()).is_err() {
+            let mut ring_cons = self.ring_cons.lock().unwrap();
+            let _ = ring_cons.try_pop();
+        }
     }
 
     fn receiver(&self) -> WorkerEventReceiver {
         let receiver = self.sender.subscribe();
-        let history = self.ring.iter().cloned().rev().collect();
+        let ring_cons = self.ring_cons.lock().unwrap();
+        let history = ring_cons.iter().cloned().collect();
         WorkerEventReceiver { history, receiver }
     }
 }
 
 fn label(event: &WorkerEvent) -> &'static str {
     match event {
-        WorkerEvent::StdOut(_) => "stdout",
-        WorkerEvent::StdErr(_) => "stderr",
+        WorkerEvent::StdOut { .. } => "stdout",
+        WorkerEvent::StdErr { .. } => "stderr",
         WorkerEvent::Log { .. } => "log",
         WorkerEvent::Close => "close",
     }
@@ -224,7 +154,7 @@ mod tests {
         });
 
         for b in 1..5u8 {
-            svc.emit_event(WorkerEvent::StdOut(vec![b]));
+            svc.emit_event(WorkerEvent::stdout(vec![b]));
         }
 
         let svc2 = svc.clone();
@@ -243,7 +173,7 @@ mod tests {
         });
 
         for b in 5..9u8 {
-            svc.emit_event(WorkerEvent::StdOut(vec![b]));
+            svc.emit_event(WorkerEvent::stdout(vec![b]));
         }
 
         drop(svc);
@@ -257,23 +187,23 @@ mod tests {
         assert_eq!(
             result1
                 == vec![
-                    WorkerEvent::StdOut(vec![1]),
-                    WorkerEvent::StdOut(vec![2]),
-                    WorkerEvent::StdOut(vec![3]),
-                    WorkerEvent::StdOut(vec![5]),
-                    WorkerEvent::StdOut(vec![6]),
-                    WorkerEvent::StdOut(vec![7]),
-                    WorkerEvent::StdOut(vec![8]),
+                    WorkerEvent::stdout(vec![1]),
+                    WorkerEvent::stdout(vec![2]),
+                    WorkerEvent::stdout(vec![3]),
+                    WorkerEvent::stdout(vec![5]),
+                    WorkerEvent::stdout(vec![6]),
+                    WorkerEvent::stdout(vec![7]),
+                    WorkerEvent::stdout(vec![8]),
                 ],
             result2
                 == vec![
-                    WorkerEvent::StdOut(vec![1]),
-                    WorkerEvent::StdOut(vec![2]),
-                    WorkerEvent::StdOut(vec![3]),
-                    WorkerEvent::StdOut(vec![5]),
-                    WorkerEvent::StdOut(vec![6]),
-                    WorkerEvent::StdOut(vec![7]),
-                    WorkerEvent::StdOut(vec![8]),
+                    WorkerEvent::stdout(vec![1]),
+                    WorkerEvent::stdout(vec![2]),
+                    WorkerEvent::stdout(vec![3]),
+                    WorkerEvent::stdout(vec![5]),
+                    WorkerEvent::stdout(vec![6]),
+                    WorkerEvent::stdout(vec![7]),
+                    WorkerEvent::stdout(vec![8]),
                 ]
         )
     }
@@ -301,7 +231,7 @@ mod tests {
 
         for b in 1..1001 {
             let s = format!("{}", b);
-            svc.emit_event(WorkerEvent::StdOut(s.as_bytes().into()));
+            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()));
         }
 
         let svc2 = svc.clone();
@@ -321,7 +251,7 @@ mod tests {
 
         for b in 1001..1005 {
             let s = format!("{}", b);
-            svc.emit_event(WorkerEvent::StdOut(s.as_bytes().into()));
+            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()));
         }
 
         drop(svc);
@@ -336,14 +266,14 @@ mod tests {
             result1.len() == 1004,
             result2
                 == vec![
-                    WorkerEvent::StdOut("997".as_bytes().into()),
-                    WorkerEvent::StdOut("998".as_bytes().into()),
-                    WorkerEvent::StdOut("999".as_bytes().into()),
-                    WorkerEvent::StdOut("1000".as_bytes().into()),
-                    WorkerEvent::StdOut("1001".as_bytes().into()),
-                    WorkerEvent::StdOut("1002".as_bytes().into()),
-                    WorkerEvent::StdOut("1003".as_bytes().into()),
-                    WorkerEvent::StdOut("1004".as_bytes().into()),
+                    WorkerEvent::stdout("997".as_bytes().into()),
+                    WorkerEvent::stdout("998".as_bytes().into()),
+                    WorkerEvent::stdout("999".as_bytes().into()),
+                    WorkerEvent::stdout("1000".as_bytes().into()),
+                    WorkerEvent::stdout("1001".as_bytes().into()),
+                    WorkerEvent::stdout("1002".as_bytes().into()),
+                    WorkerEvent::stdout("1003".as_bytes().into()),
+                    WorkerEvent::stdout("1004".as_bytes().into()),
                 ]
         )
     }

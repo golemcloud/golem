@@ -23,9 +23,9 @@ use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
-use crate::services::worker_event::WorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{OplogIndex, WrappedFunctionType};
+use golem_common::model::WorkerEvent;
 use wasmtime_wasi::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
@@ -183,9 +183,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
         let output = self.table().get(&self_)?;
         let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            Some(WorkerEvent::StdOut(contents.clone()))
+            Some(WorkerEvent::stdout(contents.clone()))
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            Some(WorkerEvent::StdErr(contents.clone()))
+            Some(WorkerEvent::stderr(contents.clone()))
         } else {
             None
         };

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::clients::worker::WorkerClient;
+use crate::command::worker::WorkerConnectOptions;
 use crate::model::component::{function_params_types, show_exported_function, Component};
 use crate::model::conversions::{
     analysed_type_client_to_model, decode_type_annotated_value_json,
@@ -89,6 +90,8 @@ pub trait WorkerService {
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
+        connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<GolemResult, GolemError>;
     async fn interrupt(
         &self,
@@ -540,10 +543,14 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         &self,
         worker_uri: WorkerUri,
         project: Option<Self::ProjectContext>,
+        connect_options: WorkerConnectOptions,
+        format: Format,
     ) -> Result<GolemResult, GolemError> {
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        self.client.connect(worker_urn).await?;
+        self.client
+            .connect_forever(worker_urn, connect_options, format)
+            .await?;
 
         Err(GolemError("Unexpected connection closure".to_string()))
     }

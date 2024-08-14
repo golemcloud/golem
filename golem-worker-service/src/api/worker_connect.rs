@@ -46,7 +46,7 @@ pub async fn ws(
     websocket: WebSocket,
     Data(service): Data<&ConnectService>,
 ) -> Response {
-    get_worker_stream(service, component_id, worker_name)
+    connect_to_worker(service, component_id, worker_name)
         .await
         .map(|(worker_id, worker_stream)| {
             websocket
@@ -72,7 +72,7 @@ pub async fn ws(
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const PING_TIMEOUT: Duration = Duration::from_secs(15);
 
-async fn get_worker_stream(
+async fn connect_to_worker(
     service: &ConnectService,
     component_id: ComponentId,
     worker_name: String,

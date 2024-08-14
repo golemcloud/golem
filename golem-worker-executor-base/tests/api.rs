@@ -39,7 +39,8 @@ use crate::common::{start, TestContext, TestWorkerExecutor};
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
-    drain_connection, is_worker_execution_error, stdout_event, worker_error_message, TestDslUnsafe,
+    drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
+    worker_error_message, TestDslUnsafe,
 };
 use tokio::time::sleep;
 use tonic::transport::Body;
@@ -118,7 +119,7 @@ async fn simulated_crash() {
     );
     check!(result.is_ok());
     check!(result == Ok(vec![Value::String("done".to_string())]));
-    check!(events == vec![stdout_event("Starting interruption test\n"),]);
+    check!(stdout_events(events.into_iter()) == vec!["Starting interruption test\n"]);
     check!(elapsed.as_secs() < 13);
 }
 
@@ -1598,8 +1599,14 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
     drop(executor);
     http_server.abort();
 
-    check!(events.contains(&Some(stdout_event("Calling the poll endpoint\n"))));
-    check!(events.contains(&Some(stdout_event("Received initial\n"))));
+    check!(events
+        .iter()
+        .flatten()
+        .any(|e| stdout_event_matching(e, "Calling the poll endpoint\n")));
+    check!(events
+        .iter()
+        .flatten()
+        .any(|e| stdout_event_matching(e, "Received initial\n")));
 }
 
 #[tokio::test]
@@ -1748,9 +1755,15 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);
     check!(status3.last_known_status.status == WorkerStatus::Running);
     check!(status4.last_known_status.status == WorkerStatus::Idle);
-    check!(events.contains(&stdout_event("Calling the poll endpoint\n")));
-    check!(events.contains(&stdout_event("Received initial\n")));
-    check!(events.contains(&stdout_event("Poll loop finished\n")));
+    check!(events
+        .iter()
+        .any(|e| stdout_event_matching(e, "Calling the poll endpoint\n")));
+    check!(events
+        .iter()
+        .any(|e| stdout_event_matching(e, "Received initial\n")));
+    check!(events
+        .iter()
+        .any(|e| stdout_event_matching(e, "Poll loop finished\n")));
 }
 
 #[tokio::test]

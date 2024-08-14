@@ -38,6 +38,7 @@ exclude = [
     "test-components/http-client-2",
     "test-components/interruption",
     "test-components/key-value-service",
+    "test-components/logging",
     "test-components/networking",
     "test-components/option-service",
     "test-components/promise",

@@ -33,7 +33,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
 use crate::services::worker::WorkerService;
-use crate::services::worker_event::{WorkerEvent, WorkerEventService};
+use crate::services::worker_event::WorkerEventService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::workerctx::{
     ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement,
@@ -50,8 +50,8 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;

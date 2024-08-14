@@ -21,7 +21,7 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
-use tracing::Instrument;
+use tracing::{error, Instrument};
 
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::metrics::api::{
@@ -41,42 +41,38 @@ impl ConnectWorkerStream {
         let mut streaming = streaming;
 
         let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
 
-        tokio::spawn({
-            record_new_grpc_api_active_stream();
+        tokio::spawn(
+            async move {
+                record_new_grpc_api_active_stream();
 
-            let cancel = cancel.clone();
-
-            let forward_loop = {
-                let sender = sender.clone();
-                async move {
-                    while let Some(message) = streaming.next().await {
-                        if let Err(error) = sender.send(message).await {
-                            tracing::error!(
-                                error = error.to_string(),
-                                "Failed to forward WorkerStream"
-                            );
+                loop {
+                    tokio::select! {
+                        _ = cancel_clone.cancelled() => {
                             break;
+                        }
+                        message = streaming.next() => {
+                            if let Some(message) = message {
+                                if let Err(error) = sender.send(message).await {
+                                    error!(
+                                        error = error.to_string(),
+                                        "Failed to forward WorkerStream"
+                                    );
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
                         }
                     }
                 }
-                .in_current_span()
-            };
 
-            async move {
-                tokio::select! {
-                    _ = cancel.cancelled() => {
-                        tracing::info!("WorkerStream cancelled");
-                    }
-                    _ = forward_loop => {
-                        tracing::info!("WorkerStream forward loop finished");
-                    }
-                }
-                sender.closed().await;
+                drop(sender);
                 record_closed_grpc_api_active_stream();
             }
-            .in_current_span()
-        });
+            .in_current_span(),
+        );
 
         Self { receiver, cancel }
     }

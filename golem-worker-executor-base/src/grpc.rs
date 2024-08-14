@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::fmt::{Debug, Display, Formatter};
-use std::marker::PhantomData;
-use std::sync::Arc;
-
+use futures_util::Stream;
 use gethostname::gethostname;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
+use std::collections::HashMap;
+use std::fmt::{Debug, Display, Formatter};
+use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
@@ -43,23 +44,21 @@ use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_worker_id_string,
 };
-use golem_common::metrics::api::{
-    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
-};
+use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
-    TimestampedWorkerInvocation, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
-use crate::services::worker_event::LogLevel;
+use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    worker_event, All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
+    All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -146,7 +145,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 }
 
 type ResponseResult<T> = Result<Response<T>, Status>;
-type ResponseStream = ReceiverStream<Result<golem::worker::LogEvent, Status>>;
+type ResponseStream = WorkerEventStream;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -224,7 +223,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     fn ensure_worker_belongs_to_this_executor(
         &self,
-        worker_id: &common_model::WorkerId,
+        worker_id: &WorkerId,
     ) -> Result<(), GolemError> {
         self.shard_service().check_worker(worker_id)
     }
@@ -990,116 +989,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await?
                         .event_service();
 
-                let mut receiver = event_service.receiver();
+                let receiver = event_service.receiver();
 
                 info!("Client connected");
                 record_new_grpc_api_active_stream();
 
-                // spawn and channel are required if you want handle "disconnect" functionality
-                // the `out_stream` will not be polled after client disconnect
-                let (tx, rx) = mpsc::channel(128);
-
-                tokio::spawn(
-                    async move {
-                        while let Ok(item) = receiver.recv().await {
-                            match item {
-                                worker_event::WorkerEvent::Close => {
-                                    break;
-                                }
-                                worker_event::WorkerEvent::StdOut(line) => {
-                                    match tx
-                                        .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                            event: Some(golem::worker::log_event::Event::Stdout(
-                                                golem::worker::StdOutLog {
-                                                    message: String::from_utf8(line).unwrap(),
-                                                },
-                                            )),
-                                        }))
-                                        .await
-                                    {
-                                        Ok(_) => {
-                                            // item (server response) was queued to be send to client
-                                        }
-                                        Err(_item) => {
-                                            // output_stream was build from rx and both are dropped
-                                            break;
-                                        }
-                                    }
-                                }
-                                worker_event::WorkerEvent::StdErr(line) => {
-                                    match tx
-                                        .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                            event: Some(golem::worker::log_event::Event::Stderr(
-                                                golem::worker::StdErrLog {
-                                                    message: String::from_utf8(line).unwrap(),
-                                                },
-                                            )),
-                                        }))
-                                        .await
-                                    {
-                                        Ok(_) => {
-                                            // item (server response) was queued to be send to client
-                                        }
-                                        Err(_item) => {
-                                            // output_stream was build from rx and both are dropped
-                                            break;
-                                        }
-                                    }
-                                }
-                                worker_event::WorkerEvent::Log {
-                                    level,
-                                    context,
-                                    message,
-                                } => match tx
-                                    .send(Result::<_, Status>::Ok(golem::worker::LogEvent {
-                                        event: Some(golem::worker::log_event::Event::Log(
-                                            golem::worker::Log {
-                                                level: match level {
-                                                    LogLevel::Trace => {
-                                                        golem::worker::Level::Trace.into()
-                                                    }
-                                                    LogLevel::Debug => {
-                                                        golem::worker::Level::Debug.into()
-                                                    }
-                                                    LogLevel::Info => {
-                                                        golem::worker::Level::Info.into()
-                                                    }
-                                                    LogLevel::Warn => {
-                                                        golem::worker::Level::Warn.into()
-                                                    }
-                                                    LogLevel::Error => {
-                                                        golem::worker::Level::Error.into()
-                                                    }
-                                                    LogLevel::Critical => {
-                                                        golem::worker::Level::Critical.into()
-                                                    }
-                                                },
-                                                context,
-                                                message,
-                                            },
-                                        )),
-                                    }))
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        // item (server response) was queued to be send to client
-                                    }
-                                    Err(_item) => {
-                                        // output_stream was build from rx and both are dropped
-                                        break;
-                                    }
-                                },
-                            }
-                        }
-
-                        record_closed_grpc_api_active_stream();
-                        info!("Client disconnected");
-                    }
-                    .in_current_span(),
-                );
-
-                let output_stream = ReceiverStream::new(rx);
-                Ok(Response::new(output_stream))
+                Ok(Response::new(WorkerEventStream::new(receiver)))
             } else {
                 // We don't want 'connect' to resume interrupted workers
                 Err(GolemError::Interrupted {
@@ -1926,4 +1821,43 @@ pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T>
         format!("Bearer {}", access_token).parse().unwrap(),
     );
     req
+}
+
+pub struct WorkerEventStream {
+    inner: Pin<Box<dyn Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> + Send>>,
+}
+
+impl WorkerEventStream {
+    pub fn new(receiver: WorkerEventReceiver) -> Self {
+        WorkerEventStream {
+            inner: Box::pin(receiver.to_stream()),
+        }
+    }
+}
+
+impl Drop for WorkerEventStream {
+    fn drop(&mut self) {
+        info!("Client disconnected");
+    }
+}
+
+impl Stream for WorkerEventStream {
+    type Item = Result<golem::worker::LogEvent, Status>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let WorkerEventStream { inner } = self.get_mut();
+        match inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => match &event {
+                WorkerEvent::Close => Poll::Ready(None),
+                WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+            },
+            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
+                Status::data_loss(format!("Lagged by {} events", n)),
+            ))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
