@@ -44,11 +44,7 @@ jobs:
           platform=${{ matrix.platform.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.platform.target }}
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.platform.target }}
       - uses: davidB/rust-cargo-make@v1
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
@@ -221,10 +217,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -250,10 +243,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -279,10 +269,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -328,10 +315,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug-workertests
@@ -363,10 +347,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -399,10 +380,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -435,10 +413,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
@@ -482,10 +457,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release
@@ -533,10 +505,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.rust-target }}
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
