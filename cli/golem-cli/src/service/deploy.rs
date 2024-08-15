@@ -62,7 +62,7 @@ impl<ProjectContext: Display + Send + Sync> DeployService for DeployServiceLive<
     ) -> Result<GolemResult, GolemError> {
         let component_urn = self
             .component_service
-            .resolve_uri(component_uri, project)
+            .resolve_uri(component_uri, &project)
             .await?;
         let component = self
             .component_service
@@ -89,7 +89,7 @@ impl<ProjectContext: Display + Send + Sync> DeployService for DeployServiceLive<
     ) -> Result<GolemResult, GolemError> {
         let component_urn = self
             .component_service
-            .resolve_uri(component_uri, project)
+            .resolve_uri(component_uri, &project)
             .await?;
         let component = self
             .component_service

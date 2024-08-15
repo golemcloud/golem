@@ -15,7 +15,7 @@
 use crate::clients::component::ComponentClient;
 use crate::model::component::{Component, ComponentView};
 use crate::model::text::{ComponentAddView, ComponentGetView, ComponentUpdateView};
-use crate::model::{ComponentName, GolemError, GolemResult, PathBufOrStdin};
+use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::uri::ComponentUri;
@@ -34,12 +34,16 @@ pub trait ComponentService {
         component_name: ComponentName,
         component_file: PathBufOrStdin,
         project: Option<Self::ProjectContext>,
+        non_interactive: bool,
+        format: Format,
     ) -> Result<GolemResult, GolemError>;
     async fn update(
         &self,
         component_uri: ComponentUri,
         component_file: PathBufOrStdin,
         project: Option<Self::ProjectContext>,
+        non_interactive: bool,
+        format: Format,
     ) -> Result<GolemResult, GolemError>;
     async fn list(
         &self,
@@ -55,7 +59,7 @@ pub trait ComponentService {
     async fn resolve_uri(
         &self,
         uri: ComponentUri,
-        project: Option<Self::ProjectContext>,
+        project: &Option<Self::ProjectContext>,
     ) -> Result<ComponentUrn, GolemError>;
     async fn get_metadata(
         &self,
@@ -83,13 +87,43 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         component_name: ComponentName,
         component_file: PathBufOrStdin,
         project: Option<Self::ProjectContext>,
+        non_interactive: bool,
+        format: Format,
     ) -> Result<GolemResult, GolemError> {
-        let component = self
+        let result = self
             .client
-            .add(component_name, component_file, &project)
-            .await?;
-        let view: ComponentView = component.into();
+            .add(component_name.clone(), component_file.clone(), &project)
+            .await;
 
+        let can_fallback = format == Format::Text && !non_interactive;
+        let component = match result {
+            Err(GolemError(message))
+                if message.starts_with("Component already exists") && can_fallback =>
+            {
+                let answer =
+                    inquire::Confirm::new("Would you like to update the existing component?")
+                        .with_default(false)
+                        .with_help_message(&message)
+                        .prompt();
+
+                match answer {
+                    Ok(true) => {
+                        let component_uri = ComponentUri::URL(ComponentUrl {
+                            name: component_name.0.clone(),
+                        });
+                        let urn = self.resolve_uri(component_uri, &project).await?;
+                        self.client.update(urn, component_file).await
+
+                    }
+                    Ok(false) => Err(GolemError(message)),
+                    Err(error) => Err(GolemError(format!("Error while asking for confirmation: {}; Use the --non-interactive (-y) flag to bypass it.", error))),
+                }
+            }
+            Err(other) => Err(other),
+            Ok(component) => Ok(component),
+        }?;
+
+        let view: ComponentView = component.into();
         Ok(GolemResult::Ok(Box::new(ComponentAddView(view))))
     }
 
@@ -98,9 +132,40 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         component_uri: ComponentUri,
         component_file: PathBufOrStdin,
         project: Option<Self::ProjectContext>,
+        non_interactive: bool,
+        format: Format,
     ) -> Result<GolemResult, GolemError> {
-        let urn = self.resolve_uri(component_uri, project).await?;
-        let component = self.client.update(urn, component_file).await?;
+        let result = self.resolve_uri(component_uri.clone(), &project).await;
+
+        let can_fallback = format == Format::Text
+            && !non_interactive
+            && matches!(component_uri, ComponentUri::URL { .. });
+        let component = match result {
+            Err(GolemError(message))
+                if message.starts_with("Can't find component") && can_fallback =>
+            {
+                let answer = inquire::Confirm::new("Would you like to create a new component?")
+                    .with_default(false)
+                    .with_help_message(&message)
+                    .prompt();
+
+                match answer {
+                        Ok(true) => {
+                            let component_name = match &component_uri {
+                                ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
+                                _ => unreachable!(),
+                            };
+                            self.client.add(component_name, component_file, &project).await
+
+                        }
+                        Ok(false) => Err(GolemError(message)),
+                        Err(error) => Err(GolemError(format!("Error while asking for confirmation: {}; Use the --non-interactive (-y) flag to bypass it.", error))),
+                    }
+            }
+            Err(other) => Err(other),
+            Ok(urn) => self.client.update(urn, component_file.clone()).await,
+        }?;
+
         let view: ComponentView = component.into();
 
         Ok(GolemResult::Ok(Box::new(ComponentUpdateView(view))))
@@ -123,7 +188,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         version: Option<u64>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let urn = self.resolve_uri(component_uri, project).await?;
+        let urn = self.resolve_uri(component_uri, &project).await?;
         let component = match version {
             Some(v) => self.get_metadata(&urn, v).await?,
             None => self.get_latest_metadata(&urn).await?,
@@ -135,14 +200,14 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
     async fn resolve_uri(
         &self,
         uri: ComponentUri,
-        project_context: Option<Self::ProjectContext>,
+        project_context: &Option<Self::ProjectContext>,
     ) -> Result<ComponentUrn, GolemError> {
         match uri {
             ComponentUri::URN(urn) => Ok(urn),
             ComponentUri::URL(ComponentUrl { name }) => {
                 let components = self
                     .client
-                    .find(Some(ComponentName(name.clone())), &project_context)
+                    .find(Some(ComponentName(name.clone())), project_context)
                     .await?;
                 let components: Vec<Component> = components
                     .into_iter()
