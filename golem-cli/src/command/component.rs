@@ -39,6 +39,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// The WASM file to be used as a Golem component
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: PathBufOrStdin, // TODO: validate exists
+
+        /// Do not ask for performing an update in case the component already exists
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
     },
 
     /// Updates an existing component by uploading a new version of its WASM
@@ -59,6 +63,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// Update mode - auto or manual
         #[arg(long, default_value = "auto", requires = "try_update_workers")]
         update_mode: WorkerUpdateMode,
+
+        /// Do not ask for creating a new component in case it does not exists
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
     },
 
     /// Lists the existing components
@@ -124,10 +132,17 @@ impl<
                 project_ref,
                 component_name,
                 component_file,
+                non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                 service
-                    .add(component_name, component_file, Some(project_id))
+                    .add(
+                        component_name,
+                        component_file,
+                        Some(project_id),
+                        non_interactive,
+                        format,
+                    )
                     .await
             }
             ComponentSubCommand::Update {
@@ -135,6 +150,7 @@ impl<
                 component_file,
                 try_update_workers,
                 update_mode,
+                non_interactive,
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
@@ -143,6 +159,8 @@ impl<
                         component_name_or_uri.clone(),
                         component_file,
                         project_id.clone(),
+                        non_interactive,
+                        format,
                     )
                     .await?;
 
