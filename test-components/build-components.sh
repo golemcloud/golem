@@ -12,6 +12,7 @@ dotnet_test_components=("csharp-1")
 swift_test_components=("swift-1")
 c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
+ts_test_components=("ts-rpc")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
@@ -69,6 +70,10 @@ for arg in "$@"; do
     python)
       single_lang=true
       lang="python"
+      ;;
+    ts)
+      single_lang=true
+      lang="ts"
       ;;
     *)
       echo "Unknown argument: $arg"
@@ -338,6 +343,33 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
     mv "$subdir.wasm" $target
 
     wasm-tools print "$target" >"$target_wat"
+
+    popd || exit
+  done
+fi
+
+if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
+  echo "Building the TS test components"
+  for subdir in ${ts_test_components[@]}; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
+    if [ "$update_wit" = true ] && [ -f "update-deps.sh" ]; then
+      ./update-deps.sh
+    fi
+
+    if [ "$rebuild" = true ]; then
+      rm *.wasm
+      rm package-lock.json
+      rm -rf node_modules
+    fi
+
+    ./componentize.sh
+    cp *.wasm ..
 
     popd || exit
   done
