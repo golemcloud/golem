@@ -453,7 +453,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         args: Vec<String>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_urn = self.components.resolve_uri(component_uri, project).await?;
+        let component_urn = self.components.resolve_uri(component_uri, &project).await?;
         self.add_by_urn(component_urn, worker_name, env, args).await
     }
 
@@ -491,7 +491,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 let component_uri = ComponentUri::URL(ComponentUrl {
                     name: component_name,
                 });
-                let component_urn = self.components.resolve_uri(component_uri, project).await?;
+                let component_urn = self.components.resolve_uri(component_uri, &project).await?;
 
                 Ok(WorkerUrn {
                     id: WorkerId {
@@ -738,7 +738,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         precise: Option<bool>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_urn = self.components.resolve_uri(component_uri, project).await?;
+        let component_urn = self.components.resolve_uri(component_uri, &project).await?;
 
         if count.is_some() {
             let response: WorkersMetadataResponseView = self
@@ -789,7 +789,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         mode: WorkerUpdateMode,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError> {
-        let component_urn = self.components.resolve_uri(component_uri, project).await?;
+        let component_urn = self.components.resolve_uri(component_uri, &project).await?;
         self.update_many_by_urn(component_urn, filter, target_version, mode)
             .await
     }
