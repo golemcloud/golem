@@ -308,6 +308,7 @@ jobs:
           - name: group3
           - name: group4
           - name: group5
+          - name: group6
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout
@@ -338,7 +339,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 25
+        timeout-minutes: 30
   integration-tests:
     runs-on: ubuntu-latest-large
     steps:
