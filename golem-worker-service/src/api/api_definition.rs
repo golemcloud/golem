@@ -37,6 +37,10 @@ impl RegisterApiDefinitionApi {
         Self { definition_service }
     }
 
+    /// Upload an OpenAPI definition
+    ///
+    /// Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+    /// API definition using it.
     #[oai(path = "/import", method = "put", operation_id = "import_open_api")]
     async fn create_or_update_open_api(
         &self,
@@ -63,6 +67,10 @@ impl RegisterApiDefinitionApi {
         record.result(response)
     }
 
+    /// Create a new API definition
+    ///
+    /// Creates a new API definition described by Golem's API definition JSON document.
+    /// If an API definition of the same version already exists, its an error.
     #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
@@ -94,6 +102,9 @@ impl RegisterApiDefinitionApi {
         record.result(response)
     }
 
+    /// Update an existing API definition.
+    ///
+    /// Only draft API definitions can be updated.
     #[oai(
         path = "/:id/:version",
         method = "put",
@@ -144,6 +155,9 @@ impl RegisterApiDefinitionApi {
         record.result(response)
     }
 
+    /// Get an API definition
+    ///
+    /// An API definition is selected by its API definition ID and version.
     #[oai(
         path = "/:id/:version",
         method = "get",
@@ -189,6 +203,9 @@ impl RegisterApiDefinitionApi {
         record.result(response)
     }
 
+    /// Delete an API definition
+    ///
+    /// Deletes an API definition by its API definition ID and version.
     #[oai(
         path = "/:id/:version",
         method = "delete",
@@ -229,6 +246,10 @@ impl RegisterApiDefinitionApi {
         record.result(response)
     }
 
+    /// Get or list API definitions
+    ///
+    /// If `api_definition_id` is specified, returns a single API definition.
+    /// Otherwise lists all API definitions.
     #[oai(path = "/", method = "get", operation_id = "list_definitions")]
     async fn list(
         &self,

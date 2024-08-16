@@ -120,6 +120,9 @@ pub struct ComponentApi {
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
+    /// Create a new component
+    ///
+    /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
         let record =
@@ -142,6 +145,7 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Update a component
     #[oai(
         path = "/:component_id/upload",
         method = "put",
@@ -168,6 +172,9 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Download a component
+    ///
+    /// Downloads a specific version of the component's WASM.
     #[oai(
         path = "/:component_id/download",
         method = "get",
@@ -197,6 +204,18 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Get the metadata for all component versions
+    ///
+    /// Each component can have multiple versions. Every time a new WASM is uploaded for a given component id, that creates a new version.
+    /// This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
+    ///
+    /// - `versionedComponentId` associates a specific version with the component id
+    /// - `userComponentId` and protectedComponentId are implementation details, not used elsewhere on the public API
+    /// - `componentName` is the human-readable name of the component
+    /// - `componentSize` is the WASM binary's size in bytes
+    /// - `metadata` contains information extracted from the WASM itself
+    /// - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
+    /// - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
     #[oai(
         path = "/:component_id",
         method = "get",
@@ -222,6 +241,9 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Get the version of a given component
+    ///
+    /// Gets the version of a component.
     #[oai(
         path = "/:component_id/versions/:version",
         method = "get",
@@ -266,6 +288,9 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Get the latest version of a given component
+    ///
+    /// Gets the latest version of a component.
     #[oai(
         path = "/:component_id/latest",
         method = "get",
@@ -296,6 +321,9 @@ impl ComponentApi {
         record.result(response)
     }
 
+    /// Get all components
+    ///
+    /// Gets all components, optionally filtered by component name.
     #[oai(path = "/", method = "get", operation_id = "get_components")]
     async fn get_components(
         &self,
