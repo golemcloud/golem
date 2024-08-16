@@ -99,7 +99,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         component_name_or_uri: ComponentRef,
 
         /// Update mode - auto or manual
-        #[arg(long, default_value = "auto", requires = "try_update_workers")]
+        #[arg(long, default_value = "auto")]
         update_mode: WorkerUpdateMode,
     },
     /// Redeploy all workers of a component using the latest version
