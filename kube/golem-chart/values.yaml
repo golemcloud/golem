@@ -11,13 +11,14 @@ shardManager:
   redis:
     port: 6379
     host: golem-redis-master
-    username: golem_user
+    username: ""
     database: 0
     password:
+      type: secret # secret or plain, or none if no auth
       plain: ""
-      fromSecret:
-        name: "" #golem-redis
-        key: password
+      secret: # password from kubernetes secret
+        name: golem-redis
+        key: redis-password
 #  nodeSelector:
 
 workerExecutor:
@@ -32,13 +33,14 @@ workerExecutor:
   redis:
     port: 6379
     host: golem-redis-master
-    username: golem_user
+    username: ""
     database: 0
     password:
+      type: secret # secret or plain, or none if no auth
       plain: ""
-      fromSecret:
-        name: "" #golem-redis
-        key: password
+      secret: # password from kubernetes secret
+        name: golem-redis
+        key: redis-password
 #  nodeSelector:
 
 workerService:
@@ -58,8 +60,9 @@ workerService:
     username: golem_user
     schema: golem_worker
     password:
+      type: secret # secret or plain
       plain: ""
-      fromSecret:
+      secret: # password from kubernetes secret
         name: golem-postgres-postgresql
         key: password
 #  nodeSelector:
@@ -80,8 +83,9 @@ componentService:
     username: golem_user
     schema: golem_component
     password:
+      type: secret  # secret or plain
       plain: ""
-      fromSecret:
+      secret: # password from kubernetes secret
         name: golem-postgres-postgresql
         key: password
 #  nodeSelector:
@@ -98,14 +102,14 @@ componentCompilationService:
 #  nodeSelector:
 
 logging:
-  json: false
+  json: false # true, if json log output should be used
 
 serviceAccountName: golem-sa-default
 
 env: default
 
 componentStore:
-  type: pvc
+  type: pvc # pvc or s3
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
@@ -116,7 +120,7 @@ componentStore:
     region: "us-east-1"
 
 workerExecutorStore:
-  type: pvc
+  type: pvc # pvc or s3
   pvc:
     storageClassName: hostpath
     storageSize: 5Gi
@@ -130,8 +134,8 @@ workerExecutorStore:
     compressedOplogBuckets: "[oplog-archive-1]"
 
 
-ingress:
-  type: nginx
+ingress: # API ingress
+  type: nginx # ngnix or aws alb
   nginx:
     annotations:
       kubernetes.io/ingress.class: nginx
@@ -141,8 +145,8 @@ ingress:
       alb.ingress.kubernetes.io/scheme: internet-facing
       alb.ingress.kubernetes.io/target-type: ip
 
-ingressWorkerRequest:
-  type: none
+ingressWorkerRequest: # worker bridge ingress
+  type: none # none or aws alb
   alb:
     annotations:
       alb.ingress.kubernetes.io/scheme: internet-facing

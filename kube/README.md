@@ -6,7 +6,7 @@ provided script:
 ./deploy.sh -n golem
 ```
 
-will deploy golem with redis, postgres and nginx ingress to kubernetes namespace golem
+will deploy Golem with Redis, PostgreSQL and Nginx ingress to kubernetes namespace `golem`. Kubernetes [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) are used to store Golem's data.
 
 
 ## Deployment in steps
@@ -17,7 +17,7 @@ create namespace
 kubectl create namespace golem
 ```
 
-### postgres
+### PostgreSQL
 
 https://artifacthub.io/packages/helm/bitnami/postgresql
 
@@ -36,18 +36,24 @@ get password (if you need it)
 export GOLEM_POSTGRES_PASSWORD=$(kubectl get secret --namespace golem golem-postgres-postgresql -o jsonpath="{.data.password}" | base64 -d)
 ```
 
-### redis
+### Redis
 
 https://artifacthub.io/packages/helm/bitnami/redis
 
 install
 ```shell
-helm upgrade --install -n golem golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=false
+helm upgrade --install -n golem golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=true
 ```
 
 delete
 ```shell
 helm delete -n golem golem-redis
+```
+
+get password (if you need it)
+
+```shell
+export REDIS_PASSWORD=$(kubectl get secret --namespace golem golem-redis -o jsonpath="{.data.redis-password}" | base64 -d)
 ```
 
 ```shell
@@ -71,13 +77,9 @@ kubectl get service --namespace ingress-nginx ingress-nginx-controller --output 
 ```
 
 NOTE: by default ingress is exposed under localhost:80, if you are want to test golem-services in kubernetes locally (docker with kubernetes), 
-and try to run commands with `golem-cli`, default url may be changed by: 
+and try to run commands with `golem-cli`, you may need to change `golem-cli` configuration to use that URL.
 
-```shell
-export GOLEM_BASE_URL=http://localhost:80
-```
-
-### golem services
+### Golem services
 
 install
 ```shell
