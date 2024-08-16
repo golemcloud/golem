@@ -27,7 +27,7 @@ pub enum AccountSubcommand {
     },
 
     /// Add a new account
-    #[command()]
+    #[command(alias = "create")]
     Add {
         /// The new account's name
         #[arg(short = 'n', long)]

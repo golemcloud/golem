@@ -33,6 +33,7 @@ use golem_cli::factory::{FactoryWithAuth, ServiceFactory};
 use golem_cli::model::GolemError;
 use golem_cli::service::project::ProjectResolver;
 use golem_cloud_client::{Context, Security};
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -311,10 +312,10 @@ impl ServiceFactory for CloudServiceFactory {
         &self,
         auth: &Self::SecurityContext,
     ) -> Result<
-        Box<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
+        Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
         GolemError,
     > {
-        Ok(Box::new(CloudProjectResolver {
+        Ok(Arc::new(CloudProjectResolver {
             service: self.project_service(auth)?,
         }))
     }

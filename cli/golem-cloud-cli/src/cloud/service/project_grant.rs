@@ -31,14 +31,14 @@ impl ProjectGrantService for ProjectGrantServiceLive {
         project_policy_id: Option<ProjectPolicyId>,
         project_actions: Option<Vec<ProjectAction>>,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
         match project_policy_id {
             None => {
                 let actions = project_actions.unwrap();
 
                 let grant = self
                     .client
-                    .create_actions(project_id, recipient_account_id, actions)
+                    .create_actions(project_urn, recipient_account_id, actions)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(ProjectGrantView(grant))))
@@ -46,7 +46,7 @@ impl ProjectGrantService for ProjectGrantServiceLive {
             Some(policy_id) => {
                 let grant = self
                     .client
-                    .create(project_id, recipient_account_id, policy_id)
+                    .create(project_urn, recipient_account_id, policy_id)
                     .await?;
 
                 Ok(GolemResult::Ok(Box::new(ProjectGrantView(grant))))

@@ -6,6 +6,9 @@ use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cli::model::{GolemError, GolemResult};
 use golem_cli::service::project::ProjectResolver;
 use golem_cloud_client::model::Project;
+use golem_common::uri::cloud::uri::ProjectUri;
+use golem_common::uri::cloud::url::ProjectUrl;
+use golem_common::uri::cloud::urn::ProjectUrn;
 use indoc::formatdoc;
 
 #[async_trait]
@@ -19,25 +22,27 @@ pub trait ProjectService {
     async fn get_default(&self) -> Result<GolemResult, GolemError>;
 
     async fn find_default(&self) -> Result<Project, GolemError>;
-    async fn resolve_id(&self, project_ref: ProjectRef) -> Result<Option<ProjectId>, GolemError>;
+    async fn resolve_urn(&self, project_ref: ProjectRef) -> Result<Option<ProjectUrn>, GolemError>;
 
-    async fn resolve_id_or_default(
+    async fn resolve_urn_or_default(
         &self,
         project_ref: ProjectRef,
-    ) -> Result<ProjectId, GolemError> {
-        match self.resolve_id(project_ref).await? {
-            None => Ok(ProjectId(self.find_default().await?.project_id)),
+    ) -> Result<ProjectUrn, GolemError> {
+        match self.resolve_urn(project_ref).await? {
+            None => Ok(ProjectUrn {
+                id: golem_common::model::ProjectId(self.find_default().await?.project_id),
+            }),
             Some(project_id) => Ok(project_id),
         }
     }
 
-    async fn resolve_id_or_default_opt(
+    async fn resolve_urn_or_default_opt(
         &self,
         project_ref: Option<ProjectRef>,
-    ) -> Result<Option<ProjectId>, GolemError> {
+    ) -> Result<Option<ProjectUrn>, GolemError> {
         match project_ref {
             None => Ok(None),
-            Some(project_ref) => Ok(Some(self.resolve_id_or_default(project_ref).await?)),
+            Some(project_ref) => Ok(Some(self.resolve_urn_or_default(project_ref).await?)),
         }
     }
 }
@@ -78,10 +83,12 @@ impl ProjectService for ProjectServiceLive {
         Ok(self.client.find_default().await?)
     }
 
-    async fn resolve_id(&self, project_ref: ProjectRef) -> Result<Option<ProjectId>, GolemError> {
-        match project_ref {
-            ProjectRef::Id(id) => Ok(Some(id)),
-            ProjectRef::Name(name) => {
+    async fn resolve_urn(&self, project_ref: ProjectRef) -> Result<Option<ProjectUrn>, GolemError> {
+        match project_ref.uri {
+            None => Ok(None),
+            Some(ProjectUri::URN(urn)) => Ok(Some(urn)),
+            Some(ProjectUri::URL(ProjectUrl { name, .. })) => {
+                // TODO: account
                 let projects = self.client.find(Some(name.clone())).await?;
 
                 if projects.len() > 1 {
@@ -98,11 +105,12 @@ impl ProjectService for ProjectServiceLive {
                 } else {
                     match projects.first() {
                         None => Err(GolemError(format!("Can't find project with name {name}"))),
-                        Some(project) => Ok(Some(ProjectId(project.project_id))),
+                        Some(project) => Ok(Some(ProjectUrn {
+                            id: golem_common::model::ProjectId(project.project_id),
+                        })),
                     }
                 }
             }
-            ProjectRef::Default => Ok(None),
         }
     }
 }
@@ -117,6 +125,8 @@ impl ProjectResolver<ProjectRef, ProjectId> for CloudProjectResolver {
         &self,
         project_ref: ProjectRef,
     ) -> Result<ProjectId, GolemError> {
-        self.service.resolve_id_or_default(project_ref).await
+        Ok(ProjectId(
+            self.service.resolve_urn_or_default(project_ref).await?.id.0,
+        ))
     }
 }

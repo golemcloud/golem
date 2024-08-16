@@ -10,7 +10,7 @@ pub struct CloudGolemError(pub String);
 
 impl From<reqwest::Error> for CloudGolemError {
     fn from(error: reqwest::Error) -> Self {
-        CloudGolemError(format!("Unexpected client error: {error}"))
+        CloudGolemError(format!("Unexpected client error: {error:?}"))
     }
 }
 

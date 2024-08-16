@@ -2,7 +2,9 @@ use crate::components::TestDependencies;
 use crate::config::CloudEnvBasedTestDependencies;
 use golem_test_framework::config::EnvBasedTestDependenciesConfig;
 use libtest_mimic::{Arguments, Conclusion, Failed};
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use strum_macros::EnumIter;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
@@ -17,6 +19,23 @@ pub mod project;
 pub mod share;
 pub mod token;
 pub mod worker;
+
+#[derive(Debug, Copy, Clone, EnumIter)]
+pub enum RefKind {
+    Name,
+    Url,
+    Urn,
+}
+
+impl Display for RefKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefKind::Name => write!(f, "name"),
+            RefKind::Url => write!(f, "url"),
+            RefKind::Urn => write!(f, "urn"),
+        }
+    }
+}
 
 fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     let args = Arguments::from_args();

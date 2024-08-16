@@ -1,6 +1,5 @@
 use crate::cloud::clients::CloudAuthentication;
 use crate::cloud::command::{CloudCommand, GolemCloudCommand};
-use crate::cloud::completion::print_cloud_completion;
 use crate::cloud::factory::CloudServiceFactory;
 use async_trait::async_trait;
 use colored::Colorize;
@@ -8,7 +7,7 @@ use golem_cli::command::profile::UniversalProfileAdd;
 use golem_cli::config::{CloudProfile, Config, Profile, ProfileName};
 use golem_cli::examples;
 use golem_cli::factory::ServiceFactory;
-use golem_cli::init::{CliKind, ProfileAuth};
+use golem_cli::init::{CliKind, PrintCompletion, ProfileAuth};
 use golem_cli::model::{GolemError, GolemResult};
 use golem_cli::stubgen::handle_stubgen;
 use std::path::{Path, PathBuf};
@@ -41,6 +40,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     profile: CloudProfile,
     cli_kind: CliKind,
     config_dir: PathBuf,
+    print_completion: Box<dyn PrintCompletion>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = cmd.format.unwrap_or(profile.config.default_format);
 
@@ -59,7 +59,9 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
             subcommand
                 .handle(
-                    factory.component_service(&auth)?.as_ref(),
+                    format,
+                    factory.component_service(&auth)?,
+                    factory.deploy_service(&auth)?,
                     factory.project_resolver(&auth)?.as_ref(),
                 )
                 .await
@@ -77,8 +79,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             subcommand
                 .handle(
                     format,
-                    factory.worker_service(&auth)?.as_ref(),
-                    factory.project_resolver(&auth)?.as_ref(),
+                    factory.worker_service(&auth)?,
+                    factory.project_resolver(&auth)?,
                 )
                 .await
         }
@@ -137,8 +139,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         CloudCommand::Share {
             project_ref,
             recipient_account_id,
-            project_policy_id,
-            project_actions,
+            project_actions_or_policy_id,
         } => {
             let auth = get_auth(
                 cmd.auth_token,
@@ -154,8 +155,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .grant(
                     project_ref,
                     recipient_account_id,
-                    project_policy_id,
-                    project_actions,
+                    project_actions_or_policy_id.project_policy_id,
+                    project_actions_or_policy_id.project_actions,
                 )
                 .await
         }
@@ -173,14 +174,19 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .handle(factory.project_policy_service(&auth)?.as_ref())
                 .await
         }
-        CloudCommand::New {
-            example,
+        CloudCommand::Examples(golem_examples::cli::Command::New {
+            name_or_language,
             package_name,
             component_name,
-        } => examples::process_new(example, component_name, package_name),
-        CloudCommand::ListExamples { min_tier, language } => {
-            examples::process_list_examples(min_tier, language)
-        }
+        }) => examples::process_new(
+            name_or_language.example_name(),
+            component_name,
+            package_name,
+        ),
+        CloudCommand::Examples(golem_examples::cli::Command::ListExamples {
+            min_tier,
+            language,
+        }) => examples::process_list_examples(min_tier, language),
         #[cfg(feature = "stubgen")]
         CloudCommand::Stubgen { subcommand } => handle_stubgen(subcommand).await,
         CloudCommand::ApiDefinition { subcommand } => {
@@ -250,7 +256,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }
         CloudCommand::Init {} => init(cli_kind, &config_dir, &factory).await,
         CloudCommand::Completion { generator } => {
-            print_cloud_completion(generator); // FIXME needs to be fixed after OSS will be updated - using PrintCompletion
+            print_completion.print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
     };

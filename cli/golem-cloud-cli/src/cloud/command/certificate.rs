@@ -15,7 +15,7 @@ pub enum CertificateSubcommand {
         #[arg(value_name = "certificate-id", value_hint = clap::ValueHint::Other)]
         certificate_id: Option<Uuid>,
     },
-    #[command()]
+    #[command(alias = "create")]
     Add {
         #[command(flatten)]
         project_ref: ProjectRef,

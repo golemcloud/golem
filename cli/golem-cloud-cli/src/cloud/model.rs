@@ -5,11 +5,10 @@ use derive_more::{Display, FromStr, Into};
 use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cli::command::ComponentRefSplit;
 use golem_cli::model::component::Component;
-use golem_cli::model::{
-    ApiDeployment, ComponentId, ComponentIdOrName, ComponentName, WorkerMetadata,
-    WorkersMetadataResponse,
-};
+use golem_cli::model::{ApiDeployment, ComponentName, WorkerMetadata, WorkersMetadataResponse};
 use golem_client::model::{IndexedWorkerMetadata, ResourceMetadata};
+use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ToOssUri};
+use golem_common::uri::cloud::url::ProjectUrl;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -21,10 +20,9 @@ use uuid::Uuid;
 pub struct TokenId(pub Uuid);
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ProjectRef {
-    Id(ProjectId),
-    Name(String),
-    Default,
+pub struct ProjectRef {
+    pub uri: Option<ProjectUri>,
+    pub explicit_name: bool,
 }
 
 impl FromArgMatches for ProjectRef {
@@ -52,108 +50,141 @@ impl clap::Args for ProjectRef {
 }
 
 #[derive(clap::Args, Debug, Clone)]
-struct ProjectRefArgs {
+pub struct ProjectRefArgs {
     #[arg(short = 'P', long, conflicts_with = "project_name")]
-    project_id: Option<Uuid>,
+    pub project: Option<ProjectUri>,
 
-    #[arg(short = 'p', long, conflicts_with = "project_id")]
-    project_name: Option<String>,
+    #[arg(short = 'p', long, conflicts_with = "project")]
+    pub project_name: Option<String>,
 }
 
 impl From<&ProjectRefArgs> for ProjectRef {
     fn from(value: &ProjectRefArgs) -> ProjectRef {
-        if let Some(id) = value.project_id {
-            ProjectRef::Id(ProjectId(id))
+        if let Some(uri) = &value.project {
+            ProjectRef {
+                uri: Some(uri.clone()),
+                explicit_name: false,
+            }
         } else if let Some(name) = value.project_name.clone() {
-            ProjectRef::Name(name)
+            ProjectRef {
+                uri: Some(ProjectUri::URL(ProjectUrl {
+                    name,
+                    account: None,
+                })),
+                explicit_name: true,
+            }
         } else {
-            ProjectRef::Default
+            ProjectRef {
+                uri: None,
+                explicit_name: false,
+            }
         }
     }
 }
 
 impl From<&ProjectRef> for ProjectRefArgs {
     fn from(value: &ProjectRef) -> Self {
-        match value {
-            ProjectRef::Id(ProjectId(id)) => ProjectRefArgs {
-                project_id: Some(*id),
+        match &value.uri {
+            None => ProjectRefArgs {
+                project: None,
                 project_name: None,
             },
-            ProjectRef::Name(name) => ProjectRefArgs {
-                project_id: None,
-                project_name: Some(name.clone()),
-            },
-            ProjectRef::Default => ProjectRefArgs {
-                project_id: None,
+            Some(ProjectUri::URN(urn)) => ProjectRefArgs {
+                project: Some(ProjectUri::URN(urn.clone())),
                 project_name: None,
             },
+            Some(ProjectUri::URL(url)) => {
+                if value.explicit_name {
+                    ProjectRefArgs {
+                        project: None,
+                        project_name: Some(url.name.to_string()),
+                    }
+                } else {
+                    ProjectRefArgs {
+                        project: Some(ProjectUri::URL(url.clone())),
+                        project_name: None,
+                    }
+                }
+            }
         }
     }
 }
 
-impl FromArgMatches for CloudComponentIdOrName {
+impl FromArgMatches for CloudComponentUriOrName {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
-        CloudComponentIdOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
+        CloudComponentUriOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
-        let prc0: CloudComponentIdOrNameArgs = (&self.clone()).into();
+        let prc0: CloudComponentUriOrNameArgs = (&self.clone()).into();
         let mut prc = prc0.clone();
-        let res = CloudComponentIdOrNameArgs::update_from_arg_matches(&mut prc, matches);
+        let res = CloudComponentUriOrNameArgs::update_from_arg_matches(&mut prc, matches);
         *self = (&prc).into();
         res
     }
 }
 
-impl clap::Args for CloudComponentIdOrName {
+impl clap::Args for CloudComponentUriOrName {
     fn augment_args(cmd: clap::Command) -> clap::Command {
-        CloudComponentIdOrNameArgs::augment_args(cmd)
+        CloudComponentUriOrNameArgs::augment_args(cmd)
     }
 
     fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
-        CloudComponentIdOrNameArgs::augment_args_for_update(cmd)
+        CloudComponentUriOrNameArgs::augment_args_for_update(cmd)
     }
 }
 
 #[derive(clap::Args, Debug, Clone)]
-struct CloudComponentIdOrNameArgs {
+struct CloudComponentUriOrNameArgs {
     #[arg(short = 'C', long, conflicts_with = "component_name", required = true)]
-    component_id: Option<Uuid>,
+    component: Option<ComponentUri>,
 
-    #[arg(short = 'c', long, conflicts_with = "component_id", required = true)]
+    #[arg(short = 'c', long, conflicts_with = "component", required = true)]
     component_name: Option<String>,
 
     #[arg(
         short = 'P',
         long,
         conflicts_with = "project_name",
-        conflicts_with = "component_id"
+        conflicts_with = "component"
     )]
-    project_id: Option<Uuid>,
+    project: Option<ProjectUri>,
 
     #[arg(
         short = 'p',
         long,
-        conflicts_with = "project_id",
-        conflicts_with = "component_id"
+        conflicts_with = "project",
+        conflicts_with = "component"
     )]
     project_name: Option<String>,
 }
 
-impl From<&CloudComponentIdOrNameArgs> for CloudComponentIdOrName {
-    fn from(value: &CloudComponentIdOrNameArgs) -> CloudComponentIdOrName {
-        let pr = if let Some(id) = value.project_id {
-            ProjectRef::Id(ProjectId(id))
+impl From<&CloudComponentUriOrNameArgs> for CloudComponentUriOrName {
+    fn from(value: &CloudComponentUriOrNameArgs) -> CloudComponentUriOrName {
+        let pr = if let Some(uri) = value.project.clone() {
+            ProjectRef {
+                uri: Some(uri),
+                explicit_name: false,
+            }
         } else if let Some(name) = value.project_name.clone() {
-            ProjectRef::Name(name)
+            ProjectRef {
+                uri: Some(ProjectUri::URL(ProjectUrl {
+                    name,
+                    account: None,
+                })),
+                explicit_name: true,
+            }
         } else {
-            ProjectRef::Default
+            ProjectRef {
+                uri: None,
+                explicit_name: false,
+            }
         };
 
-        if let Some(id) = value.component_id {
-            CloudComponentIdOrName::Id(ComponentId(id))
+        if let Some(uri) = value.component.clone() {
+            CloudComponentUriOrName::Uri(uri)
         } else {
-            CloudComponentIdOrName::Name(
+            CloudComponentUriOrName::Name(
                 ComponentName(value.component_name.as_ref().unwrap().to_string()),
                 pr,
             )
@@ -161,26 +192,25 @@ impl From<&CloudComponentIdOrNameArgs> for CloudComponentIdOrName {
     }
 }
 
-impl From<&CloudComponentIdOrName> for CloudComponentIdOrNameArgs {
-    fn from(value: &CloudComponentIdOrName) -> CloudComponentIdOrNameArgs {
+impl From<&CloudComponentUriOrName> for CloudComponentUriOrNameArgs {
+    fn from(value: &CloudComponentUriOrName) -> CloudComponentUriOrNameArgs {
         match value {
-            CloudComponentIdOrName::Id(ComponentId(id)) => CloudComponentIdOrNameArgs {
-                component_id: Some(*id),
+            CloudComponentUriOrName::Uri(uri) => CloudComponentUriOrNameArgs {
+                component: Some(uri.clone()),
                 component_name: None,
-                project_id: None,
+                project: None,
                 project_name: None,
             },
-            CloudComponentIdOrName::Name(ComponentName(name), pr) => {
-                let (project_id, project_name) = match pr {
-                    ProjectRef::Id(ProjectId(id)) => (Some(*id), None),
-                    ProjectRef::Name(name) => (None, Some(name.to_string())),
-                    ProjectRef::Default => (None, None),
-                };
+            CloudComponentUriOrName::Name(ComponentName(name), pr) => {
+                let ProjectRefArgs {
+                    project,
+                    project_name,
+                } = ProjectRefArgs::from(pr);
 
-                CloudComponentIdOrNameArgs {
-                    component_id: None,
+                CloudComponentUriOrNameArgs {
+                    component: None,
                     component_name: Some(name.clone()),
-                    project_id,
+                    project,
                     project_name,
                 }
             }
@@ -189,16 +219,36 @@ impl From<&CloudComponentIdOrName> for CloudComponentIdOrNameArgs {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum CloudComponentIdOrName {
-    Id(ComponentId),
+pub enum CloudComponentUriOrName {
+    Uri(ComponentUri),
     Name(ComponentName, ProjectRef),
 }
 
-impl ComponentRefSplit<ProjectRef> for CloudComponentIdOrName {
-    fn split(self) -> (ComponentIdOrName, Option<ProjectRef>) {
+impl ComponentRefSplit<ProjectRef> for CloudComponentUriOrName {
+    fn split(
+        self,
+    ) -> (
+        golem_common::uri::oss::uri::ComponentUri,
+        Option<ProjectRef>,
+    ) {
         match self {
-            CloudComponentIdOrName::Id(id) => (ComponentIdOrName::Id(id), None),
-            CloudComponentIdOrName::Name(name, p) => (ComponentIdOrName::Name(name), Some(p)),
+            CloudComponentUriOrName::Uri(uri) => {
+                let (uri, p) = uri.to_oss_uri();
+
+                let p = ProjectRef {
+                    uri: p.map(ProjectUri::URL),
+                    explicit_name: false,
+                };
+
+                (uri, Some(p))
+            }
+            CloudComponentUriOrName::Name(name, p) => {
+                let uri = golem_common::uri::oss::uri::ComponentUri::URL(
+                    golem_common::uri::oss::url::ComponentUrl { name: name.0 },
+                );
+
+                (uri, Some(p))
+            }
         }
     }
 }
@@ -538,21 +588,260 @@ impl ToOss<golem_client::model::VersionedComponentId>
     }
 }
 
-impl ToOss<golem_client::model::UserComponentId> for golem_cloud_client::model::UserComponentId {
-    fn to_oss(self) -> golem_client::model::UserComponentId {
-        golem_client::model::UserComponentId {
-            versioned_component_id: self.versioned_component_id.to_oss(),
+pub fn to_oss_type(
+    t: golem_cloud_client::model::AnalysedType,
+) -> golem_client::model::AnalysedType {
+    match t {
+        golem_cloud_client::model::AnalysedType::Variant(x) => {
+            golem_client::model::AnalysedType::Variant(to_oss_variant(x))
+        }
+        golem_cloud_client::model::AnalysedType::Result(x) => {
+            golem_client::model::AnalysedType::Result(Box::new(to_oss_result(*x)))
+        }
+        golem_cloud_client::model::AnalysedType::Option(x) => {
+            golem_client::model::AnalysedType::Option(Box::new(to_oss_option(*x)))
+        }
+        golem_cloud_client::model::AnalysedType::Enum(x) => {
+            golem_client::model::AnalysedType::Enum(to_oss_enum(x))
+        }
+        golem_cloud_client::model::AnalysedType::Flags(x) => {
+            golem_client::model::AnalysedType::Flags(to_oss_flags(x))
+        }
+        golem_cloud_client::model::AnalysedType::Record(x) => {
+            golem_client::model::AnalysedType::Record(to_oss_record(x))
+        }
+        golem_cloud_client::model::AnalysedType::Tuple(x) => {
+            golem_client::model::AnalysedType::Tuple(to_oss_tuple(x))
+        }
+        golem_cloud_client::model::AnalysedType::List(x) => {
+            golem_client::model::AnalysedType::List(Box::new(to_oss_list(*x)))
+        }
+        golem_cloud_client::model::AnalysedType::Str(_) => {
+            golem_client::model::AnalysedType::Str(golem_client::model::TypeStr {})
+        }
+        golem_cloud_client::model::AnalysedType::Chr(_) => {
+            golem_client::model::AnalysedType::Chr(golem_client::model::TypeChr {})
+        }
+        golem_cloud_client::model::AnalysedType::F64(_) => {
+            golem_client::model::AnalysedType::F64(golem_client::model::TypeF64 {})
+        }
+        golem_cloud_client::model::AnalysedType::F32(_) => {
+            golem_client::model::AnalysedType::F32(golem_client::model::TypeF32 {})
+        }
+        golem_cloud_client::model::AnalysedType::U64(_) => {
+            golem_client::model::AnalysedType::U64(golem_client::model::TypeU64 {})
+        }
+        golem_cloud_client::model::AnalysedType::S64(_) => {
+            golem_client::model::AnalysedType::S64(golem_client::model::TypeS64 {})
+        }
+        golem_cloud_client::model::AnalysedType::U32(_) => {
+            golem_client::model::AnalysedType::U32(golem_client::model::TypeU32 {})
+        }
+        golem_cloud_client::model::AnalysedType::S32(_) => {
+            golem_client::model::AnalysedType::S32(golem_client::model::TypeS32 {})
+        }
+        golem_cloud_client::model::AnalysedType::U16(_) => {
+            golem_client::model::AnalysedType::U16(golem_client::model::TypeU16 {})
+        }
+        golem_cloud_client::model::AnalysedType::S16(_) => {
+            golem_client::model::AnalysedType::S16(golem_client::model::TypeS16 {})
+        }
+        golem_cloud_client::model::AnalysedType::U8(_) => {
+            golem_client::model::AnalysedType::U8(golem_client::model::TypeU8 {})
+        }
+        golem_cloud_client::model::AnalysedType::S8(_) => {
+            golem_client::model::AnalysedType::S8(golem_client::model::TypeS8 {})
+        }
+        golem_cloud_client::model::AnalysedType::Bool(_) => {
+            golem_client::model::AnalysedType::Bool(golem_client::model::TypeBool {})
+        }
+        golem_cloud_client::model::AnalysedType::Handle(x) => {
+            golem_client::model::AnalysedType::Handle(to_oss_handle(x))
         }
     }
 }
 
-impl ToOss<golem_client::model::ProtectedComponentId>
-    for golem_cloud_client::model::ProtectedComponentId
-{
-    fn to_oss(self) -> golem_client::model::ProtectedComponentId {
-        golem_client::model::ProtectedComponentId {
-            versioned_component_id: self.versioned_component_id.to_oss(),
+fn to_oss_notp(
+    p: golem_cloud_client::model::NameOptionTypePair,
+) -> golem_client::model::NameOptionTypePair {
+    let golem_cloud_client::model::NameOptionTypePair { name, typ } = p;
+
+    golem_client::model::NameOptionTypePair {
+        name,
+        typ: typ.map(to_oss_type),
+    }
+}
+
+fn to_oss_variant(v: golem_cloud_client::model::TypeVariant) -> golem_client::model::TypeVariant {
+    golem_client::model::TypeVariant {
+        cases: v.cases.into_iter().map(to_oss_notp).collect(),
+    }
+}
+
+fn to_oss_result(r: golem_cloud_client::model::TypeResult) -> golem_client::model::TypeResult {
+    let golem_cloud_client::model::TypeResult { ok, err } = r;
+
+    golem_client::model::TypeResult {
+        ok: ok.map(to_oss_type),
+        err: err.map(to_oss_type),
+    }
+}
+
+fn to_oss_option(o: golem_cloud_client::model::TypeOption) -> golem_client::model::TypeOption {
+    golem_client::model::TypeOption {
+        inner: to_oss_type(o.inner),
+    }
+}
+
+fn to_oss_enum(e: golem_cloud_client::model::TypeEnum) -> golem_client::model::TypeEnum {
+    golem_client::model::TypeEnum { cases: e.cases }
+}
+
+fn to_oss_flags(e: golem_cloud_client::model::TypeFlags) -> golem_client::model::TypeFlags {
+    golem_client::model::TypeFlags { names: e.names }
+}
+
+fn to_oss_ntp(p: golem_cloud_client::model::NameTypePair) -> golem_client::model::NameTypePair {
+    let golem_cloud_client::model::NameTypePair { name, typ } = p;
+
+    golem_client::model::NameTypePair {
+        name,
+        typ: to_oss_type(typ),
+    }
+}
+
+fn to_oss_record(r: golem_cloud_client::model::TypeRecord) -> golem_client::model::TypeRecord {
+    golem_client::model::TypeRecord {
+        fields: r.fields.into_iter().map(to_oss_ntp).collect(),
+    }
+}
+
+fn to_oss_tuple(t: golem_cloud_client::model::TypeTuple) -> golem_client::model::TypeTuple {
+    golem_client::model::TypeTuple {
+        items: t.items.into_iter().map(to_oss_type).collect(),
+    }
+}
+
+fn to_oss_list(l: golem_cloud_client::model::TypeList) -> golem_client::model::TypeList {
+    golem_client::model::TypeList {
+        inner: to_oss_type(l.inner),
+    }
+}
+
+fn to_oss_resource_mode(
+    m: golem_cloud_client::model::AnalysedResourceMode,
+) -> golem_client::model::AnalysedResourceMode {
+    match m {
+        golem_cloud_client::model::AnalysedResourceMode::Borrowed => {
+            golem_client::model::AnalysedResourceMode::Borrowed
         }
+        golem_cloud_client::model::AnalysedResourceMode::Owned => {
+            golem_client::model::AnalysedResourceMode::Owned
+        }
+    }
+}
+
+fn to_oss_handle(h: golem_cloud_client::model::TypeHandle) -> golem_client::model::TypeHandle {
+    golem_client::model::TypeHandle {
+        resource_id: h.resource_id,
+        mode: to_oss_resource_mode(h.mode),
+    }
+}
+
+fn to_oss_function_parameter(
+    p: golem_cloud_client::model::AnalysedFunctionParameter,
+) -> golem_client::model::AnalysedFunctionParameter {
+    let golem_cloud_client::model::AnalysedFunctionParameter { name, typ } = p;
+
+    golem_client::model::AnalysedFunctionParameter {
+        name,
+        typ: to_oss_type(typ),
+    }
+}
+
+fn to_oss_function_result(
+    r: golem_cloud_client::model::AnalysedFunctionResult,
+) -> golem_client::model::AnalysedFunctionResult {
+    let golem_cloud_client::model::AnalysedFunctionResult { name, typ } = r;
+
+    golem_client::model::AnalysedFunctionResult {
+        name,
+        typ: to_oss_type(typ),
+    }
+}
+
+fn to_oss_export_function(
+    f: golem_cloud_client::model::AnalysedFunction,
+) -> golem_client::model::AnalysedFunction {
+    let golem_cloud_client::model::AnalysedFunction {
+        name,
+        parameters,
+        results,
+    } = f;
+
+    golem_client::model::AnalysedFunction {
+        name,
+        parameters: parameters
+            .into_iter()
+            .map(to_oss_function_parameter)
+            .collect(),
+        results: results.into_iter().map(to_oss_function_result).collect(),
+    }
+}
+
+fn to_oss_export_instance(
+    i: golem_cloud_client::model::AnalysedInstance,
+) -> golem_client::model::AnalysedInstance {
+    let golem_cloud_client::model::AnalysedInstance { name, functions } = i;
+
+    golem_client::model::AnalysedInstance {
+        name,
+        functions: functions.into_iter().map(to_oss_export_function).collect(),
+    }
+}
+
+fn to_oss_export(
+    e: golem_cloud_client::model::AnalysedExport,
+) -> golem_client::model::AnalysedExport {
+    match e {
+        golem_cloud_client::model::AnalysedExport::Instance(i) => {
+            golem_client::model::AnalysedExport::Instance(to_oss_export_instance(i))
+        }
+        golem_cloud_client::model::AnalysedExport::Function(f) => {
+            golem_client::model::AnalysedExport::Function(to_oss_export_function(f))
+        }
+    }
+}
+
+fn to_oss_versioned_name(
+    n: golem_cloud_client::model::VersionedName,
+) -> golem_client::model::VersionedName {
+    let golem_cloud_client::model::VersionedName { name, version } = n;
+
+    golem_client::model::VersionedName { name, version }
+}
+
+fn to_oss_producer_field(
+    f: golem_cloud_client::model::ProducerField,
+) -> golem_client::model::ProducerField {
+    let golem_cloud_client::model::ProducerField { name, values } = f;
+
+    golem_client::model::ProducerField {
+        name,
+        values: values.into_iter().map(to_oss_versioned_name).collect(),
+    }
+}
+
+fn to_oss_producers(p: golem_cloud_client::model::Producers) -> golem_client::model::Producers {
+    golem_client::model::Producers {
+        fields: p.fields.into_iter().map(to_oss_producer_field).collect(),
+    }
+}
+
+fn to_oss_memory(p: golem_cloud_client::model::LinearMemory) -> golem_client::model::LinearMemory {
+    golem_client::model::LinearMemory {
+        initial: p.initial,
+        maximum: p.maximum,
     }
 }
 
@@ -566,275 +855,6 @@ impl ToOss<golem_client::model::ComponentMetadata>
             memories,
         } = self;
 
-        fn to_oss_notp(
-            p: golem_cloud_client::model::NameOptionTypePair,
-        ) -> golem_client::model::NameOptionTypePair {
-            let golem_cloud_client::model::NameOptionTypePair { name, typ } = p;
-
-            golem_client::model::NameOptionTypePair {
-                name,
-                typ: typ.map(to_oss_type),
-            }
-        }
-
-        fn to_oss_variant(
-            v: golem_cloud_client::model::TypeVariant,
-        ) -> golem_client::model::TypeVariant {
-            golem_client::model::TypeVariant {
-                cases: v.cases.into_iter().map(to_oss_notp).collect(),
-            }
-        }
-
-        fn to_oss_result(
-            r: golem_cloud_client::model::TypeResult,
-        ) -> golem_client::model::TypeResult {
-            let golem_cloud_client::model::TypeResult { ok, err } = r;
-
-            golem_client::model::TypeResult {
-                ok: ok.map(to_oss_type),
-                err: err.map(to_oss_type),
-            }
-        }
-
-        fn to_oss_option(
-            o: golem_cloud_client::model::TypeOption,
-        ) -> golem_client::model::TypeOption {
-            golem_client::model::TypeOption {
-                inner: to_oss_type(o.inner),
-            }
-        }
-
-        fn to_oss_enum(e: golem_cloud_client::model::TypeEnum) -> golem_client::model::TypeEnum {
-            golem_client::model::TypeEnum { cases: e.cases }
-        }
-
-        fn to_oss_flags(e: golem_cloud_client::model::TypeFlags) -> golem_client::model::TypeFlags {
-            golem_client::model::TypeFlags { cases: e.cases }
-        }
-
-        fn to_oss_ntp(
-            p: golem_cloud_client::model::NameTypePair,
-        ) -> golem_client::model::NameTypePair {
-            let golem_cloud_client::model::NameTypePair { name, typ } = p;
-
-            golem_client::model::NameTypePair {
-                name,
-                typ: to_oss_type(typ),
-            }
-        }
-
-        fn to_oss_record(
-            r: golem_cloud_client::model::TypeRecord,
-        ) -> golem_client::model::TypeRecord {
-            golem_client::model::TypeRecord {
-                cases: r.cases.into_iter().map(to_oss_ntp).collect(),
-            }
-        }
-
-        fn to_oss_tuple(t: golem_cloud_client::model::TypeTuple) -> golem_client::model::TypeTuple {
-            golem_client::model::TypeTuple {
-                items: t.items.into_iter().map(to_oss_type).collect(),
-            }
-        }
-
-        fn to_oss_list(l: golem_cloud_client::model::TypeList) -> golem_client::model::TypeList {
-            golem_client::model::TypeList {
-                inner: to_oss_type(l.inner),
-            }
-        }
-
-        fn to_oss_resource_mode(
-            m: golem_cloud_client::model::ResourceMode,
-        ) -> golem_client::model::ResourceMode {
-            match m {
-                golem_cloud_client::model::ResourceMode::Borrowed => {
-                    golem_client::model::ResourceMode::Borrowed
-                }
-                golem_cloud_client::model::ResourceMode::Owned => {
-                    golem_client::model::ResourceMode::Owned
-                }
-            }
-        }
-
-        fn to_oss_handle(
-            h: golem_cloud_client::model::TypeHandle,
-        ) -> golem_client::model::TypeHandle {
-            golem_client::model::TypeHandle {
-                resource_id: h.resource_id,
-                mode: to_oss_resource_mode(h.mode),
-            }
-        }
-
-        fn to_oss_type(t: golem_cloud_client::model::Type) -> golem_client::model::Type {
-            match t {
-                golem_cloud_client::model::Type::Variant(x) => {
-                    golem_client::model::Type::Variant(to_oss_variant(x))
-                }
-                golem_cloud_client::model::Type::Result(x) => {
-                    golem_client::model::Type::Result(Box::new(to_oss_result(*x)))
-                }
-                golem_cloud_client::model::Type::Option(x) => {
-                    golem_client::model::Type::Option(Box::new(to_oss_option(*x)))
-                }
-                golem_cloud_client::model::Type::Enum(x) => {
-                    golem_client::model::Type::Enum(to_oss_enum(x))
-                }
-                golem_cloud_client::model::Type::Flags(x) => {
-                    golem_client::model::Type::Flags(to_oss_flags(x))
-                }
-                golem_cloud_client::model::Type::Record(x) => {
-                    golem_client::model::Type::Record(to_oss_record(x))
-                }
-                golem_cloud_client::model::Type::Tuple(x) => {
-                    golem_client::model::Type::Tuple(to_oss_tuple(x))
-                }
-                golem_cloud_client::model::Type::List(x) => {
-                    golem_client::model::Type::List(Box::new(to_oss_list(*x)))
-                }
-                golem_cloud_client::model::Type::Str(_) => {
-                    golem_client::model::Type::Str(golem_client::model::TypeStr {})
-                }
-                golem_cloud_client::model::Type::Chr(_) => {
-                    golem_client::model::Type::Chr(golem_client::model::TypeChr {})
-                }
-                golem_cloud_client::model::Type::F64(_) => {
-                    golem_client::model::Type::F64(golem_client::model::TypeF64 {})
-                }
-                golem_cloud_client::model::Type::F32(_) => {
-                    golem_client::model::Type::F32(golem_client::model::TypeF32 {})
-                }
-                golem_cloud_client::model::Type::U64(_) => {
-                    golem_client::model::Type::U64(golem_client::model::TypeU64 {})
-                }
-                golem_cloud_client::model::Type::S64(_) => {
-                    golem_client::model::Type::S64(golem_client::model::TypeS64 {})
-                }
-                golem_cloud_client::model::Type::U32(_) => {
-                    golem_client::model::Type::U32(golem_client::model::TypeU32 {})
-                }
-                golem_cloud_client::model::Type::S32(_) => {
-                    golem_client::model::Type::S32(golem_client::model::TypeS32 {})
-                }
-                golem_cloud_client::model::Type::U16(_) => {
-                    golem_client::model::Type::U16(golem_client::model::TypeU16 {})
-                }
-                golem_cloud_client::model::Type::S16(_) => {
-                    golem_client::model::Type::S16(golem_client::model::TypeS16 {})
-                }
-                golem_cloud_client::model::Type::U8(_) => {
-                    golem_client::model::Type::U8(golem_client::model::TypeU8 {})
-                }
-                golem_cloud_client::model::Type::S8(_) => {
-                    golem_client::model::Type::S8(golem_client::model::TypeS8 {})
-                }
-                golem_cloud_client::model::Type::Bool(_) => {
-                    golem_client::model::Type::Bool(golem_client::model::TypeBool {})
-                }
-                golem_cloud_client::model::Type::Handle(x) => {
-                    golem_client::model::Type::Handle(to_oss_handle(x))
-                }
-            }
-        }
-
-        fn to_oss_function_parameter(
-            p: golem_cloud_client::model::FunctionParameter,
-        ) -> golem_client::model::FunctionParameter {
-            let golem_cloud_client::model::FunctionParameter { name, typ } = p;
-
-            golem_client::model::FunctionParameter {
-                name,
-                typ: to_oss_type(typ),
-            }
-        }
-
-        fn to_oss_function_result(
-            r: golem_cloud_client::model::FunctionResult,
-        ) -> golem_client::model::FunctionResult {
-            let golem_cloud_client::model::FunctionResult { name, typ } = r;
-
-            golem_client::model::FunctionResult {
-                name,
-                typ: to_oss_type(typ),
-            }
-        }
-
-        fn to_oss_export_function(
-            f: golem_cloud_client::model::ExportFunction,
-        ) -> golem_client::model::ExportFunction {
-            let golem_cloud_client::model::ExportFunction {
-                name,
-                parameters,
-                results,
-            } = f;
-
-            golem_client::model::ExportFunction {
-                name,
-                parameters: parameters
-                    .into_iter()
-                    .map(to_oss_function_parameter)
-                    .collect(),
-                results: results.into_iter().map(to_oss_function_result).collect(),
-            }
-        }
-
-        fn to_oss_export_instance(
-            i: golem_cloud_client::model::ExportInstance,
-        ) -> golem_client::model::ExportInstance {
-            let golem_cloud_client::model::ExportInstance { name, functions } = i;
-
-            golem_client::model::ExportInstance {
-                name,
-                functions: functions.into_iter().map(to_oss_export_function).collect(),
-            }
-        }
-
-        fn to_oss_export(e: golem_cloud_client::model::Export) -> golem_client::model::Export {
-            match e {
-                golem_cloud_client::model::Export::Instance(i) => {
-                    golem_client::model::Export::Instance(to_oss_export_instance(i))
-                }
-                golem_cloud_client::model::Export::Function(f) => {
-                    golem_client::model::Export::Function(to_oss_export_function(f))
-                }
-            }
-        }
-
-        fn to_oss_versioned_name(
-            n: golem_cloud_client::model::VersionedName,
-        ) -> golem_client::model::VersionedName {
-            let golem_cloud_client::model::VersionedName { name, version } = n;
-
-            golem_client::model::VersionedName { name, version }
-        }
-
-        fn to_oss_producer_field(
-            f: golem_cloud_client::model::ProducerField,
-        ) -> golem_client::model::ProducerField {
-            let golem_cloud_client::model::ProducerField { name, values } = f;
-
-            golem_client::model::ProducerField {
-                name,
-                values: values.into_iter().map(to_oss_versioned_name).collect(),
-            }
-        }
-
-        fn to_oss_producers(
-            p: golem_cloud_client::model::Producers,
-        ) -> golem_client::model::Producers {
-            golem_client::model::Producers {
-                fields: p.fields.into_iter().map(to_oss_producer_field).collect(),
-            }
-        }
-
-        fn to_oss_memory(
-            p: golem_cloud_client::model::LinearMemory,
-        ) -> golem_client::model::LinearMemory {
-            golem_client::model::LinearMemory {
-                initial: p.initial,
-                maximum: p.maximum,
-            }
-        }
-
         golem_client::model::ComponentMetadata {
             exports: exports.into_iter().map(to_oss_export).collect(),
             producers: producers.into_iter().map(to_oss_producers).collect(),
@@ -847,8 +867,6 @@ impl ToCli<Component> for golem_cloud_client::model::Component {
     fn to_cli(self) -> Component {
         let golem_cloud_client::model::Component {
             versioned_component_id,
-            user_component_id,
-            protected_component_id,
             component_name,
             component_size,
             metadata,
@@ -857,8 +875,6 @@ impl ToCli<Component> for golem_cloud_client::model::Component {
 
         Component {
             versioned_component_id: versioned_component_id.to_oss(),
-            user_component_id: user_component_id.to_oss(),
-            protected_component_id: protected_component_id.to_oss(),
             component_name,
             component_size,
             metadata: metadata.to_oss(),

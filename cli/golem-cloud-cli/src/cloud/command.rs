@@ -4,17 +4,20 @@ use crate::cloud::command::domain::DomainSubcommand;
 use crate::cloud::command::policy::ProjectPolicySubcommand;
 use crate::cloud::command::project::ProjectSubcommand;
 use crate::cloud::command::token::TokenSubcommand;
-use crate::cloud::model::{CloudComponentIdOrName, ProjectAction, ProjectPolicyId, ProjectRef};
-use clap::{Parser, Subcommand};
+use crate::cloud::model::{CloudComponentUriOrName, ProjectAction, ProjectPolicyId, ProjectRef};
+use clap::{ArgMatches, Error, FromArgMatches, Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
 use golem_cli::cloud::AccountId;
 use golem_cli::command::api_definition::ApiDefinitionSubcommand;
 use golem_cli::command::api_deployment::ApiDeploymentSubcommand;
 use golem_cli::command::component::ComponentSubCommand;
 use golem_cli::command::profile::ProfileSubCommand;
-use golem_cli::command::worker::WorkerSubcommand;
-use golem_cli::model::Format;
-use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier, PackageName};
+use golem_cli::command::worker::{WorkerRefSplit, WorkerSubcommand};
+use golem_cli::model::{Format, WorkerName};
+use golem_common::model::WorkerId;
+use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ToOssUri, WorkerUri};
+use golem_common::uri::cloud::url::{ComponentUrl, ProjectUrl, WorkerUrl};
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use uuid::Uuid;
 
 pub mod account;
@@ -24,6 +27,287 @@ pub mod policy;
 pub mod project;
 pub mod token;
 
+#[derive(clap::Args, Debug, Clone)]
+pub struct CloudWorkerNameOrUriArg {
+    /// Worker URI. Either URN or URL.
+    #[arg(
+    short = 'W',
+    long,
+    conflicts_with_all(["worker_name", "component", "component_name"]),
+    required = true,
+    value_name = "URI"
+    )]
+    worker: Option<WorkerUri>,
+
+    /// Component URI. Either URN or URL.
+    #[arg(
+    short = 'C',
+    long,
+    conflicts_with_all(["component_name", "worker"]),
+    required = true,
+    value_name = "URI"
+    )]
+    component: Option<ComponentUri>,
+
+    /// Project URI. Either URN or URL.
+    #[arg(short = 'P', long, conflicts_with_all(["project_name", "component", "worker"]))]
+    project: Option<ProjectUri>,
+
+    #[arg(short = 'p', long, conflicts_with_all(["project", "component", "worker"]))]
+    project_name: Option<String>,
+
+    #[arg(short, long, conflicts_with_all(["component", "worker"]), required = true)]
+    component_name: Option<String>,
+
+    /// Name of the worker
+    #[arg(short, long, conflicts_with = "worker", required = true)]
+    worker_name: Option<WorkerName>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CloudWorkerUriArg {
+    pub uri: WorkerUri,
+    pub worker_name: bool,
+    pub component_name: bool,
+    pub explicit_project: ProjectRef,
+}
+
+impl WorkerRefSplit<ProjectRef> for CloudWorkerUriArg {
+    fn split(self) -> (golem_common::uri::oss::uri::WorkerUri, Option<ProjectRef>) {
+        let CloudWorkerUriArg {
+            uri,
+            worker_name: _,
+            component_name: _,
+            explicit_project,
+        } = self;
+
+        let (uri, project) = uri.to_oss_uri();
+
+        let project = project.map(ProjectUri::URL).or(explicit_project.uri);
+
+        (
+            uri,
+            Some(ProjectRef {
+                uri: project,
+                explicit_name: false,
+            }),
+        )
+    }
+}
+
+impl FromArgMatches for CloudWorkerUriArg {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        CloudWorkerNameOrUriArg::from_arg_matches(matches).map(|c| (&c).into())
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        let prc0: CloudWorkerNameOrUriArg = (&self.clone()).into();
+        let mut prc = prc0.clone();
+        let res = CloudWorkerNameOrUriArg::update_from_arg_matches(&mut prc, matches);
+        *self = (&prc).into();
+        res
+    }
+}
+
+impl clap::Args for CloudWorkerUriArg {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        CloudWorkerNameOrUriArg::augment_args(cmd)
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        CloudWorkerNameOrUriArg::augment_args_for_update(cmd)
+    }
+}
+
+impl From<&CloudWorkerNameOrUriArg> for CloudWorkerUriArg {
+    fn from(value: &CloudWorkerNameOrUriArg) -> Self {
+        match &value.worker {
+            Some(uri) => CloudWorkerUriArg {
+                uri: uri.clone(),
+                worker_name: false,
+                component_name: false,
+                explicit_project: ProjectRef {
+                    uri: None,
+                    explicit_name: false,
+                },
+            },
+            None => {
+                let worker_name = value.worker_name.clone().unwrap().0;
+
+                match &value.component {
+                    Some(ComponentUri::URN(component_urn)) => {
+                        let uri = WorkerUri::URN(WorkerUrn {
+                            id: WorkerId {
+                                component_id: component_urn.id.clone(),
+                                worker_name,
+                            },
+                        });
+                        CloudWorkerUriArg {
+                            uri,
+                            worker_name: true,
+                            component_name: false,
+                            explicit_project: ProjectRef {
+                                uri: None,
+                                explicit_name: false,
+                            },
+                        }
+                    }
+                    Some(ComponentUri::URL(component_url)) => {
+                        let uri = WorkerUri::URL(WorkerUrl {
+                            component_name: component_url.name.to_string(),
+                            worker_name,
+                            project: component_url.project.clone(),
+                        });
+
+                        CloudWorkerUriArg {
+                            uri,
+                            worker_name: true,
+                            component_name: false,
+                            explicit_project: ProjectRef {
+                                uri: None,
+                                explicit_name: false,
+                            },
+                        }
+                    }
+                    None => {
+                        let component_name = value.component_name.clone().unwrap();
+
+                        let project = match &value.project {
+                            Some(p) => ProjectRef {
+                                uri: Some(p.clone()),
+                                explicit_name: false,
+                            },
+                            None => match value.project_name.clone() {
+                                Some(project_name) => ProjectRef {
+                                    uri: Some(ProjectUri::URL(ProjectUrl {
+                                        name: project_name,
+                                        account: None,
+                                    })),
+                                    explicit_name: true,
+                                },
+                                None => ProjectRef {
+                                    uri: None,
+                                    explicit_name: false,
+                                },
+                            },
+                        };
+
+                        let uri = WorkerUri::URL(WorkerUrl {
+                            component_name,
+                            worker_name,
+                            project: None,
+                        });
+
+                        CloudWorkerUriArg {
+                            uri,
+                            worker_name: true,
+                            component_name: true,
+                            explicit_project: project,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl From<&CloudWorkerUriArg> for CloudWorkerNameOrUriArg {
+    fn from(value: &CloudWorkerUriArg) -> Self {
+        let project_name = match &value.explicit_project.uri {
+            Some(ProjectUri::URL(ProjectUrl { name, .. })) => {
+                if value.explicit_project.explicit_name {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        let project = match &value.explicit_project.uri {
+            Some(uri) => {
+                if project_name.is_none() {
+                    Some(uri.clone())
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        if !value.worker_name {
+            CloudWorkerNameOrUriArg {
+                worker: Some(value.uri.clone()),
+                component: None,
+                project,
+                project_name,
+                component_name: None,
+                worker_name: None,
+            }
+        } else {
+            match &value.uri {
+                WorkerUri::URN(urn) => {
+                    let component_uri = ComponentUri::URN(ComponentUrn {
+                        id: urn.id.component_id.clone(),
+                    });
+
+                    CloudWorkerNameOrUriArg {
+                        worker: None,
+                        component: Some(component_uri),
+                        project,
+                        project_name,
+                        component_name: None,
+                        worker_name: Some(WorkerName(urn.id.worker_name.to_string())),
+                    }
+                }
+                WorkerUri::URL(url) => {
+                    if value.component_name {
+                        CloudWorkerNameOrUriArg {
+                            worker: None,
+                            component: None,
+                            project,
+                            project_name,
+                            component_name: Some(url.component_name.to_string()),
+                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                        }
+                    } else {
+                        let component_uri = ComponentUri::URL(ComponentUrl {
+                            name: url.component_name.to_string(),
+                            project: url.project.clone(),
+                        });
+
+                        CloudWorkerNameOrUriArg {
+                            worker: None,
+                            component: Some(component_uri),
+                            project,
+                            project_name,
+                            component_name: None,
+                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = true, multiple = false)]
+pub struct ProjectActionsOrPolicyId {
+    /// The sharing policy's identifier. If not provided, use `--project-actions` instead
+    #[arg(long, required = true, group = "project_actions_or_policy")]
+    pub project_policy_id: Option<ProjectPolicyId>,
+
+    /// A list of actions to be granted to the recipient account. If not provided, use `--project-policy-id` instead
+    #[arg(
+        short = 'A',
+        long,
+        required = true,
+        group = "project_actions_or_policy"
+    )]
+    pub project_actions: Option<Vec<ProjectAction>>,
+}
+
 #[derive(Subcommand, Debug)]
 #[command()]
 pub enum CloudCommand<ProfileAdd: clap::Args> {
@@ -31,14 +315,14 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
     #[command()]
     Component {
         #[command(subcommand)]
-        subcommand: ComponentSubCommand<ProjectRef, CloudComponentIdOrName>,
+        subcommand: ComponentSubCommand<ProjectRef, CloudComponentUriOrName>,
     },
 
     /// Manage Golem workers
     #[command()]
     Worker {
         #[command(subcommand)]
-        subcommand: WorkerSubcommand<CloudComponentIdOrName>,
+        subcommand: WorkerSubcommand<CloudComponentUriOrName, CloudWorkerUriArg>,
     },
 
     /// Manage accounts
@@ -81,18 +365,8 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
         #[arg(long)]
         recipient_account_id: AccountId,
 
-        /// The sharing policy's identifier. If not provided, use `--project-actions` instead
-        #[arg(long, required = true, conflicts_with = "project_actions")]
-        project_policy_id: Option<ProjectPolicyId>,
-
-        /// A list of actions to be granted to the recipient account. If not provided, use `--project-policy-id` instead
-        #[arg(
-            short = 'A',
-            long,
-            required = true,
-            conflicts_with = "project_policy_id"
-        )]
-        project_actions: Option<Vec<ProjectAction>>,
+        #[command(flatten)]
+        project_actions_or_policy_id: ProjectActionsOrPolicyId,
     },
 
     /// Manage project sharing policies
@@ -103,31 +377,8 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
     },
 
     /// Create a new Golem component from built-in examples
-    #[command()]
-    New {
-        /// Name of the example to use
-        #[arg(short, long)]
-        example: ExampleName,
-
-        /// The new component's name
-        #[arg(short, long)]
-        component_name: golem_examples::model::ComponentName,
-
-        /// The package name of the generated component (in namespace:name format)
-        #[arg(short, long)]
-        package_name: Option<PackageName>,
-    },
-    /// Lists the built-in examples available for creating new components
-    #[command()]
-    ListExamples {
-        /// The minimum language tier to include in the list
-        #[arg(short, long)]
-        min_tier: Option<GuestLanguageTier>,
-
-        /// Filter examples by a given guest language
-        #[arg(short, long)]
-        language: Option<GuestLanguage>,
-    },
+    #[command(flatten)]
+    Examples(golem_examples::cli::Command),
 
     /// WASM RPC stub generator
     #[cfg(feature = "stubgen")]

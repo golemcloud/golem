@@ -8,7 +8,7 @@ use golem_cli::model::{GolemError, GolemResult};
 #[command()]
 pub enum ProjectPolicySubcommand {
     /// Creates a new project sharing policy
-    #[command()]
+    #[command(alias = "create")]
     Add {
         /// Name of the policy
         #[arg(long)]

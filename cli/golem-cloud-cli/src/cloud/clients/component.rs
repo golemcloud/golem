@@ -10,7 +10,8 @@ use tracing::info;
 use crate::cloud::clients::errors::CloudGolemError;
 use crate::cloud::model::ToCli;
 use golem_cli::model::component::Component;
-use golem_cli::model::{ComponentId, ComponentName, GolemError, PathBufOrStdin};
+use golem_cli::model::{ComponentName, GolemError, PathBufOrStdin};
+use golem_common::uri::oss::urn::ComponentUrn;
 
 #[derive(Debug, Clone)]
 pub struct ComponentClientLive<C: golem_cloud_client::api::ComponentClient + Sync + Send> {
@@ -25,13 +26,13 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
 
     async fn get_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError> {
         info!("Getting component version");
         let component = self
             .client
-            .get_component_metadata(&component_id.0, &version.to_string())
+            .get_component_metadata(&component_urn.id.0, &version.to_string())
             .await
             .map_err(CloudGolemError::from)?;
         Ok(component.to_cli())
@@ -39,13 +40,13 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
 
     async fn get_latest_metadata(
         &self,
-        component_id: &ComponentId,
+        component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError> {
         info!("Getting latest component version");
 
         let component = self
             .client
-            .get_latest_component_metadata(&component_id.0)
+            .get_latest_component_metadata(&component_urn.id.0)
             .await
             .map_err(CloudGolemError::from)?;
         Ok(component.to_cli())
@@ -110,8 +111,12 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         Ok(component.to_cli())
     }
 
-    async fn update(&self, id: ComponentId, file: PathBufOrStdin) -> Result<Component, GolemError> {
-        info!("Updating component {id:?} from {file:?}");
+    async fn update(
+        &self,
+        urn: ComponentUrn,
+        file: PathBufOrStdin,
+    ) -> Result<Component, GolemError> {
+        info!("Updating component {urn} from {file:?}");
 
         let component = match file {
             PathBufOrStdin::Path(path) => {
@@ -120,7 +125,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .update_component(&id.0, file)
+                    .update_component(&urn.id.0, file)
                     .await
                     .map_err(CloudGolemError::from)?
             }
@@ -132,7 +137,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .update_component(&id.0, bytes)
+                    .update_component(&urn.id.0, bytes)
                     .await
                     .map_err(CloudGolemError::from)?
             }

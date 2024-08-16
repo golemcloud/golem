@@ -11,6 +11,7 @@ use tracing_subscriber::FmtSubscriber;
 use golem_cli::init::CliKind;
 use golem_cloud_cli::cloud;
 use golem_cloud_cli::cloud::command::GolemCloudCommand;
+use golem_cloud_cli::cloud::completion::PrintCloudCompletion;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap();
@@ -45,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cloud_profile,
             CliKind::Cloud,
             config_dir,
+            Box::new(PrintCloudCompletion()),
         ))
 }
 

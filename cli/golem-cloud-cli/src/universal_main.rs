@@ -1,5 +1,6 @@
 extern crate derive_more;
 
+use clap::CommandFactory;
 use clap::Parser;
 use clap_verbosity_flag::{Level, Verbosity};
 use golem_cli::command::profile::UniversalProfileAdd;
@@ -8,11 +9,12 @@ use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
-use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand};
+use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand, PrintCompletion};
 use golem_cli::oss;
 use golem_cli::oss::command::GolemOssCommand;
 use golem_cloud_cli::cloud;
 use golem_cloud_cli::cloud::command::GolemCloudCommand;
+use golem_cloud_cli::cloud::completion::PrintCloudUniversalCompletion;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap();
@@ -40,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         p,
                         CliKind::Universal,
                         config_dir,
+                        Box::new(PrintOssUniversalCompletion()),
                     ))
             }
             Profile::GolemCloud(p) => {
@@ -58,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         p,
                         CliKind::Universal,
                         config_dir,
+                        Box::new(PrintCloudUniversalCompletion()),
                     ))
             }
         }
@@ -76,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 CliKind::Universal,
                 config_dir,
                 Box::new(DummyProfileAuth {}),
+                Box::new(PrintCloudUniversalCompletion()),
             ))
     }
 }
@@ -97,5 +102,16 @@ fn init_tracing(verbosity: &Verbosity) {
 
         tracing::subscriber::set_global_default(subscriber)
             .expect("setting default subscriber failed");
+    }
+}
+
+struct PrintOssUniversalCompletion();
+
+impl PrintCompletion for PrintOssUniversalCompletion {
+    fn print_completion(&self, generator: clap_complete::Shell) {
+        let mut cmd = GolemOssCommand::<UniversalProfileAdd>::command();
+        let cmd_name = cmd.get_name().to_string();
+        info!("Golem CLI - generating completion file for {generator:?}...");
+        clap_complete::generate(generator, &mut cmd, cmd_name, &mut std::io::stdout());
     }
 }

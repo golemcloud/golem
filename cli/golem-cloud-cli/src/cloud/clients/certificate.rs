@@ -1,14 +1,14 @@
 use crate::cloud::clients::errors::CloudGolemError;
 use async_trait::async_trait;
-use golem_cli::cloud::ProjectId;
 use golem_cloud_client::model::{Certificate, CertificateRequest};
+use golem_common::uri::cloud::urn::ProjectUrn;
 use uuid::Uuid;
 
 #[async_trait]
 pub trait CertificateClient {
     async fn get(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         certificate_id: Option<&Uuid>,
     ) -> Result<Vec<Certificate>, CloudGolemError>;
 
@@ -17,7 +17,7 @@ pub trait CertificateClient {
 
     async fn delete(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         certificate_id: &Uuid,
     ) -> Result<String, CloudGolemError>;
 }
@@ -32,12 +32,12 @@ impl<C: golem_cloud_client::api::ApiCertificateClient + Sync + Send> Certificate
 {
     async fn get(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         certificate_id: Option<&Uuid>,
     ) -> Result<Vec<Certificate>, CloudGolemError> {
         Ok(self
             .client
-            .get_certificates(&project_id.0, certificate_id)
+            .get_certificates(&project_urn.id.0, certificate_id)
             .await?)
     }
 
@@ -50,12 +50,12 @@ impl<C: golem_cloud_client::api::ApiCertificateClient + Sync + Send> Certificate
 
     async fn delete(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         certificate_id: &Uuid,
     ) -> Result<String, CloudGolemError> {
         Ok(self
             .client
-            .delete_certificate(&project_id.0, certificate_id)
+            .delete_certificate(&project_urn.id.0, certificate_id)
             .await?)
     }
 }

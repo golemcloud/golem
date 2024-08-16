@@ -12,7 +12,7 @@ pub enum DomainSubcommand {
         #[command(flatten)]
         project_ref: ProjectRef,
     },
-    #[command()]
+    #[command(alias = "create")]
     Add {
         #[command(flatten)]
         project_ref: ProjectRef,

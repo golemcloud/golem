@@ -3,29 +3,36 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_cli::clients::worker::WorkerClient;
+use golem_cli::command::worker::WorkerConnectOptions;
+use golem_cli::connect_output::ConnectOutput;
 use golem_client::model::ScanCursor;
 use golem_cloud_client::model::{
-    CallingConvention, FilterComparator, InvokeParameters, InvokeResult, StringFilterComparator,
-    WorkerAndFilter, WorkerCreatedAtFilter, WorkerCreationRequest, WorkerEnvFilter, WorkerFilter,
-    WorkerNameFilter, WorkerNotFilter, WorkerOrFilter, WorkerStatus, WorkerStatusFilter,
-    WorkerVersionFilter, WorkersMetadataRequest,
+    AnalysedResourceMode, AnalysedType, FilterComparator, InvokeParameters, InvokeResult,
+    NameOptionTypePair, NameTypePair, StringFilterComparator, TypeAnnotatedValue, TypeBool,
+    TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord,
+    TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64,
+    TypeU8, TypeVariant, WorkerAndFilter, WorkerCreatedAtFilter, WorkerCreationRequest,
+    WorkerEnvFilter, WorkerFilter, WorkerNameFilter, WorkerNotFilter, WorkerOrFilter, WorkerStatus,
+    WorkerStatusFilter, WorkerVersionFilter, WorkersMetadataRequest,
 };
 use golem_cloud_client::Context;
 use golem_cloud_client::Error;
 use native_tls::TlsConnector;
-use serde::Deserialize;
 use tokio::{task, time};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{connect_async_tls_with_config, Connector};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::cloud::clients::errors::CloudGolemError;
-use crate::cloud::model::{ToCli, ToCloud, ToOss};
+use crate::cloud::model::{to_oss_type, ToCli, ToCloud, ToOss};
+
 use golem_cli::model::{
-    ComponentId, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    Format, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
 };
 use golem_cloud_client::api::WorkerError;
+use golem_common::model::WorkerEvent;
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 
 #[derive(Clone)]
 pub struct WorkerClientLive<C: golem_cloud_client::api::WorkerClient + Sync + Send> {
@@ -35,11 +42,149 @@ pub struct WorkerClientLive<C: golem_cloud_client::api::WorkerClient + Sync + Se
 }
 
 fn to_cloud_invoke_parameters(ps: golem_client::model::InvokeParameters) -> InvokeParameters {
-    InvokeParameters { params: ps.params }
+    fn to_cloud_name_option_type_pair(
+        p: golem_client::model::NameOptionTypePair,
+    ) -> NameOptionTypePair {
+        NameOptionTypePair {
+            name: p.name,
+            typ: p.typ.map(to_cloud_analysed_type),
+        }
+    }
+
+    fn to_cloud_variant(v: golem_client::model::TypeVariant) -> TypeVariant {
+        TypeVariant {
+            cases: v
+                .cases
+                .into_iter()
+                .map(to_cloud_name_option_type_pair)
+                .collect(),
+        }
+    }
+
+    fn to_cloud_result(r: golem_client::model::TypeResult) -> TypeResult {
+        TypeResult {
+            ok: r.ok.map(to_cloud_analysed_type),
+            err: r.err.map(to_cloud_analysed_type),
+        }
+    }
+
+    fn to_cloud_option(o: golem_client::model::TypeOption) -> TypeOption {
+        TypeOption {
+            inner: to_cloud_analysed_type(o.inner),
+        }
+    }
+
+    fn to_cloud_enum(e: golem_client::model::TypeEnum) -> TypeEnum {
+        TypeEnum { cases: e.cases }
+    }
+
+    fn to_cloud_flags(f: golem_client::model::TypeFlags) -> TypeFlags {
+        TypeFlags { names: f.names }
+    }
+
+    fn to_cloud_name_type_pair(p: golem_client::model::NameTypePair) -> NameTypePair {
+        NameTypePair {
+            name: p.name,
+            typ: to_cloud_analysed_type(p.typ),
+        }
+    }
+
+    fn to_cloud_record(r: golem_client::model::TypeRecord) -> TypeRecord {
+        TypeRecord {
+            fields: r.fields.into_iter().map(to_cloud_name_type_pair).collect(),
+        }
+    }
+
+    fn to_cloud_tuple(r: golem_client::model::TypeTuple) -> TypeTuple {
+        TypeTuple {
+            items: r.items.into_iter().map(to_cloud_analysed_type).collect(),
+        }
+    }
+
+    fn to_cloud_list(l: golem_client::model::TypeList) -> TypeList {
+        TypeList {
+            inner: to_cloud_analysed_type(l.inner),
+        }
+    }
+
+    fn to_cloud_mode(m: golem_client::model::AnalysedResourceMode) -> AnalysedResourceMode {
+        match m {
+            golem_client::model::AnalysedResourceMode::Owned => AnalysedResourceMode::Owned,
+            golem_client::model::AnalysedResourceMode::Borrowed => AnalysedResourceMode::Borrowed,
+        }
+    }
+
+    fn to_cloud_type_handle(h: golem_client::model::TypeHandle) -> TypeHandle {
+        TypeHandle {
+            resource_id: h.resource_id,
+            mode: to_cloud_mode(h.mode),
+        }
+    }
+
+    fn to_cloud_analysed_type(t: golem_client::model::AnalysedType) -> AnalysedType {
+        match t {
+            golem_client::model::AnalysedType::Variant(v) => {
+                AnalysedType::Variant(to_cloud_variant(v))
+            }
+            golem_client::model::AnalysedType::Result(r) => {
+                AnalysedType::Result(Box::new(to_cloud_result(*r)))
+            }
+            golem_client::model::AnalysedType::Option(o) => {
+                AnalysedType::Option(Box::new(to_cloud_option(*o)))
+            }
+            golem_client::model::AnalysedType::Enum(e) => AnalysedType::Enum(to_cloud_enum(e)),
+            golem_client::model::AnalysedType::Flags(f) => AnalysedType::Flags(to_cloud_flags(f)),
+            golem_client::model::AnalysedType::Record(r) => {
+                AnalysedType::Record(to_cloud_record(r))
+            }
+            golem_client::model::AnalysedType::Tuple(t) => AnalysedType::Tuple(to_cloud_tuple(t)),
+            golem_client::model::AnalysedType::List(l) => {
+                AnalysedType::List(Box::new(to_cloud_list(*l)))
+            }
+            golem_client::model::AnalysedType::Str(_) => AnalysedType::Str(TypeStr {}),
+            golem_client::model::AnalysedType::Chr(_) => AnalysedType::Chr(TypeChr {}),
+            golem_client::model::AnalysedType::F64(_) => AnalysedType::F64(TypeF64 {}),
+            golem_client::model::AnalysedType::F32(_) => AnalysedType::F32(TypeF32 {}),
+            golem_client::model::AnalysedType::U64(_) => AnalysedType::U64(TypeU64 {}),
+            golem_client::model::AnalysedType::S64(_) => AnalysedType::S64(TypeS64 {}),
+            golem_client::model::AnalysedType::U32(_) => AnalysedType::U32(TypeU32 {}),
+            golem_client::model::AnalysedType::S32(_) => AnalysedType::S32(TypeS32 {}),
+            golem_client::model::AnalysedType::U16(_) => AnalysedType::U16(TypeU16 {}),
+            golem_client::model::AnalysedType::S16(_) => AnalysedType::S16(TypeS16 {}),
+            golem_client::model::AnalysedType::U8(_) => AnalysedType::U8(TypeU8 {}),
+            golem_client::model::AnalysedType::S8(_) => AnalysedType::S8(TypeS8 {}),
+            golem_client::model::AnalysedType::Bool(_) => AnalysedType::Bool(TypeBool {}),
+            golem_client::model::AnalysedType::Handle(h) => {
+                AnalysedType::Handle(to_cloud_type_handle(h))
+            }
+        }
+    }
+
+    fn to_cloud_type_annotated_value(
+        v: golem_client::model::TypeAnnotatedValue,
+    ) -> TypeAnnotatedValue {
+        TypeAnnotatedValue {
+            typ: to_cloud_analysed_type(v.typ),
+            value: v.value,
+        }
+    }
+
+    InvokeParameters {
+        params: ps
+            .params
+            .into_iter()
+            .map(to_cloud_type_annotated_value)
+            .collect(),
+    }
 }
 
 fn to_oss_invoke_result(r: InvokeResult) -> golem_client::model::InvokeResult {
-    golem_client::model::InvokeResult { result: r.result }
+    golem_client::model::InvokeResult {
+        result: golem_client::model::TypeAnnotatedValue {
+            typ: to_oss_type(r.result.typ),
+            value: r.result.value,
+        },
+    }
 }
 
 fn to_cloud_worker_filter(f: golem_client::model::WorkerFilter) -> WorkerFilter {
@@ -160,16 +305,16 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     async fn new_worker(
         &self,
         name: WorkerName,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         args: Vec<String>,
         env: Vec<(String, String)>,
     ) -> Result<golem_client::model::WorkerId, GolemError> {
-        info!("Creating worker {name} of {}", component_id.0);
+        info!("Creating worker {name} of {}", component_urn.id.0);
 
         Ok(self
             .client
             .launch_new_worker(
-                &component_id.0,
+                &component_urn.id.0,
                 &WorkerCreationRequest {
                     name: name.0,
                     args,
@@ -184,32 +329,20 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
     async fn invoke_and_await(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         function: String,
         parameters: golem_client::model::InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
-        use_stdio: bool,
     ) -> Result<golem_client::model::InvokeResult, GolemError> {
-        info!(
-            "Invoke and await for function {function} in {}/{}",
-            component_id.0, name.0
-        );
-
-        let calling_convention = if use_stdio {
-            CallingConvention::Stdio
-        } else {
-            CallingConvention::Component
-        };
+        info!("Invoke and await for function {function} in {worker_urn}");
 
         Ok(to_oss_invoke_result(
             self.client
                 .invoke_and_await_function(
-                    &component_id.0,
-                    &name.0,
+                    &worker_urn.id.component_id.0,
+                    &worker_urn.id.worker_name,
                     idempotency_key.as_ref().map(|k| k.0.as_str()),
                     &function,
-                    Some(&calling_convention),
                     &to_cloud_invoke_parameters(parameters),
                 )
                 .await
@@ -219,22 +352,18 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
     async fn invoke(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         function: String,
         parameters: golem_client::model::InvokeParameters,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<(), GolemError> {
-        info!(
-            "Invoke function {function} in {}/{}",
-            component_id.0, name.0
-        );
+        info!("Invoke function {function} in {worker_urn}");
 
         let _ = self
             .client
             .invoke_function(
-                &component_id.0,
-                &name.0,
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
                 idempotency_key.as_ref().map(|k| k.0.as_str()),
                 &function,
                 &to_cloud_invoke_parameters(parameters),
@@ -244,57 +373,64 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         Ok(())
     }
 
-    async fn interrupt(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<(), GolemError> {
-        info!("Interrupting {}/{}", component_id.0, name.0);
+    async fn interrupt(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Interrupting {worker_urn}");
 
         let _ = self
             .client
-            .interrupt_worker(&component_id.0, &name.0, Some(false))
+            .interrupt_worker(
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
+                Some(false),
+            )
             .await
             .map_err(CloudGolemError::from)?;
         Ok(())
     }
 
-    async fn simulated_crash(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<(), GolemError> {
-        info!("Simulating crash of {}/{}", component_id.0, name.0);
+    async fn resume(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Resuming {worker_urn}");
 
         let _ = self
             .client
-            .interrupt_worker(&component_id.0, &name.0, Some(true))
+            .resume_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
             .await
             .map_err(CloudGolemError::from)?;
         Ok(())
     }
 
-    async fn delete(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError> {
-        info!("Deleting worker {}/{}", component_id.0, name.0);
+    async fn simulated_crash(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Simulating crash of {worker_urn}");
 
         let _ = self
             .client
-            .delete_worker(&component_id.0, &name.0)
+            .interrupt_worker(
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
+                Some(true),
+            )
             .await
             .map_err(CloudGolemError::from)?;
         Ok(())
     }
 
-    async fn get_metadata(
-        &self,
-        name: WorkerName,
-        component_id: ComponentId,
-    ) -> Result<WorkerMetadata, GolemError> {
-        info!("Getting worker {}/{} metadata", component_id.0, name.0);
+    async fn delete(&self, worker_urn: WorkerUrn) -> Result<(), GolemError> {
+        info!("Deleting worker {worker_urn}");
+
+        let _ = self
+            .client
+            .delete_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .await
+            .map_err(CloudGolemError::from)?;
+        Ok(())
+    }
+
+    async fn get_metadata(&self, worker_urn: WorkerUrn) -> Result<WorkerMetadata, GolemError> {
+        info!("Getting worker {worker_urn} metadata");
 
         Ok(self
             .client
-            .get_worker_metadata(&component_id.0, &name.0)
+            .get_worker_metadata(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
             .await
             .map_err(CloudGolemError::from)?
             .to_cli())
@@ -302,22 +438,21 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
     async fn find_metadata(
         &self,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         filter: Option<golem_client::model::WorkerFilter>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<golem_cli::model::WorkersMetadataResponse, GolemError> {
         info!(
-            "Getting workers metadata for component: {}, filter: {}",
-            component_id.0,
+            "Getting workers metadata for component: {component_urn}, filter: {}",
             filter.is_some()
         );
 
         Ok(self
             .client
             .find_workers_metadata(
-                &component_id.0,
+                &component_urn.id.0,
                 &WorkersMetadataRequest {
                     filter: filter.map(to_cloud_worker_filter),
                     cursor: cursor.map(|c| c.to_cloud()),
@@ -332,15 +467,14 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
     async fn list_metadata(
         &self,
-        component_id: ComponentId,
+        component_urn: ComponentUrn,
         filter: Option<Vec<String>>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
         precise: Option<bool>,
     ) -> Result<golem_cli::model::WorkersMetadataResponse, GolemError> {
         info!(
-            "Getting workers metadata for component: {}, filter: {}",
-            component_id.0,
+            "Getting workers metadata for component: {component_urn}, filter: {}",
             filter
                 .clone()
                 .map(|fs| fs.join(" AND "))
@@ -353,13 +487,24 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         Ok(self
             .client
-            .get_workers_metadata(&component_id.0, filter, cursor.as_deref(), count, precise)
+            .get_workers_metadata(
+                &component_urn.id.0,
+                filter,
+                cursor.as_deref(),
+                count,
+                precise,
+            )
             .await
             .map_err(CloudGolemError::from)?
             .to_cli())
     }
 
-    async fn connect(&self, name: WorkerName, component_id: ComponentId) -> Result<(), GolemError> {
+    async fn connect(
+        &self,
+        worker_urn: WorkerUrn,
+        connect_options: WorkerConnectOptions,
+        format: Format,
+    ) -> Result<(), GolemError> {
         let mut url = self.context.base_url.clone();
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
@@ -371,9 +516,9 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .map_err(|_| GolemError("Can't get path.".to_string()))?
             .push("v1")
             .push("components")
-            .push(&component_id.0.to_string())
+            .push(&worker_urn.id.component_id.0.to_string())
             .push("workers")
-            .push(&name.0)
+            .push(&worker_urn.id.worker_name)
             .push("connect");
 
         let mut request = url
@@ -400,6 +545,8 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             None
         };
 
+        info!("Connecting to {worker_urn}");
+
         let (ws_stream, _) = connect_async_tls_with_config(request, None, false, connector)
             .await
             .map_err(|e| match e {
@@ -416,85 +563,115 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         let (mut write, read) = ws_stream.split();
 
         let pings = task::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(5)); // TODO configure
-
+            let mut interval = time::interval(Duration::from_secs(1)); // TODO configure
             let mut cnt: i32 = 1;
 
             loop {
                 interval.tick().await;
 
-                write
+                let ping_result = write
                     .send(Message::Ping(cnt.to_ne_bytes().to_vec()))
                     .await
-                    .unwrap(); // TODO: handle errors: map_err(|e| GolemError(format!("Ping failure: {e}")))?;
+                    .map_err(|err| GolemError(format!("Worker connection ping failure: {err}")));
+
+                if let Err(err) = ping_result {
+                    error!("{}", err);
+                    break err;
+                }
 
                 cnt += 1;
             }
         });
 
-        let read_res = read.for_each(|message_or_error| async {
-            match message_or_error {
-                Err(error) => {
-                    debug!("Error reading message: {}", error);
-                }
-                Ok(message) => {
-                    let instance_connect_msg = match message {
-                        Message::Text(str) => {
-                            let parsed: serde_json::Result<InstanceConnectMessage> =
-                                serde_json::from_str(&str);
-                            Some(parsed.unwrap()) // TODO: error handling
-                        }
-                        Message::Binary(data) => {
-                            let parsed: serde_json::Result<InstanceConnectMessage> =
-                                serde_json::from_slice(&data);
-                            Some(parsed.unwrap()) // TODO: error handling
-                        }
-                        Message::Ping(_) => {
-                            debug!("Ping received from server");
-                            None
-                        }
-                        Message::Pong(_) => {
-                            debug!("Pong received from server");
-                            None
-                        }
-                        Message::Close(details) => {
-                            match details {
-                                Some(closed_frame) => {
-                                    error!("Connection Closed: {}", closed_frame);
-                                }
-                                None => {
-                                    info!("Connection Closed");
-                                }
-                            }
-                            None
-                        }
-                        Message::Frame(_) => {
-                            info!("Ignore unexpected frame");
-                            None
-                        }
-                    };
+        let output = ConnectOutput::new(connect_options, format);
 
-                    match instance_connect_msg {
-                        None => {}
-                        Some(msg) => match msg.event {
-                            WorkerEvent::Stdout(StdOutLog { message }) => {
-                                print!("{message}")
+        let read_res = read.for_each(move |message_or_error| {
+            let output = output.clone();
+            async move {
+                match message_or_error {
+                    Err(error) => {
+                        error!("Error reading message: {}", error);
+                    }
+                    Ok(message) => {
+                        let instance_connect_msg = match message {
+                            Message::Text(str) => {
+                                let parsed: serde_json::Result<WorkerEvent> =
+                                    serde_json::from_str(&str);
+
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
                             }
-                            WorkerEvent::Stderr(StdErrLog { message }) => {
-                                print!("{message}")
+                            Message::Binary(data) => {
+                                let parsed: serde_json::Result<WorkerEvent> =
+                                    serde_json::from_slice(&data);
+                                match parsed {
+                                    Ok(parsed) => Some(parsed),
+                                    Err(err) => {
+                                        error!("Failed to parse worker connect message: {err}");
+                                        None
+                                    }
+                                }
                             }
-                            WorkerEvent::Log(Log {
-                                level,
-                                context,
-                                message,
-                            }) => match level {
-                                0 => tracing::trace!(message, context = context),
-                                1 => tracing::debug!(message, context = context),
-                                2 => tracing::info!(message, context = context),
-                                3 => tracing::warn!(message, context = context),
-                                _ => tracing::error!(message, context = context),
+                            Message::Ping(_) => {
+                                trace!("Ignore ping");
+                                None
+                            }
+                            Message::Pong(_) => {
+                                trace!("Ignore pong");
+                                None
+                            }
+                            Message::Close(details) => {
+                                match details {
+                                    Some(closed_frame) => {
+                                        info!("Connection Closed: {}", closed_frame);
+                                    }
+                                    None => {
+                                        info!("Connection Closed");
+                                    }
+                                }
+                                None
+                            }
+                            Message::Frame(f) => {
+                                debug!("Ignored unexpected frame {f:?}");
+                                None
+                            }
+                        };
+
+                        match instance_connect_msg {
+                            None => {}
+                            Some(msg) => match msg {
+                                WorkerEvent::StdOut { timestamp, bytes } => {
+                                    output
+                                        .emit_stdout(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
+                                }
+                                WorkerEvent::StdErr { timestamp, bytes } => {
+                                    output
+                                        .emit_stderr(
+                                            timestamp,
+                                            String::from_utf8_lossy(&bytes).to_string(),
+                                        )
+                                        .await;
+                                }
+                                WorkerEvent::Log {
+                                    timestamp,
+                                    level,
+                                    context,
+                                    message,
+                                } => {
+                                    output.emit_log(timestamp, level, context, message);
+                                }
+                                WorkerEvent::Close => {}
                             },
-                        },
+                        }
                     }
                 }
             }
@@ -503,18 +680,16 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         pin_mut!(read_res, pings);
 
         future::select(pings, read_res).await;
-
         Ok(())
     }
 
     async fn update(
         &self,
-        name: WorkerName,
-        component_id: ComponentId,
+        worker_urn: WorkerUrn,
         mode: WorkerUpdateMode,
         target_version: u64,
     ) -> Result<(), GolemError> {
-        info!("Updating worker {name} of {}", component_id.0);
+        info!("Updating worker {worker_urn}");
         let update_mode = match mode {
             WorkerUpdateMode::Automatic => golem_cloud_client::model::WorkerUpdateMode::Automatic,
             WorkerUpdateMode::Manual => golem_cloud_client::model::WorkerUpdateMode::Manual,
@@ -523,8 +698,8 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
         let _ = self
             .client
             .update_worker(
-                &component_id.0,
-                &name.0,
+                &worker_urn.id.component_id.0,
+                &worker_urn.id.worker_name,
                 &golem_cloud_client::model::UpdateWorkerRequest {
                     mode: update_mode,
                     target_version,
@@ -534,35 +709,6 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .map_err(CloudGolemError::from)?;
         Ok(())
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct InstanceConnectMessage {
-    pub event: WorkerEvent,
-}
-
-#[derive(Deserialize, Debug)]
-enum WorkerEvent {
-    Stdout(StdOutLog),
-    Stderr(StdErrLog),
-    Log(Log),
-}
-
-#[derive(Deserialize, Debug)]
-struct StdOutLog {
-    message: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct StdErrLog {
-    message: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Log {
-    pub level: i32,
-    pub context: String,
-    pub message: String,
 }
 
 fn get_worker_golem_error(status: u16, body: Vec<u8>) -> GolemError {

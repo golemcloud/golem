@@ -75,6 +75,7 @@ async fn env_vars(
         ("GOLEM__ED_DSA__PUBLIC_KEY", &pub_key),
         ("GOLEM__ACCOUNTS__ROOT__TOKEN", ROOT_TOKEN),
         ("GOLEM__ACCOUNTS__MARKETING__TOKEN", "4a029650-26a7-4220-bfee-aa386fba08da"),
+        ("GOLEM__PLANS__DEFAULT__COMPONENT_LIMIT", "10000"),
     ];
 
     let mut vars = HashMap::from_iter(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));

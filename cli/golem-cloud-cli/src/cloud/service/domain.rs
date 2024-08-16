@@ -28,9 +28,9 @@ pub struct DomainServiceLive {
 #[async_trait]
 impl DomainService for DomainServiceLive {
     async fn get(&self, project_ref: ProjectRef) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
 
-        let res = self.client.get(project_id).await?;
+        let res = self.client.get(project_urn).await?;
 
         Ok(GolemResult::Ok(Box::new(ApiDomainVecView(res))))
     }
@@ -40,9 +40,9 @@ impl DomainService for DomainServiceLive {
         project_ref: ProjectRef,
         domain_name: String,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
 
-        let res = self.client.update(project_id, domain_name).await?;
+        let res = self.client.update(project_urn, domain_name).await?;
 
         Ok(GolemResult::Ok(Box::new(ApiDomainView(res))))
     }
@@ -52,8 +52,8 @@ impl DomainService for DomainServiceLive {
         project_ref: ProjectRef,
         domain_name: String,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
-        let res = self.client.delete(project_id, &domain_name).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
+        let res = self.client.delete(project_urn, &domain_name).await?;
         Ok(GolemResult::Str(res))
     }
 }

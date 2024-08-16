@@ -66,9 +66,12 @@ impl CertificateService for CertificateServiceLive {
         project_ref: ProjectRef,
         certificate_id: Option<Uuid>,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
 
-        let res = self.client.get(project_id, certificate_id.as_ref()).await?;
+        let res = self
+            .client
+            .get(project_urn, certificate_id.as_ref())
+            .await?;
 
         Ok(GolemResult::Ok(Box::new(CertificateVecView(res))))
     }
@@ -80,10 +83,10 @@ impl CertificateService for CertificateServiceLive {
         certificate_body: PathBufOrStdin,
         certificate_private_key: PathBufOrStdin,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
 
         let request = CertificateRequest {
-            project_id: project_id.0,
+            project_id: project_urn.id.0,
             domain_name,
             certificate_body: read_path_or_stdin_as_string(certificate_body)?,
             certificate_private_key: read_path_or_stdin_as_string(certificate_private_key)?,
@@ -99,8 +102,8 @@ impl CertificateService for CertificateServiceLive {
         project_ref: ProjectRef,
         certificate_id: Uuid,
     ) -> Result<GolemResult, GolemError> {
-        let project_id = self.projects.resolve_id_or_default(project_ref).await?;
-        let res = self.client.delete(project_id, &certificate_id).await?;
+        let project_urn = self.projects.resolve_urn_or_default(project_ref).await?;
+        let res = self.client.delete(project_urn, &certificate_id).await?;
         Ok(GolemResult::Str(res))
     }
 }

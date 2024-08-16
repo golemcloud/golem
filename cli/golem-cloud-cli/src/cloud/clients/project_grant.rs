@@ -5,19 +5,20 @@ use tracing::info;
 use crate::cloud::clients::action_cli_to_api;
 use crate::cloud::clients::errors::CloudGolemError;
 use crate::cloud::model::{ProjectAction, ProjectPolicyId};
-use golem_cli::cloud::{AccountId, ProjectId};
+use golem_cli::cloud::AccountId;
+use golem_common::uri::cloud::urn::ProjectUrn;
 
 #[async_trait]
 pub trait ProjectGrantClient {
     async fn create(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         account_id: AccountId,
         policy_id: ProjectPolicyId,
     ) -> Result<ProjectGrant, CloudGolemError>;
     async fn create_actions(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         account_id: AccountId,
         actions: Vec<ProjectAction>,
     ) -> Result<ProjectGrant, CloudGolemError>;
@@ -33,7 +34,7 @@ impl<C: golem_cloud_client::api::ProjectGrantClient + Sync + Send> ProjectGrantC
 {
     async fn create(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         account_id: AccountId,
         policy_id: ProjectPolicyId,
     ) -> Result<ProjectGrant, CloudGolemError> {
@@ -48,13 +49,13 @@ impl<C: golem_cloud_client::api::ProjectGrantClient + Sync + Send> ProjectGrantC
 
         Ok(self
             .client
-            .create_project_grant(&project_id.0, &data)
+            .create_project_grant(&project_urn.id.0, &data)
             .await?)
     }
 
     async fn create_actions(
         &self,
-        project_id: ProjectId,
+        project_urn: ProjectUrn,
         account_id: AccountId,
         actions: Vec<ProjectAction>,
     ) -> Result<ProjectGrant, CloudGolemError> {
@@ -69,7 +70,7 @@ impl<C: golem_cloud_client::api::ProjectGrantClient + Sync + Send> ProjectGrantC
 
         Ok(self
             .client
-            .create_project_grant(&project_id.0, &data)
+            .create_project_grant(&project_urn.id.0, &data)
             .await?)
     }
 }
