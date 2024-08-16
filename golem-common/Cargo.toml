@@ -49,6 +49,7 @@ tracing-serde = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
+itertools = { workspace = true }
 
 [dev-dependencies]
 tracing-test = { workspace = true }

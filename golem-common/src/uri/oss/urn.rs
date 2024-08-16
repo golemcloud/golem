@@ -17,81 +17,11 @@ use crate::uri::{
     try_from_golem_urn, urldecode, urlencode, GolemUrn, GolemUrnTransformError, TypedGolemUrn,
     API_DEFINITION_TYPE_NAME, API_DEPLOYMENT_TYPE_NAME, COMPONENT_TYPE_NAME, WORKER_TYPE_NAME,
 };
+use crate::urn_from_into;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-
-macro_rules! urn_from_into {
-    ($name:ident) => {
-        impl TryFrom<&GolemUrn> for $name {
-            type Error = GolemUrnTransformError;
-
-            fn try_from(value: &GolemUrn) -> Result<Self, Self::Error> {
-                try_from_golem_urn(value)
-            }
-        }
-
-        impl TryFrom<GolemUrn> for $name {
-            type Error = GolemUrnTransformError;
-
-            fn try_from(value: GolemUrn) -> Result<Self, Self::Error> {
-                try_from_golem_urn(&value)
-            }
-        }
-
-        impl FromStr for $name {
-            type Err = GolemUrnTransformError;
-
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                let urn = GolemUrn::from_str(s)
-                    .map_err(|err| GolemUrnTransformError::UrnParseError { err })?;
-
-                urn.try_into()
-            }
-        }
-
-        impl From<&$name> for GolemUrn {
-            fn from(value: &$name) -> Self {
-                GolemUrn {
-                    resource_type: $name::resource_type().to_string(),
-                    resource_name: value.to_name(),
-                }
-            }
-        }
-
-        impl From<$name> for GolemUrn {
-            fn from(value: $name) -> Self {
-                GolemUrn::from(&value)
-            }
-        }
-
-        impl Display for $name {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", GolemUrn::from(self))
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                serializer.serialize_str(&self.to_string())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                let s = String::deserialize(deserializer)?;
-                FromStr::from_str(&s).map_err(serde::de::Error::custom)
-            }
-        }
-    };
-}
 
 /// Typed Golem URN for component
 #[derive(Debug, Clone, Eq, PartialEq)]
