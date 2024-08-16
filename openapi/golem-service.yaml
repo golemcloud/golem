@@ -7,6 +7,27 @@ paths:
     get:
       tags:
       - Worker
+      summary: Get metadata of multiple workers
+      description: |-
+        ### Filters
+
+        | Property    | Comparator             | Description                    | Example                         |
+        |-------------|------------------------|--------------------------------|----------------------------------|
+        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+        | status      | FilterComparator       | Status of worker               | `status = Running`               |
+        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+
+        ### Comparators
+
+        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
       operationId: get_workers_metadata
       parameters:
       - in: path
@@ -95,6 +116,14 @@ paths:
     post:
       tags:
       - Worker
+      summary: Launch a new worker.
+      description: |-
+        Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+
+        The parameters in the request are the following:
+        - `name` is the name of the created worker. This has to be unique, but only for a given component
+        - `args` is a list of strings which appear as command line arguments for the worker
+        - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
       operationId: launch_new_worker
       parameters:
       - in: path
@@ -159,6 +188,23 @@ paths:
     get:
       tags:
       - Worker
+      summary: Get metadata of a worker
+      description: |-
+        Returns metadata about an existing worker:
+        - `workerId` is a combination of the used component and the worker's user specified name
+        - `accountId` the account the worker is created by
+        - `args` is the provided command line arguments passed to the worker
+        - `env` is the provided map of environment variables passed to the worker
+        - `componentVersion` is the version of the component used by the worker
+        - `retryCount` is the number of retries the worker did in case of a failure
+        - `status` is the worker's current status, one of the following:
+        - `Running` if the worker is currently executing
+        - `Idle` if the worker is waiting for an invocation
+        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+        - `Interrupted` if the worker was interrupted by the user
+        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+        - `Failed` if the worker failed and there are no more retries scheduled for it
+        - `Exited` if the worker explicitly exited using the exit WASI function
       operationId: get_worker_metadata
       parameters:
       - in: path
@@ -224,6 +270,8 @@ paths:
     delete:
       tags:
       - Worker
+      summary: Delete a worker
+      description: Interrupts and deletes an existing worker.
       operationId: delete_worker
       parameters:
       - in: path
@@ -290,6 +338,8 @@ paths:
     post:
       tags:
       - Worker
+      summary: Invoke a function and await it's resolution
+      description: Supply the parameters in the request body as JSON.
       operationId: invoke_and_await_function
       parameters:
       - in: path
@@ -377,6 +427,8 @@ paths:
     post:
       tags:
       - Worker
+      summary: Invoke a function
+      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
       operationId: invoke_function
       parameters:
       - in: path
@@ -464,6 +516,11 @@ paths:
     post:
       tags:
       - Worker
+      summary: Complete a promise
+      description: |-
+        Completes a promise with a given custom array of bytes.
+        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The data field is sent back to the worker and it has no predefined meaning.
       operationId: complete_promise
       parameters:
       - in: path
@@ -536,6 +593,12 @@ paths:
     post:
       tags:
       - Worker
+      summary: Interrupt a worker
+      description: |-
+        Interrupts the execution of a worker.
+        The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+        An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+        For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
       operationId: interrupt_worker
       parameters:
       - in: path
@@ -609,6 +672,27 @@ paths:
     post:
       tags:
       - Worker
+      summary: Advanced search for workers
+      description: |-
+        ### Filter types
+        | Type      | Comparator             | Description                    | Example                                                                                       |
+        |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+        | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+        | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+        | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+        | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+        | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+        | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+        | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+        | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+
+        ### Comparators
+        - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+        - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
       operationId: find_workers_metadata
       parameters:
       - in: path
@@ -673,6 +757,7 @@ paths:
     post:
       tags:
       - Worker
+      summary: Resume a worker
       operationId: resume_worker
       parameters:
       - in: path
@@ -739,6 +824,7 @@ paths:
     post:
       tags:
       - Worker
+      summary: Update a worker
       operationId: update_worker
       parameters:
       - in: path
@@ -811,6 +897,10 @@ paths:
     put:
       tags:
       - ApiDefinition
+      summary: Upload an OpenAPI definition
+      description: |-
+        Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+        API definition using it.
       operationId: import_open_api
       requestBody:
         content:
@@ -864,6 +954,10 @@ paths:
     get:
       tags:
       - ApiDefinition
+      summary: Get or list API definitions
+      description: |-
+        If `api_definition_id` is specified, returns a single API definition.
+        Otherwise lists all API definitions.
       operationId: list_definitions
       parameters:
       - in: query
@@ -921,6 +1015,10 @@ paths:
     post:
       tags:
       - ApiDefinition
+      summary: Create a new API definition
+      description: |-
+        Creates a new API definition described by Golem's API definition JSON document.
+        If an API definition of the same version already exists, its an error.
       operationId: create_definition
       requestBody:
         content:
@@ -975,6 +1073,8 @@ paths:
     get:
       tags:
       - ApiDefinition
+      summary: Get an API definition
+      description: An API definition is selected by its API definition ID and version.
       operationId: get_definition
       parameters:
       - in: path
@@ -1039,6 +1139,8 @@ paths:
     put:
       tags:
       - ApiDefinition
+      summary: Update an existing API definition.
+      description: Only draft API definitions can be updated.
       operationId: update_definition
       parameters:
       - in: path
@@ -1109,6 +1211,8 @@ paths:
     delete:
       tags:
       - ApiDefinition
+      summary: Delete an API definition
+      description: Deletes an API definition by its API definition ID and version.
       operationId: delete_definition
       parameters:
       - in: path
@@ -1174,6 +1278,8 @@ paths:
     post:
       tags:
       - ApiDeployment
+      summary: Creates or updates a deployment
+      description: Deploys a set of API definitions to a site (specific host and subdomain).
       operationId: deploy
       requestBody:
         content:
@@ -1228,6 +1334,10 @@ paths:
     get:
       tags:
       - ApiDeployment
+      summary: Get one or more API deployments
+      description: |-
+        If `api-definition-id` is not set, it lists all API deployments.
+        If `api-definition-id` is set, returns a single API deployment.
       operationId: list_deployments
       parameters:
       - in: query
@@ -1287,6 +1397,8 @@ paths:
     get:
       tags:
       - ApiDeployment
+      summary: Get API deployment by site
+      description: Gets an API deployment by the host name (optionally with a subdomain) it is deployed to.
       operationId: get_deployment
       parameters:
       - in: path
@@ -1343,6 +1455,8 @@ paths:
     delete:
       tags:
       - ApiDeployment
+      summary: Delete API deployment by site
+      description: Deletes an API deployment by the host name (optionally with a subdomain) it is deployed to.
       operationId: delete_deployment
       parameters:
       - in: path
@@ -1424,6 +1538,8 @@ paths:
     get:
       tags:
       - Component
+      summary: Get all components
+      description: Gets all components, optionally filtered by component name.
       operationId: get_components
       parameters:
       - in: query
@@ -1481,6 +1597,8 @@ paths:
     post:
       tags:
       - Component
+      summary: Create a new component
+      description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
       operationId: create_component
       requestBody:
         content:
@@ -1544,6 +1662,7 @@ paths:
     put:
       tags:
       - Component
+      summary: Update a component
       operationId: update_component
       parameters:
       - in: path
@@ -1609,6 +1728,8 @@ paths:
     get:
       tags:
       - Component
+      summary: Download a component
+      description: Downloads a specific version of the component's WASM.
       operationId: download_component
       parameters:
       - in: path
@@ -1676,6 +1797,18 @@ paths:
     get:
       tags:
       - Component
+      summary: Get the metadata for all component versions
+      description: |-
+        Each component can have multiple versions. Every time a new WASM is uploaded for a given component id, that creates a new version.
+        This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
+
+        - `versionedComponentId` associates a specific version with the component id
+        - `userComponentId` and protectedComponentId are implementation details, not used elsewhere on the public API
+        - `componentName` is the human-readable name of the component
+        - `componentSize` is the WASM binary's size in bytes
+        - `metadata` contains information extracted from the WASM itself
+        - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
+        - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
       operationId: get_component_metadata_all_versions
       parameters:
       - in: path
@@ -1736,6 +1869,8 @@ paths:
     get:
       tags:
       - Component
+      summary: Get the version of a given component
+      description: Gets the version of a component.
       operationId: get_component_metadata
       parameters:
       - in: path
@@ -1802,6 +1937,8 @@ paths:
     get:
       tags:
       - Component
+      summary: Get the latest version of a given component
+      description: Gets the latest version of a component.
       operationId: get_latest_component_metadata
       parameters:
       - in: path
