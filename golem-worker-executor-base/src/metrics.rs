@@ -117,7 +117,7 @@ pub mod workers {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
             "worker_executor_call_total",
             "Number of calls to the worker layer",
-            &["api"]sub
+            &["api"]
         )
         .unwrap();
     }
