@@ -39,6 +39,10 @@ impl ApiDefinitionApi {
         }
     }
 
+    /// Upload an OpenAPI definition
+    ///
+    /// Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+    /// API definition using it.
     #[oai(
         path = "/:project_id/import",
         method = "put",
@@ -75,6 +79,10 @@ impl ApiDefinitionApi {
         record.result(response)
     }
 
+    /// Create a new API definition
+    ///
+    /// Creates a new API definition described by Golem's API definition JSON document.
+    /// If an API definition of the same version already exists, its an error.
     #[oai(
         path = "/:project_id",
         method = "post",
@@ -114,6 +122,9 @@ impl ApiDefinitionApi {
         record.result(response)
     }
 
+    /// Update an existing API definition.
+    ///
+    /// Only draft API definitions can be updated.
     #[oai(
         path = "/:project_id/:id/:version",
         method = "put",
@@ -164,6 +175,9 @@ impl ApiDefinitionApi {
         record.result(response)
     }
 
+    /// Get an API definition
+    ///
+    /// An API definition is selected by its API definition ID and version.
     #[oai(
         path = "/:project_id/:id/:version",
         method = "get",
@@ -207,6 +221,9 @@ impl ApiDefinitionApi {
         record.result(response)
     }
 
+    /// List API definitions
+    ///
+    /// Lists all API definitions associated with the project.
     #[oai(
         path = "/:project_id",
         method = "get",
@@ -251,6 +268,9 @@ impl ApiDefinitionApi {
         record.result(response)
     }
 
+    /// Delete an API definition
+    ///
+    /// Deletes an API definition by its API definition ID and version.
     #[oai(
         path = "/:project_id/:id/:version",
         method = "delete",

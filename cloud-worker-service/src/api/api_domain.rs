@@ -22,6 +22,7 @@ impl ApiDomainApi {
         Self { domain_service }
     }
 
+    /// Create or update an API domain
     #[oai(path = "/", method = "put", operation_id = "create_or_update_domain")]
     async fn create_or_update(
         &self,
@@ -45,6 +46,9 @@ impl ApiDomainApi {
         record.result(response)
     }
 
+    /// Get all API domains
+    ///
+    /// Returns a list of API domains for the given project.
     #[oai(path = "/", method = "get", operation_id = "get_domains")]
     async fn get(
         &self,
@@ -66,6 +70,7 @@ impl ApiDomainApi {
         record.result(response)
     }
 
+    /// Delete an API domain
     #[oai(path = "/", method = "delete", operation_id = "delete_domain")]
     async fn delete(
         &self,

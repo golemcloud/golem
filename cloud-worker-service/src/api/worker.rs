@@ -336,7 +336,6 @@ impl WorkerApi {
     /// Invoke a function
     ///
     /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-    /// To understand how to get the function name and how to encode the function parameters check Component interface
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke",
         method = "post",
@@ -665,6 +664,7 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Update a worker
     #[oai(
         path = "/:component_id/workers/:worker_name/update",
         method = "post",

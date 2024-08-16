@@ -26,6 +26,12 @@ impl ApiCertificateApi {
         }
     }
 
+    /// Creates a new certificate
+    ///
+    /// A certificate is associated with a given Golem project and domain, and consists of
+    /// a key pair.
+    ///
+    /// The created certificate will be associated with a certificate ID returned by this endpoint.
     #[oai(path = "/", method = "post", operation_id = "create_certificate")]
     async fn create(
         &self,
@@ -50,6 +56,10 @@ impl ApiCertificateApi {
         record.result(response)
     }
 
+    /// Gets one or all certificates for a given project
+    ///
+    /// If `certificate-id` is not set, it returns all certificates associated with the project.
+    /// If `certificate-id` is set, it returns a single certificate if it exists.
     #[oai(path = "/", method = "get", operation_id = "get_certificates")]
     async fn get(
         &self,
@@ -81,6 +91,9 @@ impl ApiCertificateApi {
         record.result(response)
     }
 
+    /// Deletes a certificate
+    ///
+    /// Deletes the certificate associated with the given certificate ID and project ID.
     #[oai(path = "/", method = "delete", operation_id = "delete_certificate")]
     async fn delete(
         &self,
