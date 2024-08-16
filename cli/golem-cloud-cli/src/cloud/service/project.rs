@@ -20,6 +20,7 @@ pub trait ProjectService {
     ) -> Result<GolemResult, GolemError>;
     async fn list(&self, project_name: Option<String>) -> Result<GolemResult, GolemError>;
     async fn get_default(&self) -> Result<GolemResult, GolemError>;
+    async fn get(&self, uri: ProjectUri) -> Result<GolemResult, GolemError>;
 
     async fn find_default(&self) -> Result<Project, GolemError>;
     async fn resolve_urn(&self, project_ref: ProjectRef) -> Result<Option<ProjectUrn>, GolemError>;
@@ -75,6 +76,19 @@ impl ProjectService for ProjectServiceLive {
 
     async fn get_default(&self) -> Result<GolemResult, GolemError> {
         let project = self.find_default().await?;
+
+        Ok(GolemResult::Ok(Box::new(ProjectView(project))))
+    }
+
+    async fn get(&self, uri: ProjectUri) -> Result<GolemResult, GolemError> {
+        let urn = self
+            .resolve_urn(ProjectRef {
+                uri: Some(uri),
+                explicit_name: false,
+            })
+            .await?
+            .expect("Unexpected default project");
+        let project = self.client.get(urn).await?;
 
         Ok(GolemResult::Ok(Box::new(ProjectView(project))))
     }

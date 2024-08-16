@@ -23,7 +23,7 @@ fn print_account(account: &Account, action: &str) {
     )
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccountViewGet(pub Account);
 
 impl TextFormat for AccountViewGet {
@@ -50,7 +50,7 @@ impl TextFormat for AccountViewUpdate {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ProjectView(pub Project);
 
 impl TextFormat for ProjectView {

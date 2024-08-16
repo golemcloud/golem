@@ -14,6 +14,7 @@ pub mod cli;
 pub mod component;
 pub mod components;
 pub mod config;
+pub mod get;
 pub mod policy;
 pub mod project;
 pub mod share;
@@ -48,7 +49,8 @@ fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
     tests.extend(project::all(deps.clone()));
     tests.extend(token::all(deps.clone()));
     tests.extend(policy::all(deps.clone()));
-    tests.extend(share::all(deps));
+    tests.extend(share::all(deps.clone()));
+    tests.extend(get::all(deps));
 
     libtest_mimic::run(&args, tests)
 }

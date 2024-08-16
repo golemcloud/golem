@@ -2,6 +2,7 @@ use crate::cloud::clients::errors::CloudGolemError;
 use async_trait::async_trait;
 use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cloud_client::model::{Project, ProjectDataRequest};
+use golem_common::uri::cloud::urn::ProjectUrn;
 use tracing::info;
 
 #[async_trait]
@@ -14,6 +15,7 @@ pub trait ProjectClient {
     ) -> Result<Project, CloudGolemError>;
     async fn find(&self, name: Option<String>) -> Result<Vec<Project>, CloudGolemError>;
     async fn find_default(&self) -> Result<Project, CloudGolemError>;
+    async fn get(&self, urn: ProjectUrn) -> Result<Project, CloudGolemError>;
     async fn delete(&self, project_id: ProjectId) -> Result<(), CloudGolemError>;
 }
 
@@ -51,6 +53,12 @@ impl<C: golem_cloud_client::api::ProjectClient + Sync + Send> ProjectClient
         info!("Getting default project.");
 
         Ok(self.client.get_default_project().await?)
+    }
+
+    async fn get(&self, urn: ProjectUrn) -> Result<Project, CloudGolemError> {
+        info!("Getting project {urn}.");
+
+        Ok(self.client.get_project(&urn.id.0).await?)
     }
 
     async fn delete(&self, project_id: ProjectId) -> Result<(), CloudGolemError> {

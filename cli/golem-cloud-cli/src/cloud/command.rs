@@ -15,7 +15,7 @@ use golem_cli::command::profile::ProfileSubCommand;
 use golem_cli::command::worker::{WorkerRefSplit, WorkerSubcommand};
 use golem_cli::model::{Format, WorkerName};
 use golem_common::model::WorkerId;
-use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ToOssUri, WorkerUri};
+use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ResourceUri, ToOssUri, WorkerUri};
 use golem_common::uri::cloud::url::{ComponentUrl, ProjectUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use uuid::Uuid;
@@ -374,6 +374,15 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
     ProjectPolicy {
         #[command(subcommand)]
         subcommand: ProjectPolicySubcommand,
+    },
+
+    /// Get resource by URI
+    ///
+    /// Use resource URN or URL to get resource metadata.
+    #[command()]
+    Get {
+        #[arg(value_name = "URI")]
+        uri: ResourceUri,
     },
 
     /// Create a new Golem component from built-in examples
