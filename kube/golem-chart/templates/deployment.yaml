@@ -40,18 +40,20 @@ spec:
               value: "{{ .Values.shardManager.redis.port }}"
             - name: GOLEM__REDIS__DATABASE
               value: "{{ .Values.shardManager.redis.database }}"
+{{- if .Values.shardManager.redis.username }}
             - name: GOLEM__REDIS__USERNAME
               value: "{{ .Values.shardManager.redis.username }}"
-{{- if .Values.shardManager.redis.password.plain }}
+{{- end }}
+{{- if eq .Values.shardManager.redis.password.type "plain" }}
             - name: GOLEM__REDIS__PASSWORD
               value: "{{ .Values.shardManager.redis.password.plain }}"
 {{- end }}
-{{- if .Values.shardManager.redis.password.fromSecret.name }}
+{{- if eq .Values.shardManager.redis.password.type "secret" }}
             - name: GOLEM__REDIS__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.shardManager.redis.password.fromSecret.name }}
-                  key: {{ .Values.shardManager.redis.password.fromSecret.key }}
+                  name: {{ .Values.shardManager.redis.password.secret.name }}
+                  key: {{ .Values.shardManager.redis.password.secret.key }}
 {{- end }}
             - name: RUST_BACKTRACE
               value: "1"
@@ -148,18 +150,20 @@ spec:
               value: "{{ .Values.workerExecutor.redis.port }}"
             - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE
               value: "{{ .Values.workerExecutor.redis.database }}"
+{{- if .Values.workerExecutor.redis.username }}
             - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__USERNAME
               value: "{{ .Values.workerExecutor.redis.username }}"
-{{- if .Values.workerExecutor.redis.password.plain }}
+{{- end }}
+{{- if eq .Values.workerExecutor.redis.password.type "plain" }}
             - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD
               value: "{{ .Values.workerExecutor.redis.password.plain }}"
 {{- end }}
-{{- if .Values.workerExecutor.redis.password.fromSecret.name }}
+{{- if eq .Values.workerExecutor.redis.password.type "secret" }}
             - name: GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.workerExecutor.redis.password.fromSecret.name }}
-                  key: {{ .Values.workerExecutor.redis.password.fromSecret.key }}
+                  name: {{ .Values.workerExecutor.redis.password.secret.name }}
+                  key: {{ .Values.workerExecutor.redis.password.secret.key }}
 {{- end }}
             - name: WASMTIME_BACKTRACE_DETAILS
               value: "1"
@@ -285,16 +289,16 @@ spec:
               value: {{ .Values.workerService.postgres.schema }}
             - name: GOLEM__DB__CONFIG__HOST
               value: {{ .Values.workerService.postgres.host }}
-{{- if .Values.workerService.postgres.password.plain }}
+{{- if eq .Values.workerService.postgres.password.type "plain" }}
             - name: GOLEM__DB__CONFIG__PASSWORD
               value: "{{ .Values.workerService.postgres.password.plain }}"
 {{- end }}
-{{- if .Values.workerService.postgres.password.fromSecret.name }}
+{{- if eq .Values.workerService.postgres.password.type "secret" }}
             - name: GOLEM__DB__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.workerService.postgres.password.fromSecret.name }}
-                  key: {{ .Values.workerService.postgres.password.fromSecret.key }}
+                  name: {{ .Values.workerService.postgres.password.secret.name }}
+                  key: {{ .Values.workerService.postgres.password.secret.key }}
 {{- end }}
             - name: GOLEM__DB__CONFIG__PORT
               value: "{{ .Values.workerService.postgres.port }}"
@@ -395,16 +399,16 @@ spec:
             - name: GOLEM__COMPILATION__CONFIG__PORT
               value: "{{.Values.componentCompilationService.ports.grpc}}"
 
-{{- if .Values.componentService.postgres.password.plain }}
+{{- if eq .Values.componentService.postgres.password.type "plain" }}
             - name: GOLEM__DB__CONFIG__PASSWORD
               value: "{{ .Values.componentService.postgres.password.plain }}"
 {{- end }}
-{{- if .Values.componentService.postgres.password.fromSecret.name }}
+{{- if eq .Values.componentService.postgres.password.type "secret" }}
             - name: GOLEM__DB__CONFIG__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.componentService.postgres.password.fromSecret.name }}
-                  key: {{ .Values.componentService.postgres.password.fromSecret.key }}
+                  name: {{ .Values.componentService.postgres.password.secret.name }}
+                  key: {{ .Values.componentService.postgres.password.secret.key }}
 {{- end }}
             - name: GOLEM__HTTP_PORT
               value: "{{ .Values.componentService.ports.http }}"
