@@ -7,8 +7,8 @@ use crate::service::project::{ProjectError, ProjectService};
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
 use cloud_common::model::ProjectAction;
-use golem_common::component_metadata::ComponentMetadata;
-use golem_common::component_metadata::ComponentProcessingError;
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
 use golem_component_service_base::repo::RepoError;
@@ -501,18 +501,6 @@ impl ComponentService for ComponentServiceNoop {
                 component_id: component_id.clone(),
                 version: 0,
             },
-            user_component_id: UserComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
-            },
         };
 
         Ok(fake_component)
@@ -536,18 +524,6 @@ impl ComponentService for ComponentServiceNoop {
             versioned_component_id: VersionedComponentId {
                 component_id: component_id.clone(),
                 version: 0,
-            },
-            user_component_id: UserComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version: 0,
-                },
             },
         };
 

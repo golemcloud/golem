@@ -5,9 +5,7 @@ use crate::service::auth::{AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::{
-    CallingConvention, ComponentId, IdempotencyKey, ScanCursor, WorkerFilter,
-};
+use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
@@ -305,16 +303,11 @@ impl WorkerApi {
         worker_name: Path<String>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
-        /// One of `component`, `stdio`, `stdio-event-loop`. Defaults to `component`.
-        #[oai(name = "calling-convention")]
-        calling_convention: Query<Option<CallingConvention>>,
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
         let auth = CloudAuthCtx::new(token.secret());
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-
-        let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
 
         let record = recorded_http_api_request!(
             "invoke_and_await_function",
@@ -329,7 +322,6 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 params.0.params,
-                &calling_convention,
                 None,
                 &auth,
             )

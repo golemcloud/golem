@@ -1,10 +1,8 @@
 use crate::service::auth::CloudNamespace;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
-use golem_common::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{AccountId, ProjectId};
-use golem_service_base::model::{
-    ComponentName, ProtectedComponentId, UserComponentId, VersionedComponentId,
-};
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use poem_openapi::Object;
 
 #[derive(
@@ -22,8 +20,6 @@ pub struct ComponentQuery {
 #[oai(rename_all = "camelCase")]
 pub struct Component {
     pub versioned_component_id: VersionedComponentId,
-    pub user_component_id: UserComponentId,
-    pub protected_component_id: ProtectedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
@@ -34,8 +30,6 @@ impl Component {
     pub fn new(component: golem_service_base::model::Component, project_id: ProjectId) -> Self {
         Self {
             versioned_component_id: component.versioned_component_id,
-            user_component_id: component.user_component_id,
-            protected_component_id: component.protected_component_id,
             component_name: component.component_name,
             component_size: component.component_size,
             metadata: component.metadata,
@@ -55,14 +49,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .versioned_component_id
                 .ok_or("Missing versioned_component_id")?
                 .try_into()?,
-            user_component_id: value
-                .user_component_id
-                .ok_or("Missing user_component_id")?
-                .try_into()?,
-            protected_component_id: value
-                .protected_component_id
-                .ok_or("Missing protected_component_id")?
-                .try_into()?,
             component_name: ComponentName(value.component_name),
             component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
@@ -75,8 +61,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
     fn from(value: Component) -> Self {
         Self {
             versioned_component_id: Some(value.versioned_component_id.into()),
-            user_component_id: Some(value.user_component_id.into()),
-            protected_component_id: Some(value.protected_component_id.into()),
             component_name: value.component_name.0,
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
@@ -89,8 +73,6 @@ impl From<golem_component_service_base::model::Component<CloudNamespace>> for Co
     fn from(value: golem_component_service_base::model::Component<CloudNamespace>) -> Self {
         Self {
             versioned_component_id: value.versioned_component_id,
-            user_component_id: value.user_component_id,
-            protected_component_id: value.protected_component_id,
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,

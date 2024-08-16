@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use golem_common::component_metadata::ComponentMetadata;
+    use golem_common::model::component_metadata::ComponentMetadata;
 
     // This tests that serializers are consistent across PRs.
     // If this tests fails, then we have made a backwards incompatible change to the serialization spec.

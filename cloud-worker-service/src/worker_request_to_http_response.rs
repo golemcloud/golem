@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::CallingConvention;
 use golem_service_base::model::WorkerId;
 use golem_worker_service_base::worker_bridge_execution::{
     WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
@@ -64,12 +63,11 @@ async fn execute(
 
     let type_annotated_value = default_executor
         .worker_service
-        .invoke_and_await_function_typed(
+        .invoke_and_await_function_json(
             &worker_id,
             worker_request_params.idempotency_key,
             worker_request_params.function_name.to_string(),
             invoke_parameters,
-            &CallingConvention::Component,
             None,
             &auth,
         )

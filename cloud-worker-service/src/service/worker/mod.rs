@@ -7,16 +7,14 @@ use golem_api_grpc::proto::golem::worker::{
     UpdateMode,
 };
 use golem_common::model::{
-    AccountId, CallingConvention, ComponentId, ComponentVersion, IdempotencyKey, ProjectId,
-    ScanCursor, Timestamp, WorkerFilter, WorkerStatus,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, ProjectId, ScanCursor, Timestamp,
+    WorkerFilter, WorkerStatus,
 };
-use golem_common::precise_json::PreciseJson;
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerService as BaseWorkerService,
     WorkerServiceError as BaseWorkerServiceError,
 };
-use serde_json::Value;
 
 use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
 use cloud_common::model::ProjectAction;
@@ -87,11 +85,10 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
-    ) -> Result<Value, WorkerError>;
+    ) -> Result<TypeAnnotatedValue, WorkerError>;
 
     async fn invoke_and_await_function_proto(
         &self,
@@ -99,28 +96,16 @@ pub trait WorkerService {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError>;
-
-    async fn invoke_and_await_function_typed(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
-        invocation_context: Option<InvocationContext>,
-        auth: &CloudAuthCtx,
-    ) -> Result<TypeAnnotatedValue, WorkerError>;
 
     async fn invoke_function_json(
         &self,
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError>;
@@ -314,11 +299,10 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
-    ) -> Result<Value, WorkerError> {
+    ) -> Result<TypeAnnotatedValue, WorkerError> {
         let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
@@ -330,7 +314,6 @@ impl WorkerService for WorkerServiceDefault {
                 idempotency_key,
                 function_name,
                 params,
-                calling_convention,
                 invocation_context,
                 worker_namespace.as_worker_request_metadata(),
             )
@@ -345,7 +328,6 @@ impl WorkerService for WorkerServiceDefault {
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
-        calling_convention: &CallingConvention,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError> {
@@ -360,37 +342,6 @@ impl WorkerService for WorkerServiceDefault {
                 idempotency_key,
                 function_name,
                 params,
-                calling_convention,
-                invocation_context,
-                worker_namespace.as_worker_request_metadata(),
-            )
-            .await?;
-
-        Ok(value)
-    }
-
-    async fn invoke_and_await_function_typed(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<PreciseJson>,
-        calling_convention: &CallingConvention,
-        invocation_context: Option<InvocationContext>,
-        auth: &CloudAuthCtx,
-    ) -> Result<TypeAnnotatedValue, WorkerError> {
-        let worker_namespace = self
-            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
-            .await?;
-
-        let value = self
-            .base_worker_service
-            .invoke_and_await_function_typed(
-                worker_id,
-                idempotency_key,
-                function_name,
-                params,
-                calling_convention,
                 invocation_context,
                 worker_namespace.as_worker_request_metadata(),
             )
@@ -404,7 +355,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<PreciseJson>,
+        params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
@@ -694,34 +645,7 @@ impl WorkerService for WorkerServiceNoop {
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<PreciseJson>,
-        _calling_convention: &CallingConvention,
-        _invocation_context: Option<InvocationContext>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<Value, WorkerError> {
-        Ok(Value::Null)
-    }
-
-    async fn invoke_and_await_function_proto(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<ProtoIdempotencyKey>,
-        _function_name: String,
-        _params: Vec<ProtoVal>,
-        _calling_convention: &CallingConvention,
-        _invocation_context: Option<InvocationContext>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<ProtoInvokeResult, WorkerError> {
-        Ok(ProtoInvokeResult { result: vec![] })
-    }
-
-    async fn invoke_and_await_function_typed(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<PreciseJson>,
-        _calling_convention: &CallingConvention,
+        _params: Vec<TypeAnnotatedValue>,
         _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<TypeAnnotatedValue, WorkerError> {
@@ -731,12 +655,24 @@ impl WorkerService for WorkerServiceNoop {
         }))
     }
 
+    async fn invoke_and_await_function_proto(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: Option<ProtoIdempotencyKey>,
+        _function_name: String,
+        _params: Vec<ProtoVal>,
+        _invocation_context: Option<InvocationContext>,
+        _auth: &CloudAuthCtx,
+    ) -> Result<ProtoInvokeResult, WorkerError> {
+        Ok(ProtoInvokeResult { result: vec![] })
+    }
+
     async fn invoke_function_json(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
-        _params: Vec<PreciseJson>,
+        _params: Vec<TypeAnnotatedValue>,
         _invocation_context: Option<InvocationContext>,
         _auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {

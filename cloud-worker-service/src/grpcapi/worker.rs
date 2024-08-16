@@ -6,16 +6,18 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_worker_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
+    invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response,
+    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
+    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
@@ -24,6 +26,7 @@ use golem_common::grpc::{
 };
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::WorkerServiceError;
@@ -72,33 +75,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn delete_worker(
-        &self,
-        request: Request<DeleteWorkerRequest>,
-    ) -> Result<Response<DeleteWorkerResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_api_request!(
-            "delete_worker",
-            worker_id = proto_worker_id_string(&r.worker_id),
-        );
-
-        let response = match self
-            .delete_worker(r, m)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(()) => record.succeed(delete_worker_response::Result::Success(Empty {})),
-            Err(error) => record.fail(
-                delete_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(DeleteWorkerResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn complete_promise(
         &self,
         request: Request<CompletePromiseRequest>,
@@ -126,29 +102,29 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn update_worker(
+    async fn delete_worker(
         &self,
-        request: Request<UpdateWorkerRequest>,
-    ) -> Result<Response<UpdateWorkerResponse>, Status> {
+        request: Request<DeleteWorkerRequest>,
+    ) -> Result<Response<DeleteWorkerResponse>, Status> {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
-            "update_worker",
+            "delete_worker",
             worker_id = proto_worker_id_string(&r.worker_id),
         );
 
         let response = match self
-            .update_worker(r, m)
+            .delete_worker(r, m)
             .instrument(record.span.clone())
             .await
         {
-            Ok(()) => record.succeed(update_worker_response::Result::Success(Empty {})),
+            Ok(()) => record.succeed(delete_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
-                update_worker_response::Result::Error(error.clone()),
+                delete_worker_response::Result::Error(error.clone()),
                 &WorkerTraceErrorKind(&error),
             ),
         };
 
-        Ok(Response::new(UpdateWorkerResponse {
+        Ok(Response::new(DeleteWorkerResponse {
             result: Some(response),
         }))
     }
@@ -176,38 +152,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(GetWorkerMetadataResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_workers_metadata(
-        &self,
-        request: Request<GetWorkersMetadataRequest>,
-    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-        let record = recorded_grpc_api_request!(
-            "get_workers_metadata",
-            component_id = proto_component_id_string(&r.component_id),
-        );
-
-        let response = match self
-            .get_workers_metadata(r, m)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok((cursor, workers)) => record.succeed(
-                get_workers_metadata_response::Result::Success(GetWorkersMetadataSuccessResponse {
-                    workers,
-                    cursor: cursor.map(|c| c.into()),
-                }),
-            ),
-            Err(error) => record.fail(
-                get_workers_metadata_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(GetWorkersMetadataResponse {
             result: Some(response),
         }))
     }
@@ -270,6 +214,36 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    async fn invoke_and_await_json(
+        &self,
+        request: Request<InvokeAndAwaitJsonRequest>,
+    ) -> Result<Response<InvokeAndAwaitJsonResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "invoke_and_await_json",
+            worker_id = proto_worker_id_string(&r.worker_id),
+            idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
+            function = r.function,
+            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
+        );
+
+        let response = match self
+            .invoke_and_await_json(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(invoke_and_await_json_response::Result::Success(result)),
+            Err(error) => record.fail(
+                invoke_and_await_json_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InvokeAndAwaitJsonResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn invoke(
         &self,
         request: Request<InvokeRequest>,
@@ -284,6 +258,32 @@ impl GrpcWorkerService for WorkerGrpcApi {
         );
 
         let response = match self.invoke(r, m).instrument(record.span.clone()).await {
+            Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                invoke_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InvokeResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn invoke_json(
+        &self,
+        request: Request<InvokeJsonRequest>,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "invoke_json",
+            worker_id = proto_worker_id_string(&r.worker_id),
+            idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
+            function = r.function,
+            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
+        );
+
+        let response = match self.invoke_json(r, m).instrument(record.span.clone()).await {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
@@ -344,6 +344,65 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(stream) => Ok(Response::new(stream)),
             Err(error) => Err(error_to_status(error)),
         }
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        request: Request<GetWorkersMetadataRequest>,
+    ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "get_workers_metadata",
+            component_id = proto_component_id_string(&r.component_id),
+        );
+
+        let response = match self
+            .get_workers_metadata(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok((cursor, workers)) => record.succeed(
+                get_workers_metadata_response::Result::Success(GetWorkersMetadataSuccessResponse {
+                    workers,
+                    cursor: cursor.map(|c| c.into()),
+                }),
+            ),
+            Err(error) => record.fail(
+                get_workers_metadata_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetWorkersMetadataResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn update_worker(
+        &self,
+        request: Request<UpdateWorkerRequest>,
+    ) -> Result<Response<UpdateWorkerResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "update_worker",
+            worker_id = proto_worker_id_string(&r.worker_id),
+        );
+
+        let response = match self
+            .update_worker(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(update_worker_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_worker_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateWorkerResponse {
+            result: Some(response),
+        }))
     }
 }
 
@@ -557,6 +616,35 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
+    async fn invoke_json(
+        &self,
+        request: InvokeJsonRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), GrpcWorkerError> {
+        let auth = self.auth(metadata)?;
+        let worker_id = make_crate_worker_id(request.worker_id)?;
+
+        let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
+            .into();
+
+        self.worker_service
+            .invoke_function_json(
+                &worker_id,
+                Some(idempotency_key),
+                request.function,
+                params,
+                request.context,
+                &auth,
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
@@ -569,11 +657,6 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or(bad_request_error("Missing invoke parameters"))?;
 
-        let calling_convention: golem_common::model::CallingConvention = request
-            .calling_convention
-            .try_into()
-            .map_err(bad_request_error)?;
-
         let result = self
             .worker_service
             .invoke_and_await_function_proto(
@@ -581,13 +664,49 @@ impl WorkerGrpcApi {
                 request.idempotency_key,
                 request.function,
                 params.params,
-                &calling_convention,
                 request.context,
                 &auth,
             )
             .await?;
 
         Ok(result)
+    }
+
+    async fn invoke_and_await_json(
+        &self,
+        request: InvokeAndAwaitJsonRequest,
+        metadata: MetadataMap,
+    ) -> Result<String, GrpcWorkerError> {
+        let auth = self.auth(metadata)?;
+        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
+            .into();
+
+        let result = self
+            .worker_service
+            .invoke_and_await_function_json(
+                &worker_id,
+                Some(idempotency_key),
+                request.function,
+                params,
+                request.context,
+                &auth,
+            )
+            .await?;
+
+        Ok(serde_json::to_value(result)
+            .map_err(|err| GrpcWorkerError {
+                error: Some(worker_error::Error::InternalError(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: format!("Failed to serialize response: {err:?}"),
+                    })),
+                })),
+            })?
+            .to_string())
     }
 
     async fn resume_worker(
@@ -819,4 +938,14 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
         }
         None => tonic::Status::unknown("Unknown error"),
     }
+}
+
+fn parse_json_invoke_parameters(
+    parameters: &[String],
+) -> Result<Vec<TypeAnnotatedValue>, GrpcWorkerError> {
+    parameters
+        .iter()
+        .map(|param| serde_json::from_str(param))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| bad_request_error(format!("Failed to parse JSON parameters: {err:?}")))
 }
