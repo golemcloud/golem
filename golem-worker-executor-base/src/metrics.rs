@@ -116,8 +116,8 @@ pub mod workers {
     lazy_static! {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
             "worker_executor_call_total",
-            "Number of calls to the worker executor service",
-            &["api"]
+            "Number of calls to the worker layer",
+            &["api"]sub
         )
         .unwrap();
     }
@@ -126,32 +126,6 @@ pub mod workers {
         WORKER_EXECUTOR_CALL_TOTAL
             .with_label_values(&[api_name])
             .inc();
-    }
-}
-
-pub mod invocation_keys {
-    use lazy_static::lazy_static;
-    use prometheus::*;
-
-    lazy_static! {
-        static ref IDEMPOTENCY_KEYS_PENDING_COUNT: Gauge = register_gauge!(
-            "idempotency_keys_pending_count",
-            "Number of pending idempotency keys"
-        )
-        .unwrap();
-        static ref IDEMPOTENCY_KEYS_CONFIRMED_COUNT: Gauge = register_gauge!(
-            "idempotency_keys_confirmed_count",
-            "Number of confirmed idempotency keys"
-        )
-        .unwrap();
-    }
-
-    pub fn record_pending_idempotency_keys_count(count: usize) {
-        IDEMPOTENCY_KEYS_PENDING_COUNT.set(count as f64);
-    }
-
-    pub fn record_confirmed_idempotency_keys_count(count: usize) {
-        IDEMPOTENCY_KEYS_CONFIRMED_COUNT.set(count as f64);
     }
 }
 

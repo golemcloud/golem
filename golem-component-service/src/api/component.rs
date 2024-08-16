@@ -210,7 +210,6 @@ impl ComponentApi {
     /// This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
     ///
     /// - `versionedComponentId` associates a specific version with the component id
-    /// - `userComponentId` and protectedComponentId are implementation details, not used elsewhere on the public API
     /// - `componentName` is the human-readable name of the component
     /// - `componentSize` is the WASM binary's size in bytes
     /// - `metadata` contains information extracted from the WASM itself
