@@ -33,14 +33,14 @@ echo "Creating namespace $NAMESPACE"
 kubectl create namespace $NAMESPACE
 
 echo ""
-echo "Installing postgres to namespace $NAMESPACE"
+echo "Installing PostgreSQL to namespace $NAMESPACE"
 
 helm upgrade --install -n $NAMESPACE golem-postgres oci://registry-1.docker.io/bitnamicharts/postgresql --set auth.database=golem_db --set auth.username=golem_user
 
 echo ""
-echo "Installing redis to namespace $NAMESPACE"
+echo "Installing Redis to namespace $NAMESPACE"
 
-helm upgrade --install -n $NAMESPACE golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=false
+helm upgrade --install -n $NAMESPACE golem-redis oci://registry-1.docker.io/bitnamicharts/redis --set auth.enabled=true
 
 echo ""
 echo "Waiting 30s for services to startup up ..."
@@ -48,21 +48,21 @@ echo "Waiting 30s for services to startup up ..."
 sleep 30
 
 echo ""
-echo "Installing golem to namespace $NAMESPACE"
+echo "Installing Golem to namespace $NAMESPACE"
 
 kubectl create serviceaccount -n $NAMESPACE golem-sa-default
 
 helm upgrade --install golem-default golem-chart -n $NAMESPACE
 
 echo ""
-echo "Waiting 30s for golem to startup up ..."
+echo "Waiting 30s for Golem to startup up ..."
 
 sleep 30
 
 echo ""
 ./check_golem_readiness.sh -n $NAMESPACE
 if [[ $? -ne 0 ]]; then
-  echo "Checking golem readiness namespace: $NAMESPACE failed"
+  echo "Checking Golem readiness namespace: $NAMESPACE failed"
 fi
 
 echo ""
@@ -73,7 +73,6 @@ echo "To show all kubernetes components for namespace $NAMESPACE, run:"
 echo "kubectl -n $NAMESPACE get all"
 
 echo ""
-echo "To setup GOLEM_BASE_URL for golem-cli, run:"
-echo "export GOLEM_BASE_URL=http://localhost:80"
+echo "Use http://localhost:80 in golem-cli"
 
 echo ""
