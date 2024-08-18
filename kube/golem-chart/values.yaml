@@ -1,3 +1,4 @@
+# shard manager service configuration
 shardManager:
   image: golemservices/golem-shard-manager:latest
   imagePullPolicy: Always
@@ -19,8 +20,9 @@ shardManager:
       secret: # password from kubernetes secret
         name: golem-redis
         key: redis-password
-#  nodeSelector:
+#  nodeSelector:  # added, if defined, see: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
 
+# worker executor service configuration
 workerExecutor:
   image: golemservices/golem-worker-executor:latest
   imagePullPolicy: Always
@@ -41,15 +43,16 @@ workerExecutor:
       secret: # password from kubernetes secret
         name: golem-redis
         key: redis-password
-#  nodeSelector:
+#  nodeSelector: # added, if defined, see: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
 
+# worker service configuration
 workerService:
   image: golemservices/golem-worker-service:latest
   imagePullPolicy: Always
   replica: 1
   ports:
     http: 9005
-    requestHttp: 9006
+    requestHttp: 9006 # worker API Gateway
     grpc: 9007
   service:
     type: LoadBalancer
@@ -65,8 +68,9 @@ workerService:
       secret: # password from kubernetes secret
         name: golem-postgres-postgresql
         key: password
-#  nodeSelector:
+#  nodeSelector: # added, if defined, see: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
 
+# component service configuration
 componentService:
   image: golemservices/golem-component-service:latest
   imagePullPolicy: Always
@@ -88,8 +92,9 @@ componentService:
       secret: # password from kubernetes secret
         name: golem-postgres-postgresql
         key: password
-#  nodeSelector:
+#  nodeSelector: # added, if defined, see: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
 
+# component compilation service configuration
 componentCompilationService:
   image: golemservices/golem-component-compilation-service:latest
   imagePullPolicy: Always
@@ -99,15 +104,18 @@ componentCompilationService:
     grpc: 9091
   service:
     type: LoadBalancer
-#  nodeSelector:
+#  nodeSelector: # added, if defined, see: https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/
 
+# logging configuration - used in all services
 logging:
   json: false # true, if json log output should be used
 
+# service account name  - used in all services, see: https://kubernetes.io/docs/concepts/security/service-accounts/
 serviceAccountName: golem-sa-default
 
 env: default
 
+# component store configuration
 componentStore:
   type: pvc # pvc or s3
   pvc:
@@ -119,6 +127,7 @@ componentStore:
     bucket: ""
     region: "us-east-1"
 
+# worker executor store configuration
 workerExecutorStore:
   type: pvc # pvc or s3
   pvc:
@@ -133,21 +142,22 @@ workerExecutorStore:
     oplogPayloadBucket: "oplog-payload"
     compressedOplogBuckets: "[oplog-archive-1]"
 
-
-ingress: # API ingress
+# API ingress
+ingress:
   type: nginx # ngnix or aws alb
   nginx:
-    annotations:
+    annotations: # see: https://github.com/kubernetes/ingress-nginx/blob/main/docs/user-guide/nginx-configuration/annotations.md
       kubernetes.io/ingress.class: nginx
       nginx.ingress.kubernetes.io/use-regex: "true"
   alb:
-    annotations:
+    annotations: # see: https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.8/guide/ingress/annotations/
       alb.ingress.kubernetes.io/scheme: internet-facing
       alb.ingress.kubernetes.io/target-type: ip
 
-ingressWorkerRequest: # worker bridge ingress
+# worker API Gateway ingress
+ingressWorkerRequest:
   type: none # none or aws alb
   alb:
-    annotations:
+    annotations: # see: https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.8/guide/ingress/annotations/
       alb.ingress.kubernetes.io/scheme: internet-facing
       alb.ingress.kubernetes.io/target-type: ip

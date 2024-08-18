@@ -1,5 +1,8 @@
 ## Deployment
 
+You will need to have [Helm](https://helm.sh/docs/intro/quickstart/) and [kubectl](https://kubernetes.io/docs/tasks/tools/) installed locally
+and running [kubernetes](https://kubernetes.io/docs/concepts/overview/) cluster.
+
 provided script:
 
 ```shell
@@ -8,6 +11,10 @@ provided script:
 
 will deploy Golem with Redis, PostgreSQL and Nginx ingress to kubernetes namespace `golem`. Kubernetes [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) are used to store Golem's data.
 
+notes:
+* by default, ingress is exposed under localhost:80, if you want to test golem-services in kubernetes locally (docker with kubernetes),
+  and try to run commands with `golem-cli`, you may need to change `golem-cli` configuration to use that URL.
+* by default, worker API Gateway endpoint is exposed under port 9006
 
 ## Deployment in steps
 
@@ -76,9 +83,6 @@ you can watch the status by running
 kubectl get service --namespace ingress-nginx ingress-nginx-controller --output wide --watch
 ```
 
-NOTE: by default ingress is exposed under localhost:80, if you are want to test golem-services in kubernetes locally (docker with kubernetes), 
-and try to run commands with `golem-cli`, you may need to change `golem-cli` configuration to use that URL.
-
 ### Golem services
 
 install
@@ -99,4 +103,9 @@ helm delete -n golem golem-default
 shell to the running pod/container
 ```shell
 kubectl exec --stdin --tty -n golem  <pod> -- /bin/bash
+```
+
+scale worker executor deployment
+```shell
+kubectl -n golem scale deployment.apps/deployment-worker-executor-default --replicas=3
 ```
