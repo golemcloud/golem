@@ -105,6 +105,11 @@ pub mod router {
 mod tests {
     use async_trait::async_trait;
     use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_service_base::model::VersionedComponentId;
+    use golem_wasm_ast::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple,
+    };
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
@@ -113,8 +118,6 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple};
-    use golem_service_base::model::VersionedComponentId;
 
     use crate::api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
@@ -307,55 +310,59 @@ mod tests {
     fn get_metadata() -> ComponentMetadataDictionary {
         let versioned_component_id = VersionedComponentId {
             component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
-            version: 0
+            version: 0,
         };
-
 
         let mut metadata_dict = HashMap::new();
 
-        let analysed_export = AnalysedExport::Instance(
-            AnalysedInstance {
-                name: "golem:it/api".to_string(),
-                functions: vec![AnalysedFunction {
-                    name: "get-cart-contents".to_string(),
-                    parameters: vec![AnalysedFunctionParameter {
+        let analysed_export = AnalysedExport::Instance(AnalysedInstance {
+            name: "golem:it/api".to_string(),
+            functions: vec![AnalysedFunction {
+                name: "get-cart-contents".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
                         name: "a".to_string(),
-                        typ: AnalysedType::Str(TypeStr)
-                    }, AnalysedFunctionParameter {
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    AnalysedFunctionParameter {
                         name: "b".to_string(),
-                        typ: AnalysedType::Str(TypeStr)
-                    }],
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: AnalysedType::Record(TypeRecord{
-                            fields: vec![golem_wasm_ast::analysis::NameTypePair {
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                ],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: AnalysedType::Record(TypeRecord {
+                        fields: vec![
+                            golem_wasm_ast::analysis::NameTypePair {
                                 name: "component_id".to_string(),
-                                typ: AnalysedType::Str(TypeStr)
-                            }, golem_wasm_ast::analysis::NameTypePair {
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            golem_wasm_ast::analysis::NameTypePair {
                                 name: "name".to_string(),
-                                typ: AnalysedType::Str(TypeStr)
-                            }, golem_wasm_ast::analysis::NameTypePair {
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            golem_wasm_ast::analysis::NameTypePair {
                                 name: "function_name".to_string(),
-                                typ: AnalysedType::Str(TypeStr)
-                            }, golem_wasm_ast::analysis::NameTypePair {
+                                typ: AnalysedType::Str(TypeStr),
+                            },
+                            golem_wasm_ast::analysis::NameTypePair {
                                 name: "function_params".to_string(),
-                                typ: AnalysedType::Tuple(TypeTuple{
-                                    items: vec![AnalysedType::Str(TypeStr)]
-                                })
-                            }]
-
-                        })
-                    }]
+                                typ: AnalysedType::Tuple(TypeTuple {
+                                    items: vec![AnalysedType::Str(TypeStr)],
+                                }),
+                            },
+                        ],
+                    }),
                 }],
-            }
-        );
+            }],
+        });
 
         let metadata = vec![analysed_export];
 
         metadata_dict.insert(versioned_component_id, metadata);
 
         ComponentMetadataDictionary {
-            metadata: metadata_dict
+            metadata: metadata_dict,
         }
     }
 
@@ -364,11 +371,9 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let compiled = CompiledHttpApiDefinition::from_http_api_definition(
-            api_specification,
-            &get_metadata(),
-        )
-        .unwrap();
+        let compiled =
+            CompiledHttpApiDefinition::from_http_api_definition(api_specification, &get_metadata())
+                .unwrap();
 
         let resolved_route = api_request
             .resolve_worker_binding(vec![compiled])
@@ -432,7 +437,10 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
+            Value::Array(vec![
+                Value::String("foo".to_string()),
+                Value::String("bar".to_string()),
+            ]),
         );
 
         assert_eq!(result, expected);
@@ -465,7 +473,10 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
+            Value::Array(vec![
+                Value::String("foo".to_string()),
+                Value::String("bar".to_string()),
+            ]),
         );
 
         assert_eq!(result, expected);
@@ -512,7 +523,15 @@ mod tests {
     #[tokio::test]
     async fn test_worker_request_cond_expr_resolution() {
         let empty_headers = HeaderMap::new();
-        let api_request = get_api_request("foo/1", None, &empty_headers, Value::Object(serde_json::Map::from_iter(vec![("age".to_string(), Value::Number(serde_json::Number::from(10)))])));
+        let api_request = get_api_request(
+            "foo/1",
+            None,
+            &empty_headers,
+            Value::Object(serde_json::Map::from_iter(vec![(
+                "age".to_string(),
+                Value::Number(serde_json::Number::from(10)),
+            )])),
+        );
         let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
@@ -552,8 +571,7 @@ mod tests {
             Value::String("address".to_string()),
         );
 
-        let expression =
-            r#"let response = golem:it/api.{get-cart-contents}(request.body, request.body); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}(request.body, request.body); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -572,7 +590,10 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::String("address".to_string()), Value::String("address".to_string())]),
+            Value::Array(vec![
+                Value::String("address".to_string()),
+                Value::String("address".to_string()),
+            ]),
         );
 
         assert_eq!(result, expected);
@@ -609,7 +630,10 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::String("bar".to_string()), Value::String("bar".to_string())]),
+            Value::Array(vec![
+                Value::String("bar".to_string()),
+                Value::String("bar".to_string()),
+            ]),
         );
 
         assert_eq!(result, expected);
@@ -808,7 +832,10 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::String("foo_value".to_string()), Value::String("bar_value".to_string())]),
+            Value::Array(vec![
+                Value::String("foo_value".to_string()),
+                Value::String("bar_value".to_string()),
+            ]),
         );
 
         assert_eq!(result, expected);

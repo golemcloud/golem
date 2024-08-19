@@ -55,7 +55,8 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let worker_name_compiled = rib::compile_pure(worker_name, exports, Some(AnalysedType::U64(TypeU64)))?;
+        let worker_name_compiled =
+            rib::compile_pure(worker_name, exports, Some(AnalysedType::U64(TypeU64)))?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -77,7 +78,8 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let idempotency_key_compiled = rib::compile_pure(idempotency_key, exports, Some(AnalysedType::U64(TypeU64)))?;
+        let idempotency_key_compiled =
+            rib::compile_pure(idempotency_key, exports, Some(AnalysedType::U64(TypeU64)))?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
