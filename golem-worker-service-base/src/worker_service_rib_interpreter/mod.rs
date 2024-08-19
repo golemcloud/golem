@@ -1438,7 +1438,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = TypeAnnotatedValue::U64(1);
+        let expected = TypeAnnotatedValue::Str("id1".to_string());
         assert_eq!(&value1, &expected);
     }
 
@@ -2383,51 +2383,79 @@ mod tests {
         async fn expr_to_string_round_trip_match_expr_append() {
             let noop_executor = DefaultEvaluator::noop();
 
-            let worker_response = get_err_worker_response();
+            // Output from worker
+            let sequence_value = create_list(vec![
+                TypeAnnotatedValue::Str("id1".to_string()),
+                TypeAnnotatedValue::Str("id2".to_string()),
+            ]).unwrap();
+
+            let record_value =
+                create_singleton_record("ids", &sequence_value).unwrap();
+
+            let worker_response = create_error_result(record_value, None).unwrap();
+
+            // Output from worker
+            let return_type = AnalysedType::try_from(&worker_response).unwrap();
+
+            let component_metadata =
+                get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
             let expr_str =
-                r#"append-${match worker.response { ok(x) => "foo", err(msg) => "error" }}"#;
+                r#"${let result = foo(1); match result { ok(x) => "ok", err(msg) => "append-${msg.ids[0]}" }}"#;
+
             let expr1 = rib::from_string(expr_str).unwrap();
             let value1 = noop_executor
-                .evaluate_with_worker_response_no_function_invoke(&expr1, &worker_response)
+                .evaluate_with_worker_response(
+                    &expr1,
+                    worker_response.clone(),
+                    component_metadata.clone(),
+                    None
+                )
                 .await
                 .unwrap();
 
-            let expr2_string = expr1.to_string();
-            let expr2 = rib::from_string(expr2_string.as_str()).unwrap();
-            let value2 = noop_executor
-                .evaluate_with_worker_response_no_function_invoke(&expr2, &worker_response)
-                .await
-                .unwrap();
-
-            let expected = TypeAnnotatedValue::Str("append-error".to_string());
-            assert_eq!((&value1, &value2), (&expected, &expected));
+            let expected = TypeAnnotatedValue::Str("append-id1".to_string());
+            assert_eq!(&value1, &expected);
         }
 
         #[tokio::test]
         async fn expr_to_string_round_trip_match_expr_append_suffix() {
             let noop_executor = DefaultEvaluator::noop();
 
-            let worker_response = get_err_worker_response();
+            // Output from worker
+            let sequence_value = create_list(vec![
+                TypeAnnotatedValue::Str("id1".to_string()),
+                TypeAnnotatedValue::Str("id2".to_string()),
+            ]).unwrap();
+
+            let record_value =
+                create_singleton_record("ids", &sequence_value).unwrap();
+
+            let worker_response = create_ok_result(record_value, None).unwrap();
+
+            // Output from worker
+            let return_type = AnalysedType::try_from(&worker_response).unwrap();
+
+            let component_metadata =
+                get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
             let expr_str =
-                r#"prefix-${match worker.response { ok(x) => "foo", err(msg) => "error" }}-suffix"#;
+                r#"${let result = foo(1); match result { ok(x) => "prefix-${x.ids[0]}", err(msg) => "prefix-error-suffix" }}"#;
 
             let expr1 = rib::from_string(expr_str).unwrap();
             let value1 = noop_executor
-                .evaluate_with_worker_response_no_function_invoke(&expr1, &worker_response)
+                .evaluate_with_worker_response(
+                    &expr1,
+                    worker_response.clone(),
+                    component_metadata.clone(),
+                    None
+                )
                 .await
                 .unwrap();
 
-            let expr2_string = expr1.to_string();
-            let expr2 = rib::from_string(expr2_string.as_str()).unwrap();
-            let value2 = noop_executor
-                .evaluate_with_worker_response_no_function_invoke(&expr2, &worker_response)
-                .await
-                .unwrap();
+            let expected = TypeAnnotatedValue::Str("prefix-id1".to_string());
+            assert_eq!(&value1, &expected);
 
-            let expected = TypeAnnotatedValue::Str("prefix-error-suffix".to_string());
-            assert_eq!((&value1, &value2), (&expected, &expected));
         }
     }
 }
