@@ -279,7 +279,7 @@ fn api_definition_update(
     let updated = golem_def_with_response(
         &component_name,
         &component_id,
-        "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: 200}}"
+        "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"baz\", status: 200}}"
             .to_string(),
     );
     let path = make_golem_file(&updated)?;
