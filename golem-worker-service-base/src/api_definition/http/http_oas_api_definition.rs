@@ -176,17 +176,15 @@ mod internal {
             .as_str()
             .ok_or("component-id is not a string")?;
 
-        let version_str = worker_bridge_info
+        let version = worker_bridge_info
             .get("component-version")
             .ok_or("No component-version found")?
-            .as_str()
+            .as_u64()
             .ok_or("component-version is not a string")?;
 
         let component_id =
             ComponentId(Uuid::parse_str(component_id_str).map_err(|err| err.to_string())?);
-
-        let version = version_str.parse::<u64>().map_err(|err| err.to_string())?;
-
+        
         Ok(VersionedComponentId {
             component_id,
             version,
