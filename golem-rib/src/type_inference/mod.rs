@@ -6,9 +6,9 @@ pub use rib_input_type::*;
 pub use type_check::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
+pub use type_reset::*;
 pub use type_unification::*;
 pub use variant_resolution::*;
-pub use type_reset::*;
 
 mod expr_visitor;
 mod function_type_inference;
@@ -18,9 +18,9 @@ mod rib_input_type;
 mod type_check;
 mod type_pull_up;
 mod type_push_down;
+mod type_reset;
 mod type_unification;
 mod variant_resolution;
-mod type_reset;
 
 #[cfg(test)]
 mod type_inference_tests {
@@ -52,7 +52,10 @@ mod type_inference_tests {
     }
     mod let_binding_tests {
         use crate::type_inference::type_inference_tests::get_function_type_registry;
-        use crate::{Expr, InferredType, InvocationName, Number, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId};
+        use crate::{
+            Expr, InferredType, InvocationName, Number, ParsedFunctionName,
+            ParsedFunctionReference, ParsedFunctionSite, VariableId,
+        };
 
         #[test]
         fn test_simple_let_binding_type_inference() {
@@ -161,7 +164,10 @@ mod type_inference_tests {
 
     mod pattern_match_tests {
         use crate::type_inference::type_inference_tests::get_function_type_registry;
-        use crate::{ArmPattern, Expr, InferredType, InvocationName, MatchArm, Number, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId};
+        use crate::{
+            ArmPattern, Expr, InferredType, InvocationName, MatchArm, Number, ParsedFunctionName,
+            ParsedFunctionReference, ParsedFunctionSite, VariableId,
+        };
 
         #[test]
         fn test_simple_pattern_match_type_inference() {
@@ -221,7 +227,7 @@ mod type_inference_tests {
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
-                           InvocationName::Function(ParsedFunctionName {
+                            InvocationName::Function(ParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: ParsedFunctionReference::Function {
                                     function: "baz".to_string(),

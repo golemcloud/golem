@@ -16,7 +16,6 @@ pub fn compile(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
 ) -> Result<CompilerOutput, String> {
-
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let mut expr_cloned = expr.clone();
     expr_cloned
@@ -29,10 +28,9 @@ pub fn compile(
 
     let rib_byte_code = RibByteCode::from_expr(expr_cloned)?;
 
-
     Ok(CompilerOutput {
         byte_code: rib_byte_code,
-        rib_input
+        rib_input,
     })
 }
 
@@ -58,12 +56,15 @@ pub fn compile_pure(
         .infer_types(&type_registry)
         .map_err(|e| e.join("\n"))?;
 
-    let rib_input = RibInputTypeInfo::from_pure_expr(&mut expr_cloned, alternative_type.unwrap_or(AnalysedType::Str(TypeStr)));
+    let rib_input = RibInputTypeInfo::from_pure_expr(
+        &mut expr_cloned,
+        alternative_type.unwrap_or(AnalysedType::Str(TypeStr)),
+    );
     let rib_byte_code = RibByteCode::from_expr(expr_cloned)?;
 
     Ok(CompilerOutput {
         byte_code: rib_byte_code,
-        rib_input
+        rib_input,
     })
 }
 

@@ -89,9 +89,7 @@ impl InterpreterStack {
 
     pub fn push_some(&mut self, inner_element: TypeAnnotatedValue, inner_type: &AnalysedType) {
         self.push_val(TypeAnnotatedValue::Option(Box::new(TypedOption {
-            typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(
-                inner_type,
-            )),
+            typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(inner_type)),
             value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                 type_annotated_value: Some(inner_element),
             })),
@@ -103,9 +101,7 @@ impl InterpreterStack {
     // Example: ${match ok(1) { ok(value) => none }} should be allowed
     pub fn push_none(&mut self, analysed_type: Option<AnalysedType>) {
         self.push_val(TypeAnnotatedValue::Option(Box::new(TypedOption {
-            typ: analysed_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(
-                &x,
-            )),
+            typ: analysed_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(&x)),
             value: None,
         })));
     }
@@ -116,8 +112,9 @@ impl InterpreterStack {
         ok_type: Option<&AnalysedType>,
         err_type: Option<&AnalysedType>,
     ) {
-        let ok_type =
-            golem_wasm_ast::analysis::protobuf::Type::from(ok_type.unwrap_or(&AnalysedType::try_from(&inner_element).unwrap()));
+        let ok_type = golem_wasm_ast::analysis::protobuf::Type::from(
+            ok_type.unwrap_or(&AnalysedType::try_from(&inner_element).unwrap()),
+        );
 
         self.push_val(TypeAnnotatedValue::Result(Box::new(
             golem_wasm_rpc::protobuf::TypedResult {
@@ -140,8 +137,9 @@ impl InterpreterStack {
         ok_type: Option<&AnalysedType>,
         err_type: Option<&AnalysedType>,
     ) {
-        let err_type =
-            golem_wasm_ast::analysis::protobuf::Type::from(err_type.unwrap_or(&AnalysedType::try_from(&inner_element).unwrap()));
+        let err_type = golem_wasm_ast::analysis::protobuf::Type::from(
+            err_type.unwrap_or(&AnalysedType::try_from(&inner_element).unwrap()),
+        );
 
         self.push_val(TypeAnnotatedValue::Result(Box::new(
             golem_wasm_rpc::protobuf::TypedResult {
@@ -153,7 +151,7 @@ impl InterpreterStack {
                     )),
                 ),
                 ok: ok_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
-                error: Some(err_type)
+                error: Some(err_type),
             },
         )));
     }
@@ -176,11 +174,7 @@ impl InterpreterStack {
         }));
     }
 
-    pub fn push_tuple(
-        &mut self,
-        values: Vec<TypeAnnotatedValue>,
-        types: &Vec<AnalysedType>,
-    ) {
+    pub fn push_tuple(&mut self, values: Vec<TypeAnnotatedValue>, types: &Vec<AnalysedType>) {
         self.push_val(TypeAnnotatedValue::Tuple(TypedTuple {
             value: values
                 .into_iter()

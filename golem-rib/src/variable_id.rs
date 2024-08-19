@@ -1,7 +1,7 @@
-use std::fmt::Display;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::VariableId as ProtoVariableId;
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 #[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum VariableId {

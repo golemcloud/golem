@@ -44,14 +44,15 @@ pub fn infer_function_types(expr: &mut Expr, function_type_registry: &FunctionTy
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
-
-
 }
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, InvocationName, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId};
+    use crate::{
+        Expr, InferredType, InvocationName, ParsedFunctionName, ParsedFunctionReference,
+        ParsedFunctionSite, VariableId,
+    };
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };

@@ -1,7 +1,11 @@
 use crate::{ParsedFunctionName, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
-use golem_api_grpc::proto::golem::rib::{CallInstruction, ConcatInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate, PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR};
+use golem_api_grpc::proto::golem::rib::{
+    CallInstruction, ConcatInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo,
+    JumpInstruction, LessThan, LessThanOrEqualTo, Negate, PushListInstruction, PushNoneInstruction,
+    PushTupleInstruction, RibIr as ProtoRibIR,
+};
 use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
@@ -33,11 +37,11 @@ pub enum RibIR {
     Label(InstructionId),
     Deconstruct,
     InvokeFunction(ParsedFunctionName, usize, AnalysedType),
-    PushVariant(String, AnalysedType),// There is no arg size since the type of each variant case is only 1 from beginning
+    PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
     Throw(String),
     GetTag,
     Concat(usize),
-    Negate
+    Negate,
 }
 
 // Every instruction can have a unique ID, and the compiler
@@ -116,26 +120,24 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     .try_into()
                     .map_err(|_| "Failed to convert CreateSome".to_string())?,
             )),
-            Instruction::CreateNone(value) => {
-                match value.none_type {
-                    Some(v) => {
-                        let optional_type = (&v)
-                            .try_into()
-                            .map_err(|_| "Failed to convert AnalysedType".to_string());
-                        Ok(RibIR::PushNone(Some(optional_type?)))
-                    }
-                    None => Ok(RibIR::PushNone(None)),
+            Instruction::CreateNone(value) => match value.none_type {
+                Some(v) => {
+                    let optional_type = (&v)
+                        .try_into()
+                        .map_err(|_| "Failed to convert AnalysedType".to_string());
+                    Ok(RibIR::PushNone(Some(optional_type?)))
                 }
+                None => Ok(RibIR::PushNone(None)),
             },
             Instruction::CreateOkResult(value) => {
-                Ok(RibIR::PushOkResult((&value).try_into().map_err(
-                    |_| "Failed to convert CreateOkResult".to_string(),
-                )?))
+                Ok(RibIR::PushOkResult((&value).try_into().map_err(|_| {
+                    "Failed to convert CreateOkResult".to_string()
+                })?))
             }
             Instruction::CreateErrResult(value) => {
-                Ok(RibIR::PushErrResult((&value).try_into().map_err(
-                    |_| "Failed to convert CreateErrResult".to_string(),
-                )?))
+                Ok(RibIR::PushErrResult((&value).try_into().map_err(|_| {
+                    "Failed to convert CreateErrResult".to_string()
+                })?))
             }
             Instruction::SelectField(value) => Ok(RibIR::SelectField(value)),
             Instruction::SelectIndex(value) => Ok(RibIR::SelectIndex(value as usize)),
@@ -153,41 +155,42 @@ impl TryFrom<ProtoRibIR> for RibIR {
             Instruction::Label(value) => Ok(RibIR::Label(InstructionId::from(
                 value.instruction_id as usize,
             ))),
-            Instruction::Deconstruct(_) => {
-                Ok(RibIR::Deconstruct)
-            }
+            Instruction::Deconstruct(_) => Ok(RibIR::Deconstruct),
             Instruction::Call(call_instruction) => {
                 let return_type = call_instruction
                     .return_type
                     .ok_or("Missing return_type for function call".to_string())?;
 
-                let return_analyse_type = (&return_type).try_into()
+                let return_analyse_type = (&return_type)
+                    .try_into()
                     .map_err(|_| "Failed to convert AnalysedType".to_string())?;
 
                 Ok(RibIR::InvokeFunction(
                     ParsedFunctionName::parse(call_instruction.function_name)
                         .map_err(|_| "Failed to convert ParsedFunctionName".to_string())?,
                     call_instruction.argument_count as usize,
-                    return_analyse_type
+                    return_analyse_type,
                 ))
-            },
+            }
             Instruction::VariantConstruction(variant_construction) => {
-                let variant_type =
-                    variant_construction.return_type.ok_or("Missing return_type for variant construction".to_string())?;
+                let variant_type = variant_construction
+                    .return_type
+                    .ok_or("Missing return_type for variant construction".to_string())?;
 
-                let analysed_variant_type = (&variant_type).try_into().map_err(
-                    |_| "Failed to convert AnalysedType".to_string()
-                )?;
+                let analysed_variant_type = (&variant_type)
+                    .try_into()
+                    .map_err(|_| "Failed to convert AnalysedType".to_string())?;
 
                 Ok(RibIR::PushVariant(
                     variant_construction.variant_name,
-                    analysed_variant_type
+                    analysed_variant_type,
                 ))
-            },
-            Instruction::Throw(value) => Ok(RibIR::Throw(value)),
-            Instruction::PushFlag(flag) => {
-                Ok(RibIR::PushFlag(flag.type_annotated_value.ok_or("Missing flag".to_string())?))
             }
+            Instruction::Throw(value) => Ok(RibIR::Throw(value)),
+            Instruction::PushFlag(flag) => Ok(RibIR::PushFlag(
+                flag.type_annotated_value
+                    .ok_or("Missing flag".to_string())?,
+            )),
             Instruction::GetTag(_) => Ok(RibIR::GetTag),
             Instruction::PushTuple(tuple_instruction) => {
                 let tuple_type = tuple_instruction
@@ -198,7 +201,10 @@ impl TryFrom<ProtoRibIR> for RibIR {
                             .map_err(|_| "Failed to convert AnalysedType".to_string())
                     })?;
 
-                Ok(RibIR::PushTuple(tuple_type, tuple_instruction.tuple_size as usize))
+                Ok(RibIR::PushTuple(
+                    tuple_type,
+                    tuple_instruction.tuple_size as usize,
+                ))
             }
             Instruction::Negate(_) => Ok(RibIR::Negate),
             Instruction::Concat(concat_instruction) => {
@@ -227,12 +233,10 @@ impl From<RibIR> for ProtoRibIR {
             RibIR::PushSome(value) => Instruction::CreateSome((&value).into()),
             RibIR::PushNone(value) => {
                 let push_none_instruction = PushNoneInstruction {
-                    none_type: value.map(|t| {
-                        (&t).into()
-                    }),
+                    none_type: value.map(|t| (&t).into()),
                 };
                 Instruction::CreateNone(push_none_instruction)
-            },
+            }
             RibIR::PushOkResult(value) => Instruction::CreateOkResult((&value).into()),
             RibIR::PushErrResult(value) => Instruction::CreateErrResult((&value).into()),
             RibIR::SelectField(value) => Instruction::SelectField(value),
@@ -262,20 +266,24 @@ impl From<RibIR> for ProtoRibIR {
                     argument_count: arg_count as u64,
                     return_type: Some(typ),
                 })
-            },
+            }
             RibIR::PushVariant(name, return_type) => {
                 let typ = golem_wasm_ast::analysis::protobuf::Type::from(&return_type);
 
-                Instruction::VariantConstruction(golem_api_grpc::proto::golem::rib::VariantConstructionInstruction {
-                    variant_name: name,
-                    return_type: Some(typ),
-                })
-            },
+                Instruction::VariantConstruction(
+                    golem_api_grpc::proto::golem::rib::VariantConstructionInstruction {
+                        variant_name: name,
+                        return_type: Some(typ),
+                    },
+                )
+            }
             RibIR::Throw(msg) => Instruction::Throw(msg),
-            RibIR::PushFlag(flag) => Instruction::PushFlag(golem_wasm_rpc::protobuf::TypeAnnotatedValue{
-                type_annotated_value: Some(flag),
-            }),
-            RibIR::GetTag => Instruction::GetTag(GetTag{}),
+            RibIR::PushFlag(flag) => {
+                Instruction::PushFlag(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(flag),
+                })
+            }
+            RibIR::GetTag => Instruction::GetTag(GetTag {}),
             RibIR::PushTuple(analysed_type, size) => {
                 let typ = golem_wasm_ast::analysis::protobuf::Type::from(&analysed_type);
 
@@ -284,12 +292,10 @@ impl From<RibIR> for ProtoRibIR {
                     tuple_size: size as u64,
                 })
             }
-            RibIR::Concat(concat) => {
-                Instruction::Concat(ConcatInstruction {
-                    arg_size: concat as u64,
-                })
-            }
-            RibIR::Negate => Instruction::Negate(Negate{})
+            RibIR::Concat(concat) => Instruction::Concat(ConcatInstruction {
+                arg_size: concat as u64,
+            }),
+            RibIR::Negate => Instruction::Negate(Negate {}),
         };
 
         ProtoRibIR {

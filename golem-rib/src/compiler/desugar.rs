@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use crate::{Expr, InferredType, MatchArm, VariableId};
+use std::collections::VecDeque;
 
 pub fn desugar_pattern_match(
     pred: &Expr,
@@ -19,8 +19,8 @@ pub fn desugar_pattern_match(
 }
 
 mod internal {
-    use std::collections::VecDeque;
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use std::collections::VecDeque;
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfElseBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -46,7 +46,6 @@ mod internal {
         }
     }
 
-
     #[derive(Debug, Clone)]
     pub(crate) struct IfElseBranch {
         pub(crate) condition: Expr,
@@ -54,7 +53,10 @@ mod internal {
     }
 
     impl IfElseBranch {
-        pub(crate) fn from_pred_and_match_arm(match_arm: &MatchArm, pred: &Expr) -> Option<IfElseBranch> {
+        pub(crate) fn from_pred_and_match_arm(
+            match_arm: &MatchArm,
+            pred: &Expr,
+        ) -> Option<IfElseBranch> {
             get_conditions(match_arm, pred, None, pred.inferred_type())
         }
     }
@@ -63,22 +65,40 @@ mod internal {
     // We rely on the actual constructor names, and for that reason we pattern ok, err, option, none
     // having a precise control. For example, if it's none, there is no need to check the tag of predicate and
     // and arm-literal, as it is a direct boolean expression.
-    fn get_conditions(match_arm: &MatchArm, pred_expr: &Expr, tag: Option<Expr>, inferred_type_of_pred: InferredType) -> Option<IfElseBranch> {
+    fn get_conditions(
+        match_arm: &MatchArm,
+        pred_expr: &Expr,
+        tag: Option<Expr>,
+        inferred_type_of_pred: InferredType,
+    ) -> Option<IfElseBranch> {
         let arm_pattern = &match_arm.arm_pattern;
         let resolution = &match_arm.arm_resolution_expr;
 
         match arm_pattern {
-            ArmPattern::Literal(arm_pattern_expr) => {
-                handle_literal(arm_pattern_expr, pred_expr, resolution, tag, inferred_type_of_pred)
-            }
+            ArmPattern::Literal(arm_pattern_expr) => handle_literal(
+                arm_pattern_expr,
+                pred_expr,
+                resolution,
+                tag,
+                inferred_type_of_pred,
+            ),
 
-            ArmPattern::Constructor(constructor_name, expressions) => {
-               hande_constructor(pred_expr, constructor_name, expressions, resolution, inferred_type_of_pred)
-            }
+            ArmPattern::Constructor(constructor_name, expressions) => hande_constructor(
+                pred_expr,
+                constructor_name,
+                expressions,
+                resolution,
+                inferred_type_of_pred,
+            ),
 
-            ArmPattern::As(name, inner_pattern) => {
-                handle_as_pattern(name, inner_pattern, pred_expr, resolution, tag, inferred_type_of_pred)
-            }
+            ArmPattern::As(name, inner_pattern) => handle_as_pattern(
+                name,
+                inner_pattern,
+                pred_expr,
+                resolution,
+                tag,
+                inferred_type_of_pred,
+            ),
 
             ArmPattern::WildCard => {
                 let branch = IfElseBranch {
@@ -99,11 +119,10 @@ mod internal {
     ) -> Option<IfElseBranch> {
         match arm_pattern_expr {
             Expr::Option(Some(inner_pattern), _) => {
-                let unwrapped_inferred_type =
-                    match pred_expr_inferred_type {
-                        InferredType::Option(inner) => *inner,
-                        _ => InferredType::Unknown
-                    };
+                let unwrapped_inferred_type = match pred_expr_inferred_type {
+                    InferredType::Option(inner) => *inner,
+                    _ => InferredType::Unknown,
+                };
 
                 get_conditions(
                     &MatchArm::match_arm(
@@ -111,30 +130,29 @@ mod internal {
                         resolution.clone(),
                     ),
                     &pred_expr.unwrap(),
-                    Some(Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal("some"))),
-                    unwrapped_inferred_type
+                    Some(Expr::equal_to(
+                        Expr::tag(pred_expr.clone()),
+                        Expr::literal("some"),
+                    )),
+                    unwrapped_inferred_type,
                 )
             }
 
             Expr::Option(None, _) => {
                 let branch = IfElseBranch {
-                    condition: Expr::equal_to(
-                        Expr::tag(pred_expr.clone()),
-                        Expr::literal("none"),
-                    ),
+                    condition: Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal("none")),
                     body: resolution.clone(),
                 };
                 Some(branch)
             }
 
             Expr::Result(Ok(inner_pattern), _) => {
-                let unwrapped_inferred_type =
-                    match pred_expr_inferred_type {
-                        InferredType::Result {
-                            ok,..
-                        } => ok.unwrap_or(Box::new(InferredType::Unknown)),
-                        _ => Box::new(InferredType::Unknown)
-                    };
+                let unwrapped_inferred_type = match pred_expr_inferred_type {
+                    InferredType::Result { ok, .. } => {
+                        ok.unwrap_or(Box::new(InferredType::Unknown))
+                    }
+                    _ => Box::new(InferredType::Unknown),
+                };
 
                 get_conditions(
                     &MatchArm::match_arm(
@@ -142,18 +160,20 @@ mod internal {
                         resolution.clone(),
                     ),
                     &pred_expr.unwrap(),
-                    Some(Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal("ok"))),
-                    *unwrapped_inferred_type
+                    Some(Expr::equal_to(
+                        Expr::tag(pred_expr.clone()),
+                        Expr::literal("ok"),
+                    )),
+                    *unwrapped_inferred_type,
                 )
             }
             Expr::Result(Err(inner_pattern), _) => {
-                let unwrapped_inferred_type =
-                    match pred_expr_inferred_type {
-                        InferredType::Result {
-                            error,..
-                        } => error.unwrap_or(Box::new(InferredType::Unknown)),
-                        _ => Box::new(InferredType::Unknown)
-                    };
+                let unwrapped_inferred_type = match pred_expr_inferred_type {
+                    InferredType::Result { error, .. } => {
+                        error.unwrap_or(Box::new(InferredType::Unknown))
+                    }
+                    _ => Box::new(InferredType::Unknown),
+                };
 
                 get_conditions(
                     &MatchArm::match_arm(
@@ -161,8 +181,11 @@ mod internal {
                         resolution.clone(),
                     ),
                     &pred_expr.unwrap(),
-                    Some(Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal("err"))),
-                   *unwrapped_inferred_type
+                    Some(Expr::equal_to(
+                        Expr::tag(pred_expr.clone()),
+                        Expr::literal("err"),
+                    )),
+                    *unwrapped_inferred_type,
                 )
             }
 
@@ -192,7 +215,13 @@ mod internal {
         }
     }
 
-    fn hande_constructor(pred_expr: &Expr, constructor_name: &str, bind_patterns: &Vec<ArmPattern>, resolution: &Expr, pred_expr_inferred_type: InferredType) -> Option<IfElseBranch> {
+    fn hande_constructor(
+        pred_expr: &Expr,
+        constructor_name: &str,
+        bind_patterns: &Vec<ArmPattern>,
+        resolution: &Expr,
+        pred_expr_inferred_type: InferredType,
+    ) -> Option<IfElseBranch> {
         match pred_expr_inferred_type {
             InferredType::Variant(variant) => {
                 let arg_pattern_opt = bind_patterns.first();
@@ -207,26 +236,33 @@ mod internal {
                     (Some(pattern), Some(inferred_type)) => get_conditions(
                         &MatchArm::match_arm(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
-                        Some(Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal(constructor_name))),
-                        inferred_type
+                        Some(Expr::equal_to(
+                            Expr::tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        )),
+                        inferred_type,
                     ),
                     _ => None, // Probably fail here
                 }
             }
-            InferredType::Option(inner) => {
-                match bind_patterns.first() {
-                    Some(pattern) => get_conditions(
-                        &MatchArm::match_arm(pattern.clone(), resolution.clone()),
-                        &pred_expr.unwrap(),
-                        Some(Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal(constructor_name))),
-                        *inner
+            InferredType::Option(inner) => match bind_patterns.first() {
+                Some(pattern) => get_conditions(
+                    &MatchArm::match_arm(pattern.clone(), resolution.clone()),
+                    &pred_expr.unwrap(),
+                    Some(Expr::equal_to(
+                        Expr::tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )),
+                    *inner,
+                ),
+                _ => Some(IfElseBranch {
+                    condition: Expr::equal_to(
+                        Expr::tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
                     ),
-                    _ => Some(IfElseBranch {
-                        condition: Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal(constructor_name)),
-                        body: resolution.clone(),
-                    })
-                }
-            }
+                    body: resolution.clone(),
+                }),
+            },
             InferredType::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
                     ok.as_deref()
@@ -235,14 +271,17 @@ mod internal {
                 };
 
                 match bind_patterns.first() {
-                    Some(pattern) => {
-                        get_conditions(
-                            &MatchArm::match_arm(pattern.clone(), resolution.clone()),
-                            &pred_expr.unwrap(),
-                            Some(Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal(constructor_name))),
-                            inner_variant_arg_type.unwrap_or(&InferredType::Unknown).clone()
-                        )
-                    },
+                    Some(pattern) => get_conditions(
+                        &MatchArm::match_arm(pattern.clone(), resolution.clone()),
+                        &pred_expr.unwrap(),
+                        Some(Expr::equal_to(
+                            Expr::tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        )),
+                        inner_variant_arg_type
+                            .unwrap_or(&InferredType::Unknown)
+                            .clone(),
+                    ),
 
                     _ => None, // Probably fail here to get fine grained error message
                 }
@@ -251,12 +290,18 @@ mod internal {
                 condition: Expr::boolean(false),
                 body: resolution.clone(),
             }),
-            _ => None // probably fail here to get fine grained error message
-
+            _ => None, // probably fail here to get fine grained error message
         }
     }
 
-    fn handle_as_pattern(name: &str, inner_pattern: &ArmPattern, pred_expr: &Expr, resolution: &Expr, tag: Option<Expr>, pred_expr_inferred_type: InferredType) -> Option<IfElseBranch> {
+    fn handle_as_pattern(
+        name: &str,
+        inner_pattern: &ArmPattern,
+        pred_expr: &Expr,
+        resolution: &Expr,
+        tag: Option<Expr>,
+        pred_expr_inferred_type: InferredType,
+    ) -> Option<IfElseBranch> {
         let binding = Expr::Let(
             VariableId::global(name.to_string()),
             Box::new(pred_expr.clone()),
@@ -265,19 +310,13 @@ mod internal {
 
         let block = Expr::multiple(vec![binding, resolution.clone()]);
         get_conditions(
-            &MatchArm::match_arm(
-                inner_pattern.clone(),
-                block
-            ),
+            &MatchArm::match_arm(inner_pattern.clone(), block),
             pred_expr,
             tag,
-            pred_expr_inferred_type
+            pred_expr_inferred_type,
         )
     }
 }
-
-
-
 
 #[cfg(test)]
 mod desugar_tests {
@@ -436,7 +475,7 @@ mod desugar_tests {
                     Number { value: 1f64 },
                     InferredType::U64,
                 )))),
-                InferredType::Unknown
+                InferredType::Unknown,
             ),
         )
         .add_infer_type(InferredType::U64);
@@ -474,6 +513,85 @@ mod desugar_tests {
             .add_infer_type(InferredType::U64),
         )
         .add_infer_type(InferredType::U64);
+
+        let expected = Expr::Cond(
+            Box::new(Expr::EqualTo(
+                Box::new(Expr::Tag(
+                    Box::new(Expr::Option(
+                        Some(Box::new(Expr::Number(
+                            Number { value: 1.0 },
+                            InferredType::U64,
+                        ))),
+                        InferredType::Option(Box::new(InferredType::U64)),
+                    )),
+                    InferredType::Unknown,
+                )),
+                Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
+                InferredType::Bool,
+            )),
+            Box::new(Expr::Multiple(
+                vec![
+                    Expr::Let(
+                        VariableId::Global("x".to_string()),
+                        Box::new(Expr::Unwrap(
+                            Box::new(Expr::Option(
+                                Some(Box::new(Expr::Number(
+                                    Number { value: 1.0 },
+                                    InferredType::U64,
+                                ))),
+                                InferredType::Option(Box::new(InferredType::U64)),
+                            )),
+                            InferredType::Unknown,
+                        )),
+                        InferredType::U64,
+                    ),
+                    Expr::Identifier(VariableId::Global("x".to_string()), InferredType::U64),
+                ],
+                InferredType::U64,
+            )),
+            Box::new(Expr::Cond(
+                Box::new(Expr::EqualTo(
+                    Box::new(Expr::Tag(
+                        Box::new(Expr::Option(
+                            Some(Box::new(Expr::Number(
+                                Number { value: 1.0 },
+                                InferredType::U64,
+                            ))),
+                            InferredType::Option(Box::new(InferredType::U64)),
+                        )),
+                        InferredType::Unknown,
+                    )),
+                    Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
+                    InferredType::Bool,
+                )),
+                Box::new(Expr::Multiple(
+                    vec![
+                        Expr::Let(
+                            VariableId::Global("y".to_string()),
+                            Box::new(Expr::Unwrap(
+                                Box::new(Expr::Option(
+                                    Some(Box::new(Expr::Number(
+                                        Number { value: 1.0 },
+                                        InferredType::U64,
+                                    ))),
+                                    InferredType::Option(Box::new(InferredType::U64)),
+                                )),
+                                InferredType::Unknown,
+                            )),
+                            InferredType::U64,
+                        ),
+                        Expr::Identifier(VariableId::Global("y".to_string()), InferredType::U64),
+                    ],
+                    InferredType::U64,
+                )),
+                Box::new(Expr::Throw(
+                    "No match found".to_string(),
+                    InferredType::Unknown,
+                )),
+                InferredType::U64,
+            )),
+            InferredType::U64,
+        );
 
         assert_eq!(desugared_expr, expected);
     }

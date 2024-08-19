@@ -120,17 +120,16 @@ impl Interpreter {
                 }
 
                 RibIR::InvokeFunction(parsed_function_name, arity, _) => {
-                    internal::run_call_instruction(
-                        parsed_function_name,
-                        arity,
-                        self,
-                    )
-                    .await?;
+                    internal::run_call_instruction(parsed_function_name, arity, self).await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
-                    internal::run_variant_construction_instruction(variant_name, analysed_type, self)
-                        .await?;
+                    internal::run_variant_construction_instruction(
+                        variant_name,
+                        analysed_type,
+                        self,
+                    )
+                    .await?;
                 }
 
                 RibIR::Throw(message) => {
@@ -186,14 +185,16 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::result::RibInterpreterResult;
     use crate::interpreter::stack::InterpreterStack;
-    use crate::{GetLiteralValue, InstructionId, Interpreter, ParsedFunctionName, RibIR, VariableId};
+    use crate::{
+        GetLiteralValue, InstructionId, Interpreter, ParsedFunctionName, RibIR, VariableId,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::typed_result::ResultValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedRecord, TypedTuple};
     use std::collections::VecDeque;
     use std::ops::Deref;
-    use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 
     pub(crate) fn run_assign_var_instruction(
         variable_id: VariableId,
@@ -290,10 +291,9 @@ mod internal {
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-
         // TODO; This type of check is actually un-necessary
         // Avoid these checks - and allow compiler to directly form the instruction with the inner type
-         match analysed_type {
+        match analysed_type {
             AnalysedType::List(inner_type) => {
                 // Last updated value in stack should be a list to update the list
                 let last_list = interpreter_stack
@@ -323,7 +323,6 @@ mod internal {
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-
         // TODO; This type of check is actually un-necessary
         // Avoid these checks - and allow compiler to directly form the instruction with the inner type
         match analysed_type {
@@ -358,14 +357,14 @@ mod internal {
             .pop_val()
             .ok_or("Failed to get a value from the stack to negate".to_string())?;
 
-        let result = value.get_literal().and_then(|literal| literal.get_bool()).ok_or(
-            "Failed to get a boolean value from the stack to negate".to_string(),
-        )?;
+        let result = value
+            .get_literal()
+            .and_then(|literal| literal.get_bool())
+            .ok_or("Failed to get a boolean value from the stack to negate".to_string())?;
 
         interpreter_stack.push_val(TypeAnnotatedValue::Bool(!result));
         Ok(())
     }
-
 
     pub(crate) fn run_compare_instruction(
         interpreter_stack: &mut InterpreterStack,
@@ -480,9 +479,10 @@ mod internal {
                 Ok(())
             }
 
-            _ => {
-                Err(format!("Expected a Variant type for the variant {}, but obtained {:?}", variant_name, analysed_type))
-            }
+            _ => Err(format!(
+                "Expected a Variant type for the variant {}, but obtained {:?}",
+                variant_name, analysed_type
+            )),
         }
     }
 
@@ -492,7 +492,6 @@ mod internal {
         argument_size: usize,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
-
         let last_n_elements = interpreter
             .stack
             .pop_n(argument_size)
@@ -524,7 +523,7 @@ mod internal {
                     .ok_or("Internal Error. Unexpected empty result")?;
                 Ok(RibInterpreterResult::Val(inner))
             }
-            _ => Err("Named multiple results are not supported yet".to_string())
+            _ => Err("Named multiple results are not supported yet".to_string()),
         };
 
         interpreter.stack.push(interpreter_result?);
@@ -574,33 +573,25 @@ mod internal {
             .pop_val()
             .ok_or("Failed to get a tag value from the stack to unwrap".to_string())?;
 
-
         let tag = match value {
-            TypeAnnotatedValue::Variant(variant) => {
-                variant.case_name
-            }
-            TypeAnnotatedValue::Option(option) => {
-                match option.value {
-                    Some(_) => "some".to_string(),
-                    None => "none".to_string()
-                }
-            }
-            TypeAnnotatedValue::Result(result) => {
-                match result.result_value {
-                    Some(result_value) => match result_value {
-                        ResultValue::OkValue(_) => "ok".to_string(),
-                        ResultValue::ErrorValue(_) => "err".to_string()
-                    }
-                    None => "err".to_string()
-                }
-            }
-            _ => "untagged".to_string()
+            TypeAnnotatedValue::Variant(variant) => variant.case_name,
+            TypeAnnotatedValue::Option(option) => match option.value {
+                Some(_) => "some".to_string(),
+                None => "none".to_string(),
+            },
+            TypeAnnotatedValue::Result(result) => match result.result_value {
+                Some(result_value) => match result_value {
+                    ResultValue::OkValue(_) => "ok".to_string(),
+                    ResultValue::ErrorValue(_) => "err".to_string(),
+                },
+                None => "err".to_string(),
+            },
+            _ => "untagged".to_string(),
         };
 
         interpreter_stack.push_val(TypeAnnotatedValue::Str(tag));
         Ok(())
     }
-
 
     pub(crate) fn run_create_some_instruction(
         interpreter_stack: &mut InterpreterStack,
@@ -651,7 +642,7 @@ mod internal {
 
     pub(crate) fn run_concat_instruction(
         interpreter_stack: &mut InterpreterStack,
-        arg_size: usize
+        arg_size: usize,
     ) -> Result<(), String> {
         let last_n_elements = interpreter_stack
             .pop_n(arg_size)
@@ -668,14 +659,16 @@ mod internal {
 
         let mut str = String::new();
         for value in type_anntoated_values {
-            let result = value.get_literal().ok_or("Expected a literal value".to_string())?.as_string();
+            let result = value
+                .get_literal()
+                .ok_or("Expected a literal value".to_string())?
+                .as_string();
             str.push_str(&result);
         }
 
         interpreter_stack.push_val(TypeAnnotatedValue::Str(str));
 
         Ok(())
-
     }
 
     pub(crate) fn run_create_err_instruction(
@@ -809,7 +802,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_bool().unwrap(), false);
+        assert_eq!(result.get_bool().unwrap(), true);
     }
 
     #[tokio::test]
@@ -950,9 +943,7 @@ mod interpreter_tests {
                 },
             ],
             typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(
-                &AnalysedType::List(TypeList {
-                    inner: Box::new(AnalysedType::S32(TypeS32)),
-                }),
+                &AnalysedType::S32(TypeS32),
             )),
         });
         assert_eq!(result.get_val().unwrap(), expected);

@@ -1,6 +1,6 @@
 use crate::{Expr, InferredType, MatchArm};
-use std::collections::{HashMap, VecDeque};
 use golem_wasm_ast::analysis::AnalysedType;
+use std::collections::{HashMap, VecDeque};
 
 pub fn push_types_down(expr: &mut Expr) {
     let mut queue = VecDeque::new();
@@ -316,9 +316,15 @@ pub fn push_types_down(expr: &mut Expr) {
                             }
                         }
 
-                       let final_type =
-                           map.into_iter().map(|(x, y)|
-                               (x.clone(), InferredType::AllOf(y.into_iter().map(|x| x.clone()).collect()))).collect::<Vec<_>>();
+                        let final_type = map
+                            .into_iter()
+                            .map(|(x, y)| {
+                                (
+                                    x.clone(),
+                                    InferredType::AllOf(y.into_iter().map(|x| x.clone()).collect()),
+                                )
+                            })
+                            .collect::<Vec<_>>();
 
                         *inferred_type = InferredType::Record(final_type);
                     }
@@ -353,8 +359,8 @@ pub fn push_types_down(expr: &mut Expr) {
 }
 
 mod internal {
-    use std::collections::VecDeque;
     use crate::{ArmPattern, Expr, InferredType};
+    use std::collections::VecDeque;
 
     // This function is called from pushed down phase, and we push down the predicate
     // types to arm patterns where ever possible

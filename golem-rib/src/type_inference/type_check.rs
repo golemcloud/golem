@@ -75,14 +75,18 @@ pub fn type_check(expr: &Expr) -> Result<(), Vec<String>> {
 mod internal {
     use crate::{Expr, TypeErrorMessage};
 
-    pub(crate) fn accumulate_errors<A>(expr: &Expr, result: Result<A, Vec<TypeErrorMessage>>, errors: &mut Vec<TypeErrorMessage>) {
+    pub(crate) fn accumulate_errors<A>(
+        expr: &Expr,
+        result: Result<A, Vec<TypeErrorMessage>>,
+        errors: &mut Vec<TypeErrorMessage>,
+    ) {
         match result {
             Ok(_) => {}
             Err(errs) => {
                 let error_message = format!("Type error: {}", expr);
                 errors.push(TypeErrorMessage(error_message));
                 errors.extend(errs)
-            },
+            }
         }
     }
 }

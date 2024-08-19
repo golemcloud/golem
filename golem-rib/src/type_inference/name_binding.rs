@@ -59,7 +59,10 @@ mod internal {
 
 #[cfg(test)]
 mod name_binding_tests {
-    use crate::{Expr, InferredType, InvocationName, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId};
+    use crate::{
+        Expr, InferredType, InvocationName, ParsedFunctionName, ParsedFunctionReference,
+        ParsedFunctionSite, VariableId,
+    };
 
     #[test]
     fn test_name_binding_simple() {

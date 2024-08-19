@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use crate::{Expr, InferredType};
+use std::collections::VecDeque;
 
 // TODO; This is recursion because we bumped into Rust borrowing issues with the following logic,
 // which may require changing Expr data structure with RefCells.
@@ -80,7 +80,7 @@ pub fn pull_types_up(expr: &mut Expr) {
         Expr::PatternMatch(_, match_arms, inferred_type) => {
             let mut possible_inference_types = vec![];
             for match_arm in match_arms {
-               // match_arm.arm_resolution_expr.pull_types_up();
+                // match_arm.arm_resolution_expr.pull_types_up();
                 possible_inference_types.push(match_arm.arm_resolution_expr.inferred_type())
             }
 
@@ -93,9 +93,7 @@ pub fn pull_types_up(expr: &mut Expr) {
                 }
             }
         }
-        Expr::Let(_, expr, _) => {
-            expr.pull_types_up()
-        }
+        Expr::Let(_, expr, _) => expr.pull_types_up(),
         Expr::SelectField(expr, field, inferred_type) => {
             expr.pull_types_up();
             let expr_type = expr.inferred_type();
@@ -156,15 +154,9 @@ pub fn pull_types_up(expr: &mut Expr) {
                 expr.pull_types_up()
             }
         }
-        Expr::Unwrap(expr, _) => {
-            expr.pull_types_up()
-        }
+        Expr::Unwrap(expr, _) => expr.pull_types_up(),
         Expr::Throw(_, _) => {}
-        Expr::Tag(expr, _) => {
-            expr.pull_types_up()
-        }
+        Expr::Tag(expr, _) => expr.pull_types_up(),
         Expr::Option(None, _) => {}
     }
 }
-
-

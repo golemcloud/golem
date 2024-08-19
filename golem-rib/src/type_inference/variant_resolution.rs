@@ -1,6 +1,9 @@
-use std::collections::VecDeque;
-use crate::{Expr, FunctionTypeRegistry, InvocationName, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RegistryKey, RegistryValue, VariableId};
 use crate::type_inference::variant_resolution::internal::get_variants_info;
+use crate::{
+    Expr, FunctionTypeRegistry, InvocationName, ParsedFunctionName, ParsedFunctionReference,
+    ParsedFunctionSite, RegistryKey, RegistryValue, VariableId,
+};
+use std::collections::VecDeque;
 
 pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
     let variants = get_variants_info(expr, function_type_registry);
@@ -10,10 +13,13 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 }
 
 mod internal {
-    use std::collections::VecDeque;
     use crate::{Expr, FunctionTypeRegistry, InvocationName, RegistryKey, RegistryValue};
+    use std::collections::VecDeque;
 
-    pub(crate) fn convert_function_calls_to_variant_calls(expr: &mut Expr, variant_info: &VariantInfo) {
+    pub(crate) fn convert_function_calls_to_variant_calls(
+        expr: &mut Expr,
+        variant_info: &VariantInfo,
+    ) {
         let variants = variant_info.variants_with_args.clone();
         let mut queue = VecDeque::new();
         queue.push_back(expr);
@@ -34,7 +40,10 @@ mod internal {
         }
     }
 
-    pub(crate) fn convert_identifiers_to_no_arg_variant_calls(expr: &mut Expr, variant_info: &VariantInfo) {
+    pub(crate) fn convert_identifiers_to_no_arg_variant_calls(
+        expr: &mut Expr,
+        variant_info: &VariantInfo,
+    ) {
         let variants = variant_info.no_arg_variants.clone();
 
         let mut queue = VecDeque::new();
@@ -56,7 +65,10 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_variants_info(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) -> VariantInfo {
+    pub(crate) fn get_variants_info(
+        expr: &mut Expr,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> VariantInfo {
         let mut no_arg_variants = vec![];
         let mut variant_with_args = vec![];
         let mut queue = VecDeque::new();
@@ -73,10 +85,8 @@ mod internal {
                     {
                         no_arg_variants.push(variable_id.name());
                         inferred_type.update(analysed_type.clone().into());
-                    } else if let Some(RegistryValue::Function {
-                                           return_types,
-                                           ..
-                                       }) = function_type_registry.types.get(&key)
+                    } else if let Some(RegistryValue::Function { return_types, .. }) =
+                        function_type_registry.types.get(&key)
                     {
                         variant_with_args.push(variable_id.name());
 

@@ -16,12 +16,10 @@ pub fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
                 if inferred_type == &InferredType::Unknown {
                     if let Some(inferred_type) = identifier_lookup.lookup(&variable_id) {
                         expr.add_infer_type_mut(inferred_type);
-
                     }
                 } else {
                     identifier_lookup.update(variable_id.clone(), inferred_type.clone());
                 }
-
             }
             Expr::Let(variable_id, expr, _) => {
                 if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
@@ -39,7 +37,6 @@ pub fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
             }
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
-
     }
 }
 
@@ -103,5 +100,4 @@ mod internal {
             self.0.get(id).cloned()
         }
     }
-
 }

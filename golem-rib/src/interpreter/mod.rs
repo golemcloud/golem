@@ -1,13 +1,11 @@
 pub use env::RibFunctionInvoke;
+pub use literal::*;
 pub use result::*;
 pub use rib_interpreter::*;
-pub use literal::*;
 
-use std::collections::HashMap;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::RibByteCode;
-
-
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use std::collections::HashMap;
 
 mod env;
 mod literal;

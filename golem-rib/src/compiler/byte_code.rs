@@ -74,8 +74,8 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-    use std::ops::Deref;
     use golem_wasm_rpc::protobuf::TypedFlags;
+    use std::ops::Deref;
 
     pub(crate) fn process_expr<'a>(
         expr: &Expr,
@@ -188,7 +188,10 @@ mod internal {
             }
             Expr::Option(Some(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
-                instructions.push(RibIR::PushSome(convert_to_analysed_type_for(&expr, &inferred_type)?));
+                instructions.push(RibIR::PushSome(convert_to_analysed_type_for(
+                    &expr,
+                    &inferred_type,
+                )?));
             }
 
             Expr::Option(None, inferred_type) => {
@@ -198,14 +201,16 @@ mod internal {
 
             Expr::Result(Ok(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
-                instructions.push(RibIR::PushOkResult(convert_to_analysed_type_for(&expr,
+                instructions.push(RibIR::PushOkResult(convert_to_analysed_type_for(
+                    &expr,
                     &inferred_type,
                 )?));
             }
 
             Expr::Result(Err(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
-                instructions.push(RibIR::PushErrResult(convert_to_analysed_type_for(&expr,
+                instructions.push(RibIR::PushErrResult(convert_to_analysed_type_for(
+                    &expr,
                     &inferred_type,
                 )?));
             }
@@ -222,38 +227,35 @@ mod internal {
                         instructions.push(RibIR::InvokeFunction(
                             parsed_function_name.clone(),
                             arguments.len(),
-                            analysed_type
+                            analysed_type,
                         ));
                     }
                     InvocationName::VariantConstructor(variant_name) => {
-                        instructions.push(RibIR::PushVariant(
-                            variant_name.clone(),
-                            analysed_type
-                        ));
+                        instructions.push(RibIR::PushVariant(variant_name.clone(), analysed_type));
                     }
                 }
             }
 
-            Expr::Flags(flag_values, inferred_type) => {
-                match inferred_type {
-                    InferredType::Flags(all_flags) => {
-                        instructions.push(RibIR::PushFlag(TypeAnnotatedValue::Flags(TypedFlags {
-                            typ: all_flags.clone(),
-                            values: flag_values.clone(),
-                        })));
-                    }
-                    inferred_type => {
-                        return Err(format!("Flags should have inferred type Flags {:?}", inferred_type));
-                    }
+            Expr::Flags(flag_values, inferred_type) => match inferred_type {
+                InferredType::Flags(all_flags) => {
+                    instructions.push(RibIR::PushFlag(TypeAnnotatedValue::Flags(TypedFlags {
+                        typ: all_flags.clone(),
+                        values: flag_values.clone(),
+                    })));
                 }
-            }
+                inferred_type => {
+                    return Err(format!(
+                        "Flags should have inferred type Flags {:?}",
+                        inferred_type
+                    ));
+                }
+            },
             Expr::Boolean(bool, _) => {
                 instructions.push(RibIR::PushLit(TypeAnnotatedValue::Bool(*bool)));
             }
             Expr::Tag(expr, _) => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 stack.push(ExprState::from_ir(RibIR::GetTag));
-
             }
 
             Expr::Concat(exprs, _) => {
@@ -275,14 +277,21 @@ mod internal {
                 let analysed_type = convert_to_analysed_type_for(&expr, &analysed_type)?;
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
-
         }
 
         Ok(())
     }
 
-    pub(crate) fn convert_to_analysed_type_for(expr: &Expr, inferred_type: &InferredType) -> Result<AnalysedType, String> {
-        AnalysedType::try_from(inferred_type).map_err(|e| format!("Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}", expr, inferred_type, e))
+    pub(crate) fn convert_to_analysed_type_for(
+        expr: &Expr,
+        inferred_type: &InferredType,
+    ) -> Result<AnalysedType, String> {
+        AnalysedType::try_from(inferred_type).map_err(|e| {
+            format!(
+                "Invalid Rib {}. Error converting {:?} to AnalysedType: {:?}",
+                expr, inferred_type, e
+            )
+        })
     }
 
     // We create a temporary stack of expressions that we pop one by one,

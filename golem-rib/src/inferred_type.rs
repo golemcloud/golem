@@ -51,7 +51,6 @@ pub enum InferredType {
 pub struct TypeErrorMessage(pub String);
 
 impl InferredType {
-
     pub fn is_unknown(&self) -> bool {
         matches!(self, InferredType::Unknown)
     }
@@ -501,9 +500,7 @@ impl InferredType {
                     }
 
                     for (a_name, a_type) in b_fields {
-                        if let None =
-                            a_fields.iter().find(|(b_name, _)| b_name == a_name)
-                        {
+                        if let None = a_fields.iter().find(|(b_name, _)| b_name == a_name) {
                             fields.insert(a_name.clone(), a_type.clone());
                         }
                     }
@@ -693,7 +690,6 @@ impl InferredType {
                 }
 
                 (inferred_type, InferredType::AllOf(types)) => {
-
                     let result = InferredType::AllOf(types.clone()).unify_types()?;
 
                     result.unify_with_required(inferred_type)
@@ -934,9 +930,7 @@ impl InferredType {
                 }
             }
 
-            (a, b) => {
-                a.is_number() && b.is_number() || a.is_string() && b.is_string()
-            },
+            (a, b) => a.is_number() && b.is_number() || a.is_string() && b.is_string(),
         }
     }
 

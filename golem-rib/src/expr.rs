@@ -56,7 +56,7 @@ pub enum Expr {
     // Syntax for this (parsing) is yet to be supported
     Unwrap(Box<Expr>, InferredType), // option.unwrap, result.unwrap, etc
     Throw(String, InferredType),
-    Tag(Box<Expr>, InferredType)
+    Tag(Box<Expr>, InferredType),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
@@ -76,12 +76,14 @@ impl Display for InvocationName {
 
 impl TryFrom<golem_api_grpc::proto::golem::rib::InvocationName> for InvocationName {
     type Error = String;
-    fn try_from(value: golem_api_grpc::proto::golem::rib::InvocationName) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::InvocationName,
+    ) -> Result<Self, Self::Error> {
         let invocation = value.name.ok_or("Missing name of invocation")?;
         match invocation {
-            golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
-                Ok(InvocationName::Function(ParsedFunctionName::try_from(name)?))
-            }
+            golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => Ok(
+                InvocationName::Function(ParsedFunctionName::try_from(name)?),
+            ),
             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(name) => {
                 Ok(InvocationName::VariantConstructor(name))
             }
@@ -111,7 +113,6 @@ impl From<InvocationName> for golem_api_grpc::proto::golem::rib::InvocationName 
 }
 
 impl Expr {
-
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
         match self {
             Expr::Option(Some(expr), _) => Some(("some".to_string(), Some(expr.deref().clone()))),
@@ -129,7 +130,11 @@ impl Expr {
     }
 
     pub fn call(parsed_fn_name: ParsedFunctionName, args: Vec<Expr>) -> Self {
-        Expr::Call(InvocationName::Function(parsed_fn_name), args, InferredType::Unknown)
+        Expr::Call(
+            InvocationName::Function(parsed_fn_name),
+            args,
+            InferredType::Unknown,
+        )
     }
 
     pub fn concat(expressions: Vec<Expr>) -> Self {
@@ -252,7 +257,7 @@ impl Expr {
                 .into_iter()
                 .map(|(field_name, expr)| (field_name, Box::new(expr)))
                 .collect(),
-            inferred_type
+            inferred_type,
         )
     }
 

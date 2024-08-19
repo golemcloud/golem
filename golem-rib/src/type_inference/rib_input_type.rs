@@ -40,20 +40,24 @@ impl RibInputTypeInfo {
         })
     }
 
-    pub fn from_pure_expr(expr: &mut Expr, alternative_for_uninferred_type: AnalysedType) -> RibInputTypeInfo {
+    pub fn from_pure_expr(
+        expr: &mut Expr,
+        alternative_for_uninferred_type: AnalysedType,
+    ) -> RibInputTypeInfo {
         let mut queue = VecDeque::new();
 
         let mut global_variables = HashMap::new();
 
         queue.push_back(expr);
 
-
         while let Some(expr) = queue.pop_back() {
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
                     if variable_id.is_global() {
-                        let analysed_type =
-                            internal::to_analysed_type_with_fallback(inferred_type, alternative_for_uninferred_type.clone());
+                        let analysed_type = internal::to_analysed_type_with_fallback(
+                            inferred_type,
+                            alternative_for_uninferred_type.clone(),
+                        );
 
                         global_variables.insert(variable_id.name(), analysed_type);
                     }
@@ -90,119 +94,94 @@ impl From<RibInputTypeInfo> for ProtoRibInputType {
 }
 
 mod internal {
+    use crate::InferredType;
     use golem_wasm_ast::analysis::*;
-    use crate::{InferredType};
 
     // To handle special cases: mainly to support ambiguous expressions such as request.path.user.id, where it can infer only
     // to be a record but not the type of id
-    pub(crate) fn to_analysed_type_with_fallback(inferred_type: &InferredType, fallback: AnalysedType) -> AnalysedType {
-
+    pub(crate) fn to_analysed_type_with_fallback(
+        inferred_type: &InferredType,
+        fallback: AnalysedType,
+    ) -> AnalysedType {
         match inferred_type {
-            InferredType::Bool => AnalysedType::Bool(
-                TypeBool,
-            ),
-            InferredType::S8 => AnalysedType::S8(
-                TypeS8,
-            ),
-            InferredType::U8 => AnalysedType::U8(
-                TypeU8,
-            ),
-            InferredType::S16 => AnalysedType::S16(
-                TypeS16,
-            ),
-            InferredType::U16 => AnalysedType::U16(
-                TypeU16,
-            ),
-            InferredType::S32 => AnalysedType::S32(
-                TypeS32,
-            ),
-            InferredType::U32 => AnalysedType::U32(
-                TypeU32,
-            ),
-            InferredType::S64 => AnalysedType::S64(
-                TypeS64,
-            ),
-            InferredType::U64 => AnalysedType::U64(
-                TypeU64,
-            ),
-            InferredType::F32 => AnalysedType::F32(
-                TypeF32,
-            ),
-            InferredType::F64 => AnalysedType::F64(
-                TypeF64,
-            ),
-            InferredType::Chr => AnalysedType::Chr(
-                TypeChr,
-            ),
-            InferredType::Str => AnalysedType::Str(
-                TypeStr,
-            ),
-            InferredType::List(inferred_type) =>
-                AnalysedType::List(TypeList {
-                    inner: Box::new(to_analysed_type_with_fallback(inferred_type.as_ref(), fallback.clone())),
-                }),
-            InferredType::Tuple(tuple) =>
-                AnalysedType::Tuple(TypeTuple {
-                    items: tuple
-                        .into_iter()
-                        .map(|t| to_analysed_type_with_fallback(t, fallback.clone()))
-                        .collect::<Vec<AnalysedType>>(),
-                }),
-            InferredType::Record(record) =>
-                AnalysedType::Record(TypeRecord {
-                    fields: record
-                        .into_iter()
-                        .map(|(name, typ)| {
-                            NameTypePair {
-                                name: name.to_string(),
-                                typ: to_analysed_type_with_fallback(typ, fallback.clone())
-                            }
-                        })
-                        .collect::<Vec<NameTypePair>>(),
-                }),
-            InferredType::Flags(flags) =>
-                AnalysedType::Flags(TypeFlags {
-                    names: flags.clone(),
-                }),
-            InferredType::Enum(enums) =>
-                AnalysedType::Enum(TypeEnum {
-                    cases: enums.clone(),
-                }),
-            InferredType::Option(option) =>
-                AnalysedType::Option(TypeOption {
-                    inner: Box::new(to_analysed_type_with_fallback(option.as_ref(), fallback.clone())),
-                }),
+            InferredType::Bool => AnalysedType::Bool(TypeBool),
+            InferredType::S8 => AnalysedType::S8(TypeS8),
+            InferredType::U8 => AnalysedType::U8(TypeU8),
+            InferredType::S16 => AnalysedType::S16(TypeS16),
+            InferredType::U16 => AnalysedType::U16(TypeU16),
+            InferredType::S32 => AnalysedType::S32(TypeS32),
+            InferredType::U32 => AnalysedType::U32(TypeU32),
+            InferredType::S64 => AnalysedType::S64(TypeS64),
+            InferredType::U64 => AnalysedType::U64(TypeU64),
+            InferredType::F32 => AnalysedType::F32(TypeF32),
+            InferredType::F64 => AnalysedType::F64(TypeF64),
+            InferredType::Chr => AnalysedType::Chr(TypeChr),
+            InferredType::Str => AnalysedType::Str(TypeStr),
+            InferredType::List(inferred_type) => AnalysedType::List(TypeList {
+                inner: Box::new(to_analysed_type_with_fallback(
+                    inferred_type.as_ref(),
+                    fallback.clone(),
+                )),
+            }),
+            InferredType::Tuple(tuple) => AnalysedType::Tuple(TypeTuple {
+                items: tuple
+                    .into_iter()
+                    .map(|t| to_analysed_type_with_fallback(t, fallback.clone()))
+                    .collect::<Vec<AnalysedType>>(),
+            }),
+            InferredType::Record(record) => AnalysedType::Record(TypeRecord {
+                fields: record
+                    .into_iter()
+                    .map(|(name, typ)| NameTypePair {
+                        name: name.to_string(),
+                        typ: to_analysed_type_with_fallback(typ, fallback.clone()),
+                    })
+                    .collect::<Vec<NameTypePair>>(),
+            }),
+            InferredType::Flags(flags) => AnalysedType::Flags(TypeFlags {
+                names: flags.clone(),
+            }),
+            InferredType::Enum(enums) => AnalysedType::Enum(TypeEnum {
+                cases: enums.clone(),
+            }),
+            InferredType::Option(option) => AnalysedType::Option(TypeOption {
+                inner: Box::new(to_analysed_type_with_fallback(
+                    option.as_ref(),
+                    fallback.clone(),
+                )),
+            }),
             InferredType::Result { ok, error } =>
-                // In the case of result, there are instances users give just 1 value with zero function calls, we need to be flexible here
+            // In the case of result, there are instances users give just 1 value with zero function calls, we need to be flexible here
+            {
                 AnalysedType::Result(TypeResult {
                     ok: ok
                         .as_ref()
-                        .map(|t| to_analysed_type_with_fallback(t.as_ref(), fallback.clone())).map(Box::new),
+                        .map(|t| to_analysed_type_with_fallback(t.as_ref(), fallback.clone()))
+                        .map(Box::new),
                     err: error
                         .as_ref()
-                        .map(|t| to_analysed_type_with_fallback(t.as_ref(), fallback.clone())).map(Box::new),
-                }),
-            InferredType::Variant(variant) =>
-                AnalysedType::Variant(TypeVariant {
-                    cases: variant
-                        .into_iter()
-                        .map(|(name, typ)| {
-                            NameOptionTypePair {
-                                name: name.clone(),
-                                typ: typ.as_ref().map(|t| to_analysed_type_with_fallback(t, fallback.clone()))
-                            }
-                        })
-                        .collect::<Vec<NameOptionTypePair>>()
-                }),
+                        .map(|t| to_analysed_type_with_fallback(t.as_ref(), fallback.clone()))
+                        .map(Box::new),
+                })
+            }
+            InferredType::Variant(variant) => AnalysedType::Variant(TypeVariant {
+                cases: variant
+                    .into_iter()
+                    .map(|(name, typ)| NameOptionTypePair {
+                        name: name.clone(),
+                        typ: typ
+                            .as_ref()
+                            .map(|t| to_analysed_type_with_fallback(t, fallback.clone())),
+                    })
+                    .collect::<Vec<NameOptionTypePair>>(),
+            }),
             InferredType::Resource {
                 resource_id,
                 resource_mode,
-            } => AnalysedType::Handle(
-                TypeHandle {
-                    resource_id: resource_id.clone(),
-                    mode: resource_mode.clone(),
-                },
-            ),
+            } => AnalysedType::Handle(TypeHandle {
+                resource_id: resource_id.clone(),
+                mode: resource_mode.clone(),
+            }),
 
             InferredType::OneOf(_) => fallback,
             InferredType::AllOf(types) => {
@@ -231,6 +210,4 @@ mod internal {
             }
         }
     }
-
-
 }
