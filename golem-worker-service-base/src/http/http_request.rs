@@ -375,8 +375,6 @@ mod tests {
             .await
             .unwrap();
 
-        dbg!(resolved_route.clone());
-
         resolved_route.interpret_response_mapping(&evaluator).await
     }
 
@@ -632,7 +630,11 @@ mod tests {
         );
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}(if request.body.number < 11 then 0 else 1);
+          let number1 = if request.body.number < 11 then 0 else 1;
+          let number2 = if request.body.number > 11 then 0 else 1;
+          let input1 = "foo-${number1}";
+          let input2 = "bar-${number2}";
+          let response = golem:it/api.{get-cart-contents}(input1, input2);
           response
         "#;
 
@@ -650,7 +652,10 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Number(serde_json::Number::from(0))]),
+            Value::Array(vec![
+                Value::String("foo-0".to_string()),
+                Value::String("bar-1".to_string()),
+            ]),
         );
 
         assert_eq!(result, expected);
@@ -673,7 +678,9 @@ mod tests {
         let expression = r#"
           let condition1 = if request.body.number < 11 then request.path.user-id else 1;
           let condition2 = if request.body.number < 5 then request.path.user-id else 1;
-          let response = golem:it/api.{get-cart-contents}(condition1, condition2);
+          let param1 = "foo-${condition1}";
+          let param2 = "bar-${condition2}";
+          let response = golem:it/api.{get-cart-contents}(param1, param2);
           response
         "#;
 
@@ -692,8 +699,8 @@ mod tests {
             "shopping-cart".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
-                Value::Number(serde_json::Number::from(2)),
-                Value::Number(serde_json::Number::from(1)),
+                Value::String("foo-2".to_string()),
+                Value::String("bar-1".to_string()),
             ]),
         );
 
@@ -780,8 +787,7 @@ mod tests {
         );
 
         let expression = r#"
-          let param = request.body;
-          let response = golem:it/api.{get-cart-contents}(param);
+          let response = golem:it/api.{get-cart-contents}(request.body.foo_key, request.body.bar_key[0]);
           response
         "#;
 
@@ -802,7 +808,7 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Object(request_body)]),
+            Value::Array(vec![Value::String("foo_value".to_string()), Value::String("bar_value".to_string())]),
         );
 
         assert_eq!(result, expected);
@@ -815,19 +821,20 @@ mod tests {
             let api_request =
                 get_api_request(request_path, None, &empty_headers, serde_json::Value::Null);
 
-            let function_params = "[]";
+            let expression = r#"
+            let response = golem:it/api.{get-cart-contents}("foo", "bar");
+            response
+            "#;
 
             let api_specification: HttpApiDefinition = get_api_spec(
                 definition_path,
                 "shopping-cart-${request.path.cart-id}",
-                function_params,
+                expression,
             );
 
             let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
                 &api_specification,
-                &ComponentMetadataDictionary {
-                    metadata: HashMap::new(),
-                },
+                &get_metadata(),
             )
             .unwrap();
 
@@ -853,7 +860,7 @@ mod tests {
     #[tokio::test]
     async fn test_worker_idempotency_key_header() {
         async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
-            let api_request = get_api_request("/getcartcontent/my-cart-id", None, header_map, Value::Null);
+            let api_request = get_api_request("/getcartcontent/1", None, header_map, Value::Null);
 
             let expression = r#"
             let response = golem:it/api.{get-cart-contents}("foo", "bar");

@@ -489,6 +489,7 @@ impl InferredType {
                 // { name: Opt<Str>, age: Option<U32> } and { name: Str }
                 (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                     let mut fields = HashMap::new();
+                    // Common fields unified else kept it as it is
                     for (a_name, a_type) in a_fields {
                         if let Some((_, b_type)) =
                             b_fields.iter().find(|(b_name, _)| b_name == a_name)
@@ -498,6 +499,15 @@ impl InferredType {
                             fields.insert(a_name.clone(), a_type.clone());
                         }
                     }
+
+                    for (a_name, a_type) in b_fields {
+                        if let None =
+                            a_fields.iter().find(|(b_name, _)| b_name == a_name)
+                        {
+                            fields.insert(a_name.clone(), a_type.clone());
+                        }
+                    }
+
                     Ok(InferredType::Record(
                         fields.iter().map(|(n, t)| (n.clone(), t.clone())).collect(),
                     ))

@@ -393,8 +393,6 @@ mod internal {
             .pop()
             .ok_or("Failed to get a record from the stack to select a field".to_string())?;
 
-        dbg!(record.clone());
-
         match record {
             RibInterpreterResult::Val(TypeAnnotatedValue::Record(record)) => {
                 let field = record
