@@ -332,7 +332,8 @@ impl<ProfileAdd: Into<UniversalProfileAdd> + clap::Args> ProfileSubCommand<Profi
                 add.subcommand.handle(cli_kind, set_active, config_dir)
             }
             ProfileSubCommand::Init { name } => {
-                let res = crate::init::init_profile(cli_kind, name, config_dir).await?;
+                let res =
+                    crate::init::init_profile(cli_kind, name, config_dir, profile_auth).await?;
 
                 if res.auth_required {
                     profile_auth.auth(&res.profile_name, config_dir).await?
