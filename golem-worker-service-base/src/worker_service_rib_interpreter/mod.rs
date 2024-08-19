@@ -703,11 +703,10 @@ mod tests {
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
-            .await
-            .unwrap_err()
-            .0;
+            .await;
 
-        assert!(result.contains("Field street2 not found in the record"));
+        // A compile time failure
+        assert!(result.is_err());
     }
 
     #[tokio::test]

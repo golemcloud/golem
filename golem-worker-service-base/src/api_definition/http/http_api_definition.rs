@@ -575,7 +575,9 @@ mod tests {
           - method: Get
             path: {}
             binding:
-              componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              componentId:
+                version: 0
+                componentId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
               workerName: '{}'
               response: '{}'
 

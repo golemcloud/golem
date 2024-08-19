@@ -257,6 +257,7 @@ mod tests {
             extensions: vec![("x-golem-worker-bridge".to_string(), json!({
                 "worker-name": "worker-${request.body.user}",
                 "component-id": "00000000-0000-0000-0000-000000000000",
+                "component-version": "0",
                 "idempotency-key": "test-key",
                 "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
             }))]
