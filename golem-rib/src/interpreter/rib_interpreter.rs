@@ -128,7 +128,7 @@ impl Interpreter {
                     .await?;
                 }
 
-                RibIR::ConstructVariant(variant_name, analysed_type) => {
+                RibIR::PushVariant(variant_name, analysed_type) => {
                     internal::run_variant_construction_instruction(variant_name, analysed_type, self)
                         .await?;
                 }

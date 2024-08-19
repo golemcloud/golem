@@ -116,6 +116,9 @@ impl InterpreterStack {
         ok_type: Option<&AnalysedType>,
         err_type: Option<&AnalysedType>,
     ) {
+        let ok_type =
+            golem_wasm_ast::analysis::protobuf::Type::from(ok_type.unwrap_or(&AnalysedType::try_from(&inner_element).unwrap()));
+
         self.push_val(TypeAnnotatedValue::Result(Box::new(
             golem_wasm_rpc::protobuf::TypedResult {
                 result_value: Some(
@@ -125,7 +128,7 @@ impl InterpreterStack {
                         },
                     )),
                 ),
-                ok: ok_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
+                ok: Some(ok_type),
                 error: err_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
             },
         )));
@@ -137,6 +140,9 @@ impl InterpreterStack {
         ok_type: Option<&AnalysedType>,
         err_type: Option<&AnalysedType>,
     ) {
+        let err_type =
+            golem_wasm_ast::analysis::protobuf::Type::from(err_type.unwrap_or(&AnalysedType::try_from(&inner_element).unwrap()));
+
         self.push_val(TypeAnnotatedValue::Result(Box::new(
             golem_wasm_rpc::protobuf::TypedResult {
                 result_value: Some(
@@ -147,7 +153,7 @@ impl InterpreterStack {
                     )),
                 ),
                 ok: ok_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
-                error: err_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
+                error: Some(err_type)
             },
         )));
     }

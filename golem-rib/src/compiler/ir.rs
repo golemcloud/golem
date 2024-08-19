@@ -33,7 +33,7 @@ pub enum RibIR {
     Label(InstructionId),
     Deconstruct,
     InvokeFunction(ParsedFunctionName, usize, AnalysedType),
-    ConstructVariant(String, AnalysedType),// There is no arg size since the type of each variant case is only 1 from beginning
+    PushVariant(String, AnalysedType),// There is no arg size since the type of each variant case is only 1 from beginning
     Throw(String),
     GetTag,
     Concat(usize),
@@ -179,7 +179,7 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     |_| "Failed to convert AnalysedType".to_string()
                 )?;
 
-                Ok(RibIR::ConstructVariant(
+                Ok(RibIR::PushVariant(
                     variant_construction.variant_name,
                     analysed_variant_type
                 ))
@@ -263,7 +263,7 @@ impl From<RibIR> for ProtoRibIR {
                     return_type: Some(typ),
                 })
             },
-            RibIR::ConstructVariant(name, return_type) => {
+            RibIR::PushVariant(name, return_type) => {
                 let typ = golem_wasm_ast::analysis::protobuf::Type::from(&return_type);
 
                 Instruction::VariantConstruction(golem_api_grpc::proto::golem::rib::VariantConstructionInstruction {

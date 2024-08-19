@@ -226,7 +226,7 @@ mod internal {
                         ));
                     }
                     InvocationName::VariantConstructor(variant_name) => {
-                        instructions.push(RibIR::ConstructVariant(
+                        instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
                             analysed_type
                         ));

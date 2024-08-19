@@ -1636,95 +1636,30 @@ mod tests {
             }),
         }));
 
-        let expr =
-            rib::from_string("${match worker.response { Foo(value) => ok(value.id) }}").unwrap();
-        let result = noop_executor
-            .evaluate_with_worker_response_no_function_invoke(&expr, &worker_response)
-            .await;
+        let variant_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
 
-        let expected = create_ok_result(TypeAnnotatedValue::Str("pId".to_string()), None).unwrap();
+        let json = worker_response.to_json_value();
 
-        assert_eq!(result, Ok(expected));
-    }
+        let request_input = get_request_details(&json.to_json_string(), &HeaderMap::new());
 
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_variant_nested_with_some() {
-        let noop_executor = DefaultEvaluator::noop();
+        let request_body_type = variant_analysed_type.clone();
 
-        let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
-            case_name: "Foo".to_string(),
-            case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(
-                    create_option(
-                        create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string()))
-                            .unwrap(),
-                    )
-                    .unwrap(),
-                ),
-            })),
-            typ: Some(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "Foo".to_string(),
-                        typ: Some(
-                            (&AnalysedType::Option(TypeOption {
-                                inner: Box::new(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            }))
-                                .into(),
-                        ),
-                    },
-                    NameOptionTypePair {
-                        name: "Bar".to_string(),
-                        typ: Some(
-                            (&AnalysedType::Option(TypeOption {
-                                inner: Box::new(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            }))
-                                .into(),
-                        ),
-                    },
-                ],
-            }),
-        }));
+        let request_type =
+            get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
+
+        let component_metadata =
+            get_analysed_exports("foo", vec![request_type.clone()], variant_analysed_type.clone());
 
         let expr = rib::from_string(
-            r#"${match worker.response { Foo(some(value)) => value.id, err(msg) => "not found" }}"#,
-        )
-        .unwrap();
-
-        let result = noop_executor
-            .evaluate_with_worker_response_no_function_invoke(&expr, &output)
-            .await;
-
-        let expected = TypeAnnotatedValue::Str("pId".to_string());
-
-        assert_eq!(result, Ok(expected));
-    }
-
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_variant_nested_with_some_result() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let output = get_complex_variant_typed_value();
-
-        let expr = rib::from_string(
-            r#"${match worker.response { Foo(some(ok(value))) => value.id, err(msg) => "not found" }}"#,
+            r#"${let x = foo(request); match x { Foo(value) => ok(value.id) }}"#,
         )
             .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response_no_function_invoke(&expr, &output)
+            .evaluate_with_worker_response(&expr, worker_response, component_metadata, Some((request_input, request_type)))
             .await;
 
-        let expected = TypeAnnotatedValue::Str("pId".to_string());
+
+        let expected = create_ok_result(TypeAnnotatedValue::Str("pId".to_string()), None).unwrap();
 
         assert_eq!(result, Ok(expected));
     }
@@ -1736,14 +1671,9 @@ mod tests {
         let worker_response = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(test_utils::create_none(Some(&AnalysedType::Record(
-                    TypeRecord {
-                        fields: vec![NameTypePair {
-                            name: "id".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }],
-                    },
-                )))),
+                type_annotated_value: Some(test_utils::create_option(create_record(
+                    vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
+                ).unwrap()).unwrap())
             })),
             typ: Some(TypeVariant {
                 cases: vec![
@@ -1801,7 +1731,7 @@ mod tests {
             .evaluate_with_worker_response(&expr, worker_response, component_metadata, Some((request_input, request_type)))
             .await;
 
-        let expected = TypeAnnotatedValue::Str("not found".to_string());
+        let expected = TypeAnnotatedValue::Str("pId".to_string());
 
         assert_eq!(result, Ok(expected));
 
