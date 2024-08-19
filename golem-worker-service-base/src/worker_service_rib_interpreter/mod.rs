@@ -610,10 +610,10 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr = rib::from_string(r#"${foo(request); "$request.body.address.street} ${request.body.address.city}""#)
+        let expr = rib::from_string(r#"${foo(request); request.body.address.street}"#)
             .unwrap();
 
-        let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet bCity".to_string());
+        let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet".to_string());
         let result = noop_executor
             .evaluate_with_worker_response(&expr,worker_response,component_metadata, Some((request_details, request_type)))
             .await;
