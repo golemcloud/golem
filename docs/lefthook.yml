@@ -2,14 +2,20 @@ lint_glob: &lint_glob "*.{js,jsx,ts,tsx,cjs,mjs}"
 prettier_glob: &prettier_glob "*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc,md,mdx}"
 
 pre-commit:
-  parallel: true
+  parallel: false
   commands:
     lint:
       glob: *lint_glob
-      run: bunx eslint --fix {staged_files} && git add {staged_files}
+      run: bunx eslint --fix {staged_files}
+    lint-add:
+      glob: *lint_glob
+      run: git add {staged_files}
     prettier:
       glob: *prettier_glob
-      run: bunx prettier --log-level warn --write {staged_files} && git add {staged_files}
+      run: bunx prettier --log-level warn --write {staged_files}
+    prettier-add:
+      glob: *prettier_glob
+      run: git add {staged_files}
     typecheck:
       run: bunx tsc
 
@@ -24,3 +30,13 @@ pre-build:
       run: bunx prettier --log-level warn --check {all_files}
     typecheck:
       run: bunx tsc
+
+fix:
+  parallel: false
+  commands:
+    lint:
+      glob: *lint_glob
+      run: next lint --fix .
+    prettier:
+      glob: *prettier_glob
+      run: bunx prettier --log-level silent --write ./src
