@@ -146,6 +146,7 @@ mod tests {
 
     use golem_service_base::type_inference::infer_analysed_type;
     use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, NameTypePair, TypeList, TypeOption, TypeRecord, TypeStr, TypeU32, TypeU64};
+    use golem_wasm_rpc::json;
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedTuple, TypedVariant};
@@ -1585,7 +1586,7 @@ mod tests {
             r#"${
             let x = request;
             let y = foo(x);
-            { headers : y }
+            match y  { a @ err(value) => a }
           }"#,
         )
             .unwrap();
@@ -1598,19 +1599,11 @@ mod tests {
         let output_json = result.to_json_value();
 
         let expected_json = json!({
-            "p": {
                 "err": {
                     "ok": {
                         "id": 1
                     }
-                }
-            },
-            "q": {
-                "ok": {
-                    "id": 1
-                }
-            },
-            "r": 1
+                },
         });
         assert_eq!(output_json, expected_json);
     }
@@ -1761,7 +1754,7 @@ mod tests {
     async fn test_evaluation_with_pattern_match_variant_nested_with_none() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let output = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
+        let worker_response = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
                 type_annotated_value: Some(test_utils::create_none(Some(&AnalysedType::Record(
@@ -1807,12 +1800,26 @@ mod tests {
             }),
         }));
 
+        let variant_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
+
+        let json = worker_response.to_json_value();
+
+        let request_input = get_request_details(&json.to_json_string(), &HeaderMap::new());
+
+        let request_body_type = variant_analysed_type.clone();
+
+        let request_type =
+            get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
+
+        let component_metadata =
+            get_analysed_exports("foo", vec![request_type.clone()], variant_analysed_type.clone());
+
         let expr = rib::from_string(
-            r#"${match worker.response { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
+            r#"${let x = foo(request); match x { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response_no_function_invoke(&expr, &output)
+            .evaluate_with_worker_response(&expr, worker_response, component_metadata, Some((request_input, request_type)))
             .await;
 
         let expected = TypeAnnotatedValue::Str("not found".to_string());
