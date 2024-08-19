@@ -139,13 +139,16 @@ impl WorkerServiceRibInterpreter for DefaultEvaluator {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    
+
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
 
     use golem_service_base::type_inference::infer_analysed_type;
-    use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, NameTypePair, TypeList, TypeOption, TypeRecord, TypeStr, TypeU32, TypeU64};
+    use golem_wasm_ast::analysis::{
+        AnalysedExport, AnalysedType, NameTypePair, TypeList, TypeOption, TypeRecord, TypeStr,
+        TypeU32, TypeU64,
+    };
     use golem_wasm_rpc::json;
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -159,7 +162,7 @@ mod tests {
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::worker_binding::{RequestDetails, RibInputValue, RibInputValueResolver};
-    
+
     use crate::worker_service_rib_interpreter::{
         DefaultEvaluator, EvaluationError, WorkerServiceRibInterpreter,
     };
@@ -186,7 +189,7 @@ mod tests {
             expr: &Expr,
             worker_bridge_response: TypeAnnotatedValue,
             metadata: Vec<AnalysedExport>,
-            input: Option<(RequestDetails, AnalysedType)>
+            input: Option<(RequestDetails, AnalysedType)>,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
 
         async fn evaluate_with(
@@ -204,7 +207,7 @@ mod tests {
         async fn evaluate_pure_expr_with_any_global_input(
             &self,
             expr: &Expr,
-            rib_input_value: &RibInputValue
+            rib_input_value: &RibInputValue,
         ) -> Result<RibInterpreterResult, EvaluationError>;
     }
 
@@ -244,7 +247,7 @@ mod tests {
             expr: &Expr,
             worker_response: TypeAnnotatedValue,
             metadata: Vec<AnalysedExport>,
-            request_input: Option<(RequestDetails, AnalysedType)>
+            request_input: Option<(RequestDetails, AnalysedType)>,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             let expr = expr.clone();
             let compiled = rib::compile(&expr, &metadata)?;
@@ -261,8 +264,17 @@ mod tests {
                 let mut type_info = HashMap::new();
                 type_info.insert("request".to_string(), analysed_type);
                 let rib_input_type_info = RibInputTypeInfo { types: type_info };
-                let request_rib_input_value = request_details.resolve_rib_input_value(&rib_input_type_info).unwrap();
-                rib_input.insert("request".to_string(), request_rib_input_value.value.get("request").unwrap().clone());
+                let request_rib_input_value = request_details
+                    .resolve_rib_input_value(&rib_input_type_info)
+                    .unwrap();
+                rib_input.insert(
+                    "request".to_string(),
+                    request_rib_input_value
+                        .value
+                        .get("request")
+                        .unwrap()
+                        .clone(),
+                );
             }
 
             let worker_invoke_function: RibFunctionInvoke = Arc::new(move |_, _| {
@@ -277,14 +289,12 @@ mod tests {
                 })
             });
 
-            let eval_result = rib::interpret(
-                &compiled.byte_code,
-                rib_input,
-                worker_invoke_function,
-            )
-            .await?;
+            let eval_result =
+                rib::interpret(&compiled.byte_code, rib_input, worker_invoke_function).await?;
 
-            eval_result.get_val().ok_or(EvaluationError("The text is evaluated to unit and doesn't have a value".to_string()))
+            eval_result.get_val().ok_or(EvaluationError(
+                "The text is evaluated to unit and doesn't have a value".to_string(),
+            ))
         }
 
         async fn evaluate_with_worker_response_no_function_invoke(
@@ -293,7 +303,7 @@ mod tests {
             worker_bridge_response: &TypeAnnotatedValue,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             let mut expr = expr.clone();
-           // let _ =expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            // let _ =expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
             let compiled = rib::compile(&expr, &vec![]).unwrap();
 
             let worker_response_analysed_type =
@@ -361,7 +371,7 @@ mod tests {
         async fn evaluate_pure_expr_with_any_global_input(
             &self,
             expr: &Expr,
-            rib_input_value: &RibInputValue
+            rib_input_value: &RibInputValue,
         ) -> Result<RibInterpreterResult, EvaluationError> {
             let compiled = rib::compile(&expr, &vec![]).unwrap();
 
@@ -392,9 +402,8 @@ mod tests {
         let request_details = request_details_from_request_path_variables(uri, path_pattern);
 
         // The spec that will become part of the component metadata
-        let request_path_type = get_analysed_type_record(vec![
-            ("id".to_string(), AnalysedType::Str(TypeStr)),
-        ]);
+        let request_path_type =
+            get_analysed_type_record(vec![("id".to_string(), AnalysedType::Str(TypeStr))]);
 
         let request_type =
             get_analysed_type_record(vec![("path".to_string(), request_path_type.clone())]);
@@ -410,8 +419,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = request;
               let result = foo(x);
               request.path.id
@@ -423,7 +431,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
             .await
             .unwrap();
@@ -456,21 +464,27 @@ mod tests {
             &HeaderMap::new(),
         );
 
-
         // The spec that will become part of the component metadata
         let request_body_type = get_analysed_type_record(vec![
             ("id".to_string(), AnalysedType::Str(TypeStr)),
             ("name".to_string(), AnalysedType::Str(TypeStr)),
-            ("titles".to_string(), AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) })),
-            ("address".to_string(), get_analysed_type_record(vec![
-                ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
+            (
+                "titles".to_string(),
+                AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                }),
+            ),
+            (
+                "address".to_string(),
+                get_analysed_type_record(vec![
+                    ("street".to_string(), AnalysedType::Str(TypeStr)),
+                    ("city".to_string(), AnalysedType::Str(TypeStr)),
+                ]),
+            ),
         ]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -483,8 +497,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               match result {  some(value) => "personal-id", none =>  request.body.id }
@@ -496,9 +509,10 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(result, TypeAnnotatedValue::Str("bId".to_string()));
     }
@@ -526,21 +540,27 @@ mod tests {
             &HeaderMap::new(),
         );
 
-
         // The spec that will become part of the component metadata
         let request_body_type = get_analysed_type_record(vec![
             ("id".to_string(), AnalysedType::Str(TypeStr)),
             ("name".to_string(), AnalysedType::Str(TypeStr)),
-            ("titles".to_string(), AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) })),
-            ("address".to_string(), get_analysed_type_record(vec![
-                ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
+            (
+                "titles".to_string(),
+                AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                }),
+            ),
+            (
+                "address".to_string(),
+                get_analysed_type_record(vec![
+                    ("street".to_string(), AnalysedType::Str(TypeStr)),
+                    ("city".to_string(), AnalysedType::Str(TypeStr)),
+                ]),
+            ),
         ]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -553,8 +573,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
@@ -566,9 +585,10 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(result, TypeAnnotatedValue::Str("bTitle2".to_string()));
     }
@@ -591,12 +611,13 @@ mod tests {
         );
 
         // The spec that will become part of the component metadata
-        let request_body_type = get_analysed_type_record(vec![
-            ("address".to_string(), get_analysed_type_record(vec![
+        let request_body_type = get_analysed_type_record(vec![(
+            "address".to_string(),
+            get_analysed_type_record(vec![
                 ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
-        ]);
+                ("city".to_string(), AnalysedType::Str(TypeStr)),
+            ]),
+        )]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
@@ -611,12 +632,16 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr = rib::from_string(r#"${foo(request); request.body.address.street}"#)
-            .unwrap();
+        let expr = rib::from_string(r#"${foo(request); request.body.address.street}"#).unwrap();
 
         let expected_evaluated_result = TypeAnnotatedValue::Str("bStreet".to_string());
         let result = noop_executor
-            .evaluate_with_worker_response(&expr,worker_response,component_metadata, Some((request_details, request_type)))
+            .evaluate_with_worker_response(
+                &expr,
+                worker_response,
+                component_metadata,
+                Some((request_details, request_type)),
+            )
             .await;
         assert_eq!(result, Ok(expected_evaluated_result));
     }
@@ -645,8 +670,6 @@ mod tests {
             .await;
         assert_eq!(result, Ok(expected_evaluated_result));
 
-
-
         let noop_executor = DefaultEvaluator::noop();
 
         let mut header_map = HeaderMap::new();
@@ -667,12 +690,16 @@ mod tests {
             ("name".to_string(), AnalysedType::Str(TypeStr)),
         ]);
 
-        let request_type =
-            get_analysed_type_record(vec![
-                ("body".to_string(), request_body_type.clone()),
-                ("headers".to_string(), get_analysed_type_record(vec![("authorisation".to_string(), AnalysedType::Str(TypeStr))]))
-            ]);
-
+        let request_type = get_analysed_type_record(vec![
+            ("body".to_string(), request_body_type.clone()),
+            (
+                "headers".to_string(),
+                get_analysed_type_record(vec![(
+                    "authorisation".to_string(),
+                    AnalysedType::Str(TypeStr),
+                )]),
+            ),
+        ]);
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -685,8 +712,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = request;
               let result = foo(x);
               if request.headers.authorisation == "admin" then 200 else 401
@@ -698,9 +724,10 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap();
+            .await
+            .unwrap();
 
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
 
@@ -730,21 +757,27 @@ mod tests {
             &HeaderMap::new(),
         );
 
-
         // The spec that will become part of the component metadata
         let request_body_type = get_analysed_type_record(vec![
             ("id".to_string(), AnalysedType::Str(TypeStr)),
             ("name".to_string(), AnalysedType::Str(TypeStr)),
-            ("titles".to_string(), AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) })),
-            ("address".to_string(), get_analysed_type_record(vec![
-                ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
+            (
+                "titles".to_string(),
+                AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                }),
+            ),
+            (
+                "address".to_string(),
+                get_analysed_type_record(vec![
+                    ("street".to_string(), AnalysedType::Str(TypeStr)),
+                    ("city".to_string(), AnalysedType::Str(TypeStr)),
+                ]),
+            ),
         ]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -757,8 +790,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.address.street2 }
@@ -770,9 +802,11 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap_err().0;
+            .await
+            .unwrap_err()
+            .0;
 
         dbg!(result.clone());
 
@@ -802,21 +836,27 @@ mod tests {
             &HeaderMap::new(),
         );
 
-
         // The spec that will become part of the component metadata
         let request_body_type = get_analysed_type_record(vec![
             ("id".to_string(), AnalysedType::Str(TypeStr)),
             ("name".to_string(), AnalysedType::Str(TypeStr)),
-            ("titles".to_string(), AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) })),
-            ("address".to_string(), get_analysed_type_record(vec![
-                ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
+            (
+                "titles".to_string(),
+                AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                }),
+            ),
+            (
+                "address".to_string(),
+                get_analysed_type_record(vec![
+                    ("street".to_string(), AnalysedType::Str(TypeStr)),
+                    ("city".to_string(), AnalysedType::Str(TypeStr)),
+                ]),
+            ),
         ]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -829,8 +869,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.titles[4] }
@@ -842,13 +881,14 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap_err().0;
+            .await
+            .unwrap_err()
+            .0;
 
         assert!(result.contains("Index 4 not found in the list"));
     }
-
 
     #[tokio::test]
     async fn test_evaluation_with_request_body_index_of_object() {
@@ -873,21 +913,27 @@ mod tests {
             &HeaderMap::new(),
         );
 
-
         // The spec that will become part of the component metadata
         let request_body_type = get_analysed_type_record(vec![
             ("id".to_string(), AnalysedType::Str(TypeStr)),
             ("name".to_string(), AnalysedType::Str(TypeStr)),
-            ("titles".to_string(), AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) })),
-            ("address".to_string(), get_analysed_type_record(vec![
-                ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
+            (
+                "titles".to_string(),
+                AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                }),
+            ),
+            (
+                "address".to_string(),
+                get_analysed_type_record(vec![
+                    ("street".to_string(), AnalysedType::Str(TypeStr)),
+                    ("city".to_string(), AnalysedType::Str(TypeStr)),
+                ]),
+            ),
         ]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -900,8 +946,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.address[4] }
@@ -913,9 +958,11 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap_err().0;
+            .await
+            .unwrap_err()
+            .0;
 
         let expected = TypeAnnotatedValue::Str("bStreet".to_string());
 
@@ -944,12 +991,16 @@ mod tests {
             ("name".to_string(), AnalysedType::Str(TypeStr)),
         ]);
 
-        let request_type =
-            get_analysed_type_record(vec![
-                ("body".to_string(), request_body_type.clone()),
-                ("headers".to_string(), get_analysed_type_record(vec![("authorisation".to_string(), AnalysedType::Str(TypeStr))]))
-            ]);
-
+        let request_type = get_analysed_type_record(vec![
+            ("body".to_string(), request_body_type.clone()),
+            (
+                "headers".to_string(),
+                get_analysed_type_record(vec![(
+                    "authorisation".to_string(),
+                    AnalysedType::Str(TypeStr),
+                )]),
+            ),
+        ]);
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -962,8 +1013,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = request;
               let result = foo(x);
               if request.headers.authorisation then 200 else 401
@@ -975,9 +1025,11 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
-            .await.unwrap_err().0;
+            .await
+            .unwrap_err()
+            .0;
 
         let expected = TypeAnnotatedValue::Str("bName".to_string());
 
@@ -1006,7 +1058,6 @@ mod tests {
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
 
-
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
 
@@ -1018,8 +1069,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let x = request;
               let result = foo(x);
               match result {  some(value) => "personal-id", none => x.body.name }
@@ -1031,7 +1081,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
             .await
             .unwrap();
@@ -1068,16 +1118,23 @@ mod tests {
         let request_body_type = get_analysed_type_record(vec![
             ("id".to_string(), AnalysedType::Str(TypeStr)),
             ("name".to_string(), AnalysedType::Str(TypeStr)),
-            ("titles".to_string(), AnalysedType::List(TypeList { inner: Box::new(AnalysedType::Str(TypeStr)) })),
-            ("address".to_string(), get_analysed_type_record(vec![
-                ("street".to_string(), AnalysedType::Str(TypeStr)),
-                ("city".to_string(), AnalysedType::Str(TypeStr))
-            ]))
+            (
+                "titles".to_string(),
+                AnalysedType::List(TypeList {
+                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                }),
+            ),
+            (
+                "address".to_string(),
+                get_analysed_type_record(vec![
+                    ("street".to_string(), AnalysedType::Str(TypeStr)),
+                    ("city".to_string(), AnalysedType::Str(TypeStr)),
+                ]),
+            ),
         ]);
 
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
 
         // Output from worker - doesn't matter
         let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
@@ -1090,8 +1147,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-        let expr_str =
-            r#"${
+        let expr_str = r#"${
               let result = foo( { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address });
               match result {  some(value) => "personal-id", none =>  request.body.address.street }
             }"#;
@@ -1102,7 +1158,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                Some((request_details, request_type))
+                Some((request_details, request_type)),
             )
             .await
             .unwrap();
@@ -1138,7 +1194,11 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         // Output from worker
-        let record = create_record(vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))]).unwrap();
+        let record = create_record(vec![(
+            "id".to_string(),
+            TypeAnnotatedValue::Str("pId".to_string()),
+        )])
+        .unwrap();
         let worker_response = create_option(record).unwrap();
 
         // Output from worker
@@ -1147,8 +1207,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str =
-            r#"${let result = foo(1); match result {  some(value) => "personal-id", none => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result {  some(value) => "personal-id", none => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1156,7 +1215,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1181,8 +1240,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str =
-            r#"${let result = foo(1); match result {  some(value) => "personal-id", none => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result {  some(value) => "personal-id", none => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1190,7 +1248,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1198,7 +1256,6 @@ mod tests {
         let expected = TypeAnnotatedValue::Str("not found".to_string());
 
         assert_eq!(&value1, &expected);
-
     }
 
     #[tokio::test]
@@ -1215,26 +1272,24 @@ mod tests {
         let request_details =
             request_details_from_request_path_variables(uri.clone(), path_pattern.clone());
 
-        let worker_response_inner = create_record(
-            vec![("id".to_string(), TypeAnnotatedValue::Str("baz".to_string()))]
-        ).unwrap();
+        let worker_response_inner = create_record(vec![(
+            "id".to_string(),
+            TypeAnnotatedValue::Str("baz".to_string()),
+        )])
+        .unwrap();
 
-        let worker_response =
-            create_ok_result(worker_response_inner, None).unwrap();
+        let worker_response = create_ok_result(worker_response_inner, None).unwrap();
 
-        let return_type =
-            AnalysedType::try_from(&worker_response).unwrap();
+        let return_type = AnalysedType::try_from(&worker_response).unwrap();
 
         // The spec that will become part of the component metadata
-        let request_path_type = get_analysed_type_record(vec![
-            ("id".to_string(), AnalysedType::Str(TypeStr)),
-        ]);
+        let request_path_type =
+            get_analysed_type_record(vec![("id".to_string(), AnalysedType::Str(TypeStr))]);
 
         let request_type =
             get_analysed_type_record(vec![("path".to_string(), request_path_type.clone())]);
 
         let metadata = get_analysed_exports("foo", vec![request_type.clone()], return_type);
-
 
         let expr1 = rib::from_string(
             r#"${
@@ -1246,7 +1301,12 @@ mod tests {
             .unwrap();
 
         let result1 = noop_executor
-            .evaluate_with_worker_response(&expr1, worker_response.clone(), metadata.clone(), Some((request_details.clone(), request_type.clone())))
+            .evaluate_with_worker_response(
+                &expr1,
+                worker_response.clone(),
+                metadata.clone(),
+                Some((request_details.clone(), request_type.clone())),
+            )
             .await;
 
         let expr2 = rib::from_string(
@@ -1259,15 +1319,18 @@ mod tests {
         ).unwrap();
 
         let result2 = noop_executor
-            .evaluate_with_worker_response(&expr2, worker_response,metadata.clone(), Some((request_details.clone(), request_type.clone())))
+            .evaluate_with_worker_response(
+                &expr2,
+                worker_response,
+                metadata.clone(),
+                Some((request_details.clone(), request_type.clone())),
+            )
             .await;
 
         let error_worker_response =
             create_error_result(TypeAnnotatedValue::Str("Error".to_string()), None).unwrap();
 
-        let new_request_details =
-            request_details_from_request_path_variables(uri, path_pattern);
-
+        let new_request_details = request_details_from_request_path_variables(uri, path_pattern);
 
         let expr3 = rib::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
@@ -1275,21 +1338,20 @@ mod tests {
         ).unwrap();
 
         let result3 = noop_executor
-            .evaluate_with_worker_response(&expr2, error_worker_response, metadata, Some((request_details, request_type)))
+            .evaluate_with_worker_response(
+                &expr2,
+                error_worker_response,
+                metadata,
+                Some((request_details, request_type)),
+            )
             .await;
 
         assert_eq!(
             (result1, result2, result3),
             (
-                Ok(TypeAnnotatedValue::Str(
-                    "bar".to_string()
-                )),
-                Ok(TypeAnnotatedValue::Str(
-                    "baz".to_string()
-                )),
-                Ok(TypeAnnotatedValue::Str(
-                    "empty".to_string()
-                ))
+                Ok(TypeAnnotatedValue::Str("bar".to_string())),
+                Ok(TypeAnnotatedValue::Str("baz".to_string())),
+                Ok(TypeAnnotatedValue::Str("empty".to_string()))
             )
         );
     }
@@ -1301,8 +1363,7 @@ mod tests {
         // Output from worker
         let field_value = TypeAnnotatedValue::Str("pId".to_string());
 
-        let record_value =
-            create_singleton_record("id", &field_value).unwrap();
+        let record_value = create_singleton_record("id", &field_value).unwrap();
 
         let worker_response = create_ok_result(record_value.clone(), None).unwrap();
 
@@ -1312,8 +1373,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str =
-            r#"${let result = foo(1); match result {  ok(value) => "personal-id", err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result {  ok(value) => "personal-id", err(msg) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1321,7 +1381,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1329,7 +1389,6 @@ mod tests {
         let expected = TypeAnnotatedValue::Str("personal-id".to_string());
 
         assert_eq!(&value1, &expected);
-
     }
 
     #[tokio::test]
@@ -1339,8 +1398,7 @@ mod tests {
         // Output from worker
         let field_value = TypeAnnotatedValue::Str("pId".to_string());
 
-        let record_value =
-            create_singleton_record("id", &field_value).unwrap();
+        let record_value = create_singleton_record("id", &field_value).unwrap();
 
         let worker_response = create_ok_result(record_value.clone(), None).unwrap();
 
@@ -1350,8 +1408,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str =
-            r#"${let result = foo(1); match result { ok(value) => value.id, err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.id, err(msg) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1359,7 +1416,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1374,8 +1431,7 @@ mod tests {
         // Output from worker
         let field_value = TypeAnnotatedValue::Str("pId".to_string());
 
-        let record_value =
-            create_singleton_record("id", &field_value).unwrap();
+        let record_value = create_singleton_record("id", &field_value).unwrap();
 
         let worker_response = create_ok_result(record_value, None).unwrap();
 
@@ -1385,8 +1441,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str =
-            r#"${let result = foo(1); match result { ok(value) => value.id, err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.id, err(msg) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1394,7 +1449,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1411,10 +1466,10 @@ mod tests {
         let sequence_value = create_list(vec![
             TypeAnnotatedValue::Str("id1".to_string()),
             TypeAnnotatedValue::Str("id2".to_string()),
-        ]).unwrap();
+        ])
+        .unwrap();
 
-        let record_value =
-            create_singleton_record("ids", &sequence_value).unwrap();
+        let record_value = create_singleton_record("ids", &sequence_value).unwrap();
 
         let worker_response = create_ok_result(record_value, None).unwrap();
 
@@ -1424,8 +1479,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str =
-            r#"${let result = foo(1); match result { ok(value) => value.ids[0], err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.ids[0], err(msg) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1433,7 +1487,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1446,7 +1500,8 @@ mod tests {
     async fn test_evaluation_with_pattern_match_with_some_construction() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let return_type = get_result_type_fully_formed(AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr));
+        let return_type =
+            get_result_type_fully_formed(AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr));
 
         let worker_response = create_ok_result(TypeAnnotatedValue::U32(10), None).unwrap();
 
@@ -1461,7 +1516,7 @@ mod tests {
                 &expr1,
                 worker_response.clone(),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -1474,13 +1529,12 @@ mod tests {
     async fn test_evaluation_with_pattern_match_with_none_construction() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string(
-            r#"${match ok(1) { ok(value) => none, err(_) => some(1) }}"#,
-        )
-        .unwrap();
+        let expr =
+            rib::from_string(r#"${match ok(1) { ok(value) => none, err(_) => some(1) }}"#).unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
-            .await.map(|v| v.get_val().unwrap());
+            .await
+            .map(|v| v.get_val().unwrap());
 
         let expected = create_none(None);
 
@@ -1496,12 +1550,12 @@ mod tests {
                 .unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
-            .await.map(|v| v.get_val().unwrap());
+            .await
+            .map(|v| v.get_val().unwrap());
 
         let inner_number = TypeAnnotatedValue::U64(1);
         let inner_some = create_option(inner_number.clone()).unwrap();
         let outer_some = create_option(inner_some).unwrap();
-
 
         assert_eq!(result, Ok(outer_some));
     }
@@ -1510,13 +1564,13 @@ mod tests {
     async fn test_evaluation_with_pattern_match_with_ok_construction() {
         let noop_executor = DefaultEvaluator::noop();
 
-
         let expr =
             rib::from_string("${match ok(\"afsal\") { ok(value) => ok(1), err(msg) => err(2) }}")
                 .unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
-            .await.map(|v| v.get_val().unwrap());
+            .await
+            .map(|v| v.get_val().unwrap());
         let expected = create_ok_result(TypeAnnotatedValue::U64(1), None).unwrap();
         assert_eq!(result, Ok(expected));
     }
@@ -1531,7 +1585,8 @@ mod tests {
 
         let result = noop_executor
             .evaluate_pure_expr(&expr)
-            .await.map(|v| v.get_val().unwrap());
+            .await
+            .map(|v| v.get_val().unwrap());
 
         let expected = create_error_result(TypeAnnotatedValue::U64(2), None).unwrap();
 
@@ -1543,17 +1598,16 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr =
-            rib::from_string("${match err(10) { ok(_) => ok(1), err(_) => err(2) }}")
-                .unwrap();
+            rib::from_string("${match err(10) { ok(_) => ok(1), err(_) => err(2) }}").unwrap();
 
         let result = noop_executor
             .evaluate_pure_expr(&expr)
-            .await.map(|v| v.get_val().unwrap());
+            .await
+            .map(|v| v.get_val().unwrap());
 
         let expected = create_error_result(TypeAnnotatedValue::U64(2), None).unwrap();
         assert_eq!(result, Ok(expected));
     }
-
 
     #[tokio::test]
     async fn test_evaluation_with_pattern_match_with_name_alias() {
@@ -1569,18 +1623,24 @@ mod tests {
         let request_details =
             request_details_from_request_path_variables(uri.clone(), path_pattern.clone());
 
-        let request_type =
-            get_analysed_type_record(vec![("path".to_string(), get_analysed_type_record(vec![("id".to_string(), AnalysedType::Str(TypeStr))]))]);
+        let request_type = get_analysed_type_record(vec![(
+            "path".to_string(),
+            get_analysed_type_record(vec![("id".to_string(), AnalysedType::Str(TypeStr))]),
+        )]);
 
         let worker_response = create_error_result(
-            create_ok_result(create_record(
-                vec![("id".to_string(), TypeAnnotatedValue::U64(1))]
-            ).unwrap(), Some(AnalysedType::Str(TypeStr))).unwrap(),
-            Some(AnalysedType::Str(TypeStr))
-        ).unwrap();
+            create_ok_result(
+                create_record(vec![("id".to_string(), TypeAnnotatedValue::U64(1))]).unwrap(),
+                Some(AnalysedType::Str(TypeStr)),
+            )
+            .unwrap(),
+            Some(AnalysedType::Str(TypeStr)),
+        )
+        .unwrap();
 
         let function_return_type = AnalysedType::try_from(&worker_response).unwrap();
-        let metadata = get_analysed_exports("foo", vec![request_type.clone()], function_return_type);
+        let metadata =
+            get_analysed_exports("foo", vec![request_type.clone()], function_return_type);
 
         let expr = rib::from_string(
             r#"${
@@ -1589,10 +1649,15 @@ mod tests {
             match y  { a @ err(value) => a }
           }"#,
         )
-            .unwrap();
+        .unwrap();
 
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, worker_response, metadata, Some((request_details, request_type)))
+            .evaluate_with_worker_response(
+                &expr,
+                worker_response,
+                metadata,
+                Some((request_details, request_type)),
+            )
             .await
             .unwrap();
 
@@ -1647,17 +1712,23 @@ mod tests {
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
 
-        let component_metadata =
-            get_analysed_exports("foo", vec![request_type.clone()], variant_analysed_type.clone());
+        let component_metadata = get_analysed_exports(
+            "foo",
+            vec![request_type.clone()],
+            variant_analysed_type.clone(),
+        );
 
-        let expr = rib::from_string(
-            r#"${let x = foo(request); match x { Foo(value) => ok(value.id) }}"#,
-        )
-            .unwrap();
+        let expr =
+            rib::from_string(r#"${let x = foo(request); match x { Foo(value) => ok(value.id) }}"#)
+                .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, worker_response, component_metadata, Some((request_input, request_type)))
+            .evaluate_with_worker_response(
+                &expr,
+                worker_response,
+                component_metadata,
+                Some((request_input, request_type)),
+            )
             .await;
-
 
         let expected = create_ok_result(TypeAnnotatedValue::Str("pId".to_string()), None).unwrap();
 
@@ -1671,9 +1742,16 @@ mod tests {
         let worker_response = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
             case_name: "Foo".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(test_utils::create_option(create_record(
-                    vec![("id".to_string(), TypeAnnotatedValue::Str("pId".to_string()))],
-                ).unwrap()).unwrap())
+                type_annotated_value: Some(
+                    test_utils::create_option(
+                        create_record(vec![(
+                            "id".to_string(),
+                            TypeAnnotatedValue::Str("pId".to_string()),
+                        )])
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                ),
             })),
             typ: Some(TypeVariant {
                 cases: vec![
@@ -1720,21 +1798,28 @@ mod tests {
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
 
-        let component_metadata =
-            get_analysed_exports("foo", vec![request_type.clone()], variant_analysed_type.clone());
+        let component_metadata = get_analysed_exports(
+            "foo",
+            vec![request_type.clone()],
+            variant_analysed_type.clone(),
+        );
 
         let expr = rib::from_string(
             r#"${let x = foo(request); match x { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
         )
             .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, worker_response, component_metadata, Some((request_input, request_type)))
+            .evaluate_with_worker_response(
+                &expr,
+                worker_response,
+                component_metadata,
+                Some((request_input, request_type)),
+            )
             .await;
 
         let expected = TypeAnnotatedValue::Str("pId".to_string());
 
         assert_eq!(result, Ok(expected));
-
     }
 
     #[tokio::test]
@@ -1798,15 +1883,23 @@ mod tests {
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
 
-        let component_metadata =
-            get_analysed_exports("foo", vec![request_type.clone()], variant_analysed_type.clone());
+        let component_metadata = get_analysed_exports(
+            "foo",
+            vec![request_type.clone()],
+            variant_analysed_type.clone(),
+        );
 
         let expr = rib::from_string(
             r#"${let x = foo(request); match x { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
         )
         .unwrap();
         let result = noop_executor
-            .evaluate_with_worker_response(&expr, worker_response, component_metadata, Some((request_input, request_type)))
+            .evaluate_with_worker_response(
+                &expr,
+                worker_response,
+                component_metadata,
+                Some((request_input, request_type)),
+            )
             .await;
 
         let expected = TypeAnnotatedValue::Str("not found".to_string());
@@ -1944,7 +2037,7 @@ mod tests {
         use crate::api_definition::http::{AllPathPatterns, PathPattern, VarInfo};
         use crate::http::router::RouterPattern;
         use crate::worker_binding::RequestDetails;
-        
+
         use crate::worker_service_rib_interpreter::tests::WorkerServiceRibInterpreterTestExt;
         use crate::worker_service_rib_interpreter::{DefaultEvaluator, EvaluationError};
         use golem_service_base::type_inference::infer_analysed_type;
@@ -1969,8 +2062,6 @@ mod tests {
         use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::{TypedFlags, TypedTuple};
         use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedResult};
-        
-        
 
         pub(crate) fn create_tuple(
             value: Vec<TypeAnnotatedValue>,
@@ -2003,7 +2094,7 @@ mod tests {
 
         pub(crate) fn create_ok_result(
             value: TypeAnnotatedValue,
-            error_type: Option<AnalysedType>
+            error_type: Option<AnalysedType>,
         ) -> Result<TypeAnnotatedValue, EvaluationError> {
             let typ = golem_wasm_rpc::protobuf::Type::try_from(&value)
                 .map_err(|_| EvaluationError("Failed to get type".to_string()))?;
@@ -2037,7 +2128,7 @@ mod tests {
                 ok: optional_ok_type.map(|x| (&x).into()),
                 error: Some(typ),
             }));
-            
+
             Ok(typed_value)
         }
 
@@ -2128,7 +2219,6 @@ mod tests {
             }))
         }
 
-
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             let record =
                 create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string())).unwrap();
@@ -2185,27 +2275,33 @@ mod tests {
             }))
         }
 
-        pub(crate) fn get_result_type_fully_formed(ok_type: AnalysedType, err_type: AnalysedType) -> AnalysedType {
+        pub(crate) fn get_result_type_fully_formed(
+            ok_type: AnalysedType,
+            err_type: AnalysedType,
+        ) -> AnalysedType {
             AnalysedType::Result(TypeResult {
                 ok: Some(Box::new(ok_type)),
                 err: Some(Box::new(err_type)),
             })
         }
 
-        pub(crate) fn get_analysed_type_record(record_type: Vec<(String, AnalysedType)>) -> AnalysedType {
+        pub(crate) fn get_analysed_type_record(
+            record_type: Vec<(String, AnalysedType)>,
+        ) -> AnalysedType {
             let record = TypeRecord {
                 fields: record_type
                     .into_iter()
-                    .map(|(name, typ)| NameTypePair {
-                        name,
-                        typ,
-                    })
+                    .map(|(name, typ)| NameTypePair { name, typ })
                     .collect(),
             };
             AnalysedType::Record(record)
         }
 
-        pub(crate) fn get_analysed_exports(function_name: &str, input_types: Vec<AnalysedType>, output: AnalysedType) -> Vec<AnalysedExport> {
+        pub(crate) fn get_analysed_exports(
+            function_name: &str,
+            input_types: Vec<AnalysedType>,
+            output: AnalysedType,
+        ) -> Vec<AnalysedExport> {
             let analysed_function_parameters = input_types
                 .into_iter()
                 .enumerate()
@@ -2215,16 +2311,14 @@ mod tests {
                 })
                 .collect();
 
-            vec![
-                AnalysedExport::Function(AnalysedFunction {
-                    name: function_name.to_string(),
-                    parameters: analysed_function_parameters,
-                    results: vec![AnalysedFunctionResult {
-                        name: None,
-                        typ: output
-                    }],
-                }),
-            ]
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }],
+            })]
         }
 
         pub(crate) fn get_function_response_analysed_type_result() -> Vec<AnalysedExport> {
@@ -2306,10 +2400,7 @@ mod tests {
             result_as_typed_value
         }
 
-        pub(crate) fn get_request_details(
-            input: &str,
-            header_map: &HeaderMap,
-        ) -> RequestDetails {
+        pub(crate) fn get_request_details(input: &str, header_map: &HeaderMap) -> RequestDetails {
             let request_body: Value = serde_json::from_str(input).expect("Failed to parse json");
 
             RequestDetails::from(
@@ -2363,7 +2454,7 @@ mod tests {
                     &expr1,
                     worker_response.clone(),
                     component_metadata.clone(),
-                    None
+                    None,
                 )
                 .await
                 .unwrap();
@@ -2387,10 +2478,10 @@ mod tests {
             let sequence_value = create_list(vec![
                 TypeAnnotatedValue::Str("id1".to_string()),
                 TypeAnnotatedValue::Str("id2".to_string()),
-            ]).unwrap();
+            ])
+            .unwrap();
 
-            let record_value =
-                create_singleton_record("ids", &sequence_value).unwrap();
+            let record_value = create_singleton_record("ids", &sequence_value).unwrap();
 
             let worker_response = create_error_result(record_value, None).unwrap();
 
@@ -2400,8 +2491,7 @@ mod tests {
             let component_metadata =
                 get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-            let expr_str =
-                r#"${let result = foo(1); match result { ok(x) => "ok", err(msg) => "append-${msg.ids[0]}" }}"#;
+            let expr_str = r#"${let result = foo(1); match result { ok(x) => "ok", err(msg) => "append-${msg.ids[0]}" }}"#;
 
             let expr1 = rib::from_string(expr_str).unwrap();
             let value1 = noop_executor
@@ -2409,7 +2499,7 @@ mod tests {
                     &expr1,
                     worker_response.clone(),
                     component_metadata.clone(),
-                    None
+                    None,
                 )
                 .await
                 .unwrap();
@@ -2426,10 +2516,10 @@ mod tests {
             let sequence_value = create_list(vec![
                 TypeAnnotatedValue::Str("id1".to_string()),
                 TypeAnnotatedValue::Str("id2".to_string()),
-            ]).unwrap();
+            ])
+            .unwrap();
 
-            let record_value =
-                create_singleton_record("ids", &sequence_value).unwrap();
+            let record_value = create_singleton_record("ids", &sequence_value).unwrap();
 
             let worker_response = create_ok_result(record_value, None).unwrap();
 
@@ -2439,8 +2529,7 @@ mod tests {
             let component_metadata =
                 get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-            let expr_str =
-                r#"${let result = foo(1); match result { ok(x) => "prefix-${x.ids[0]}", err(msg) => "prefix-error-suffix" }}"#;
+            let expr_str = r#"${let result = foo(1); match result { ok(x) => "prefix-${x.ids[0]}", err(msg) => "prefix-error-suffix" }}"#;
 
             let expr1 = rib::from_string(expr_str).unwrap();
             let value1 = noop_executor
@@ -2448,14 +2537,13 @@ mod tests {
                     &expr1,
                     worker_response.clone(),
                     component_metadata.clone(),
-                    None
+                    None,
                 )
                 .await
                 .unwrap();
 
             let expected = TypeAnnotatedValue::Str("prefix-id1".to_string());
             assert_eq!(&value1, &expected);
-
         }
     }
 }
