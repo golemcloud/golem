@@ -136,7 +136,7 @@ pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
     make_file(&def.id, &golem_json)
 }
 
-pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Failed> {
+pub fn make_open_api_file(id: &str, component_id: &str, component_version: u64) -> Result<PathBuf, Failed> {
     let open_api_json = json!(
       {
         "openapi": "3.0.0",
@@ -151,6 +151,7 @@ pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Faile
               "x-golem-worker-bridge": {
                 "worker-name": "worker-${request.path.user-id}",
                 "component-id": component_id,
+                "component-version": component_version,
                 "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: \"random\", status: 200}}"
               },
               "get": {
@@ -219,7 +220,8 @@ fn api_definition_import(
     let component_name = format!("api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let path = make_open_api_file(&component_name, &component_id)?;
+    let component_version = component.component_version;
+    let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
 

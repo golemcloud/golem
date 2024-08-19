@@ -546,7 +546,8 @@ fn text_api_definition_import(
     let component_name = format!("text_api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let path = make_open_api_file(&component_name, &component_id)?;
+    let component_version = component.component_version;
+    let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
