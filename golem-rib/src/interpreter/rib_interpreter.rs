@@ -263,8 +263,6 @@ mod internal {
             TypeAnnotatedValue::Record(record) => {
                 let mut existing_fields = record.value;
 
-                dbg!(existing_fields.clone());
-
                 let name_value_pair = NameValuePair {
                     name: field_name.clone(),
                     value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {

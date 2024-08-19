@@ -184,7 +184,7 @@ mod internal {
 
         let component_id =
             ComponentId(Uuid::parse_str(component_id_str).map_err(|err| err.to_string())?);
-        
+
         Ok(VersionedComponentId {
             component_id,
             version,
