@@ -93,7 +93,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             InferredType::Tuple(tuple) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Tuple(TypeTuple {
                     items: tuple
-                        .into_iter()
+                        .iter()
                         .map(|t| t.try_into())
                         .collect::<Result<Vec<AnalysedType>, String>>()?,
                 }),
@@ -101,7 +101,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             InferredType::Record(record) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Record(TypeRecord {
                     fields: record
-                        .into_iter()
+                        .iter()
                         .map(|(name, typ)| {
                             Ok(NameTypePair {
                                 name: name.to_string(),
@@ -140,7 +140,7 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
             InferredType::Variant(variant) => Ok(AnalysedTypeWithUnit::analysed_type(
                 AnalysedType::Variant(TypeVariant {
                     cases: variant
-                        .into_iter()
+                        .iter()
                         .map(|(name, typ)| {
                             Ok(NameOptionTypePair {
                                 name: name.clone(),

@@ -105,7 +105,7 @@ impl HttpRequestDetails {
 
         Ok(Self {
             request_path_values: path_params,
-            request_body: request_body,
+            request_body,
             request_query_values: query_params,
             request_header_values: header_params,
         })

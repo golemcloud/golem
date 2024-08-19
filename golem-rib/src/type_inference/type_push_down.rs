@@ -1,5 +1,4 @@
 use crate::{Expr, InferredType, MatchArm};
-use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, VecDeque};
 
 pub fn push_types_down(expr: &mut Expr) {
@@ -56,11 +55,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::AllOf(types) => {
                         let mut all_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Option(ref t) => {
-                                    all_types.push(*t.clone());
-                                }
-                                _ => {}
+                            if let InferredType::Option(ref t) = typ {
+                                all_types.push(*t.clone());
                             }
                         }
                         expr.add_infer_type_mut(InferredType::AllOf(all_types));
@@ -68,11 +64,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::OneOf(types) => {
                         let mut one_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Option(ref t) => {
-                                    one_of_types.push(*t.clone());
-                                }
-                                _ => {}
+                            if let InferredType::Option(ref t) = typ {
+                                one_of_types.push(*t.clone());
                             }
                         }
                         expr.add_infer_type_mut(InferredType::OneOf(one_of_types));
@@ -86,22 +79,15 @@ pub fn push_types_down(expr: &mut Expr) {
                 // The inferred_type should be ideally result type, i.e, either Unknown type. or all of multiple result types, or one of all result types,
                 // and otherwise we give up inferring the internal type at this phase
                 match inferred_type {
-                    InferredType::Result { ref ok, .. } => {
-                        if let Some(ok) = ok {
-                            expr.add_infer_type_mut(*ok.clone());
-                            queue.push_back(expr);
-                        }
+                    InferredType::Result { ok: Some(ok), .. } => {
+                        expr.add_infer_type_mut(*ok.clone());
+                        queue.push_back(expr);
                     }
                     InferredType::AllOf(types) => {
                         let mut all_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Result { ok, .. } => {
-                                    if let Some(ok) = ok {
-                                        all_types.push(*ok.clone());
-                                    }
-                                }
-                                _ => {}
+                            if let InferredType::Result { ok: Some(ok), .. } = typ {
+                                all_types.push(*ok.clone());
                             }
                         }
                         expr.add_infer_type_mut(InferredType::AllOf(all_types));
@@ -110,13 +96,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::OneOf(types) => {
                         let mut one_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Result { ref ok, .. } => {
-                                    if let Some(ok) = ok {
-                                        one_of_types.push(*ok.clone());
-                                    }
-                                }
-                                _ => {}
+                            if let InferredType::Result { ok: Some(ok), .. } = typ {
+                                one_of_types.push(*ok.clone());
                             }
                         }
                         expr.add_infer_type_mut(InferredType::OneOf(one_of_types));
@@ -131,22 +112,20 @@ pub fn push_types_down(expr: &mut Expr) {
                 // The inferred_type should be ideally result type, i.e, either Unknown type. or all of multiple result types, or one of all result types,
                 // and otherwise we give up inferring the internal type at this phase
                 match inferred_type {
-                    InferredType::Result { ref error, .. } => {
-                        if let Some(error) = error {
-                            expr.add_infer_type_mut(*error.clone());
-                            queue.push_back(expr);
-                        }
+                    InferredType::Result {
+                        error: Some(error), ..
+                    } => {
+                        expr.add_infer_type_mut(*error.clone());
+                        queue.push_back(expr);
                     }
                     InferredType::AllOf(types) => {
                         let mut all_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Result { ref error, .. } => {
-                                    if let Some(error) = error {
-                                        all_types.push(*error.clone());
-                                    }
-                                }
-                                _ => {}
+                            if let InferredType::Result {
+                                error: Some(error), ..
+                            } = typ
+                            {
+                                all_types.push(*error.clone());
                             }
                         }
                         expr.add_infer_type_mut(InferredType::AllOf(all_types));
@@ -155,13 +134,11 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::OneOf(types) => {
                         let mut one_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Result { ref error, .. } => {
-                                    if let Some(error) = error {
-                                        one_of_types.push(*error.clone());
-                                    }
-                                }
-                                _ => {}
+                            if let InferredType::Result {
+                                error: Some(error), ..
+                            } = typ
+                            {
+                                one_of_types.push(*error.clone());
                             }
                         }
                         expr.add_infer_type_mut(InferredType::OneOf(one_of_types));
@@ -204,11 +181,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::AllOf(types) => {
                         let mut all_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Tuple(types) => {
-                                    all_types.extend(types);
-                                }
-                                _ => {}
+                            if let InferredType::Tuple(types) = typ {
+                                all_types.extend(types);
                             }
                         }
                         for (expr, typ) in exprs.iter_mut().zip(all_types) {
@@ -219,11 +193,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::OneOf(types) => {
                         let mut one_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Tuple(types) => {
-                                    one_of_types.extend(types);
-                                }
-                                _ => {}
+                            if let InferredType::Tuple(types) = typ {
+                                one_of_types.extend(types);
                             }
                         }
                         for (expr, typ) in exprs.iter_mut().zip(one_of_types) {
@@ -248,11 +219,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::AllOf(types) => {
                         let mut all_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Sequence(types) => {
-                                    all_types.extend(types);
-                                }
-                                _ => {}
+                            if let InferredType::Sequence(types) = typ {
+                                all_types.extend(types);
                             }
                         }
                         for (expr, typ) in expressions.iter_mut().zip(all_types) {
@@ -263,11 +231,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::OneOf(types) => {
                         let mut one_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Sequence(types) => {
-                                    one_of_types.extend(types);
-                                }
-                                _ => {}
+                            if let InferredType::Sequence(types) = typ {
+                                one_of_types.extend(types);
                             }
                         }
                         for (expr, typ) in expressions.iter_mut().zip(one_of_types) {
@@ -297,12 +262,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::AllOf(types) => {
                         let mut all_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                // Because we already typecheceked and can guarantee to forget other cases
-                                InferredType::Record(types) => {
-                                    all_of_types.push(types);
-                                }
-                                _ => {}
+                            if let InferredType::Record(types) = typ {
+                                all_of_types.push(types);
                             }
                         }
 
@@ -332,11 +293,8 @@ pub fn push_types_down(expr: &mut Expr) {
                     InferredType::OneOf(types) => {
                         let mut one_of_types = vec![];
                         for typ in types {
-                            match typ {
-                                InferredType::Record(types) => {
-                                    one_of_types.extend(types);
-                                }
-                                _ => {}
+                            if let InferredType::Record(types) = typ {
+                                one_of_types.extend(types);
                             }
                         }
                         for (field_name, expr) in expressions.iter_mut() {
@@ -359,15 +317,14 @@ pub fn push_types_down(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::{ArmPattern, Expr, InferredType};
-    use std::collections::VecDeque;
+    use crate::{ArmPattern, InferredType};
 
     // This function is called from pushed down phase, and we push down the predicate
     // types to arm patterns where ever possible
     // match some(x) {
     //   some(some(some(x))) => x
-    pub(crate) fn update_arm_pattern_type<'a>(
-        arm_pattern: &'a mut ArmPattern,
+    pub(crate) fn update_arm_pattern_type(
+        arm_pattern: &mut ArmPattern,
         inferred_type: &InferredType,
     ) {
         match arm_pattern {
@@ -405,8 +362,9 @@ mod internal {
                 InferredType::Variant(variant) => {
                     variant
                         .iter()
-                        .find(|(name, optional_type)| name == constructor_name)
-                        .map(|(_, optional_type)| {
+                        .find(|(name, _optional_type)| name == constructor_name)
+                        .iter()
+                        .for_each(|(_, optional_type)| {
                             if let Some(inner_type) = optional_type {
                                 for pattern in &mut *patterns {
                                     update_arm_pattern_type(pattern, inner_type);

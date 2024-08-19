@@ -113,10 +113,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
-                ""
-            ))
+            Ok((Expr::select_field(Expr::identifier("foo"), "bar"), ""))
         );
     }
 
@@ -128,11 +125,8 @@ mod tests {
             result,
             Ok((
                 Expr::select_field(
-                    Expr::record(vec![(
-                        "foo".to_string(),
-                        Expr::identifier("bar".to_string())
-                    )]),
-                    "foo".to_string()
+                    Expr::record(vec![("foo".to_string(), Expr::identifier("bar"))]),
+                    "foo"
                 ),
                 ""
             ))
@@ -146,10 +140,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::select_field(
-                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
-                    "baz".to_string()
-                ),
+                Expr::select_field(Expr::select_field(Expr::identifier("foo"), "bar"), "baz"),
                 ""
             ))
         );
@@ -163,10 +154,7 @@ mod tests {
             result,
             Ok((
                 Expr::select_index(
-                    Expr::select_field(
-                        Expr::select_index(Expr::identifier("foo".to_string()), 0),
-                        "bar".to_string()
-                    ),
+                    Expr::select_field(Expr::select_index(Expr::identifier("foo"), 0), "bar"),
                     1
                 ),
                 ""
@@ -182,11 +170,8 @@ mod tests {
             result,
             Ok((
                 Expr::select_field(
-                    Expr::select_index(
-                        Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
-                        0
-                    ),
-                    "baz".to_string()
+                    Expr::select_index(Expr::select_field(Expr::identifier("foo"), "bar"), 0),
+                    "baz"
                 ),
                 ""
             ))
@@ -200,8 +185,8 @@ mod tests {
             result,
             Ok((
                 Expr::greater_than(
-                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
-                    Expr::literal("bar".to_string())
+                    Expr::select_field(Expr::identifier("foo"), "bar"),
+                    Expr::literal("bar")
                 ),
                 ""
             ))
@@ -215,7 +200,7 @@ mod tests {
             result,
             Ok((
                 Expr::greater_than(
-                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
+                    Expr::select_field(Expr::identifier("foo"), "bar"),
                     Expr::number(1f64)
                 ),
                 ""
@@ -232,11 +217,11 @@ mod tests {
             Ok((
                 Expr::cond(
                     Expr::greater_than(
-                        Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
+                        Expr::select_field(Expr::identifier("foo"), "bar"),
                         Expr::number(1f64)
                     ),
-                    Expr::select_field(Expr::identifier("foo".to_string()), "bar".to_string()),
-                    Expr::select_field(Expr::identifier("foo".to_string()), "baz".to_string())
+                    Expr::select_field(Expr::identifier("foo"), "bar"),
+                    Expr::select_field(Expr::identifier("foo"), "baz")
                 ),
                 ""
             ))
@@ -251,40 +236,30 @@ mod tests {
             result,
             Ok((
                 Expr::pattern_match(
-                    Expr::identifier("foo".to_string()),
+                    Expr::identifier("foo"),
                     vec![
-                        MatchArm::match_arm(
-                            ArmPattern::WildCard,
-                            Expr::identifier("bar".to_string())
+                        MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
+                            Expr::identifier("x")
                         ),
-                        MatchArm::match_arm(
-                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier(
-                                "x".to_string()
-                            )))),
-                            Expr::identifier("x".to_string())
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("x")))),
+                            Expr::identifier("x")
                         ),
-                        MatchArm::match_arm(
-                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier(
-                                "x".to_string()
-                            )))),
-                            Expr::identifier("x".to_string())
-                        ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(None))),
-                            Expr::identifier("foo".to_string())
+                            Expr::identifier("foo")
                         ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
-                                "x".to_string()
+                                "x"
                             ))))),
-                            Expr::identifier("x".to_string())
+                            Expr::identifier("x")
                         ),
-                        MatchArm::match_arm(
-                            ArmPattern::Literal(Box::new(Expr::identifier("foo".to_string()))),
-                            Expr::select_field(
-                                Expr::identifier("foo".to_string()),
-                                "bar".to_string()
-                            )
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::identifier("foo"))),
+                            Expr::select_field(Expr::identifier("foo"), "bar")
                         ),
                     ]
                 ),

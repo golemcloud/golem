@@ -1,7 +1,7 @@
 use crate::Expr;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibInputType as ProtoRibInputType;
-use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
@@ -125,13 +125,13 @@ mod internal {
             }),
             InferredType::Tuple(tuple) => AnalysedType::Tuple(TypeTuple {
                 items: tuple
-                    .into_iter()
+                    .iter()
                     .map(|t| to_analysed_type_with_fallback(t, fallback.clone()))
                     .collect::<Vec<AnalysedType>>(),
             }),
             InferredType::Record(record) => AnalysedType::Record(TypeRecord {
                 fields: record
-                    .into_iter()
+                    .iter()
                     .map(|(name, typ)| NameTypePair {
                         name: name.to_string(),
                         typ: to_analysed_type_with_fallback(typ, fallback.clone()),
@@ -166,7 +166,7 @@ mod internal {
             }
             InferredType::Variant(variant) => AnalysedType::Variant(TypeVariant {
                 cases: variant
-                    .into_iter()
+                    .iter()
                     .map(|(name, typ)| NameOptionTypePair {
                         name: name.clone(),
                         typ: typ

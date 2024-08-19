@@ -1,4 +1,4 @@
-use crate::{InvocationName, ParsedFunctionName};
+use crate::InvocationName;
 use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
@@ -77,7 +77,7 @@ impl FunctionTypeRegistry {
                             .parameters
                             .into_iter()
                             .map(|parameter| {
-                                let analysed_type = AnalysedType::from(parameter.typ);
+                                let analysed_type = parameter.typ;
                                 types.insert(analysed_type.clone());
                                 analysed_type
                             })
@@ -87,7 +87,7 @@ impl FunctionTypeRegistry {
                             .results
                             .into_iter()
                             .map(|result| {
-                                let analysed_type = AnalysedType::from(result.typ);
+                                let analysed_type = result.typ;
                                 types.insert(analysed_type.clone());
                                 analysed_type
                             })
@@ -113,7 +113,7 @@ impl FunctionTypeRegistry {
                         .parameters
                         .into_iter()
                         .map(|parameter| {
-                            let analysed_type = AnalysedType::from(parameter.typ);
+                            let analysed_type = parameter.typ;
                             types.insert(analysed_type.clone());
                             analysed_type
                         })
@@ -123,7 +123,7 @@ impl FunctionTypeRegistry {
                         .results
                         .into_iter()
                         .map(|result| {
-                            let analysed_type = AnalysedType::from(result.typ);
+                            let analysed_type = result.typ;
                             types.insert(analysed_type.clone());
                             analysed_type
                         })
@@ -142,21 +142,18 @@ impl FunctionTypeRegistry {
         }
 
         for ty in types {
-            match ty.clone() {
-                AnalysedType::Variant(variant) => {
-                    for name_type_pair in variant.cases {
-                        map.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
-                            name_type_pair.typ.map_or(
-                                RegistryValue::Value(ty.clone()),
-                                |variant_parameter_typ| RegistryValue::Function {
-                                    parameter_types: vec![variant_parameter_typ],
-                                    return_types: vec![ty.clone()],
-                                },
-                            )
-                        });
-                    }
+            if let AnalysedType::Variant(variant) = ty.clone() {
+                for name_type_pair in variant.cases {
+                    map.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
+                        name_type_pair.typ.map_or(
+                            RegistryValue::Value(ty.clone()),
+                            |variant_parameter_typ| RegistryValue::Function {
+                                parameter_types: vec![variant_parameter_typ],
+                                return_types: vec![ty.clone()],
+                            },
+                        )
+                    });
                 }
-                _ => {}
             }
         }
 

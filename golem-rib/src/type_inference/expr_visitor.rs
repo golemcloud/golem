@@ -103,7 +103,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             queue.push_back(expr);
             for arm in arms {
                 let arm_literal_expressions = arm.arm_pattern.get_expr_literals();
-                queue.extend(arm_literal_expressions.iter().map(|x| *x));
+                queue.extend(arm_literal_expressions.iter().copied());
                 queue.push_back(&*arm.arm_resolution_expr);
             }
         }

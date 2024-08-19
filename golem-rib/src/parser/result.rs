@@ -28,8 +28,8 @@ use combine::stream::easy;
 
 pub fn result<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        spaces().with(between(string("ok("), char(')'), rib_expr()).map(|expr| Expr::ok(expr))),
-        spaces().with(between(string("err("), char(')'), rib_expr()).map(|expr| Expr::err(expr))),
+        spaces().with(between(string("ok("), char(')'), rib_expr()).map(Expr::ok)),
+        spaces().with(between(string("err("), char(')'), rib_expr()).map(Expr::err)),
     ))
 }
 

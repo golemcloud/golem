@@ -113,8 +113,8 @@ mod tests {
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
-    use http::{HeaderMap, HeaderName, HeaderValue, Method};
-    use rib::{GetLiteralValue, ParsedFunctionName, RibInterpreterResult};
+    use http::{HeaderMap, HeaderValue, Method};
+    use rib::{GetLiteralValue, RibInterpreterResult};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;

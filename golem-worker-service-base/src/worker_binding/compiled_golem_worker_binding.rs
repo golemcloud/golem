@@ -1,7 +1,7 @@
 use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeStr, TypeU64};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeU64};
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 
@@ -122,15 +122,15 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
         let component_id = value
             .component
             .ok_or("Missing component".to_string())
-            .and_then(|x| VersionedComponentId::try_from(x))?;
+            .and_then(VersionedComponentId::try_from)?;
         let worker_name_compiled = value
             .compiled_worker_name_expr
             .ok_or("Missing compiled worker name expr".to_string())
-            .and_then(|x| RibByteCode::try_from(x))?;
+            .and_then(RibByteCode::try_from)?;
         let worker_name_input = value
             .worker_name_rib_input
             .ok_or("Missing worker name rib input".to_string())
-            .and_then(|x| RibInputTypeInfo::try_from(x))?;
+            .and_then(RibInputTypeInfo::try_from)?;
         let idempotency_key_compiled = match value.compiled_idempotency_key_expr {
             Some(x) => Some(RibByteCode::try_from(x)?),
             None => None,
@@ -143,17 +143,17 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
         let response_compiled = value
             .compiled_response_expr
             .ok_or("Missing compiled response".to_string())
-            .and_then(|x| RibByteCode::try_from(x))?;
+            .and_then(RibByteCode::try_from)?;
         let response_input = value
             .response_rib_input
             .ok_or("Missing response rib input".to_string())
-            .and_then(|x| RibInputTypeInfo::try_from(x))?;
+            .and_then(RibInputTypeInfo::try_from)?;
 
         let worker_name_compiled = WorkerNameCompiled {
             worker_name: value
                 .worker_name
                 .ok_or("Missing worker name".to_string())
-                .and_then(|x| Expr::try_from(x))?,
+                .and_then(Expr::try_from)?,
             compiled_worker_name: worker_name_compiled,
             rib_input: worker_name_input,
         };
@@ -163,7 +163,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
                 idempotency_key: value
                     .idempotency_key
                     .ok_or("Missing idempotency key".to_string())
-                    .and_then(|x| Expr::try_from(x))?,
+                    .and_then(Expr::try_from)?,
                 compiled_idempotency_key: compiled,
                 rib_input: input,
             }),
@@ -175,7 +175,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             response_rib_expr: value
                 .response
                 .ok_or("Missing response".to_string())
-                .and_then(|x| Expr::try_from(x))?,
+                .and_then(Expr::try_from)?,
             compiled_response: response_compiled,
             rib_input: response_input,
         };

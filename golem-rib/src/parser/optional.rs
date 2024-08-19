@@ -87,9 +87,6 @@ mod tests {
     fn test_some_of_literal() {
         let input = "some(\"foo\")";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((Expr::option(Some(Expr::literal("foo".to_string()))), ""))
-        );
+        assert_eq!(result, Ok((Expr::option(Some(Expr::literal("foo"))), "")));
     }
 }

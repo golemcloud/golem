@@ -77,7 +77,7 @@ mod internal {
     use golem_wasm_rpc::protobuf::TypedFlags;
     use std::ops::Deref;
 
-    pub(crate) fn process_expr<'a>(
+    pub(crate) fn process_expr(
         expr: &Expr,
         stack: &mut Vec<ExprState>,
         instructions: &mut Vec<RibIR>,
@@ -99,7 +99,7 @@ mod internal {
                 instructions.push(RibIR::PushLit(type_annotated_value));
             }
             Expr::Number(num, inferred_type) => {
-                let analysed_type = convert_to_analysed_type_for(&expr, &inferred_type)?;
+                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
 
                 let type_annotated_value = num.to_val(&analysed_type).ok_or(format!(
                     "Internal error: convert a number to wasm value using {:?}",
@@ -140,7 +140,7 @@ mod internal {
                     instructions.push(RibIR::UpdateRecord(field_name.clone()));
                 }
                 // Push record creation instruction
-                let analysed_type = convert_to_analysed_type_for(&expr, &inferred_type);
+                let analysed_type = convert_to_analysed_type_for(expr, inferred_type);
                 instructions.push(RibIR::CreateAndPushRecord(analysed_type?));
             }
             Expr::Sequence(exprs, inferred_type) => {
@@ -149,7 +149,7 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                let analysed_type = convert_to_analysed_type_for(&expr, &inferred_type)?;
+                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
                 instructions.push(RibIR::PushList(analysed_type, exprs.len()));
             }
             Expr::Multiple(exprs, _) => {
@@ -164,7 +164,7 @@ mod internal {
             }
             Expr::PatternMatch(pred, match_arms, inferred_type) => {
                 let desugared_pattern_match =
-                    desugar_pattern_match(pred.deref(), &match_arms, inferred_type.clone())
+                    desugar_pattern_match(pred.deref(), match_arms, inferred_type.clone())
                         .ok_or("Desugar pattern match failed".to_string())?;
                 stack.push(ExprState::from_expr(&desugared_pattern_match));
             }
@@ -189,29 +189,29 @@ mod internal {
             Expr::Option(Some(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushSome(convert_to_analysed_type_for(
-                    &expr,
-                    &inferred_type,
+                    expr,
+                    inferred_type,
                 )?));
             }
 
             Expr::Option(None, inferred_type) => {
-                let optional = convert_to_analysed_type_for(&expr, &inferred_type);
+                let optional = convert_to_analysed_type_for(expr, inferred_type);
                 instructions.push(RibIR::PushNone(optional.ok()));
             }
 
             Expr::Result(Ok(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushOkResult(convert_to_analysed_type_for(
-                    &expr,
-                    &inferred_type,
+                    expr,
+                    inferred_type,
                 )?));
             }
 
             Expr::Result(Err(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::PushErrResult(convert_to_analysed_type_for(
-                    &expr,
-                    &inferred_type,
+                    expr,
+                    inferred_type,
                 )?));
             }
 
@@ -220,7 +220,7 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                let analysed_type = convert_to_analysed_type_for(expr, &inferred_type)?;
+                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
 
                 match invocation_name {
                     InvocationName::Function(parsed_function_name) => {
@@ -274,7 +274,7 @@ mod internal {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
-                let analysed_type = convert_to_analysed_type_for(&expr, &analysed_type)?;
+                let analysed_type = convert_to_analysed_type_for(expr, analysed_type)?;
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
         }
@@ -770,21 +770,21 @@ mod compiler_tests {
         let expr = Expr::PatternMatch(
             Box::new(Expr::Literal("pred".to_string(), InferredType::Str)),
             vec![
-                MatchArm::match_arm(
+                MatchArm::new(
                     ArmPattern::Literal(Box::new(Expr::Literal(
                         "arm1_pattern_expr".to_string(),
                         InferredType::Str,
                     ))),
                     Expr::Literal("arm1_resolution_expr".to_string(), InferredType::Str),
                 ),
-                MatchArm::match_arm(
+                MatchArm::new(
                     ArmPattern::Literal(Box::new(Expr::Literal(
                         "arm2_pattern_expr".to_string(),
                         InferredType::Str,
                     ))),
                     Expr::Literal("arm2_resolution_expr".to_string(), InferredType::Str),
                 ),
-                MatchArm::match_arm(
+                MatchArm::new(
                     ArmPattern::Literal(Box::new(Expr::Literal(
                         "arm3_pattern_expr".to_string(),
                         InferredType::Str,

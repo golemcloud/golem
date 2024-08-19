@@ -52,16 +52,14 @@ impl RibInputValueResolver for RequestDetails {
 
         let request_type_annotated_value = match request_type_info {
             Some(request_type) => {
-                let request_value =
-                    TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
-                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
-                request_value
+                TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
+                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?
             }
             None => {
                 let analysed_type = infer_analysed_type(rib_input_with_request_content);
-                let request_value = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, &analysed_type)
-                    .map_err(|err| RibInputTypeMismatch(format!("Internal Error: Input request has been inferred  to {:?} but failed to get converted to a valid input. {}", analysed_type, err.join(", "))))?;
-                request_value
+
+                TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, &analysed_type)
+                    .map_err(|err| RibInputTypeMismatch(format!("Internal Error: Input request has been inferred  to {:?} but failed to get converted to a valid input. {}", analysed_type, err.join(", "))))?
             }
         };
 

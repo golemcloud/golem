@@ -177,13 +177,13 @@ mod tests {
                 Expr::pattern_match(
                     Expr::identifier("foo"),
                     vec![
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
                                 "x",
                             ))))),
                             Expr::identifier("x"),
                         ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(None))),
                             Expr::boolean(false),
                         ),
@@ -195,11 +195,11 @@ mod tests {
                 Expr::pattern_match(
                     Expr::identifier("bar"),
                     vec![
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
                             Expr::identifier("x"),
                         ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("msg")))),
                             Expr::boolean(false),
                         ),

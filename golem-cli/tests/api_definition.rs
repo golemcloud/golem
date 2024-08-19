@@ -1,7 +1,9 @@
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_component_from_file;
 use golem_cli::model::component::ComponentView;
-use golem_client::model::{GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route};
+use golem_client::model::{
+    GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route, VersionedComponentId,
+};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
@@ -112,7 +114,10 @@ fn golem_def_with_response(id: &str, component_id: &str, response: String) -> Ht
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
             binding: GolemWorkerBinding {
-                component_id: Uuid::parse_str(component_id).unwrap(),
+                component_id: VersionedComponentId {
+                    component_id: Uuid::parse_str(component_id).unwrap(),
+                    version: 0,
+                },
                 worker_name: "worker-${request.path.user-id}".to_string(),
                 idempotency_key: None,
                 response,

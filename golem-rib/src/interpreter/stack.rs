@@ -9,6 +9,12 @@ pub struct InterpreterStack {
     pub stack: Vec<RibInterpreterResult>,
 }
 
+impl Default for InterpreterStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InterpreterStack {
     pub fn new() -> Self {
         InterpreterStack { stack: Vec::new() }
@@ -126,7 +132,7 @@ impl InterpreterStack {
                     )),
                 ),
                 ok: Some(ok_type),
-                error: err_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
+                error: err_type.map(golem_wasm_ast::analysis::protobuf::Type::from),
             },
         )));
     }
@@ -150,7 +156,7 @@ impl InterpreterStack {
                         },
                     )),
                 ),
-                ok: ok_type.map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x)),
+                ok: ok_type.map(golem_wasm_ast::analysis::protobuf::Type::from),
                 error: Some(err_type),
             },
         )));
@@ -174,7 +180,7 @@ impl InterpreterStack {
         }));
     }
 
-    pub fn push_tuple(&mut self, values: Vec<TypeAnnotatedValue>, types: &Vec<AnalysedType>) {
+    pub fn push_tuple(&mut self, values: Vec<TypeAnnotatedValue>, types: &[AnalysedType]) {
         self.push_val(TypeAnnotatedValue::Tuple(TypedTuple {
             value: values
                 .into_iter()
@@ -183,8 +189,8 @@ impl InterpreterStack {
                 })
                 .collect(),
             typ: types
-                .into_iter()
-                .map(|x| golem_wasm_ast::analysis::protobuf::Type::from(x))
+                .iter()
+                .map(golem_wasm_ast::analysis::protobuf::Type::from)
                 .collect(),
         }));
     }

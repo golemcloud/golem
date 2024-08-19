@@ -149,7 +149,7 @@ mod tests {
         AnalysedExport, AnalysedType, NameTypePair, TypeList, TypeOption, TypeRecord, TypeStr,
         TypeU32, TypeU64,
     };
-    use golem_wasm_rpc::json;
+
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameOptionTypePair, TypeVariant, TypedTuple, TypedVariant};
@@ -158,7 +158,7 @@ mod tests {
     use rib::{
         Expr, FunctionTypeRegistry, RibFunctionInvoke, RibInputTypeInfo, RibInterpreterResult,
     };
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     use crate::api_definition::http::AllPathPatterns;
     use crate::worker_binding::{RequestDetails, RibInputValue, RibInputValueResolver};
@@ -284,7 +284,7 @@ mod tests {
             expr: &Expr,
         ) -> Result<RibInterpreterResult, EvaluationError> {
             let compiled =
-                rib::compile_pure(&expr, &vec![], Some(AnalysedType::Str(TypeStr))).unwrap();
+                rib::compile_pure(expr, &vec![], Some(AnalysedType::Str(TypeStr))).unwrap();
 
             self.evaluate_pure(&compiled.byte_code, &RibInputValue::empty())
                 .await
@@ -860,7 +860,7 @@ mod tests {
             .unwrap_err()
             .0;
 
-        let expected = TypeAnnotatedValue::Str("bStreet".to_string());
+        let _expected = TypeAnnotatedValue::Str("bStreet".to_string());
 
         assert!(result.contains("Types do not match. Inferred to be both Record([(\"street\", Str), (\"city\", Str)]) and List(Unknown)"));
     }
@@ -927,7 +927,7 @@ mod tests {
             .unwrap_err()
             .0;
 
-        let expected = TypeAnnotatedValue::Str("bName".to_string());
+        let _expected = TypeAnnotatedValue::Str("bName".to_string());
 
         assert!(error_message.contains("Types do not match. Inferred to be both Str and Bool"));
     }
@@ -1226,9 +1226,9 @@ mod tests {
         let error_worker_response =
             create_error_result(TypeAnnotatedValue::Str("Error".to_string()), None).unwrap();
 
-        let new_request_details = request_details_from_request_path_variables(uri, path_pattern);
+        let _new_request_details = request_details_from_request_path_variables(uri, path_pattern);
 
-        let expr3 = rib::from_string(
+        let _expr3 = rib::from_string(
             r#"${if request.path.id == "bar" then "foo" else match worker.response { ok(foo) => foo.id, err(msg) => "empty" }}"#,
 
         ).unwrap();
@@ -2085,7 +2085,7 @@ mod tests {
                     .map_err(|_| EvaluationError("Failed to get type".to_string()))?;
                 name_type_pairs.push(NameTypePair {
                     name: key.to_string(),
-                    typ: typ,
+                    typ,
                 });
 
                 name_value_pairs.push(NameValuePair {
@@ -2115,6 +2115,7 @@ mod tests {
             }))
         }
 
+        #[allow(dead_code)]
         pub(crate) fn get_complex_variant_typed_value() -> TypeAnnotatedValue {
             let record =
                 create_singleton_record("id", &TypeAnnotatedValue::Str("pId".to_string())).unwrap();
@@ -2245,19 +2246,19 @@ mod tests {
         }
 
         pub(crate) fn get_simple_worker_response_err() -> TypeAnnotatedValue {
-            let worker_response_value = TypeAnnotatedValue::parse_with_type(
+            TypeAnnotatedValue::parse_with_type(
                 &json!({"err": "afsal" }),
                 &AnalysedType::Result(TypeResult {
                     ok: None,
                     err: Some(Box::new(AnalysedType::Str(TypeStr))),
                 }),
             )
-            .unwrap();
-            worker_response_value
+            .unwrap()
         }
 
+        #[allow(dead_code)]
         pub(crate) fn get_err_worker_response() -> TypeAnnotatedValue {
-            let worker_response_value = TypeAnnotatedValue::parse_with_type(
+            TypeAnnotatedValue::parse_with_type(
                 &json!({"err": { "id" : "afsal"} }),
                 &AnalysedType::Result(TypeResult {
                     err: Some(Box::new(AnalysedType::Record(TypeRecord {
@@ -2269,18 +2270,16 @@ mod tests {
                     ok: None,
                 }),
             )
-            .unwrap();
-
-            worker_response_value
+            .unwrap()
         }
 
+        #[allow(dead_code)]
         pub(crate) fn get_worker_response(input: &str) -> TypeAnnotatedValue {
             let value: Value = serde_json::from_str(input).expect("Failed to parse json");
 
             let expected_type = infer_analysed_type(&value);
-            let result_as_typed_value =
-                TypeAnnotatedValue::parse_with_type(&value, &expected_type).unwrap();
-            result_as_typed_value
+
+            TypeAnnotatedValue::parse_with_type(&value, &expected_type).unwrap()
         }
 
         pub(crate) fn get_request_details(input: &str, header_map: &HeaderMap) -> RequestDetails {

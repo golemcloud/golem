@@ -1,5 +1,4 @@
 use crate::{Expr, InferredType};
-use std::collections::VecDeque;
 
 // TODO; This is recursion because we bumped into Rust borrowing issues with the following logic,
 // which may require changing Expr data structure with RefCells.

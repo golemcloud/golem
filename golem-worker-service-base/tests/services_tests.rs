@@ -5,14 +5,12 @@ mod tests {
     use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
-    use golem_service_base::model::{Component, VersionedComponentId};
+    use golem_service_base::model::Component;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple,
+        AnalysedInstance, AnalysedType, TypeStr,
     };
-    use golem_worker_service_base::api_definition::http::{
-        ComponentMetadataDictionary, HttpApiDefinition,
-    };
+    use golem_worker_service_base::api_definition::http::HttpApiDefinition;
     use golem_worker_service_base::api_definition::{
         ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
     };
@@ -24,13 +22,11 @@ mod tests {
     use golem_worker_service_base::service::api_deployment::{
         ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
     };
-    use golem_worker_service_base::service::component::{
-        ComponentResult, ComponentService, ComponentServiceNoop,
-    };
+    use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
     use golem_worker_service_base::service::http::http_api_definition_validator::{
         HttpApiDefinitionValidator, RouteValidationError,
     };
-    use std::collections::HashMap;
+
     use std::sync::Arc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};

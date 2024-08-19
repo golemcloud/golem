@@ -10,14 +10,16 @@ pub struct Interpreter {
     pub env: InterpreterEnv,
 }
 
-impl Interpreter {
-    pub fn default() -> Self {
+impl Default for Interpreter {
+    fn default() -> Self {
         Interpreter {
             stack: InterpreterStack::new(),
             env: InterpreterEnv::default(),
         }
     }
+}
 
+impl Interpreter {
     pub fn new(
         input: HashMap<String, TypeAnnotatedValue>,
         function_invoke: RibFunctionInvoke,
@@ -456,7 +458,7 @@ mod internal {
                 let variant = variants
                     .cases
                     .iter()
-                    .find(|name| &name.name == &variant_name)
+                    .find(|name| name.name == variant_name)
                     .ok_or(format!("Unknown variant {} not found", variant_name))?;
 
                 let variant_arg_typ = variant.typ.clone();
@@ -693,13 +695,10 @@ mod internal {
         instruction_stack: &mut VecDeque<RibIR>,
     ) {
         while let Some(instruction) = instruction_stack.pop_front() {
-            match instruction {
-                RibIR::Label(label_instruction_id) => {
-                    if label_instruction_id == instruction_id {
-                        break;
-                    }
+            if let RibIR::Label(label_instruction_id) = instruction {
+                if label_instruction_id == instruction_id {
+                    break;
                 }
-                _ => {}
             }
         }
     }
@@ -738,7 +737,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_bool().unwrap(), true);
+        assert!(result.get_bool().unwrap());
     }
 
     #[tokio::test]
@@ -754,7 +753,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_bool().unwrap(), true);
+        assert!(result.get_bool().unwrap());
     }
 
     #[tokio::test]
@@ -770,7 +769,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_bool().unwrap(), true);
+        assert!(result.get_bool().unwrap());
     }
 
     #[tokio::test]
@@ -786,7 +785,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_bool().unwrap(), true);
+        assert!(result.get_bool().unwrap());
     }
 
     #[tokio::test]
@@ -802,7 +801,7 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
-        assert_eq!(result.get_bool().unwrap(), true);
+        assert!(result.get_bool().unwrap());
     }
 
     #[tokio::test]

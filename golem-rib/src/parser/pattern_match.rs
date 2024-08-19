@@ -54,7 +54,7 @@ mod match_arm {
             //RHS
             rib_expr().skip(spaces()),
         )
-            .map(|(lhs, _, rhs)| MatchArm::match_arm(lhs, rhs))
+            .map(|(lhs, _, rhs)| MatchArm::new(lhs, rhs))
     }
 }
 
@@ -186,10 +186,7 @@ mod tests {
             Ok((
                 Expr::pattern_match(
                     Expr::identifier("foo"),
-                    vec![MatchArm::match_arm(
-                        ArmPattern::WildCard,
-                        Expr::identifier("bar")
-                    )]
+                    vec![MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar"))]
                 ),
                 ""
             ))
@@ -205,7 +202,7 @@ mod tests {
             Ok((
                 Expr::pattern_match(
                     Expr::identifier("foo"),
-                    vec![MatchArm::match_arm(
+                    vec![MatchArm::new(
                         ArmPattern::custom_constructor(
                             "foo",
                             vec![
@@ -231,7 +228,7 @@ mod tests {
             Ok((
                 Expr::pattern_match(
                     Expr::identifier("foo"),
-                    vec![MatchArm::match_arm(
+                    vec![MatchArm::new(
                         ArmPattern::As(
                             "abc".to_string(),
                             Box::new(ArmPattern::custom_constructor(
@@ -266,7 +263,7 @@ mod tests {
             Ok((
                 Expr::pattern_match(
                     Expr::identifier("foo"),
-                    vec![MatchArm::match_arm(
+                    vec![MatchArm::new(
                         ArmPattern::Constructor(
                             "Foo".to_string(),
                             vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
@@ -289,20 +286,20 @@ mod tests {
                 Expr::pattern_match(
                     Expr::identifier("foo"),
                     vec![
-                        MatchArm::match_arm(ArmPattern::WildCard, Expr::identifier("bar")),
-                        MatchArm::match_arm(
+                        MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
                             Expr::identifier("x")
                         ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("x")))),
                             Expr::identifier("x")
                         ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(None))),
                             Expr::identifier("foo")
                         ),
-                        MatchArm::match_arm(
+                        MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
                                 "x"
                             ))))),

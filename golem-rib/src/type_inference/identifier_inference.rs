@@ -14,7 +14,7 @@ pub fn infer_all_identifiers_bottom_up(expr: &mut Expr) {
         match expr {
             Expr::Identifier(variable_id, inferred_type) => {
                 if inferred_type == &InferredType::Unknown {
-                    if let Some(inferred_type) = identifier_lookup.lookup(&variable_id) {
+                    if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                         expr.add_infer_type_mut(inferred_type);
                     }
                 } else {
@@ -50,7 +50,7 @@ pub fn infer_all_identifiers_top_down(expr: &mut Expr) {
         match expr {
             Expr::Identifier(variable_id, inferred_type) => {
                 if inferred_type == &InferredType::Unknown {
-                    if let Some(inferred_type) = identifier_lookup.lookup(&variable_id) {
+                    if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                         expr.add_infer_type_mut(inferred_type);
                     }
                 } else {
@@ -77,7 +77,7 @@ pub fn infer_all_identifiers_top_down(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::{Expr, InferredType, VariableId};
+    use crate::{InferredType, VariableId};
     use std::collections::HashMap;
 
     // A state that maps from the identifers to the types inferred

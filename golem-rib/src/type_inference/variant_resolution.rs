@@ -1,9 +1,5 @@
 use crate::type_inference::variant_resolution::internal::get_variants_info;
-use crate::{
-    Expr, FunctionTypeRegistry, InvocationName, ParsedFunctionName, ParsedFunctionReference,
-    ParsedFunctionSite, RegistryKey, RegistryValue, VariableId,
-};
-use std::collections::VecDeque;
+use crate::{Expr, FunctionTypeRegistry};
 
 pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
     let variants = get_variants_info(expr, function_type_registry);

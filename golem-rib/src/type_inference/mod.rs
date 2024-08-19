@@ -68,7 +68,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(rib_expr).unwrap();
 
-            let _ = expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry).unwrap();
 
             let let_binding = Expr::Let(
                 VariableId::local("x", 0),
@@ -111,7 +111,7 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(rib_expr).unwrap();
 
-            let _ = expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry).unwrap();
 
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
@@ -182,7 +182,7 @@ mod type_inference_tests {
 
             let function_type_registry = get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
-            let _ = expr.infer_types(&function_type_registry).unwrap();
+            expr.infer_types(&function_type_registry).unwrap();
 
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
@@ -202,7 +202,7 @@ mod type_inference_tests {
                     InferredType::U64,
                 )),
                 vec![
-                    MatchArm::match_arm(
+                    MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::Number(
                             Number { value: 1f64 },
                             InferredType::U64,
@@ -221,7 +221,7 @@ mod type_inference_tests {
                             InferredType::Sequence(vec![]),
                         ),
                     ),
-                    MatchArm::match_arm(
+                    MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::Number(
                             Number { value: 2f64 },
                             InferredType::U64, // because predicate is u64

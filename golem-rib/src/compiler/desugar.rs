@@ -1,9 +1,8 @@
-use crate::{Expr, InferredType, MatchArm, VariableId};
-use std::collections::VecDeque;
+use crate::{Expr, InferredType, MatchArm};
 
 pub fn desugar_pattern_match(
     pred: &Expr,
-    match_arms: &Vec<MatchArm>,
+    match_arms: &[MatchArm],
     expr_type: InferredType,
 ) -> Option<Expr> {
     let mut if_else_branches = vec![];
@@ -20,7 +19,6 @@ pub fn desugar_pattern_match(
 
 mod internal {
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
-    use std::collections::VecDeque;
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfElseBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -125,7 +123,7 @@ mod internal {
                 };
 
                 get_conditions(
-                    &MatchArm::match_arm(
+                    &MatchArm::new(
                         ArmPattern::Literal(inner_pattern.clone()),
                         resolution.clone(),
                     ),
@@ -155,7 +153,7 @@ mod internal {
                 };
 
                 get_conditions(
-                    &MatchArm::match_arm(
+                    &MatchArm::new(
                         ArmPattern::Literal(inner_pattern.clone()),
                         resolution.clone(),
                     ),
@@ -176,7 +174,7 @@ mod internal {
                 };
 
                 get_conditions(
-                    &MatchArm::match_arm(
+                    &MatchArm::new(
                         ArmPattern::Literal(inner_pattern.clone()),
                         resolution.clone(),
                     ),
@@ -218,7 +216,7 @@ mod internal {
     fn hande_constructor(
         pred_expr: &Expr,
         constructor_name: &str,
-        bind_patterns: &Vec<ArmPattern>,
+        bind_patterns: &[ArmPattern],
         resolution: &Expr,
         pred_expr_inferred_type: InferredType,
     ) -> Option<IfElseBranch> {
@@ -234,7 +232,7 @@ mod internal {
                 match (arg_pattern_opt, inner_variant_arg_type) {
                     (None, None) => None,
                     (Some(pattern), Some(inferred_type)) => get_conditions(
-                        &MatchArm::match_arm(pattern.clone(), resolution.clone()),
+                        &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
                         Some(Expr::equal_to(
                             Expr::tag(pred_expr.clone()),
@@ -247,7 +245,7 @@ mod internal {
             }
             InferredType::Option(inner) => match bind_patterns.first() {
                 Some(pattern) => get_conditions(
-                    &MatchArm::match_arm(pattern.clone(), resolution.clone()),
+                    &MatchArm::new(pattern.clone(), resolution.clone()),
                     &pred_expr.unwrap(),
                     Some(Expr::equal_to(
                         Expr::tag(pred_expr.clone()),
@@ -272,7 +270,7 @@ mod internal {
 
                 match bind_patterns.first() {
                     Some(pattern) => get_conditions(
-                        &MatchArm::match_arm(pattern.clone(), resolution.clone()),
+                        &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
                         Some(Expr::equal_to(
                             Expr::tag(pred_expr.clone()),
@@ -310,7 +308,7 @@ mod internal {
 
         let block = Expr::multiple(vec![binding, resolution.clone()]);
         get_conditions(
-            &MatchArm::match_arm(inner_pattern.clone(), block),
+            &MatchArm::new(inner_pattern.clone(), block),
             pred_expr,
             tag,
             pred_expr_inferred_type,
@@ -363,7 +361,7 @@ mod desugar_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        let _ = expr.infer_types(&function_type_registry).unwrap();
+        expr.infer_types(&function_type_registry).unwrap();
 
         let desugared_expr = match expr.clone() {
             Expr::PatternMatch(predicate, match_arms, _) => {
@@ -405,7 +403,7 @@ mod desugar_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        let _ = expr.infer_types(&function_type_registry).unwrap();
+        expr.infer_types(&function_type_registry).unwrap();
 
         let desugared_expr = match expr.clone() {
             Expr::PatternMatch(predicate, match_arms, _) => {
@@ -459,7 +457,7 @@ mod desugar_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        let _ = expr.infer_types(&function_type_registry).unwrap();
+        expr.infer_types(&function_type_registry).unwrap();
 
         let desugared_expr = match expr.clone() {
             Expr::PatternMatch(predicate, match_arms, _) => {
@@ -502,7 +500,7 @@ mod desugar_tests {
             Expr::Identifier(VariableId::local_with_no_id("y"), InferredType::U64),
         ]);
 
-        let expected = Expr::cond(
+        let _expected = Expr::cond(
             Expr::boolean(true),
             first_expected_block,
             Expr::cond(

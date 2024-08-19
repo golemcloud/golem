@@ -14,7 +14,7 @@
 
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
-use crate::type_registry::{FunctionTypeRegistry, RegistryKey, RegistryValue};
+use crate::type_registry::FunctionTypeRegistry;
 use crate::{text, type_inference, InferredType, VariableId};
 use bincode::{Decode, Encode};
 use combine::EasyParser;
@@ -213,6 +213,7 @@ impl Expr {
         Expr::Multiple(expressions, inferred_type)
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn not(expr: Expr) -> Self {
         Expr::Not(Box::new(expr), InferredType::Bool)
     }
@@ -1043,7 +1044,7 @@ pub struct MatchArm {
 }
 
 impl MatchArm {
-    pub fn match_arm(arm_pattern: ArmPattern, arm_resolution: Expr) -> MatchArm {
+    pub fn new(arm_pattern: ArmPattern, arm_resolution: Expr) -> MatchArm {
         MatchArm {
             arm_pattern,
             arm_resolution_expr: Box::new(arm_resolution),
@@ -1057,7 +1058,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::MatchArm> for MatchArm {
     fn try_from(value: golem_api_grpc::proto::golem::rib::MatchArm) -> Result<Self, Self::Error> {
         let pattern = value.pattern.ok_or("Missing pattern")?;
         let expr = value.expr.ok_or("Missing expr")?;
-        Ok(MatchArm::match_arm(pattern.try_into()?, expr.try_into()?))
+        Ok(MatchArm::new(pattern.try_into()?, expr.try_into()?))
     }
 }
 

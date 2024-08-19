@@ -276,35 +276,29 @@ mod tests {
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
                     worker_name: Expr::concat(vec![
-                        Expr::literal("worker-".to_string()),
+                        Expr::literal("worker-"),
                         Expr::select_field(
-                            Expr::select_field(
-                                Expr::identifier("request".to_string()),
-                                "body".to_string()
-                            ),
-                            "user".to_string()
+                            Expr::select_field(Expr::identifier("request"), "body"),
+                            "user"
                         )
                     ]),
                     component_id: golem_service_base::model::VersionedComponentId {
                         component_id: ComponentId(Uuid::nil()),
                         version: 0
                     },
-                    idempotency_key: Some(Expr::literal("test-key".to_string())),
+                    idempotency_key: Some(Expr::literal("test-key")),
                     response: ResponseMapping(Expr::record(
                         vec![
                             (
                                 "headers".to_string(),
                                 Expr::record(vec![
-                                    ("ContentType".to_string(), Expr::literal("json".to_string()),),
-                                    ("user-id".to_string(), Expr::literal("foo".to_string()),)
+                                    ("ContentType".to_string(), Expr::literal("json"),),
+                                    ("user-id".to_string(), Expr::literal("foo"),)
                                 ]),
                             ),
                             (
                                 "body".to_string(),
-                                Expr::select_field(
-                                    Expr::identifier("worker".to_string()),
-                                    "response".to_string(),
-                                ),
+                                Expr::select_field(Expr::identifier("worker"), "response",),
                             ),
                             ("status".to_string(), Expr::number(200f64)),
                         ]

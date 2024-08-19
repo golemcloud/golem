@@ -75,7 +75,7 @@ impl WorkerDetail {
             );
         }
 
-        let map = serde_json::Map::from_iter(worker_detail_content.into_iter());
+        let map = serde_json::Map::from_iter(worker_detail_content);
 
         Value::Object(map)
     }

@@ -35,7 +35,7 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
             routes: compiled_http_api_definition
                 .routes
                 .into_iter()
-                .map(|compiled_route| Route::from(compiled_route))
+                .map(Route::from)
                 .collect(),
             draft: compiled_http_api_definition.draft,
         }
@@ -356,7 +356,7 @@ impl CompiledRoute {
 
         let binding =
             CompiledGolemWorkerBinding::from_golem_worker_binding(&route.binding, metadata)
-                .map_err(|err| RouteCompilationErrors::RibCompilationError(err))?;
+                .map_err(RouteCompilationErrors::RibCompilationError)?;
 
         Ok(CompiledRoute {
             method: route.method.clone(),

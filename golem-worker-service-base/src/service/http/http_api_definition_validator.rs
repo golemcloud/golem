@@ -102,9 +102,9 @@ mod tests {
                         component_id: ComponentId::new_v4(),
                         version: 1,
                     },
-                    worker_name: Expr::identifier("request".to_string()),
+                    worker_name: Expr::identifier("request"),
                     idempotency_key: None,
-                    response: ResponseMapping(Expr::literal("sample".to_string())),
+                    response: ResponseMapping(Expr::literal("sample")),
                 },
             }
         }

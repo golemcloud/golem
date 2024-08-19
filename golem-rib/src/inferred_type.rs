@@ -160,12 +160,12 @@ impl InferredType {
         for typ in types {
             match typ {
                 InferredType::OneOf(types) => {
-                    let flattened = Self::flatten_one_of_list(&types);
+                    let flattened = Self::flatten_one_of_list(types);
                     one_of_types.extend(flattened);
                 }
                 // we made sure to flatten all the all ofs
                 InferredType::AllOf(all_of) => {
-                    let flattened = Self::flatten_all_of_list(&all_of);
+                    let flattened = Self::flatten_all_of_list(all_of);
                     all_of_types.extend(flattened);
                 }
                 _ => {
@@ -188,13 +188,13 @@ impl InferredType {
         for typ in types {
             match typ {
                 InferredType::OneOf(types) => {
-                    let flattened = Self::flatten_one_of_list(&types);
+                    let flattened = Self::flatten_one_of_list(types);
 
                     one_of_types.extend(flattened);
                 }
                 // we made sure to flatten all the all ofs
                 InferredType::AllOf(types) => {
-                    let flattened = Self::flatten_all_of_list(&types);
+                    let flattened = Self::flatten_all_of_list(types);
                     all_of_types.extend(flattened);
                 }
                 _ => {
@@ -210,14 +210,14 @@ impl InferredType {
         one_of_types
     }
 
-    fn all_numbers(types: &Vec<InferredType>) -> bool {
+    fn all_numbers(types: &[InferredType]) -> bool {
         types.iter().all(|t| t.is_number())
     }
 
     fn unify_all_alternative_types(types: &Vec<InferredType>) -> Result<InferredType, Vec<String>> {
         let mut unified_type = InferredType::Unknown;
         for typ in types {
-            unified_type = unified_type.unify_with_alternative(&typ)?;
+            unified_type = unified_type.unify_with_alternative(typ)?;
         }
         // This may or may not result in AllOf itself
         Ok(unified_type)
@@ -226,7 +226,7 @@ impl InferredType {
     fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, Vec<String>> {
         let mut unified_type = InferredType::Unknown;
         for typ in types {
-            unified_type = unified_type.unify_with_required(&typ)?;
+            unified_type = unified_type.unify_with_required(typ)?;
         }
         // This may or may not result in AllOf itself
         Ok(unified_type)
@@ -241,9 +241,7 @@ impl InferredType {
     fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, Vec<String>> {
         if self == &InferredType::Unknown {
             Ok(other.clone())
-        } else if other == &InferredType::Unknown {
-            Ok(self.clone())
-        } else if self == other {
+        } else if other == &InferredType::Unknown || self == other {
             Ok(self.clone())
         } else {
             match (self, other) {
@@ -500,7 +498,7 @@ impl InferredType {
                     }
 
                     for (a_name, a_type) in b_fields {
-                        if let None = a_fields.iter().find(|(b_name, _)| b_name == a_name) {
+                        if !a_fields.iter().any(|(b_name, _)| b_name == a_name) {
                             fields.insert(a_name.clone(), a_type.clone());
                         }
                     }
@@ -640,7 +638,7 @@ impl InferredType {
                 // Given we always flatten AllOf and OneOf, in reality we can check if All of the types are part of the One ofs.
                 (InferredType::AllOf(types), InferredType::OneOf(one_of_types)) => {
                     for typ in types {
-                        if !one_of_types.contains(&typ) {
+                        if !one_of_types.contains(typ) {
                             return Err(
                                 vec!["AllOf types are not part of OneOf types".to_string()],
                             );
@@ -653,7 +651,7 @@ impl InferredType {
                 // Given we always flatten AllOf and OneOf, in reality we can check if All of the types are part of the One ofs.
                 (InferredType::OneOf(one_of_types), InferredType::AllOf(all_of_types)) => {
                     for required_type in all_of_types {
-                        if !one_of_types.contains(&required_type) {
+                        if !one_of_types.contains(required_type) {
                             return Err(
                                 vec!["OneOf types are not part of AllOf types".to_string()],
                             );
@@ -739,33 +737,30 @@ impl InferredType {
         }
     }
     fn is_number(&self) -> bool {
-        match self {
+        matches!(
+            self,
             InferredType::S8
-            | InferredType::U8
-            | InferredType::S16
-            | InferredType::U16
-            | InferredType::S32
-            | InferredType::U32
-            | InferredType::S64
-            | InferredType::U64
-            | InferredType::F32
-            | InferredType::F64 => true,
-            _ => false,
-        }
+                | InferredType::U8
+                | InferredType::S16
+                | InferredType::U16
+                | InferredType::S32
+                | InferredType::U32
+                | InferredType::S64
+                | InferredType::U64
+                | InferredType::F32
+                | InferredType::F64
+        )
     }
 
     fn is_string(&self) -> bool {
-        match self {
-            InferredType::Str => true,
-            _ => false,
-        }
+        matches!(self, InferredType::Str)
     }
 
-    fn check_all_compatible(&self, types: &Vec<InferredType>) -> bool {
+    fn check_all_compatible(&self, types: &[InferredType]) -> bool {
         if types.len() > 1 {
             for i in 0..types.len() {
                 for j in (i + 1)..types.len() {
-                    if !self.are_compatible(&types[i], &types[j]) {
+                    if !Self::are_compatible(&types[i], &types[j]) {
                         return false;
                     }
                 }
@@ -774,12 +769,12 @@ impl InferredType {
         true
     }
 
-    fn are_compatible(&self, a: &InferredType, b: &InferredType) -> bool {
+    fn are_compatible(a: &InferredType, b: &InferredType) -> bool {
         match (a, b) {
             (InferredType::Unknown, _) | (_, InferredType::Unknown) => true,
 
             (InferredType::List(a_type), InferredType::List(b_type)) => {
-                self.are_compatible(a_type, b_type)
+                Self::are_compatible(a_type, b_type)
             }
 
             (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
@@ -787,7 +782,7 @@ impl InferredType {
                     return false;
                 }
                 for (a_type, b_type) in a_types.iter().zip(b_types) {
-                    if !self.are_compatible(a_type, b_type) {
+                    if !Self::are_compatible(a_type, b_type) {
                         return false;
                     }
                 }
@@ -798,7 +793,7 @@ impl InferredType {
                 for (a_name, a_type) in a_fields {
                     if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
                     {
-                        if !self.are_compatible(a_type, b_type) {
+                        if !Self::are_compatible(a_type, b_type) {
                             return false;
                         }
                     } else {
@@ -815,7 +810,7 @@ impl InferredType {
             }
 
             (InferredType::Option(a_type), InferredType::Option(b_type)) => {
-                self.are_compatible(a_type, b_type)
+                Self::are_compatible(a_type, b_type)
             }
 
             (
@@ -829,13 +824,13 @@ impl InferredType {
                 },
             ) => {
                 let ok = match (a_ok, b_ok) {
-                    (Some(a_inner), Some(b_inner)) => self.are_compatible(a_inner, b_inner),
+                    (Some(a_inner), Some(b_inner)) => Self::are_compatible(a_inner, b_inner),
                     (None, None) => true,
                     (Some(_), None) => true,
                     (None, Some(_)) => true,
                 };
                 let error = match (a_error, b_error) {
-                    (Some(a_inner), Some(b_inner)) => self.are_compatible(a_inner, b_inner),
+                    (Some(a_inner), Some(b_inner)) => Self::are_compatible(a_inner, b_inner),
                     (None, None) => true,
                     (Some(_), None) => true,
                     (None, Some(_)) => true,
@@ -851,7 +846,7 @@ impl InferredType {
                     {
                         match (a_type, b_type) {
                             (Some(a_inner), Some(b_inner)) => {
-                                if !self.are_compatible(a_inner, b_inner) {
+                                if !Self::are_compatible(a_inner, b_inner) {
                                     return false;
                                 }
                             }
@@ -898,7 +893,7 @@ impl InferredType {
 
             (InferredType::AllOf(types), inferred_type) => {
                 for t in types {
-                    if !self.are_compatible(t, inferred_type) {
+                    if !Self::are_compatible(t, inferred_type) {
                         return false;
                     }
                 }
@@ -907,28 +902,16 @@ impl InferredType {
 
             (inferred_type, InferredType::AllOf(types)) => {
                 for t in types {
-                    if !self.are_compatible(inferred_type, t) {
+                    if !Self::are_compatible(inferred_type, t) {
                         return false;
                     }
                 }
                 true
             }
 
-            (InferredType::OneOf(types), inferred_type) => {
-                if types.contains(inferred_type) {
-                    true
-                } else {
-                    false
-                }
-            }
+            (InferredType::OneOf(types), inferred_type) => types.contains(inferred_type),
 
-            (inferred_type, InferredType::OneOf(types)) => {
-                if types.contains(inferred_type) {
-                    true
-                } else {
-                    false
-                }
-            }
+            (inferred_type, InferredType::OneOf(types)) => types.contains(inferred_type),
 
             (a, b) => a.is_number() && b.is_number() || a.is_string() && b.is_string(),
         }
