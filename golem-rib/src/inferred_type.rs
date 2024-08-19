@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
@@ -484,6 +485,7 @@ impl InferredType {
             self.unify_types()
         } else {
             match (self, other) {
+                // { name: Opt<Str>, age: Option<U32> } and { name: Str }
                 (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                     let mut fields = HashMap::new();
                     for (a_name, a_type) in a_fields {
@@ -491,6 +493,8 @@ impl InferredType {
                             b_fields.iter().find(|(b_name, _)| b_name == a_name)
                         {
                             fields.insert(a_name.clone(), a_type.unify_with_required(b_type)?);
+                        } else {
+                            fields.insert(a_name.clone(), a_type.clone());
                         }
                     }
                     Ok(InferredType::Record(
@@ -535,6 +539,21 @@ impl InferredType {
                 (InferredType::Option(a_type), InferredType::Option(b_type)) => Ok(
                     InferredType::Option(Box::new(a_type.unify_with_required(b_type)?)),
                 ),
+
+                (InferredType::Option(a_type), inferred_type) => {
+                    if a_type.deref() == inferred_type {
+                        Ok(InferredType::Option(a_type.clone()))
+                    } else {
+                        Err(vec!["Option types do not match".to_string()])
+                    }
+                }
+                (inferred_type, InferredType::Option(a_type)) => {
+                    if a_type.deref() == inferred_type {
+                        Ok(InferredType::Option(a_type.clone()))
+                    } else {
+                        Err(vec!["Option types do not match".to_string()])
+                    }
+                }
                 (
                     InferredType::Result {
                         ok: a_ok,
