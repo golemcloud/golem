@@ -21,7 +21,7 @@ async-recursion = { version = "1.1.1", optional = true }
 async-trait = { version = "0.1.77", optional = true }
 bigdecimal = { version = "0.4.5", optional = true }
 bincode = { version = "2.0.0-rc.3", optional = true }
-golem-wasm-ast = { version = "1.0.0-rc1", optional = true }
+golem-wasm-ast = { version = "1.0.0", optional = true }
 poem-openapi = { version = "5.0", optional = true }
 serde = { version = "1.0", optional = true }
 serde_json = { version = "1.0", optional = true }
@@ -56,14 +56,35 @@ host = [
 ]
 arbitrary = ["dep:arbitrary"]
 bincode = ["dep:bincode", "golem-wasm-ast/bincode"]
-json = ["dep:serde", "dep:serde_json", "dep:bigdecimal", "typeinfo", "golem-wasm-ast/json"]
-poem_openapi = ["dep:poem-openapi", "json", "typeinfo", "golem-wasm-ast/poem_openapi"]
+json = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:bigdecimal",
+    "typeinfo",
+    "golem-wasm-ast/json",
+]
+poem_openapi = [
+    "dep:poem-openapi",
+    "json",
+    "typeinfo",
+    "golem-wasm-ast/poem_openapi",
+]
 protobuf = ["dep:bincode", "dep:serde", "dep:prost"]
 serde = ["dep:serde"]
 stub = []
 text = ["wasmtime", "dep:wasm-wave", "golem-wasm-ast/wave"]
-typeinfo = ["dep:golem-wasm-ast", "golem-wasm-ast/analysis", "golem-wasm-ast/protobuf", "protobuf"]
-wasmtime = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:async-recursion", "typeinfo"]
+typeinfo = [
+    "dep:golem-wasm-ast",
+    "golem-wasm-ast/analysis",
+    "golem-wasm-ast/protobuf",
+    "protobuf",
+]
+wasmtime = [
+    "dep:wasmtime",
+    "dep:wasmtime-wasi",
+    "dep:async-recursion",
+    "typeinfo",
+]
 
 
 [package.metadata.component]
