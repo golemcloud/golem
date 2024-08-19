@@ -431,7 +431,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker1",
-            "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200 }  }",
+            "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(\"foo\"), status: 200 }  }",
             false,
         );
         let def2 = get_api_definition(
@@ -439,7 +439,7 @@ mod tests {
             "0.0.1",
             "/api/get2",
             "worker2",
-            "${ {body: golem:it/api.{get-cart-contents}()} }",
+            "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
             true,
         );
 
@@ -448,7 +448,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker2",
-            "${ {body: golem:it/api.{get-cart-contents}()} }",
+            "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
             false,
         );
 
