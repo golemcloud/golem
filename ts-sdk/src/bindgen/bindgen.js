@@ -14,16 +14,16 @@
 
 import {
     GetWorkers,
+    awaitPromise as awaitPromiseImpl,
+    completePromise as completePromiseImpl,
+    createPromise as createPromiseImpl,
+    deletePromise as deletePromiseImpl,
     generateIdempotencyKey as generateIdempotencyKeyImpl,
     getIdempotenceMode as getIdempotenceModeImpl,
     getOplogIndex as getOplogIndexImpl,
     getOplogPersistenceLevel as getOplogPersistenceLevelImpl,
     getRetryPolicy as getRetryPolicyImpl,
     getSelfUri as getSelfUriImpl,
-    golemAwaitPromise as golemAwaitPromiseImpl,
-    golemCompletePromise as golemCompletePromiseImpl,
-    golemCreatePromise as golemCreatePromiseImpl,
-    golemDeletePromise as golemDeletePromiseImpl,
     markBeginOperation as markBeginOperationImpl,
     markEndOperation as markEndOperationImpl,
     oplogCommit as oplogCommitImpl,
@@ -36,20 +36,20 @@ import {
 
 export { GetWorkers };
 
-export function golemCreatePromise() {
-    return golemCreatePromiseImpl();
+export function createPromise() {
+    return createPromiseImpl();
 }
 
-export function golemAwaitPromise(promiseId) {
-    return golemAwaitPromiseImpl(promiseId);
+export function awaitPromise(promiseId) {
+    return awaitPromiseImpl(promiseId);
 }
 
-export function golemCompletePromise(promiseId, data) {
-    return golemCompletePromiseImpl(promiseId, data);
+export function completePromise(promiseId, data) {
+    return completePromiseImpl(promiseId, data);
 }
 
-export function golemDeletePromise(promiseId) {
-    return golemDeletePromiseImpl(promiseId);
+export function deletePromise(promiseId) {
+    return deletePromiseImpl(promiseId);
 }
 
 export function getSelfUri(functionName) {
