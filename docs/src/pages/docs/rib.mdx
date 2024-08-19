@@ -1,29 +1,12 @@
 # Rib
 
-`Rib`- is a feature in `Golem OSS`, that enables users to write programs capable of manipulating worker responses, which are WebAssembly (WASM) values.
-Currently, Rib language is designed to function seamlessly with the worker-bridge of `Golem`. Refer to worker-bridge documentation, where we extensively use `Rib`.
+**Rib** is the language used by the [Worker Gateway](concepts-worker-gateway) that enables users to write programs capable of manipulating worker responses, which are WebAssembly (WASM) values.
 
-## Purpose of Rib
+Rib uses the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) syntax for encoding values.
 
-Golem lets you invoke functions on workers directly. However, sometimes you want to put a specific API in front of those workers, such as HTTP, gRPC, or GraphQL.
-Yet, each of these different protocols has certain expectations around the structure of requests and responses.
-Rib lets you adapt inputs and outputs without having to change the definitions of functions on your workers. It's the glue that lets you build any type of API atop your workers.
+## Rib Grammar
 
-Currently, the Worker Bridge allows you to import OpenAPI specification with HTTP endpoints (or define API Definition in worker-bridge's format), each having its own worker-binding. Refer worker-bridge documentation for more detail.
-
-A worker-binding generally includes the worker name, the name of function in the worker to be invoked, it's function parameters, and the response mapping, which tells how to change the worker response to the API response.
-The Rib language is used in many places in this context. Example: You can utilize this language to construct the worker name, which can be based on the request object, a constant literal, or a combination of both. For example: `foo-${request.body.user}`.
-
-For further guidance on using Rib language in conjunction with the Worker Bridge, refer to the Worker Bridge documentation.
-
-With that, let's explain the grammar of this language and a few examples and corner cases
-
-For the most representation of the values are making use of WASM syntax.
-
-### Rib Grammar
-
-`rib-expr` below defines the various possibilities of expressions that can be used in Rib. Consider this as a reference.
-Probably all you need is to look at the examples further given below.
+`rib-expr` below defines the grammar of **Rib**.
 
 ```bash filename="Terminal" copy
 rib-expr            ::= request
@@ -63,7 +46,7 @@ select_index      ::= (sequence | variable)('[' rib-expr ']')+
 sequence          ::= '[' rib-expr (',' rib-expr)* ']'
 record            ::= '{' field (',' field)* '}'
 tuple             ::= '(' rib-expr (',' rib-expr)* ')'
-literal           ::= "'" [a-zA-Z0-9]* "'"
+literal           ::= '"' [a-zA-Z0-9]* '"'
 variable          ::= [a-zA-Z0-9_]+
 number            ::= DIGITS
 flags              ::= '{' STRING (',' STRING)* '}'
@@ -92,9 +75,9 @@ pattern           ::= variable
                       | '_' // wildcard pattern
 ```
 
-Here are some examples of each construct
+The following sections show some examples of each construct.
 
-#### Examples
+## Examples
 
 Note that Rib expressions in the below examples need to be wrapped in code block using `${` `}`. This is to differentiate between raw text and an actual Rib program.
 As we progress, we may try to avoid the need of it, and being able to write `Rib` program in IDE without code-blocks.
@@ -109,16 +92,16 @@ Example: `${1}` is evaluated as a `Number` while `1` is evaluated as text.
 
 This is a parsed as a number of type u64. Similarly `-1` is parsed as a number of type i64 and `1.1` is parsed as a number of type f64.
 
-#### String
+### String
 
 ```bash filename="Terminal" copy
 
-'Hello'
+"Hello"
 ```
 
 This is parsed as a string literal. If the strings are not wrapped with quotes, then it is considered as a variable.
 
-#### Boolean
+### Boolean
 
 ```bash filename="Terminal" copy
 true
@@ -126,7 +109,7 @@ true
 
 This is parsed as a boolean true. Similarly `false` is parsed as a boolean literal.
 
-#### Variables
+### Variables
 
 ```bash filename="Terminal" copy
 foo
@@ -137,7 +120,7 @@ Usually `variables` are used to refer to the values in the context of evaluation
 
 More explanations on variables can be found in other examples.
 
-#### Sequence
+### Sequence
 
 ```bash filename="Terminal" copy
 # Sequence of numbers
@@ -146,32 +129,32 @@ More explanations on variables can be found in other examples.
 
 ```bash filename="Terminal" copy
 # Sequence of strings
-['foo', 'bar', 'baz']
+["foo", "bar", "baz"]
 ```
 
 ```bash filename="Terminal" copy
 # Sequence of record
-[{a: 'foo'}, {b : 'bar'}]
+[{a: "foo"}, {b : "bar"}]
 ```
 
 This is parsed as a sequence of values. While the values can be of any type, similar to any dynamic language, evaluation may fail with error if we mix different types in a sequence.
 In other words, `Rib` evaluator do expect the values in a sequence to be of the same type.
 
-#### Record
+### Record
 
 ```bash filename="Terminal" copy
 
-{ name: 'John', age: 30 }
-{ city: 'New York', population: 8000000 }
-{ country: 'France', capital: 'Paris' }
-{ fruits: ['apple', 'banana', 'orange'], count: 3 }
+{ name: "John", age: 30 }
+{ city: "New York", population: 8000000 }
+{ country: "France", capital: "Paris" }
+{ fruits: ["apple"", "banana"", "orange""], count: 3 }
 
 ```
 
 This is parsed as a `WASM` Record. The syntax is inspired from `WASM-WAVE`. The minor difference here is strings are wrapped with single quotes instead of double quotes.
 Note that keys are not considered as variables. They are considered as literals (even in the absence of single quotes) if they are part of Record.
 
-#### Tuple
+### Tuple
 
 ```bash filename="Terminal" copy
 (1, 2, 3)
@@ -180,10 +163,10 @@ Note that keys are not considered as variables. They are considered as literals 
 This is parsed as a tuple of values. Unlike `sequence`, the values in a tuple can be of different types.
 
 ```bash filename="Terminal" copy
-('foo', 1, {a: 'bar'})
+("foo", 1, {a: "bar"})
 ```
 
-#### Flags
+### Flags
 
 ```bash filename="Terminal" copy
 { Foo, Bar, Baz }
@@ -191,16 +174,16 @@ This is parsed as a tuple of values. Unlike `sequence`, the values in a tuple ca
 
 This is parsed as Flag type in WASM. The values are separated by comma.
 
-#### Selection of Field
+### Selection of Field
 
 A field can be selected from an `Rib` expression if it is a `Record` type. For example, `foo.user`
 is a valid selection given `foo` is a variable that gets evaluated to a record value.
 
 ```bash filename="Terminal" copy
-{ name: 'John', age: 30 }.name
+{ name: "John", age: 30 }.name
 ```
 
-#### Selection of Index
+### Selection of Index
 
 This is selecting an index from a sequence value.
 
@@ -241,7 +224,7 @@ Then we can use Rib language to select the field `user`, as it considers this re
 request.body.user
 ```
 
-#### Worker Response and Selection of Fields
+### Worker Response and Selection of Fields
 
 This is again available only if you use Rib along with worker-bridge of Golem. It points to the response from the worker.
 However, mostly you wouldn't need this as Rib allows you to call the worker's function and assign it to a variable.
@@ -270,7 +253,7 @@ If the worker response is a record, then we can select the field in the response
 
 Then we can use expr language to select the field `user`, as it considers the value of `worker.response` `WASM` Record type, and therefore a valid selection.
 
-#### Result
+### Result
 
 `Result`in `Rib` is WASM Result, which can take the shape of `ok` or `err`. This is similar to `Result` type in std `Rust`.
 
@@ -281,7 +264,7 @@ A `Result` can be `Ok` of a value, or an `Err` of a value.
 ```
 
 ```bash filename="Terminal" copy
- err('error')
+ err("error")
 ```
 
 This is again, using the same syntax followed in wasm-wave.
@@ -299,7 +282,7 @@ More on these details can be found under worker-bridge's documentation
 }
 ```
 
-#### Option Expr
+### Option Expr
 
 `Option` in corresponding to WASM , which can take the shape of `Some` or `None`. This is similar to `Option` type in std `Rust`.
 
@@ -315,7 +298,7 @@ An `Option` can be `Some` of a value, or `None`.
 
 The syntax is inspired from wasm wave.
 
-#### Comparison Operators
+### Comparison Operators
 
 ```bash filename="Terminal" copy
 5 > 3
@@ -331,11 +314,11 @@ Both operands should be a valid Rib code that points/evaluated to a number or st
 Trying to compare complex values will result in evaluation error. Example : `[1, 2, 3] > [4, 5, 6]` will result in error.
 We will add support for these in Expr language.
 
-#### Conditional Statement
+### Conditional Statement
 
 ```bash filename="Terminal" copy
 
- if request.user.id > 3 then 'higher' else 'lower'
+ if request.user.id > 3 then "higher" else "lower"
 
 ```
 
@@ -345,14 +328,14 @@ The `then-rib-expr` or `else-rib-expr` can be an any valid rib code, which could
 
 ```bash filename="Terminal" copy
 
- if request.user.id > 3 then 'higher' else if request.user.id == 3 then 'equal' else 'lower'
+ if request.user.id > 3 then "higher" else if request.user.id == 3 then "equal" else "lower"
 
 ```
 
 If branch and then branch are not type checked as of now.
 Meaning similar to other dynamic languages like python, they may get evaluated to different types of WASM values.
 
-#### Pattern Matching
+### Pattern Matching
 
 ```bash filename="Terminal" copy
 
@@ -368,22 +351,22 @@ This would probably be your go-to construct when you are dealing with complex da
 that comes out as worker.response.
 
 ```bash filename="Terminal" copy
-  match worker.response { ok(x) => 'foo', err(msg) => 'error' }
+  match worker.response { ok(x) => "foo", err(msg) => "error" }
 ```
 
 You can bring them in multiple lines as follows:
 
 ```bash filename="Terminal" copy
   match worker.response {
-    ok(x) => 'foo',
-    err(msg) => 'error'
+    ok(x) => "foo",
+    err(msg) => "error"
   }
 ```
 
 ```bash filename="Terminal" copy
   match worker.response {
-    some(x) => 'found',
-    none => 'not found'
+    some(x) => "found",
+    none => "not found"
   }
 ```
 
@@ -406,12 +389,12 @@ Note that Rib doesn't allow you to define types as above. The above type is just
 
 ```bash filename="Terminal" copy
   match worker.response {
-    bar(x) => 'bar',
-    foo(x) => 'foo'
+    bar(x) => "bar",
+    foo(x) => "foo"
   }
 ```
 
-##### Variables in the context of pattern matching
+#### Variables in the context of pattern matching
 
 In all of the above, there exist a variable in the context of pattern.
 Example `x` in `ok(x)` or `msg` in `err(msg)` or `x` in `some(x)` or `x` in `bar(x)` or `x` in `foo(x)`.
@@ -429,8 +412,8 @@ Example, given the worker response is ok(1), the following match expression will
   }
 ```
 
-The following match expression will result in 'c', if the worker response was variant value `foo(['a', 'b', 'c'])`,
-and will result in 'a' if the `worker.response` was variant value `bar({a: 1, b: 'a'})`.
+The following match expression will result in "c", if the worker response was variant value `foo(["a", "b", "c"])`,
+and will result in "a" if the `worker.response` was variant value `bar({a: 1, b: "a"})`.
 
 ```bash filename="Terminal" copy
   let result = my-worker-function();
@@ -444,25 +427,25 @@ and will result in 'a' if the `worker.response` was variant value `bar({a: 1, b:
 
 More on let binding below
 
-##### Wild card patterns
+#### Wild card patterns
 
 In some of the above examples, the binding variables are unused. In this case, we can use `_` as a wildcard pattern to indicate that we don't care about the value.
 
 ```bash filename="Terminal" copy
   match worker.response {
-    bar(_) => 'bar',
-    foo(_) => 'foo'
+    bar(_) => "bar",
+    foo(_) => "foo"
   }
 ```
 
-#### Let Binding
+### Let Binding
 
 ```bash filename="Terminal" copy
 
- let a = { age: worker.response.age, city: 'New York', name: request.body.name };
+ let a = { age: worker.response.age, city: "New York", name: request.body.name };
 
  match worker.response.admin {
-   Admin(_) => 'admin',
+   Admin(_) => "admin",
    User(x) => a
  }
 

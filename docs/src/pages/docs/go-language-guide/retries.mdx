@@ -1,0 +1,61 @@
+# Control the retry policy from Go
+
+### Using Golem's retry mechanism
+
+Golem applies a retry mechanism to all workers. In case of a failure, Golem will automatically recover the worker to the point before the failure and retry the operation. An exponential backoff and an upper limit on the number of retries are applied.
+
+If the maximum number of retries is reached, the worker will be marked as failed and no further invocations will be possible on it.
+
+This mechanism is automatic and applied to all kind of failures. To rely on it, just let the Go code panic.
+
+### Customizing the retry policy
+
+The retry policy which controls the maximum number of retries and the exponential backoff is a global configuration of the Golem servers, but it can be customized for each worker.
+
+The `golem-go` library provides the `golemhost.SetRetryPolicy` and `golemhost.WithRetryPolicy` functions to temporarily change the retry policy:
+
+```go
+import (
+	"time"
+
+	"github.com/golemcloud/golem-go/golemhost"
+)
+
+// Setting directly the retry policy
+golemhost.SetRetryPolicy(golemhost.RetryPolicy{
+	MaxAttempts: 10,
+	MinDelay:    100 * time.Millisecond,
+	MaxDelay:    5 * time.Second,
+	Multiplier:  3,
+})
+
+// WithRetryPolicy stores (using golemhost.GetRetryPolicy) the current retry policy and
+// then restores it after running the provided function
+result, err = golemhost.WithRetryPolicy(
+	golemhost.RetryPolicy{
+		MaxAttempts: 4,
+		MinDelay:    300 * time.Millisecond,
+		MaxDelay:    3 * time.Second,
+		Multiplier:  2,
+	},
+	func() (string, error) {
+		return "golem", nil
+	},
+)
+```
+
+The `golemhost.RetryPolicy` type itself is originated from Golem's WIT definition in the following way:
+
+```wit
+/// Configures how the executor retries failures
+record retry-policy {
+    /// The maximum number of retries before the worker becomes permanently failed
+    max-attempts: u32,
+    /// The minimum delay between retries (applied to the first retry)
+    min-delay: duration,
+    /// The maximum delay between retries
+    max-delay: duration,
+    /// Multiplier applied to the delay on each retry to implement exponential backoff
+    multiplier: f64
+}
+```

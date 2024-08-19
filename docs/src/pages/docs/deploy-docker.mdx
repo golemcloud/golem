@@ -1,0 +1,17 @@
+# Deploy using Docker
+
+To get started we recommend using the Docker Compose file from the [Golem Docker examples](https://github.com/golemcloud/golem/blob/main/docker-examples). You will need to have [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system.
+
+Once you have Docker Compose installed, you can make use of docker-compose file in Golem repository to spin up Golem.
+
+```bash filename="Terminal" copy
+# Download an example docker-compose file along with .env file that has a few common configurations
+curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/docker-compose-postgres.yaml -O  https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/.env
+
+# Start Golem with backend storage as PostgreSQL and Redis
+docker-compose -f docker-compose-postgres.yaml up
+```
+
+You may need to modify it to suit your needs.
+If you are running into any port conflicts you can modify the [.env](https://github.com/golemcloud/golem/blob/main/docker-examples/.env) file that was downloaded as part of the above curl command.
+[Golem APIs](oss-rest-api.mdx) are exposed on port 9881 by default. Worker [API Gateway](concepts-worker-gateway.mdx) endpoint is exposed under port 9006.

@@ -1,0 +1,183 @@
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
+
+# Introduction
+
+Golem is a durable computing platform that makes it simple to build and deploy
+highly reliable distributed systems.
+
+In server-based programming, the fundamental unit of work is the _server_, which
+accepts incoming connections, and handles requests by generating responses.
+
+In Golem, which is a serverless computing platform, the fundamental unit of
+work is the _worker_. A worker is a _running instance_ of a component, with a
+unique identity, which allows addressing specific workers.
+
+Workers are similar to _lambdas_ or _functions_ in other serverless computing
+platforms, but they are far more powerful and expressive.
+
+<Callout type="info">
+  The relationship between a component and a worker is the same as the relationship between an
+  executable and a process: processes are running instances of executables. While the executable
+  contains mostly code, which awaits execution, a process contains both code, as well as dynamic
+  state, which captures work-in-progress.
+</Callout>
+
+# Worker Essentials
+
+The fundamental elements of every worker include:
+
+- **Identity**. Every worker has a unique identity, which allows addressing
+  specific workers.
+- **State**. Every worker has state, including memory, environment variables,
+  and file system.
+- **API**. Every worker has a public API, defined by its component.
+
+These core elements are discussed in the sections that follow.
+
+## Identity
+
+Every worker has a globally unique identity, which is formed from the
+following elements:
+
+- **Component ID**. Every component deployed on Golem has a globally
+  unique identity (UUID), which is assigned by Golem when a new component
+  is uploaded to Golem.
+- **Worker Name**. The worker name can be chosen by you for each worker.
+  If you do not need to address specific workers, you can also use a UUID for
+  the worker name. The only constraint is that worker names must be unique
+  within the scope of their component.
+
+The unique identity of workers allows them to be addressed individually,
+which unlocks many powerful patterns for building distributed systems.
+
+## State
+
+Workers are inherently stateful, in the same way that any running process
+is stateful. Workers have the following stateful elements:
+
+- **Memory**. A worker has in-memory state, such as global variables, stack,
+  and so on, which constantly changes over the life of the worker.
+- **Environment Variables**. A worker has environment variables, which it
+  inherits from component settings and any initial settings when the worker is
+  created, and which may change over time.
+- **File System**. A worker has a file system, which currently starts out
+  empty, but which may evolve over the life of the worker.
+- **Status**. The status of the worker, managed by Golem, is one of the
+  following: running, idle, suspended, interrupted, retrying, failed, or
+  exited.
+
+State also includes something called the _instruction pointer_, which is not
+accessible in most programming languages, but which tracks which location in the
+code the CPU is currently executing.
+
+## API
+
+Workers are running instances of components. Because components have a public
+API, which is defined by WIT, workers inherit this API.
+
+To perform work, such as handling a request, you _invoke_ a worker's public API.
+This process is referred to as _invocation_, and you can learn more in the
+section on [invocation](#concepts-invocation).
+
+# Worker Guarantees
+
+Golem executes workers with strong guarantees. To understand these guarantees,
+you should read the section on [reliability](#concepts-reliability).
+
+However, in brief, Golem provides the following guarantees:
+
+- **Transactional Execution**. Workers are executed transactionally. Once a
+  worker is started, it will be executed to completion, even in the presence of
+  faults, restarts, or updates. It's perfectly acceptable to use workers for
+  high-value use cases, such as financial transaction processing; or for
+  implementing APIs that coordinate updates across multiple systems.
+- **Durable State**. All worker state, including in-memory state, is durable,
+  and can be treated as automatically persistent. This means that state
+  survives failures, restarts, and updates without the loss of any
+  information. Workers may treat their memory as a database, and use it to
+  persist state indefinitely and across any number of invocations.
+- **Reliable Internal Communication**. Workers can communicate with each other
+  using their public APIs, in a type-safe way. Worker-to-worker communication
+  is reliable, with exactly-once semantics, and can be used to build
+  sophisticated and stateful distributed systems.
+- **Resilient External Communication**. Workers can freely communicate with
+  external systems, such as databases, message queues, and APIs. External
+  communication is automatically resilient, with exactly-once semantics for
+  systems that support idempotency keys, and at-least-once semantics for
+  systems that do not.
+- **Indefinite Life**. Unless forcibly deleted or failed in a way that is
+  unrecoverable (e.g. corruption of memory in a C program), workers live
+  forever, without loss of state or progress. This allows workers to be used
+  for long-running tasks, such as background processing, or for implementing
+  APIs that require long-lived state.
+- **Secure Sandboxing**. Workers are executed in completely sandboxed
+  environments, with no possibility of workers interacting with each other
+  (except via their public APIs), and no possibility that one worker's failure
+  impacts another worker's health.
+
+Some of these guarantees are common across all serverless platforms, but others
+are unique to the durable computing environment that Golem provides.
+
+# Classic Serverless
+
+Although Golem brings the power of durable computing to serverless, it is still
+possible to use Golem as a classic serverless platform.
+
+This enables increased reliability and use of serverless for long-running tasks,
+financial transactions, and other use cases that are not well-suited to
+traditional serverless platforms.
+
+## Comparing Functions to Workers
+
+|               | Worker | Function | Explanation                                                                                                           |
+| :------------ | :----: | :------: | :-------------------------------------------------------------------------------------------------------------------- |
+| Low-Latency   |   ✅   |    ✅    | Functions in serverless environments are designed to execute quickly, making them suitable for low-latency use cases. |
+| Scalable      |   ✅   |    ✅    | Functions in serverless environments scale automatically, making them suitable for high-throughput use cases.         |
+| Stateful      |   ✅   |    ❌    | Workers are inherently stateful, which means they maintain state for their lifetime, and across repeated invocations. |
+| Long-Running  |   ✅   |    ❌    | Workers run indefinitely, without loss of state or progress, making them uniquely suitable for long-running tasks.    |
+| Transactional |   ✅   |    ❌    | Workers are executed with strong transactional guarantees, transparently surviving faults, restarts, and updates.     |
+| Persistent    |   ✅   |    ❌    | All worker state, including in-memory state, is persistent and survives failures, restarts, and updates without loss. |
+
+## Emulating Classic Serverless
+
+Because Golem supports workers that run forever, each with their own unique
+identity, it may not be clear how to use Golem as a classic serverless platform.
+
+To emulate classic serverless, you really only need to do two things:
+
+1. **One-Export Component**. While WASM components can have any number of
+   exports, when emulating classic serverless, you should only have one export
+   per component. This export represents the event or request handler that you
+   would typically have in a classic serverless function.
+2. **One Worker Per Request**. When dispatching events or requests to your
+   component, you should create a new worker for each event or request. The
+   worker will handle the event or request, and never be used again.
+
+To ensure one worker per request or event, you can create a random worker name
+for each request or event, and use that to dispatch the event or request to the
+worker with the specified identity.
+
+Although the worker will remain available indefinitely, it will only be executed
+a single time, when used to handle the event or request. This allows you to
+emulate classic serverless behavior, while still benefiting from the durability
+and reliability of Golem.
+
+## Operations
+
+Workers support the following operations:
+
+- **Creation**. Workers benefit from automatic creation, which occurs when a
+  worker is invoked for the first time. Therefore, it is not necessary to
+  create workers explicitly.
+- **Interruption**. Workers can be interrupted at any time, which causes the
+  worker to stop executing. Interrupted workers can be resumed later.
+- **Deletion**. Workers can be deleted, which causes all state of the worker
+  to be permanently deleted. Deleted workers cannot be undeleted or resumed,
+  and if invoked again, they will be recreated from scratch.
+- **Updating**. Workers can be updated to a newer version of a component, which
+  is useful for long-lived workers that can benefit from bug fixes or new
+  features.
+
+Details about how to perform these operations can be found in the CLI guide,
+the REST API reference, and language-specific SDK documentation.

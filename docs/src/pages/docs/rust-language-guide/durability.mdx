@@ -1,0 +1,84 @@
+# Control durability guarantees from Rust
+
+Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in Rust there is a [Rust crate published](https://crates.io/crates/golem-rust) providing a set of idiomatic Rust wrappers for these functions.
+
+### Adding as a dependency
+
+To use the Golem Rust library, add the following dependency to your component's `Cargo.toml`:
+
+```toml
+golem-rust = { version = "0.4.0" }
+golem-rust-macro = { version = "0.4.0" }
+```
+
+### General concepts
+
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/docs/rust-language-guide/retries)).
+
+All these features are regional - they can be changed for a section of the code within a single exported function. To make this easy to use in Rust, the library provides a pair of functions for each feature:
+
+- the functions starting with `use_` return a guard, which resets the property when dropped
+- the functions starting with `with_` take a closure and apply the property only for the duration of the closure
+
+### Persistence level
+
+The persistence level can be one of the following:
+
+| Level                    | Description                                                                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PersistNothing           | Turns off persistence for a section. In case the worker is recovered or restarted, all the side-effecting functions will be reexecuted                               |
+| PersistRemoteSideEffects | Persists all the side-effects that are affecting the outside world. In case of recovery the side-effects won't be reexecuted and the persisted results will be used. |
+| Smart                    | The default setting; Let Golem decide what to persist to optimize performance                                                                                        |
+
+To change the persistence level for a section of the code, use the one of the `use_persistence_level` or `with_persistence_level functions:
+
+```rust
+with_persistence_level(PersistenceLevel::PersistNothing, || {
+    remote_side_effect();
+});
+
+// or
+
+let _guard = use_persistence_level(PersistenceLevel::PersistNothing);
+remote_side_effect();
+```
+
+### Idempotence mode
+
+Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried. This behavior can be changed using the `use_idempotence_mode` and `with_idempotence_mode` functions:
+
+```rust
+with_idempotence_mode(enabled, || {
+   remote_side_effect();
+});
+
+// or
+
+let _guard = use_idempotence_mode(enabled);
+remote_side_effect();
+```
+
+With disabled idempotence mode, in case Golem cannot determine if the request was sent or not, it won't retry it but the worker will fail.
+
+### Atomic regions
+
+By default side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the worker failed or interrupted within the region), all the side effects will be reexecuted.
+
+The `golem-rust` library exposes the `mark_atomic_operation` and `atomically` functions to do this:
+
+```rust
+atomically(|| {
+    remote_side_effect_1();
+    remote_side_effect_2();
+});
+
+// or
+
+let _guard = mark_atomic_operation();
+remote_side_effect_1();
+remote_side_effect_2();
+```
+
+### Commit oplog
+
+The `oplog_commit` function waits until the oplog is committed to its persistent storage. The function takes a single argument, `replicas`, with the desired number of storage replicas the worker's journal is replicated to. The function will block until the oplog is committed to the specified number of replicas, or, if this number is larger than the available number of replicas, until it is written to all the replicas.

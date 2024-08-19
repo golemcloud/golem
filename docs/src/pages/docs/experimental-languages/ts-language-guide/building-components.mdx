@@ -1,0 +1,76 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Building Golem Components in TypeScript
+
+Building Golem components written in TypeScript requires a series of steps.
+
+If the project was created with `golem-cli new`, it already has a `package.json` that incorporates all the necessary steps as _npm scripts_ to build the component, so it is enough to run:
+
+```shell
+$ npm run componentize
+```
+
+In details, building the component requires the following steps:
+
+<Steps>
+### Generate the TypeScript bindings
+
+For generating the binding we use the Golem fork of `jco` and `componentize-js`. When using the `golem-cli` examples, these dependencies are included in `package.json`, and an _npm script_ called `stub` is also defined:
+
+```shell
+$ npm run stub
+```
+
+The generated binding will placed in the `src/generated` directory.
+
+The above run command will execute the following commands:
+
+```shell
+$ jco stubgen wit -o src/generated
+```
+
+And requires the following dev dependencies:
+
+```json
+{
+  "devDependencies": {
+    "@golemcloud/componentize-js": "0.10.2-golem.1",
+    "@golemcloud/jco": "1.4.0-golem.1"
+  }
+}
+```
+
+### Compile the TypeScript code to JavaScript
+
+The examples use `rollup` through an _npm script_ to compile _TypeScript_ to _JavaScript_:
+
+```shell
+$ npm run build
+```
+
+This will compile all the _TypeScript_ sources into a **single** _JavaScript_ file at `out/main.js`.
+
+### Componentizing the JavaScript code
+
+The final step is **componentizing**, which involves:
+
+- embedding our _JavaScript_ code into the _StarlingMonkey JS engine_
+- running _Wizer pre-initialization_, which pre-loads and parses our Javascript source in the JS engine
+- creating the _wasm output_ file for our component with it's interface exposed as a _WebAssembly component_ usable by _Golem_.
+
+The example projects includes an _npm script_ called `componentize`, which also includes the previous `stub` and `build` steps.
+
+```shell
+$ npm run componentize
+```
+
+The output wasm file with be created with the built component name, eg.: `out/example.wasm`.
+
+The above _npm script_ will execute the following commands:
+
+```
+$ npm run stub && npm run build && jco componentize -w wit -o out/example.wasm out/main.js
+```
+
+</Steps>

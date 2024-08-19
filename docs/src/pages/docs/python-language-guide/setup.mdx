@@ -1,0 +1,15 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Setup development environment for Python
+
+Python programs can be compiled into WASM components using the tool `componentize-py`. For **Golem** you should use our forked version of this tool, as it pins all its dependencies to the one required by Golem Cloud.
+
+First install Python 3 to your system and once you have access to the `pip` package manager, install `componentize-py` using:
+
+```shell
+$ pip install componentize-py==0.13.5
+
+$ componentize-py --version
+componentize-py 0.13.5
+```

@@ -1,0 +1,120 @@
+# Login API
+
+The login endpoints are implementing an OAuth2 flow.
+
+## Acquire token with OAuth2 authorization
+
+| Path         | Method | Protected |
+| ------------ | ------ | --------- |
+| `/v1/oauth2` | POST   | No        |
+
+Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+
+In the response:
+
+- `id` is the identifier of the token itself
+- `accountId` is the account's identifier, can be used on the account API
+- `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+
+**Query Parameters**
+
+| Name         | Type   | Required | Description                           |
+| ------------ | ------ | -------- | ------------------------------------- |
+| provider     | string | Yes      | Currently only `github` is supported. |
+| access-token | string | Yes      | OAuth2 access token                   |
+
+**Example Response JSON**
+
+```json copy
+{
+  "data": {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "accountId": "string",
+    "createdAt": "2019-08-24T14:15:22Z",
+    "expiresAt": "2019-08-24T14:15:22Z"
+  },
+  "secret": {
+    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
+  }
+}
+```
+
+## Get information about a token
+
+| Path              | Method | Protected |
+| ----------------- | ------ | --------- |
+| `/v1/login/token` | GET    | Yes       |
+
+Gets information about a token that is selected by the secret key passed in the Authorization header.
+The JSON is the same as the data object in the oauth2 endpoint's response.
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "accountId": "string",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Start GitHub OAuth2 interactive flow
+
+| Path                         | Method | Protected |
+| ---------------------------- | ------ | --------- |
+| `/login/oauth2/device/start` | POST   | No        |
+
+Starts an interactive authorization flow.
+The user must open the returned url and enter the userCode in a form before the expires deadline.
+Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+
+**Example Response JSON**
+
+```json copy
+{
+  "url": "string",
+  "userCode": "string",
+  "expires": "2019-08-24T14:15:22Z",
+  "encodedSession": "string"
+}
+```
+
+## Finish GitHub OAuth2 interactive flow
+
+| Path                            | Method | Protected |
+| ------------------------------- | ------ | --------- |
+| `/login/oauth2/device/complete` | POST   | No        |
+
+Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
+Returns a JSON string containing the encodedSession from the start endpoint's response.
+
+**Example Request JSON**
+
+```json copy
+"string"
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "data": {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "accountId": "string",
+    "createdAt": "2019-08-24T14:15:22Z",
+    "expiresAt": "2019-08-24T14:15:22Z"
+  },
+  "secret": {
+    "value": "a860a344-d7b2-406e-828e-8d442f23f344"
+  }
+}
+```
+
+## Login API Errors
+
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Failed to login                                                          | `{"error":"string"}`    |
+| 500         | External service call failed during login                                | `{"error":"string"}`    |

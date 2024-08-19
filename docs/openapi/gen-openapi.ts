@@ -4,14 +4,16 @@ import { writeFile } from "fs/promises"
 import { OpenAPIV3 } from "openapi-types"
 import OpenAPISampler from "openapi-sampler"
 
-const SPEC_SRC = "./openapi/cloud-spec.yaml"
-const GEN_PATH = "./src/pages/docs/rest-api"
+const CLOUD_SPEC_SRC = "./openapi/cloud-spec.yaml"
+const CLOUD_GEN_PATH = "./src/pages/docs/cloud-rest-api"
+const OSS_SPEC_SRC = "./openapi/oss-spec.yaml"
+const OSS_GEN_PATH = "./src/pages/docs/oss-rest-api"
 
 main().catch(e => console.error("Failed to update API Docs", e))
 
 // Two options are available:
 // --production - will generate the docs for the Production Golem API, and update the local yaml file.
-// --local - will generate the docs from local yaml file.
+// --local - will generate the docs from local yaml files.
 async function main() {
   const args = process.argv.slice(2)
 
@@ -22,8 +24,12 @@ async function main() {
   const [mode] = args
 
   if (mode === "--local") {
-    console.log("Updating REST API docs from local OpenAPI spec at:", SPEC_SRC)
-    await writeOpenApiDocs(SPEC_SRC)
+    console.log("Updating REST API docs from local OpenAPI spec at:", [
+      CLOUD_SPEC_SRC,
+      OSS_SPEC_SRC,
+    ])
+    await writeOpenApiDocs(CLOUD_GEN_PATH, CLOUD_SPEC_SRC)
+    await writeOpenApiDocs(OSS_GEN_PATH, OSS_SPEC_SRC)
   } else {
     let specUrl =
       mode === "--prod"
@@ -31,18 +37,18 @@ async function main() {
         : "https://release.dev-api.golem.cloud/specs"
 
     console.log("Updating REST API docs from OpenAPI spec at:", specUrl)
-    await writeOpenApiDocs(specUrl)
+    await writeOpenApiDocs(CLOUD_GEN_PATH, specUrl)
     const response = await fetch(specUrl)
     if (!response.ok) {
       throw new Error(`Error fetching data: ${response.status}`)
     }
 
     const textContent = await response.text()
-    await writeFile(SPEC_SRC, textContent)
+    await writeFile(CLOUD_SPEC_SRC, textContent)
   }
 }
 
-async function writeOpenApiDocs(openapiSpec: string) {
+async function writeOpenApiDocs(target: string, openapiSpec: string) {
   const api = (await SwaggerParser.parse(openapiSpec)) as OpenAPIV3.Document
 
   const tags = api.tags
@@ -77,7 +83,7 @@ async function writeOpenApiDocs(openapiSpec: string) {
   await Promise.all(
     markdown.map(([tag, content]) => {
       const fileName = pascalToKebab(tag.name)
-      const path = `${GEN_PATH}/${fileName}.mdx`
+      const path = `${target}/${fileName}.mdx`
       writeFile(path, content)
     })
   )

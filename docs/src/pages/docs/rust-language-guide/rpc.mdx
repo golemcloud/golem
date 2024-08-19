@@ -1,0 +1,327 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Worker to Worker communication for Rust components
+
+See the [Worker to Worker communication page](/docs/concepts-worker-to-worker-communication) for a general overview of how workers can invoke each other in Golem.
+
+## Setting up
+
+For doing worker to worker communication between Golem components implemented in Rust, in addition to the the Rust compiler and the `cargo-component` tool described in the [setup page](/docs/rust-language-guide/setup), we need two additional dependencies:
+
+- The `golem-cli` tool which automates some steps of setting up the communication between workers.
+- The [cargo-make](https://crates.io/crates/cargo-make) task runner used to further automate the build steps.
+
+Install `cargo-make` by running:
+
+```shell
+$ cargo install cargo-make
+```
+
+## Creating a project with two components
+
+A project building two Golem components where one can call the other can be set up with the following primary steps:
+
+<Steps>
+### Create the two components
+
+First create two Rust components using the techniques described in the [defining components](/docs/rust-language-guide/defining-components) page. The two components should be in two separate directories, enclosed by a root directory for the whole project.
+
+<Callout type="warning">
+It is important to **use a different package name** for each component, otherwise the stub generator will fail.
+
+This can be done by using the `--package-name` parameter of `golem-cli new` for example `--package-name rpcdemo:component1` and `--package-name rpcdemo:component2`.
+
+</Callout>
+
+### Create a cargo workspace
+
+Make the root directory a **cargo workspace**. This is done by creating a `Cargo.toml` file in the root directory with the following content:
+
+```toml
+[workspace]
+resolver = "2"
+
+# list the two components here
+members = [
+    "component1",
+    "component2"
+]
+
+# common release profile for all components
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+```
+
+To learn more about cargo workspaces, check [the official documentation](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html).
+
+Check it works by running `cargo component build` **in the root directory of the project**, which should build both components in parallel:
+
+```shell
+$ cargo component build
+...
+Creating component target/wasm32-wasi/debug/component2.wasm
+Creating component target/wasm32-wasi/debug/component1.wasm
+```
+
+### Set up the Golem WASM-RPC stub generator
+
+In the next step we use `golem-cli` to modify our cargo workspace and add a `cargo-make` task description file to automate the build steps.
+
+This can be done by running:
+
+```
+$ golem-cli stubgen initialize-workspace --targets component1 --callers component2
+...
+Writing updated Cargo.toml to "/Users/vigoo/tmp/doc-temp/rpc/Cargo.toml"
+Done
+```
+
+<Callout type="info">
+  There can be multiple `--targets` and `--callers` parameters. Every component listed as a caller
+  will be able to call every component listed as a target.
+</Callout>
+
+<Callout type="warning">
+  Only add links between components where there really is a need for RPC calls, because every link
+  increases the size of the generated component, and also the build fails on unused links.
+</Callout>
+
+Test the setup by running `cargo make build-flow` in the root directory of the project:
+
+```shell
+$ cargo make build-flow
+...
+Error: no dependencies of component `target/wasm32-wasi/debug/component2.wasm` were found
+[cargo-make] ERROR - Error while executing command, exit code: 1
+[cargo-make] WARN - Build Failed.
+```
+
+This error is expected, as we haven't added any remote procedure calls yet, but we have a new component in our workspace, called `component1-stub` and it has successfully compiled.
+
+### Import the generated stub in the caller component
+
+The next step is to **import** the generated **stub component's interface** into the caller component (`component2` in the above example) `WIT` world.
+
+This is done by modifying `component2/wit/component2.wit` in the following way:
+
+```wit
+// ...
+world component2 {
+  import demo:component1-stub/stub-component1; // new line added
+  export api;
+}
+```
+
+<Callout type="info">
+The exact name to be imported depends on what package and component names were used when creating the target component.
+
+In this example the package name was `demo:component1` and the component name was `component1`. This gives the generated stub the component name `demo:component1-stub` and the generated stub interface within it is named `stub-component1` (here `component1` coming from the target component's name).
+
+</Callout>
+
+### Start implementing the components
+
+With this the workspace is set up, and the generated stubs can be used from the caller component to call the target component, as it is described in the next section.
+
+Once the code is written, use:
+
+- `cargo make build-flow` to build all the components quickly in debug
+- `cargo make release-build-flow` to create a release build of all the components
+
+</Steps>
+
+### Writing blocking remote calls
+
+For each exported function in the target component, the generated stub contains two exported variants:
+
+- A **blocking** variant, prefixed with `blocking-`, which does not return until the remote worker finished processing the call.
+- A **non-blocking** variant, which returns a pollable result immediately (unless for remote functions without any return value, in which case it just triggers the invocation but does not return anything)
+
+To use the blocking variants we need to construct a **resource** from the generated stub, passing the remote Golem URI of the target worker to the constructor.
+
+Taking the `rust-minimal-actor` example as the target component, which has the following exported interface:
+
+```wit
+package demo:component1;
+
+interface api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world component1 {
+  export api;
+}
+```
+
+The generated stub will contain the following functions:
+
+```wit
+package demo:component1-stub;
+
+interface stub-component1 {
+  use golem:rpc/types@0.1.0.{uri};
+  use wasi:io/poll@0.2.0.{pollable};
+
+  resource future-get-result {
+    subscribe: func() -> pollable;
+    get: func() -> option<u64>;
+  }
+  resource api {
+    constructor(location: uri);
+    blocking-add: func(value: u64);
+    add: func(value: u64);
+    blocking-get: func() -> u64;
+    get: func() -> future-get-result;
+  }
+
+}
+
+world wasm-rpc-stub-component1 {
+  export stub-component1;
+}
+```
+
+To use this generated `api` resource, the following steps are needed in the **caller component** (`component2` in the example):
+
+<Steps>
+### Import the generated types
+
+The generated bindings for the generated stubs need to be imported in the module where the remote procedure calls are made.
+
+```rust
+use crate::bindings::golem::rpc::types::Uri;
+use crate::bindings::demo::component1_stub::stub_component1::*;
+```
+
+### Construct the URI for the target worker
+
+The worker to be invoked is identified by an URI which consists of the **component ID** and the **worker name**.
+
+Workers can get their own URI by using the `get_self_uri` function from the Golem Rust SDK, but it can also be constructed manually.
+
+If the worker pointed by the URI does not exists, it is going to be created automatically and it inherits the environment variables of the caller.
+
+A common pattern is to use environment variables to configure the deployed component's **component ID** and use that to construct the URI. See the [defining components](/docs/rust-language-guide/defining-components) page for more information about passing configuration values to workers.
+
+The following code snippet gets the target component's id from an environment variable, and constructs the URI for the target worker with a fixed worker name `target-worker`:
+
+```rust
+let component_id =
+    std::env::var("TARGET_COMPONENT_ID").expect("TARGET_COMPONENT_ID not set");
+let target_uri = Uri {
+    value: format!("worker://{component_id}/target-worker"),
+};
+```
+
+### Construct and use the API resource
+
+With `target_uri` the `Api` resource can be constructed and used to call the remote functions.
+
+```rust
+let remote_api = Api::new(&target_uri);
+remote_api.blocking_get()
+```
+
+</Steps>
+
+### Writing non-blocking remote calls
+
+Using the non-blocking variants of the generated stub functions requires the same steps as the blocking variants, but the returned value is a special **future** which needs to be subscribed to and polled using the low-level WASI `poll` interface.
+
+The following snippet demonstrates how to get the value of three counters simultaneously, assuming that `counter1`, `counter2` and `counter3` are all insteances of the generated stub's `Api` resource:
+
+```rust
+// Making the non-blocking calls
+let future_value1 = counter1.get_value();
+let future_value2 = counter2.get_value();
+let future_value3 = counter3.get_value();
+
+let futures = &[&future_value1, &future_value2, &future_value3];
+
+// Subscribing to get the results
+let poll_value1 = future_value1.subscribe();
+let poll_value2 = future_value2.subscribe();
+let poll_value3 = future_value3.subscribe();
+
+let mut values = [0u64; 3];
+let mut remaining = vec![&poll_value1, &poll_value2, &poll_value3];
+let mut mapping = vec![0, 1, 2];
+
+// Repeatedly poll the futures until all of them are ready
+while !remaining.is_empty() {
+    let poll_result = bindings::wasi::io::poll::poll(&remaining);
+
+    // poll_result is a list of indexes of the futures that are ready
+    for idx in &poll_result {
+        let counter_idx = mapping[*idx as usize];
+        let future = futures[counter_idx];
+        let value = future
+            .get()
+            .expect("future did not return a value because after marked as completed");
+        values[counter_idx] = value;
+    }
+
+    // Removing the completed futures from the list
+    remaining = remaining
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            if poll_result.contains(&(idx as u32)) {
+                None
+            } else {
+                Some(item)
+            }
+        })
+        .collect();
+
+    // Updating the index mapping
+    mapping = mapping
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            if poll_result.contains(&(idx as u32)) {
+                None
+            } else {
+                Some(item)
+            }
+        })
+        .collect();
+}
+
+// values contains the results of the three calls
+```
+
+### Deploying the resulting components
+
+To build deployable WASM files of the involved components, use
+
+```shell
+$ cargo make release-build-flow
+...
+Creating component target/wasm32-wasi/release/component1.wasm
+Creating component target/wasm32-wasi/release/component2.wasm
+Creating component target/wasm32-wasi/release/component1_stub.wasm
+...
+Writing composed component to "target/wasm32-wasi/release/component2_composed.wasm"
+Done
+```
+
+In this example, where `component1` was the target, and `component2` was the caller, the following artifacts are to be deployed:
+
+- `target/wasm32-wasi/release/component1.wasm` is the target component which itself does not perform any remote procedure calls
+- `target/wasm32-wasi/release/component2_composed.wasm` is the version of `component2` composed with the RPC stubs, ready to be deployed to Golem
+
+<Callout type="warning">
+  If you try to upload the non-composed build output, `component2.wasm` to Golem, it will fail to
+  create the worker because not all the imports of the WebAssembly component are satisfied.
+</Callout>
+
+### Adding new connections in a workspace
+
+When during development new components are added to the workspace, and/or new connections need to be estabilished between them, running the `golem-cli stubgen initialize-workspace` command again will regenerate the build steps in the cargo makefile. Make sure to list **all** the targets and callers, not just the new ones.
+
+There is currently no automated way to **remove** connections from the workspace. If this is needed, the generated stub subprojects and their WIT definitions from the caller component's `wit/deps` must be removed manually.

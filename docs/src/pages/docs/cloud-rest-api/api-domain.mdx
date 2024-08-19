@@ -1,0 +1,82 @@
+# Api Domain API
+
+## Get all API domains
+
+| Path              | Method | Protected |
+| ----------------- | ------ | --------- |
+| `/v1/api/domains` | GET    | Yes       |
+
+Returns a list of API domains for the given project.
+
+**Query Parameters**
+
+| Name       | Type   | Required | Description |
+| ---------- | ------ | -------- | ----------- |
+| project-id | string | Yes      | -           |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+    "domainName": "string",
+    "nameServers": ["string"]
+  }
+]
+```
+
+## Create or update an API domain
+
+| Path              | Method | Protected |
+| ----------------- | ------ | --------- |
+| `/v1/api/domains` | PUT    | Yes       |
+
+**Example Request JSON**
+
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "domainName": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "domainName": "string",
+  "nameServers": ["string"]
+}
+```
+
+## Delete an API domain
+
+| Path              | Method | Protected |
+| ----------------- | ------ | --------- |
+| `/v1/api/domains` | DELETE | Yes       |
+
+**Query Parameters**
+
+| Name       | Type   | Required | Description |
+| ---------- | ------ | -------- | ----------- |
+| project-id | string | Yes      | -           |
+| domain     | string | Yes      | -           |
+
+**Example Response JSON**
+
+```json copy
+"string"
+```
+
+## Api Domain API Errors
+
+| Status Code | Description | Body                                      |
+| ----------- | ----------- | ----------------------------------------- |
+| 400         |             | `{"type":"Messages","errors":["string"]}` |
+| 401         |             | `{"error":"string"}`                      |
+| 403         |             | `{"error":"string"}`                      |
+| 404         |             | `{"message":"string"}`                    |
+| 409         |             | `"string"`                                |
+| 500         |             | `{"error":"string"}`                      |

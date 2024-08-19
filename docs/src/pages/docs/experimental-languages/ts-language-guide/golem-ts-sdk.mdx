@@ -1,0 +1,109 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Setting up the Golem TypeScript SDK
+
+<Callout type="warning">
+  If the project was created with `golem-cli new`, it already has the Golem TypeScript SDK set up
+  and these steps can be ignored.
+</Callout>
+
+If setting up the [Golem TypeScript SDK](https://github.com/golemcloud/golem-ts) manually, the following steps are required:
+
+<Steps>
+
+### Add the Golem TypeScript SDK and related tooling as a dependency
+
+The Golem TypeScript SDK currently relies on forked versions of `jco` and `componentize-js`. Our examples contains the latest dependencies that work together, but in case you want setup you project manually, use the following samples as a starting point.
+
+Example `package.json`:
+
+```json
+{
+  "scripts": {
+    "stub": "jco stubgen wit -o src/generated",
+    "build": "rollup --config",
+    "componentize": "npm run stub && npm run build && jco componentize -w wit -o out/component_name.wasm out/main.js",
+    "clean": "rm -rf out src/generated"
+  },
+  "devDependencies": {
+    "@golemcloud/componentize-js": "0.10.2-golem.1",
+    "@golemcloud/golem-ts": "0.2.0",
+    "@golemcloud/jco": "1.4.0-golem.1",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "rollup-plugin-typescript2": "^0.36.0",
+    "@types/node": "^20.14.2",
+    "rollup": "^4.18.0",
+    "tslib": "^2.6.3"
+  }
+}
+```
+
+Example `rollup.config.mjs`:
+
+```json
+import typescript from "rollup-plugin-typescript2";
+import resolve from "@rollup/plugin-node-resolve";
+
+export default {
+    input: 'src/main.ts',
+    output: {
+    file: 'out/main.js',
+    format: 'esm'
+},
+    external: ["golem:api/host@0.2.0"],
+    plugins: [resolve(), typescript()],
+};
+```
+
+### Add all the supported WIT files into the project
+
+The project's `wit/deps` directory must contain all the WIT files from the [golem-wit](https://github.com/golemcloud/golem-wit/tree/main/wit/deps) repository.
+
+### Importing WITs into the component's world:
+
+If the project's WIT file was like this:
+
+```wit
+package golem:demo;
+
+world ts-example {
+  export api;
+}
+```
+
+Modify it in the following way:
+
+```wit
+package golem:demo;
+
+world ts-example {
+  import golem:api/host@0.2.0;
+  import golem:rpc/types@0.1.0;
+
+  import wasi:blobstore/blobstore;
+  import wasi:blobstore/container;
+  import wasi:cli/environment@0.2.0;
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:clocks/monotonic-clock@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
+  import wasi:filesystem/types@0.2.0;
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  import wasi:io/error@0.2.0;
+  import wasi:io/poll@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/eventual@0.1.0;
+  import wasi:logging/logging;
+  import wasi:random/random@0.2.0;
+  import wasi:random/insecure@0.2.0;
+  import wasi:random/insecure-seed@0.2.0;
+  import wasi:sockets/ip-name-lookup@0.2.0;
+  import wasi:sockets/instance-network@0.2.0;
+
+  export api;
+}
+```
+
+</Steps>

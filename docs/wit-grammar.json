@@ -1,0 +1,1443 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "WIT",
+  "fileTypes": ["wit"],
+  "uuid": "73554272-ff1a-4515-879e-39a6dcec955d",
+  "foldingStartMarker": "(\\{|\\[)\\s*",
+  "foldingStopMarker": "\\s*(\\}|\\])",
+  "scopeName": "source.wit",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#package"
+    },
+    {
+      "include": "#toplevel-use"
+    },
+    {
+      "include": "#world"
+    },
+    {
+      "include": "#interface"
+    },
+    {
+      "include": "#whitespace"
+    }
+  ],
+  "repository": {
+    "whitespace": {
+      "name": "meta.whitespace.wit",
+      "comment": "whitespace token",
+      "match": "\\s+"
+    },
+    "comment": {
+      "patterns": [
+        {
+          "include": "#block-comments"
+        },
+        {
+          "include": "#doc-comment"
+        },
+        {
+          "include": "#line-comment"
+        }
+      ]
+    },
+    "doc-comment": {
+      "name": "comment.line.documentation.wit",
+      "comment": "documentation comments",
+      "begin": "^\\s*///",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#markdown"
+        }
+      ]
+    },
+    "line-comment": {
+      "name": "comment.line.double-slash.wit",
+      "comment": "line comments",
+      "match": "\\s*//.*"
+    },
+    "block-comments": {
+      "patterns": [
+        {
+          "name": "comment.block.empty.wit",
+          "comment": "empty block comments",
+          "match": "/\\*\\*/"
+        },
+        {
+          "name": "comment.block.documentation.wit",
+          "comment": "block documentation comments",
+          "begin": "/\\*\\*",
+          "end": "\\*/",
+          "applyEndPatternLast": 1,
+          "patterns": [
+            {
+              "include": "#block-comments"
+            },
+            {
+              "include": "#markdown"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ]
+        },
+        {
+          "name": "comment.block.wit",
+          "comment": "block comments",
+          "begin": "/\\*(?!\\*)",
+          "end": "\\*/",
+          "applyEndPatternLast": 1,
+          "patterns": [
+            {
+              "include": "#block-comments"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ]
+        }
+      ]
+    },
+    "markdown": {
+      "patterns": [
+        {
+          "match": "\\G\\s*(#+.*)$",
+          "captures": {
+            "1": {
+              "name": "markup.heading.markdown"
+            }
+          }
+        },
+        {
+          "match": "\\G\\s*((\\>)\\s+)+",
+          "captures": {
+            "2": {
+              "name": "punctuation.definition.quote.begin.markdown"
+            }
+          }
+        },
+        {
+          "match": "\\G\\s*(\\-)\\s+",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.list.begin.markdown"
+            }
+          }
+        },
+        {
+          "match": "\\G\\s*(([0-9]+\\.)\\s+)",
+          "captures": {
+            "1": {
+              "name": "markup.list.numbered.markdown"
+            },
+            "2": {
+              "name": "punctuation.definition.list.begin.markdown"
+            }
+          }
+        },
+        {
+          "match": "(`.*?`)",
+          "captures": {
+            "1": {
+              "name": "markup.italic.markdown"
+            }
+          }
+        },
+        {
+          "match": "\\b(__.*?__)",
+          "captures": {
+            "1": {
+              "name": "markup.bold.markdown"
+            }
+          }
+        },
+        {
+          "match": "\\b(_.*?_)",
+          "captures": {
+            "1": {
+              "name": "markup.italic.markdown"
+            }
+          }
+        },
+        {
+          "match": "(\\*\\*.*?\\*\\*)",
+          "captures": {
+            "1": {
+              "name": "markup.bold.markdown"
+            }
+          }
+        },
+        {
+          "match": "(\\*.*?\\*)",
+          "captures": {
+            "1": {
+              "name": "markup.italic.markdown"
+            }
+          }
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "punctuation.equal.wit",
+          "match": "\\="
+        },
+        {
+          "name": "punctuation.comma.wit",
+          "match": "\\,"
+        },
+        {
+          "name": "keyword.operator.key-value.wit",
+          "match": "\\:"
+        },
+        {
+          "name": "punctuation.semicolon.wit",
+          "match": "\\;"
+        },
+        {
+          "name": "punctuation.brackets.round.begin.wit",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.brackets.round.end.wit",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.brackets.curly.begin.wit",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.brackets.curly.end.wit",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.brackets.angle.begin.wit",
+          "match": "\\<"
+        },
+        {
+          "name": "punctuation.brackets.angle.end.wit",
+          "match": "\\>"
+        },
+        {
+          "name": "keyword.operator.star.wit",
+          "match": "\\*"
+        },
+        {
+          "name": "keyword.operator.arrow.skinny.wit",
+          "match": "\\-\\>"
+        }
+      ]
+    },
+    "package": {
+      "name": "meta.package-decl.wit",
+      "match": "^(package)\\s+([^\\s]+)\\s*",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.package-decl.wit"
+        },
+        "2": {
+          "name": "meta.id.package-decl.wit",
+          "patterns": [
+            {
+              "name": "meta.package-identifier.wit",
+              "match": "([^\\:]+)(\\:)([^\\@]+)((\\@)([^\\s]+))?",
+              "captures": {
+                "1": {
+                  "name": "entity.name.namespace.package-identifier.wit",
+                  "patterns": [
+                    {
+                      "include": "#identifier"
+                    }
+                  ]
+                },
+                "2": {
+                  "name": "keyword.operator.namespace.package-identifier.wit"
+                },
+                "3": {
+                  "name": "entity.name.type.package-identifier.wit",
+                  "patterns": [
+                    {
+                      "include": "#identifier"
+                    }
+                  ]
+                },
+                "5": {
+                  "name": "keyword.operator.versioning.package-identifier.wit"
+                },
+                "6": {
+                  "name": "constant.numeric.versioning.package-identifier.wit"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "toplevel-use": {
+      "name": "meta.toplevel-use-item.wit",
+      "match": "^(use)\\s+([^\\s]+)(\\s+(as)\\s+([^\\s]+))?\\s*",
+      "captures": {
+        "1": {
+          "name": "keyword.other.use.toplevel-use-item.wit"
+        },
+        "2": {
+          "name": "meta.interface.toplevel-use-item.wit",
+          "patterns": [
+            {
+              "name": "entity.name.type.declaration.interface.toplevel-use-item.wit",
+              "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+            },
+            {
+              "name": "meta.versioning.interface.toplevel-use-item.wit",
+              "match": "(\\@)((0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?)",
+              "captures": {
+                "1": {
+                  "name": "keyword.operator.versioning.interface.toplevel-use-item.wit"
+                },
+                "2": {
+                  "name": "constant.numeric.versioning.interface.toplevel-use-item.wit"
+                }
+              }
+            }
+          ]
+        },
+        "4": {
+          "name": "keyword.control.as.toplevel-use-item.wit"
+        },
+        "5": {
+          "name": "entity.name.type.toplevel-use-item.wit"
+        }
+      }
+    },
+    "world": {
+      "name": "meta.world-item.wit",
+      "comment": "Syntax for WIT like `world \"id\" {`",
+      "begin": "^\\b(default\\s+)?(world)\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.modifier.default.world-item.wit"
+        },
+        "2": {
+          "name": "keyword.declaration.world.world-item.wit storage.type.wit"
+        },
+        "3": {
+          "name": "entity.name.type.id.world-item.wit"
+        },
+        "8": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.export-item.wit",
+          "comment": "Syntax for WIT like `export \"id\"`",
+          "begin": "\\b(export)\\b\\s+([^\\s]+)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.export.export-item.wit"
+            },
+            "2": {
+              "name": "meta.id.export-item.wit",
+              "patterns": [
+                {
+                  "name": "variable.other.constant.id.export-item.wit",
+                  "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+                },
+                {
+                  "name": "meta.versioning.id.export-item.wit",
+                  "match": "(\\@)((0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?)",
+                  "captures": {
+                    "1": {
+                      "name": "keyword.operator.versioning.id.export-item.wit"
+                    },
+                    "2": {
+                      "name": "constant.numeric.versioning.id.export-item.wit"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "patterns": [
+            {
+              "include": "#extern"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ],
+          "end": "((?<=\\n)|(?=\\}))",
+          "applyEndPatternLast": 1
+        },
+        {
+          "name": "meta.import-item.wit",
+          "comment": "Syntax for WIT like `import \"id\"`",
+          "begin": "\\b(import)\\s+([^\\s]+)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.import.import-item.wit"
+            },
+            "2": {
+              "name": "meta.id.import-item.wit",
+              "patterns": [
+                {
+                  "name": "variable.other.id.import-item.wit",
+                  "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+                },
+                {
+                  "name": "meta.versioning.id.import-item.wit",
+                  "match": "(\\@)((0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?)",
+                  "captures": {
+                    "1": {
+                      "name": "keyword.operator.versioning.id.import-item.wit"
+                    },
+                    "2": {
+                      "name": "constant.numeric.versioning.id.import-item.wit"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "patterns": [
+            {
+              "include": "#extern"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ],
+          "end": "((?<=\\n)|(?=\\}))",
+          "applyEndPatternLast": 1
+        },
+        {
+          "name": "meta.include-item.wit",
+          "comment": "Syntax for WIT like `include \"use-path\"`",
+          "begin": "\\b(include)\\s+([^\\s]+)\\s*",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.include.include-item.wit"
+            },
+            "2": {
+              "name": "meta.use-path.include-item.wit",
+              "patterns": [
+                {
+                  "include": "#use-path"
+                }
+              ]
+            }
+          },
+          "patterns": [
+            {
+              "name": "meta.with.include-item.wit",
+              "begin": "\\b(with)\\b\\s+(\\{)",
+              "beginCaptures": {
+                "1": {
+                  "name": "keyword.control.with.include-item.wit"
+                },
+                "2": {
+                  "name": "punctuation.brackets.curly.begin.wit"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "#comment"
+                },
+                {
+                  "name": "meta.include-names-item.wit",
+                  "match": "([^\\s]+)\\s+(as)\\s+([^\\s\\,]+)",
+                  "captures": {
+                    "1": {
+                      "name": "variable.other.id.include-names-item.wit"
+                    },
+                    "2": {
+                      "name": "keyword.control.as.include-names-item.wit"
+                    },
+                    "3": {
+                      "name": "entity.name.type.include-names-item.wit"
+                    }
+                  }
+                },
+                {
+                  "name": "punctuation.comma.wit",
+                  "match": "(\\,)"
+                },
+                {
+                  "include": "#whitespace"
+                }
+              ],
+              "end": "(\\})",
+              "applyEndPatternLast": 1,
+              "endCaptures": {
+                "1": {
+                  "name": "punctuation.brackets.curly.end.wit"
+                }
+              }
+            }
+          ],
+          "end": "(?<=\\n)",
+          "applyEndPatternLast": 1
+        },
+        {
+          "include": "#use"
+        },
+        {
+          "include": "#typedef-item"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "interface": {
+      "name": "meta.interface-item.wit",
+      "comment": "Syntax for WIT like `interface \"id\" {`",
+      "begin": "^\\b(default\\s+)?(interface)\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.modifier.default.interface-item.wit"
+        },
+        "2": {
+          "name": "keyword.declaration.interface.interface-item.wit storage.type.wit"
+        },
+        "3": {
+          "name": "entity.name.type.id.interface-item.wit"
+        },
+        "8": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#interface-items"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "extern": {
+      "name": "meta.extern-type.wit",
+      "patterns": [
+        {
+          "name": "meta.interface-type.wit",
+          "patterns": [
+            {
+              "begin": "\\b(interface)\\b\\s*(\\{)",
+              "beginCaptures": {
+                "1": {
+                  "name": "keyword.other.interface.interface-type.wit"
+                },
+                "2": {
+                  "name": "ppunctuation.brackets.curly.begin.wit"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "#comment"
+                },
+                {
+                  "include": "#interface-items"
+                },
+                {
+                  "include": "#whitespace"
+                }
+              ],
+              "end": "(\\})",
+              "applyEndPatternLast": 1,
+              "endCaptures": {
+                "1": {
+                  "name": "punctuation.brackets.curly.end.wit"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "include": "#function-definition"
+        },
+        {
+          "include": "#use-path"
+        }
+      ]
+    },
+    "interface-items": {
+      "name": "meta.interface-items.wit",
+      "patterns": [
+        {
+          "include": "#typedef-item"
+        },
+        {
+          "include": "#use"
+        },
+        {
+          "include": "#function"
+        }
+      ]
+    },
+    "typedef-item": {
+      "name": "meta.typedef-item.wit",
+      "patterns": [
+        {
+          "include": "#resource"
+        },
+        {
+          "include": "#variant"
+        },
+        {
+          "include": "#record"
+        },
+        {
+          "include": "#flags"
+        },
+        {
+          "include": "#enum"
+        },
+        {
+          "include": "#type-definition"
+        }
+      ]
+    },
+    "use": {
+      "name": "meta.use-item.wit",
+      "comment": "Syntax for WIT like `use \"id\".`",
+      "begin": "\\b(use)\\b\\s+([^\\s]+)(\\.)(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.use.use-item.wit"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#use-path"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ]
+        },
+        "3": {
+          "name": "keyword.operator.namespace-separator.use-item.wit"
+        },
+        "4": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "entity.name.type.declaration.use-names-item.use-item.wit",
+          "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+        },
+        {
+          "name": "punctuation.comma.wit",
+          "match": "(\\,)"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "use-path": {
+      "name": "meta.use-path.wit",
+      "patterns": [
+        {
+          "name": "entity.name.namespace.id.use-path.wit",
+          "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+        },
+        {
+          "name": "meta.versioning.id.use-path.wit",
+          "match": "(\\@)((0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.versioning.id.use-path.wit"
+            },
+            "2": {
+              "name": "constant.numeric.versioning.id.use-path.wit"
+            }
+          }
+        },
+        {
+          "name": "keyword.operator.namespace-separator.use-path.wit",
+          "match": "\\."
+        }
+      ]
+    },
+    "type-definition": {
+      "name": "meta.type-item.wit",
+      "comment": "Syntax for WIT like `type \"id\" =`",
+      "begin": "\\b(type)\\b\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\=)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.type.type-item.wit storage.type.wit"
+        },
+        "2": {
+          "name": "entity.name.type.id.type-item.wit"
+        },
+        "7": {
+          "name": "punctuation.equal.wit"
+        }
+      },
+      "patterns": [
+        {
+          "name": "meta.types.type-item.wit",
+          "include": "#types"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(?<=\\n)",
+      "applyEndPatternLast": 1
+    },
+    "record": {
+      "name": "meta.record-item.wit",
+      "comment": "Syntax for WIT like `record \"id\" {`",
+      "begin": "\\b(record)\\b\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.record.record-item.wit"
+        },
+        "2": {
+          "name": "entity.name.type.id.record-item.wit"
+        },
+        "7": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#record-fields"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "record-fields": {
+      "name": "meta.record-fields.wit",
+      "begin": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b\\s*(\\:)",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.declaration.id.record-fields.wit"
+        },
+        "6": {
+          "name": "keyword.operator.key-value.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.types.record-fields.wit",
+          "include": "#types"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "((\\,)|(?=\\})|(?=\\n))",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "2": {
+          "name": "punctuation.comma.wit"
+        }
+      }
+    },
+    "flags": {
+      "name": "meta.flags-items.wit",
+      "comment": "Syntax for WIT like `flags \"id\" {`",
+      "begin": "\\b(flags)\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.flags.flags-items.wit"
+        },
+        "2": {
+          "name": "entity.name.type.id.flags-items.wit"
+        },
+        "7": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#flags-fields"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "flags-fields": {
+      "name": "meta.flags-fields.wit",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "variable.other.enummember.id.flags-fields.wit",
+          "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+        },
+        {
+          "name": "punctuation.comma.wit",
+          "match": "(\\,)"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ]
+    },
+    "variant": {
+      "name": "meta.variant.wit",
+      "comment": "Syntax for WIT like `variant \"id\" {`",
+      "begin": "\\b(variant)\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.variant.wit"
+        },
+        "2": {
+          "name": "entity.name.type.id.variant.wit"
+        },
+        "7": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#variant-cases"
+        },
+        {
+          "include": "#enum-cases"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "variant-cases": {
+      "name": "meta.variant-cases.wit",
+      "begin": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b\\s*(\\()",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.other.enummember.id.variant-cases.wit"
+        },
+        "6": {
+          "name": "punctuation.brackets.round.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "name": "meta.types.variant-cases.wit",
+          "include": "#types"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\))\\s*(\\,)?",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.round.end.wit"
+        },
+        "2": {
+          "name": "punctuation.comma.wit"
+        }
+      }
+    },
+    "enum": {
+      "name": "meta.enum-items.wit",
+      "comment": "Syntax for WIT like `enum \"id\" {`",
+      "begin": "\\b(enum)\\b\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.enum.enum-items.wit"
+        },
+        "2": {
+          "name": "entity.name.type.id.enum-items.wit"
+        },
+        "7": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#enum-cases"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "enum-cases": {
+      "name": "meta.enum-cases.wit",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "variable.other.enummember.id.enum-cases.wit",
+          "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+        },
+        {
+          "name": "punctuation.comma.wit",
+          "match": "(\\,)"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ]
+    },
+    "types": {
+      "name": "meta.ty.wit",
+      "comment": "Syntax for WIT types corresponding to the interface types specification",
+      "patterns": [
+        {
+          "include": "#primitive"
+        },
+        {
+          "include": "#container"
+        },
+        {
+          "include": "#identifier"
+        }
+      ]
+    },
+    "primitive": {
+      "name": "meta.primitive.ty.wit",
+      "comment": "Syntax for WIT primitives like `'u8' | 'bool' | 'string'` and more",
+      "patterns": [
+        {
+          "include": "#numeric"
+        },
+        {
+          "include": "#boolean"
+        },
+        {
+          "include": "#string"
+        }
+      ]
+    },
+    "numeric": {
+      "name": "entity.name.type.numeric.wit",
+      "comment": "Syntax for numeric types identifiers such as signed and unsigned integers and floating point identifiers",
+      "match": "\\b(u8|u16|u32|u64|s8|s16|s32|s64|float32|float64)\\b"
+    },
+    "boolean": {
+      "name": "entity.name.type.boolean.wit",
+      "comment": "Syntax for boolean types such as bool",
+      "match": "\\b(bool)\\b"
+    },
+    "string": {
+      "name": "entity.name.type.string.wit",
+      "comment": "Syntax for primitive types such as string and char",
+      "match": "\\b(string|char)\\b"
+    },
+    "container": {
+      "name": "meta.container.ty.wit",
+      "comment": "Syntax for WIT containers like `tuple | list | result | handle`",
+      "patterns": [
+        {
+          "include": "#tuple"
+        },
+        {
+          "include": "#list"
+        },
+        {
+          "include": "#option"
+        },
+        {
+          "include": "#result"
+        },
+        {
+          "include": "#handle"
+        }
+      ]
+    },
+    "tuple": {
+      "name": "meta.tuple.ty.wit",
+      "comment": "Syntax for WIT types such as tuple",
+      "begin": "\\b(tuple)\\b(\\<)",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.type.tuple.wit"
+        },
+        "2": {
+          "name": "punctuation.brackets.angle.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.types.tuple.wit",
+          "include": "#types"
+        },
+        {
+          "name": "punctuation.comma.wit",
+          "match": "(\\,)"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\>)",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.angle.end.wit"
+        }
+      }
+    },
+    "list": {
+      "name": "meta.list.ty.wit",
+      "comment": "Syntax for WIT types such as list",
+      "begin": "\\b(list)\\b(\\<)",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.type.list.wit"
+        },
+        "2": {
+          "name": "punctuation.brackets.angle.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.types.list.wit",
+          "include": "#types"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\>)",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.angle.end.wit"
+        }
+      }
+    },
+    "option": {
+      "name": "meta.option.ty.wit",
+      "comment": "Syntax for WIT types such as option",
+      "begin": "\\b(option)\\b(\\<)",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.type.option.wit"
+        },
+        "2": {
+          "name": "punctuation.brackets.angle.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.types.option.wit",
+          "include": "#types"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\>)",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.angle.end.wit"
+        }
+      }
+    },
+    "result": {
+      "name": "meta.result.ty.wit",
+      "comment": "Syntax for WIT types such as result",
+      "begin": "\\b(result)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.type.result.wit"
+        },
+        "2": {
+          "name": "punctuation.brackets.angle.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.inner.result.wit",
+          "begin": "(\\<)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.brackets.angle.begin.wit"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "name": "variable.other.inferred-type.result.wit",
+              "match": "(?<!\\w)(\\_)(?!\\w)"
+            },
+            {
+              "name": "meta.types.result.wit",
+              "include": "#types"
+            },
+            {
+              "name": "punctuation.comma.wit",
+              "match": "(?<!result)\\s*(\\,)"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ],
+          "end": "(\\>)",
+          "applyEndPatternLast": 1,
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.brackets.angle.end.wit"
+            }
+          }
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "((?<=\\n)|(?=\\,)|(?=\\}))",
+      "applyEndPatternLast": 1
+    },
+    "handle": {
+      "name": "meta.handle.ty.wit",
+      "comment": "Syntax for WIT types such as handle",
+      "match": "\\b(borrow)\\b(\\<)\\s*%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\>)",
+      "captures": {
+        "1": {
+          "name": "entity.name.type.borrow.handle.wit"
+        },
+        "2": {
+          "name": "punctuation.brackets.angle.begin.wit"
+        },
+        "3": {
+          "name": "entity.name.type.id.handle.wit"
+        },
+        "8": {
+          "name": "punctuation.brackets.angle.end.wit"
+        }
+      }
+    },
+    "identifier": {
+      "name": "entity.name.type.id.wit",
+      "comment": "Syntax for WIT types based on its identifier",
+      "match": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b"
+    },
+    "resource": {
+      "name": "meta.resource-item.wit",
+      "comment": "Syntax for WIT like `resource \"id\" {`",
+      "begin": "\\b(resource)\\b\\s+%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.resource.wit"
+        },
+        "2": {
+          "name": "entity.name.type.id.resource.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#resource-methods"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "((?<=\\n)|(?=\\}))",
+      "applyEndPatternLast": 1
+    },
+    "resource-methods": {
+      "name": "meta.resource-methods.wit",
+      "begin": "(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "name": "meta.constructor-type.wit",
+          "begin": "\\b(constructor)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.constructor.constructor-type.wit"
+            },
+            "2": {
+              "name": "punctuation.brackets.round.begin.wit"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "include": "#parameter-list"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ],
+          "end": "((?<=\\n)|(?=\\}))",
+          "applyEndPatternLast": 1
+        },
+        {
+          "include": "#function"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\})",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.curly.end.wit"
+        }
+      }
+    },
+    "function": {
+      "name": "meta.func-item.wit",
+      "comment": "This is a function item that includes its identifier. This starts with a variable name, succeded by a `func` keyword and ends with `new line`",
+      "begin": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\s*(\\:)",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.function.id.func-item.wit"
+        },
+        "2": {
+          "name": "meta.word.wit"
+        },
+        "4": {
+          "name": "meta.word-separator.wit"
+        },
+        "5": {
+          "name": "meta.word.wit"
+        },
+        "6": {
+          "name": "keyword.operator.key-value.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#function-definition"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "((?<=\\n)|(?=\\}))",
+      "applyEndPatternLast": 1
+    },
+    "function-definition": {
+      "name": "meta.func-type.wit",
+      "comment": "This is a function definition. This starts with a `func` keyword and ends with `new line`",
+      "patterns": [
+        {
+          "name": "meta.function.wit",
+          "begin": "\\b(static\\s+)?(func)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.modifier.static.func-item.wit"
+            },
+            "2": {
+              "name": "keyword.other.func.func-type.wit"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "include": "#parameter-list"
+            },
+            {
+              "include": "#result-list"
+            },
+            {
+              "include": "#whitespace"
+            }
+          ],
+          "end": "((?<=\\n)|(?=\\}))",
+          "applyEndPatternLast": 1
+        }
+      ]
+    },
+    "parameter-list": {
+      "name": "meta.param-list.wit",
+      "begin": "(\\()",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.brackets.round.begin.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#named-type-list"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "(\\))",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.brackets.round.end.wit"
+        }
+      }
+    },
+    "result-list": {
+      "name": "meta.result-list.wit",
+      "begin": "(\\-\\>)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.arrow.skinny.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#parameter-list"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "((?<=\\n)|(?=\\}))",
+      "applyEndPatternLast": 1
+    },
+    "named-type-list": {
+      "name": "meta.named-type-list.wit",
+      "begin": "\\b%?((?<![\\-\\w])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(([\\-])([a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*)\\b\\s*(\\:)",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.parameter.id.named-type.wit"
+        },
+        "6": {
+          "name": "keyword.operator.key-value.wit"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#whitespace"
+        }
+      ],
+      "end": "((\\,)|(?=\\))|(?=\\n))",
+      "applyEndPatternLast": 1,
+      "endCaptures": {
+        "2": {
+          "name": "punctuation.comma.wit"
+        }
+      }
+    }
+  }
+}

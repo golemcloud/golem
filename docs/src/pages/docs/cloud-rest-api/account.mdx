@@ -1,0 +1,126 @@
+# Account API
+
+The account API allows users to query and manipulate their own account data.
+
+## Get account
+
+| Path                        | Method | Protected |
+| --------------------------- | ------ | --------- |
+| `/v1/accounts/{account_id}` | GET    | Yes       |
+
+Retrieve an account for a given Account ID
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+}
+```
+
+## Update account
+
+| Path                        | Method | Protected |
+| --------------------------- | ------ | --------- |
+| `/v1/accounts/{account_id}` | PUT    | Yes       |
+
+Allows the user to change the account details such as name and email.
+
+Changing the planId is not allowed and the request will be rejected.
+The response is the updated account data.
+
+**Example Request JSON**
+
+```json copy
+{
+  "name": "string",
+  "email": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+}
+```
+
+## Delete account
+
+| Path                        | Method | Protected |
+| --------------------------- | ------ | --------- |
+| `/v1/accounts/{account_id}` | DELETE | Yes       |
+
+Delete an account.
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Get account's plan
+
+| Path                             | Method | Protected |
+| -------------------------------- | ------ | --------- |
+| `/v1/accounts/{account_id}/plan` | GET    | Yes       |
+
+**Example Response JSON**
+
+```json copy
+{
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "planData": {
+    "projectLimit": 0,
+    "componentLimit": 0,
+    "workerLimit": 0,
+    "storageLimit": 0,
+    "monthlyGasLimit": 0,
+    "monthlyUploadLimit": 0
+  }
+}
+```
+
+## Create account
+
+| Path           | Method | Protected |
+| -------------- | ------ | --------- |
+| `/v1/accounts` | POST   | Yes       |
+
+Create a new account. The response is the created account data.
+
+**Example Request JSON**
+
+```json copy
+{
+  "name": "string",
+  "email": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d"
+}
+```
+
+## Account API Errors
+
+| Status Code | Description                                                              | Body                    |
+| ----------- | ------------------------------------------------------------------------ | ----------------------- |
+| 400         | Invalid request, returning with a list of issues detected in the request | `{"errors":["string"]}` |
+| 401         | Unauthorized request                                                     | `{"error":"string"}`    |
+| 404         | Account not found                                                        | `{"error":"string"}`    |
+| 500         | Internal server error                                                    | `{"error":"string"}`    |

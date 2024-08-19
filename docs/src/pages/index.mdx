@@ -1,40 +1,28 @@
 import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
 import {
-  HelpIcon,
-  TerminalIcon,
-  ArrowUpDownIcon,
-  HardHatIcon,
-  BookTypeIcon,
-  NetworkIcon,
-  PlayCircleIcon,
-  BlocksIcon,
-  ArrowRightFromLineIcon,
-  HelpCircleIcon,
-  GalleryVerticalEnd,
-  RocketIcon,
+  Code,
+  Cog,
+  Gamepad,
+  LibraryBig,
+  Terminal,
+  ArrowUpDown,
+  SquareFunction,
+  HardHat,
+  CircleHelp,
+  Rocket,
 } from "lucide-react"
 import { GolemIcon } from "src/components/golem-logo"
 
-# Golem Documentation
+# Golem Developer Documentation
 
 Welcome to the Golem developer documentation portal! Here you will find comprehensive documentation on how to build, deploy, and manage applications on Golem.
 
 <Callout type="info">
   <div>
     Golem is available in both an open source version that you can deploy yourself and a hosted
-    version that we manage for you.
-  </div>
-  <div>
-    This documentation covers both versions, and we will call out any differences between the two.
-  </div>
-</Callout>
-
-<Callout type="warning">
-  <div> Golem is currently in Developer Preview. </div>
-  <div>
-    We encourage experimentation and prototypes, but please do not deploy mission-critical
-    production applications.
+    version that we manage for you. This documentation covers both versions, and we will discuss any
+    differences between the two.
   </div>
 </Callout>
 
@@ -42,16 +30,19 @@ Welcome to the Golem developer documentation portal! Here you will find comprehe
 
 <Cards num={2}>
   <Card title="Why Golem?" href="/docs/why-golem" icon={<GolemIcon />} />
-  <Card title="Quickstart" href="/docs/quickstart" icon={<RocketIcon />} />
-  <Card title="Building Components" href="/docs/building-components" icon={<HardHatIcon />} />
-  <Card title="Management Console" href="/docs/console" icon={<BlocksIcon />} />
+  <Card title="Fundamentals" href="/docs/fundamentals" icon={<HardHat />} />
+  <Card title="Quickstart" href="/docs/quickstart" icon={<Rocket />} />
 </Cards>
 
-### Reference
+### Quick Links
 
 <Cards num={2}>
-  <Card title="Golem CLI" href="/docs/golem-cli" icon={<TerminalIcon />} />
-  <Card title="REST API" href="/docs/rest-api" icon={<ArrowUpDownIcon />} />
-  <Card title="Runtime API" href="/docs/runtime-api" icon={<PlayCircleIcon />} />
-  <Card title="FAQ" href="/docs/faq" icon={<HelpCircleIcon />} />
+  <Card title="Develop" href="/docs/develop" icon={<Code />} />
+  <Card title="Deploy" href="/docs/deploy" icon={<ArrowUpDown />} />
+  <Card title="Invoke" href="/docs/invoke" icon={<SquareFunction />} />
+  <Card title="Operate" href="/docs/operate" icon={<Cog />} />
+  <Card title="CLI" href="/docs/cli" icon={<Terminal />} />
+  <Card title="Console" href="/docs/console" icon={<Gamepad />} />
+  <Card title="Troubleshooting" href="/docs/troubleshooting" icon={<CircleHelp />} />
+  <Card title="References" href="/docs/references" icon={<LibraryBig />} />
 </Cards>

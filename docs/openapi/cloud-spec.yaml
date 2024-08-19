@@ -1,65 +1,24 @@
 openapi: 3.0.0
 info:
   title: Golem API
-  version: '2.0'
-servers: []
-tags:
-- name: Account
-  description: The account API allows users to query and manipulate their own account data.
-- name: AccountSummary
-- name: Component
-  description: The component API provides endpoint to upload, download and find Golem components (WASM components with associated metadata).
-- name: Grant
-- name: HealthCheck
-- name: Limits
-  description: The limits API allows users to query their current resource limits.
-- name: Login
-  description: The login endpoints are implementing an OAuth2 flow.
-- name: Project
-  description: |-
-    Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
-
-    Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
-- name: ProjectGrant
-  description: |-
-    Projects can have grants providing access to other accounts than the project's owner.
-
-    The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
-- name: ProjectPolicy
-  description: |-
-    Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
-
-    The following actions can be used in the projectActions fields of this API:
-    - `ViewComponent` grants read access to a component
-    - `CreateComponent` allows creating new components in a project
-    - `UpdateComponent` allows uploading new versions for existing components in a project
-    - `DeleteComponent` allows deleting components from a project
-    - `ViewWorker` allows querying existing workers of a component belonging to the project
-    - `CreateWorker` allows launching new workers of a component in the project
-    - `UpdateWorker` allows manipulating existing workers of a component belonging to the project
-    - `DeleteWorker` allows deleting workers of a component belonging to the project
-    - `ViewProjectGrants` allows listing the existing grants of the project
-    - `CreateProjectGrants` allows creating new grants for the project
-    - `DeleteProjectGrants` allows deleting existing grants of the project
-- name: Token
-  description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
-- name: Worker
-  description: The worker API allows to launch new workers, query and manipulate their status, and invoke their exported functions.
+  version: '1.0'
 paths:
-  /v2/accounts/{account_id}:
+  /v1/accounts/{account_id}:
     get:
       tags:
       - Account
       summary: Get account
       description: Retrieve an account for a given Account ID
+      operationId: get_account
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: account_id
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -103,14 +62,16 @@ paths:
 
         Changing the planId is not allowed and the request will be rejected.
         The response is the updated account data.
+      operationId: update_account
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: account_id
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -156,14 +117,16 @@ paths:
       - Account
       summary: Delete account
       description: Delete an account.
+      operationId: delete_account
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: account_id
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -198,19 +161,21 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/accounts/{account_id}/plan:
+  /v1/accounts/{account_id}/plan:
     get:
       tags:
       - Account
       summary: Get account's plan
+      operationId: get_account_plan
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: account_id
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -245,12 +210,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/accounts:
+  /v1/accounts:
     post:
       tags:
       - Account
       summary: Create account
       description: Create a new account. The response is the created account data.
+      operationId: create_account
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -291,27 +257,30 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/admin/accounts:
+  /v1/admin/accounts:
     get:
       tags:
       - AccountSummary
+      operationId: get_account_summary
       parameters:
-      - name: skip
+      - in: query
+        name: skip
+        required: true
+        deprecated: false
         schema:
           type: integer
           format: int32
-        in: query
+        explode: true
+        style: form
+      - in: query
+        name: limit
         required: true
         deprecated: false
-        explode: true
-      - name: limit
         schema:
           type: integer
           format: int32
-        in: query
-        required: true
-        deprecated: false
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -336,10 +305,11 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/admin/accounts/count:
+  /v1/admin/accounts/count:
     get:
       tags:
       - AccountSummary
+      operationId: get_account_count
       responses:
         '200':
           description: ''
@@ -363,18 +333,20 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/accounts/{account_id}/grants:
+  /v1/accounts/{account_id}/grants:
     get:
       tags:
       - Grant
+      operationId: get_account_grants
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: account_id
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -411,25 +383,28 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/accounts/{account_id}/grants/{role}:
+  /v1/accounts/{account_id}/grants/{role}:
     get:
       tags:
       - Grant
+      operationId: get_account_grant
       parameters:
-      - name: account_id
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
         schema:
           type: string
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: role
         required: true
         deprecated: false
-        explode: true
-      - name: role
         schema:
           $ref: '#/components/schemas/Role'
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -467,21 +442,24 @@ paths:
     put:
       tags:
       - Grant
+      operationId: create_account_grant
       parameters:
-      - name: account_id
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
         schema:
           type: string
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: role
         required: true
         deprecated: false
-        explode: true
-      - name: role
         schema:
           $ref: '#/components/schemas/Role'
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -519,21 +497,24 @@ paths:
     delete:
       tags:
       - Grant
+      operationId: delete_account_grant
       parameters:
-      - name: account_id
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
         schema:
           type: string
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: role
         required: true
         deprecated: false
-        explode: true
-      - name: role
         schema:
           $ref: '#/components/schemas/Role'
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -568,20 +549,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/resource-limits:
+  /v1/resource-limits:
     get:
       tags:
       - Limits
       summary: Get resource limits for a given account.
+      operationId: get_resource_limits
       parameters:
-      - name: account-id
-        schema:
-          type: string
-        in: query
+      - in: query
+        name: account-id
         description: The Account ID to check resource limits for.
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -601,6 +584,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
           content:
@@ -614,6 +603,7 @@ paths:
       tags:
       - Limits
       summary: Update resource limits for a given account.
+      operationId: update_resource_limits
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -639,6 +629,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: Internal server error
           content:
@@ -648,7 +644,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/oauth2:
+  /v1/oauth2:
     post:
       tags:
       - Login
@@ -660,23 +656,26 @@ paths:
         - `id` is the identifier of the token itself
         - `accountId` is the account's identifier, can be used on the account API
         - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+      operationId: login_oauth2
       parameters:
-      - name: provider
-        schema:
-          type: string
-        in: query
+      - in: query
+        name: provider
         description: Currently only `github` is supported.
         required: true
         deprecated: false
-        explode: true
-      - name: access-token
         schema:
           type: string
-        in: query
+        explode: true
+        style: form
+      - in: query
+        name: access-token
         description: OAuth2 access token
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -702,7 +701,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/login/token:
+  /v1/login/token:
     get:
       tags:
       - Login
@@ -710,6 +709,7 @@ paths:
       description: |-
         Gets information about a token that is selected by the secret key passed in the Authorization header.
         The JSON is the same as the data object in the oauth2 endpoint's response.
+      operationId: current_login_token
       responses:
         '200':
           description: ''
@@ -747,6 +747,7 @@ paths:
         Starts an interactive authorization flow.
         The user must open the returned url and enter the userCode in a form before the expires deadline.
         Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      operationId: start_login_oauth2
       responses:
         '200':
           description: ''
@@ -780,6 +781,7 @@ paths:
       description: |-
         Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
         Returns a JSON string containing the encodedSession from the start endpoint's response.
+      operationId: complete_login_oauth2
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -815,6 +817,7 @@ paths:
     get:
       tags:
       - HealthCheck
+      operationId: healthcheck
       responses:
         '200':
           description: ''
@@ -826,6 +829,7 @@ paths:
     get:
       tags:
       - HealthCheck
+      operationId: version
       responses:
         '200':
           description: ''
@@ -833,7 +837,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
-  /v2/projects/default:
+  /v1/projects/default:
     get:
       tags:
       - Project
@@ -842,6 +846,7 @@ paths:
         - name of the project can be used for lookup the project if the ID is now known
         - defaultEnvironmentId is currently always default
         - projectType is either Default
+      operationId: get_default_project
       responses:
         '200':
           description: ''
@@ -882,7 +887,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/projects:
+  /v1/projects:
     get:
       tags:
       - Project
@@ -891,15 +896,16 @@ paths:
         Returns all projects of the account if no project-name is specified.
         Otherwise, returns all projects of the account that has the given name.
         As unique names are not enforced on the API level, the response may contain multiple entries.
+      operationId: get_projects
       parameters:
-      - name: project-name
+      - in: query
+        name: project-name
+        description: Filter by project name
+        deprecated: false
         schema:
           type: string
-        in: query
-        description: Filter by project name
-        required: false
-        deprecated: false
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -947,6 +953,7 @@ paths:
       - Project
       summary: Create project
       description: Creates a new project. The ownerAccountId must be the caller's account ID.
+      operationId: create_project
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -993,21 +1000,23 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/projects/{project_id}:
+  /v1/projects/{project_id}:
     get:
       tags:
       - Project
       summary: Get project by ID
       description: Gets a project by its identifier. Response is the same as for the default project.
+      operationId: get_project
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1053,15 +1062,17 @@ paths:
       - Project
       summary: Delete project
       description: Deletes a project given by its identifier.
+      operationId: delete_project
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1102,21 +1113,23 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/projects/{project_id}/actions:
+  /v1/projects/{project_id}/actions:
     get:
       tags:
       - Project
       summary: Get project actions
       description: Returns a list of actions that can be performed on the project.
+      operationId: get_project_actions
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1159,7 +1172,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/projects/{project_id}/grants:
+  /v1/projects/{project_id}/grants:
     get:
       tags:
       - ProjectGrant
@@ -1172,15 +1185,17 @@ paths:
         - `granteeAccountId` the account that gets access for the project
         - `grantorProjectId` the project ID
         - `projectPolicyId` the associated policy - see the project policy API below
+      operationId: get_project_grants
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1233,15 +1248,17 @@ paths:
         - `projectPolicyId` the associated policy - see the project policy API below
 
         The response describes the new project grant including it's id that can be used to query specifically this grant in the future.
+      operationId: create_project_grant
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1288,29 +1305,32 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/projects/{project_id}/grants/{grant_id}:
+  /v1/projects/{project_id}/grants/{grant_id}:
     get:
       tags:
       - ProjectGrant
       summary: Get a specific grant of a project
       description: Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint's response described above.
+      operationId: get_project_grant
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: grant_id
         required: true
         deprecated: false
-        explode: true
-      - name: grant_id
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1356,23 +1376,26 @@ paths:
       - ProjectGrant
       summary: Delete a project grant
       description: Deletes an existing grant of a specific project.
+      operationId: delete_project_grant
       parameters:
-      - name: project_id
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: grant_id
         required: true
         deprecated: false
-        explode: true
-      - name: grant_id
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1413,21 +1436,23 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/project-policies/{project_policy_id}:
+  /v1/project-policies/{project_policy_id}:
     get:
       tags:
       - ProjectPolicy
       summary: Get a project policy
       description: Returns a given project policy by it's ID. Project policy identifiers are used in project grants.
+      operationId: get_project_policies
       parameters:
-      - name: project_policy_id
+      - in: path
+        name: project_policy_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1462,12 +1487,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/project-policies:
+  /v1/project-policies:
     post:
       tags:
       - ProjectPolicy
       summary: Create a project policy
       description: Creates a new project policy and returns the object describing it, including the newly created policy's id.
+      operationId: create_project_policy
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -1508,7 +1534,237 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/components/{component_id}:
+  /v1/accounts/{account_id}/tokens:
+    get:
+      tags:
+      - Token
+      summary: Get all tokens
+      description: |-
+        Gets all created tokens of an account.
+        The format of each element is the same as the data object in the oauth2 endpoint's response.
+      operationId: get_tokens
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - Token
+      summary: Create new token
+      description: |
+        Creates a new token with a given expiration date.
+        The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
+      operationId: create_token
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CreateTokenDTO'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UnsafeToken'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/accounts/{account_id}/tokens/{token_id}:
+    get:
+      tags:
+      - Token
+      summary: Get a specific token
+      description: |-
+        Gets information about a token given by it's identifier.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      operationId: get_token
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: token_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - Token
+      summary: Delete a token
+      description: Deletes a previously created token given by it's identifier.
+      operationId: delete_token
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: token_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteTokenResponse'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Token not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}:
     get:
       tags:
       - Component
@@ -1518,21 +1774,22 @@ paths:
         This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
 
         - `versionedComponentId` associates a specific version with the component id
-        - `userComponentId` and protectedComponentId are implementation details, not used elsewhere on the public API
         - `componentName` is the human-readable name of the component
         - `componentSize` is the WASM binary's size in bytes
         - `metadata` contains information extracted from the WASM itself
         - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
         - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
+      operationId: get_component_metadata_all_versions
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1581,20 +1838,22 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/components/{component_id}/upload:
+  /v1/components/{component_id}/upload:
     put:
       tags:
       - Component
       summary: Update a component
+      operationId: update_component
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/octet-stream:
@@ -1648,96 +1907,31 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/components:
-    post:
-      tags:
-      - Component
-      summary: Upload a new component
-      description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-              - query
-              - component
-              properties:
-                query:
-                  $ref: '#/components/schemas/ComponentQuery'
-                component:
-                  type: string
-                  format: binary
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Component'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of components exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Component already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
+  /v1/components:
     get:
       tags:
       - Component
       summary: Get all components
       description: Gets all components, optionally filtered by project and/or component name.
+      operationId: get_components
       parameters:
-      - name: project-id
+      - in: query
+        name: project-id
+        description: Project ID to filter by
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: query
-        description: Project ID to filter by
-        required: false
-        deprecated: false
         explode: true
-      - name: component-name
+        style: form
+      - in: query
+        name: component-name
+        description: Component name to filter by
+        deprecated: false
         schema:
           type: string
-        in: query
-        description: Component name to filter by
-        required: false
-        deprecated: false
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -1786,29 +1980,98 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/components/{component_id}/download:
+    post:
+      tags:
+      - Component
+      summary: Create a new component
+      description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+      operationId: create_component
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                query:
+                  $ref: '#/components/schemas/ComponentQuery'
+                component:
+                  type: string
+                  format: binary
+              required:
+              - query
+              - component
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/download:
     get:
       tags:
       - Component
       summary: Download a component
       description: Downloads a specific version of the component's WASM.
+      operationId: download_component
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
-      - name: version
+        style: simple
+      - in: query
+        name: version
+        deprecated: false
         schema:
           type: integer
           format: uint64
-        in: query
-        required: false
-        deprecated: false
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -1856,21 +2119,31 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/components/{component_id}/latest:
+  /v1/components/{component_id}/versions/{version}:
     get:
       tags:
       - Component
-      summary: Get the latest version of a given component
-      description: Gets the latest version of a component.
+      summary: Get the version of a given component
+      description: Gets the version of a component.
+      operationId: get_component_metadata
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: version
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -1917,144 +2190,30 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v2/accounts/{account_id}/tokens:
+  /v1/components/{component_id}/latest:
     get:
       tags:
-      - Token
-      summary: Get all tokens
-      description: |-
-        Gets all created tokens of an account.
-        The format of each element is the same as the data object in the oauth2 endpoint's response.
+      - Component
+      summary: Get the latest version of a given component
+      description: Gets the latest version of a component.
+      operationId: get_latest_component_metadata
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: component_id
         required: true
         deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Token'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Token not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-    post:
-      tags:
-      - Token
-      summary: Create new token
-      description: |
-        Creates a new token with a given expiration date.
-        The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CreateTokenDTO'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/UnsafeToken'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Token not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v2/accounts/{account_id}/tokens/{token_id}:
-    get:
-      tags:
-      - Token
-      summary: Get a specific token
-      description: |-
-        Gets information about a token given by it's identifier.
-        The JSON is the same as the data object in the oauth2 endpoint's response.
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: token_id
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/Component'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2067,8 +2226,20 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Token not found
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
           content:
             application/json; charset=utf-8:
               schema:
@@ -2082,34 +2253,84 @@ paths:
       security:
       - Cookie: []
       - Token: []
-    delete:
+  /v1/components/{component_id}/workers:
+    get:
       tags:
-      - Token
-      summary: Delete a token
-      description: Deletes a previously created token given by it's identifier.
+      - Worker
+      summary: Get metadata of multiple workers
+      description: |-
+        ### Filters
+
+        | Property    | Comparator             | Description                    | Example                         |
+        |-------------|------------------------|--------------------------------|----------------------------------|
+        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+        | status      | FilterComparator       | Status of worker               | `status = Running`               |
+        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+
+        ### Comparators
+
+        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      operationId: get_workers_metadata
       parameters:
-      - name: account_id
-        schema:
-          type: string
-        in: path
+      - in: path
+        name: component_id
         required: true
         deprecated: false
-        explode: true
-      - name: token_id
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
+      - in: query
+        name: filter
+        description: Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
+        deprecated: false
+        schema:
+          type: array
+          items:
+            type: string
+        explode: true
+        style: form
+      - in: query
+        name: cursor
+        description: 'Count of listed values, default: 50'
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: count
+        description: Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: precise
+        description: Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/DeleteTokenResponse'
+                $ref: '#/components/schemas/WorkersMetadataResponse'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2122,8 +2343,20 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '404':
-          description: Token not found
+          description: Component / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Worker already exists
           content:
             application/json; charset=utf-8:
               schema:
@@ -2133,11 +2366,10 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/GolemErrorBody'
       security:
       - Cookie: []
       - Token: []
-  /v2/components/{component_id}/workers:
     post:
       tags:
       - Worker
@@ -2149,15 +2381,17 @@ paths:
         - `name` is the name of the created worker. This has to be unique, but only for a given component
         - `args` is a list of strings which appear as command line arguments for the worker
         - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
+      operationId: launch_new_worker
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2210,192 +2444,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: launch_new_worker
-    get:
-      tags:
-      - Worker
-      summary: Get metadata of multiple workers
-      description: |-
-        ### Filters
-
-        | Property    | Comparator             | Description                    | Example                         |
-        |-------------|------------------------|--------------------------------|----------------------------------|
-        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
-        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
-        | status      | FilterComparator       | Status of worker               | `status = Running`               |
-        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
-        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
-
-
-        ### Comparators
-
-        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
-        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
-
-        Returns metadata about an existing component workers:
-        - `workers` list of workers metadata
-        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: filter
-        schema:
-          type: array
-          items:
-            type: string
-        in: query
-        description: Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
-        required: false
-        deprecated: false
-        explode: true
-      - name: cursor
-        schema:
-          type: integer
-          format: uint64
-        in: query
-        description: 'Count of listed values, default: 50'
-        required: false
-        deprecated: false
-        explode: true
-      - name: count
-        schema:
-          type: integer
-          format: uint64
-        in: query
-        description: Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
-        required: false
-        deprecated: false
-        explode: true
-      - name: precise
-        schema:
-          type: boolean
-        in: query
-        description: Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkersMetadataResponse'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of workers exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component / Worker / Promise not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Worker already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/GolemErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_workers_metadata
-  /v2/components/{component_id}/workers/{worker_name}:
-    delete:
-      tags:
-      - Worker
-      summary: Delete a worker
-      description: Interrupts and deletes an existing worker.
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: worker_name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/DeleteWorkerResponse'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Maximum number of workers exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Component / Worker / Promise not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: Worker already exists
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/GolemErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_worker
+  /v1/components/{component_id}/workers/{worker_name}:
     get:
       tags:
       - Worker
@@ -2416,22 +2465,25 @@ paths:
         - `Retrying` if the worker failed, and an automatic retry was scheduled for it
         - `Failed` if the worker failed and there are no more retries scheduled for it
         - `Exited` if the worker explicitly exited using the exit WASI function
+      operationId: get_worker_metadata
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -2478,38 +2530,37 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_worker_metadata
-  /v2/components/{component_id}/workers/{worker_name}/key:
-    post:
+    delete:
       tags:
       - Worker
-      summary: Get an invocation key
-      description: |-
-        Creates an invocation key for a given worker.
-        An invocation key is passed to the below defined invoke APIs to guarantee that retrying those invocations only performs the operation on the worker once.
+      summary: Delete a worker
+      description: Interrupts and deletes an existing worker.
+      operationId: delete_worker
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/InvocationKey'
+                $ref: '#/components/schemas/DeleteWorkerResponse'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2549,53 +2600,46 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_invocation_key
-  /v2/components/{component_id}/workers/{worker_name}/invoke-and-await:
+  /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
       summary: Invoke a function and await it's resolution
       description: Supply the parameters in the request body as JSON.
+      operationId: invoke_and_await_function
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
-      - name: invocation-key
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
         schema:
           type: string
-        in: query
-        description: must be created with the create invokation key endpoint
+        explode: true
+        style: simple
+      - in: query
+        name: function
         required: true
         deprecated: false
-        explode: true
-      - name: function
         schema:
           type: string
-        in: query
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
         explode: true
-      - name: calling-convention
-        schema:
-          $ref: '#/components/schemas/CallingConvention'
-        in: query
-        description: One of `component`, `stdio`, `stdio-event-loop`. Defaults to `component`.
-        required: false
-        deprecated: false
-        explode: true
+        style: form
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2648,39 +2692,47 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: invoke_and_await_function
-  /v2/components/{component_id}/workers/{worker_name}/invoke:
+  /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
       summary: Invoke a function
-      description: |-
-        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns. Custom calling convention and invocation key is not supported.
-        To understand how to get the function name and how to encode the function parameters check Component interface
+      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+      operationId: invoke_function
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
         deprecated: false
-        explode: true
-      - name: function
         schema:
           type: string
-        in: query
+        explode: true
+        style: simple
+      - in: query
+        name: function
         description: name of the exported function to be invoked
         required: true
         deprecated: false
+        schema:
+          type: string
         explode: true
+        style: form
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2733,8 +2785,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: invoke_function
-  /v2/components/{component_id}/workers/{worker_name}/complete:
+  /v1/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
       - Worker
@@ -2743,22 +2794,25 @@ paths:
         Completes a promise with a given custom array of bytes.
         The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
         The data field is sent back to the worker and it has no predefined meaning.
+      operationId: complete_promise
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2811,8 +2865,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: complete_promise
-  /v2/components/{component_id}/workers/{worker_name}/interrupt:
+  /v1/components/{component_id}/workers/{worker_name}/interrupt:
     post:
       tags:
       - Worker
@@ -2822,30 +2875,33 @@ paths:
         The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
         An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
         For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
+      operationId: interrupt_worker
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
-      - name: recovery-immediately
+        style: simple
+      - in: query
+        name: recovery-immediately
+        description: if true will simulate a worker recovery. Defaults to false.
+        deprecated: false
         schema:
           type: boolean
-        in: query
-        description: if true will simulate a worker recovery. Defaults to false.
-        required: false
-        deprecated: false
         explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -2892,8 +2948,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: interrupt_worker
-  /v2/components/{component_id}/workers/find:
+  /v1/components/{component_id}/workers/find:
     post:
       tags:
       - Worker
@@ -2918,15 +2973,17 @@ paths:
         Returns metadata about an existing component workers:
         - `workers` list of workers metadata
         - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      operationId: find_workers_metadata
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2979,28 +3036,30 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: find_workers_metadata
-  /v2/components/{component_id}/workers/{worker_name}/resume:
+  /v1/components/{component_id}/workers/{worker_name}/resume:
     post:
       tags:
       - Worker
       summary: Resume a worker
+      operationId: resume_worker
       parameters:
-      - name: component_id
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
         schema:
           type: string
           format: uuid
-        in: path
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
         required: true
         deprecated: false
-        explode: true
-      - name: worker_name
         schema:
           type: string
-        in: path
-        required: true
-        deprecated: false
         explode: true
+        style: simple
       responses:
         '200':
           description: ''
@@ -3047,8 +3106,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: resume_worker
-  /v2/components/{component_id}/workers/{worker_name}/update:
+  /v1/components/{component_id}/workers/{worker_name}/update:
     post:
       tags:
       - Worker
@@ -3086,11 +3144,81 @@ paths:
               schema:
                 $ref: '#/components/schemas/UpdateWorkerResponse'
         '400':
-          description: ''
+          description: Invalid request, returning with a list of issues detected in the request
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of workers exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component / Worker / Promise not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Worker already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/definitions/{project_id}/import:
+    put:
+      tags:
+      - ApiDefinition
+      summary: Upload an OpenAPI definition
+      description: |-
+        Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+        API definition using it.
+      operationId: import_open_api
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema: {}
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
         '401':
           description: ''
           content:
@@ -3108,31 +3236,1065 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/MessageBody'
         '409':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                type: string
         '500':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/GolemErrorBody'
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - Cookie: []
-      - Token: [] 
+      - Token: []
+  /v1/api/definitions/{project_id}:
+    get:
+      tags:
+      - ApiDefinition
+      summary: List API definitions
+      description: Lists all API definitions associated with the project.
+      operationId: list_definitions
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: api-definition-id
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - ApiDefinition
+      summary: Create a new API definition
+      description: |-
+        Creates a new API definition described by Golem's API definition JSON document.
+        If an API definition of the same version already exists, its an error.
+      operationId: create_definition
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinition'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/definitions/{project_id}/{id}/{version}:
+    get:
+      tags:
+      - ApiDefinition
+      summary: Get an API definition
+      description: An API definition is selected by its API definition ID and version.
+      operationId: get_definition
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    put:
+      tags:
+      - ApiDefinition
+      summary: Update an existing API definition.
+      description: Only draft API definitions can be updated.
+      operationId: update_definition
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinition'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - ApiDefinition
+      summary: Delete an API definition
+      description: Deletes an API definition by its API definition ID and version.
+      operationId: delete_definition
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/deployments/deploy:
+    post:
+      tags:
+      - ApiDeployment
+      summary: Creates or updates a deployment
+      description: Deploys a set of API definitions to a site (specific host and subdomain).
+      operationId: deploy
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ApiDeployment'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/deployments:
+    get:
+      tags:
+      - ApiDeployment
+      summary: Get one or more API deployments
+      description: |-
+        If `api-definition-id` is not set, it lists all API deployments.
+        If `api-definition-id` is set, returns a single API deployment.
+      operationId: list_deployments
+      parameters:
+      - in: query
+        name: project-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      - in: query
+        name: api-definition-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/deployments/{site}:
+    get:
+      tags:
+      - ApiDeployment
+      summary: Get API deployment by site
+      description: Gets an API deployment by the host name (optionally with a subdomain) it is deployed to.
+      operationId: get_deployment
+      parameters:
+      - in: path
+        name: site
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDeployment'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - ApiDeployment
+      summary: Delete API deployment by site
+      description: Deletes an API deployment by the host name (optionally with a subdomain) it is deployed to.
+      operationId: delete_deployment
+      parameters:
+      - in: path
+        name: site
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/certificates:
+    get:
+      tags:
+      - ApiCertificate
+      summary: Gets one or all certificates for a given project
+      description: |-
+        If `certificate-id` is not set, it returns all certificates associated with the project.
+        If `certificate-id` is set, it returns a single certificate if it exists.
+      operationId: get_certificates
+      parameters:
+      - in: query
+        name: project-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      - in: query
+        name: certificate-id
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Certificate'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - ApiCertificate
+      summary: Creates a new certificate
+      description: |-
+        A certificate is associated with a given Golem project and domain, and consists of
+        a key pair.
+
+        The created certificate will be associated with a certificate ID returned by this endpoint.
+      operationId: create_certificate
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CertificateRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Certificate'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - ApiCertificate
+      summary: Deletes a certificate
+      description: Deletes the certificate associated with the given certificate ID and project ID.
+      operationId: delete_certificate
+      parameters:
+      - in: query
+        name: project-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      - in: query
+        name: certificate-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/api/domains:
+    get:
+      tags:
+      - ApiDomain
+      summary: Get all API domains
+      description: Returns a list of API domains for the given project.
+      operationId: get_domains
+      parameters:
+      - in: query
+        name: project-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiDomain'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    put:
+      tags:
+      - ApiDomain
+      summary: Create or update an API domain
+      operationId: create_or_update_domain
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DomainRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ApiDomain'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - ApiDomain
+      summary: Delete an API domain
+      operationId: delete_domain
+      parameters:
+      - in: query
+        name: project-id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      - in: query
+        name: domain
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MessageBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
 components:
   schemas:
     Account:
       type: object
-      required:
-      - id
-      - name
-      - email
-      - planId
       properties:
         id:
           type: string
@@ -3143,25 +4305,23 @@ components:
         planId:
           type: string
           format: uuid
-    AccountData:
-      type: object
       required:
+      - id
       - name
       - email
+      - planId
+    AccountData:
+      type: object
       properties:
         name:
           type: string
         email:
           type: string
-    AccountSummary:
-      type: object
       required:
-      - id
       - name
       - email
-      - componentCount
-      - workerCount
-      - createdAt
+    AccountSummary:
+      type: object
       properties:
         id:
           type: string
@@ -3178,95 +4338,31 @@ components:
         createdAt:
           type: string
           format: date-time
+      required:
+      - id
+      - name
+      - email
+      - componentCount
+      - workerCount
+      - createdAt
     BatchUpdateResourceLimits:
       type: object
-      required:
-      - updates
       properties:
         updates:
           type: object
           additionalProperties:
             type: integer
             format: int64
-    CallingConvention:
-      type: string
-      enum:
-      - Component
-      - Stdio
-      - StdioEventloop
-    CompleteParameters:
-      type: object
       required:
-      - oplogIdx
-      - data
-      properties:
-        oplogIdx:
-          type: integer
-          format: uint64
-        data:
-          type: array
-          items:
-            type: integer
-            format: uint8
-    Component:
-      type: object
-      required:
-      - versionedComponentId
-      - userComponentId
-      - protectedComponentId
-      - componentName
-      - componentSize
-      - metadata
-      - projectId
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-        userComponentId:
-          $ref: '#/components/schemas/UserComponentId'
-        protectedComponentId:
-          $ref: '#/components/schemas/ProtectedComponentId'
-        componentName:
-          type: string
-        componentSize:
-          type: integer
-          format: uint64
-        metadata:
-          $ref: '#/components/schemas/ComponentMetadata'
-        projectId:
-          type: string
-          format: uuid
-    ComponentMetadata:
-      type: object
-      required:
-      - exports
-      - producers
-      properties:
-        exports:
-          type: array
-          items:
-            $ref: '#/components/schemas/Export'
-        producers:
-          type: array
-          items:
-            $ref: '#/components/schemas/Producers'
-    ComponentQuery:
-      type: object
-      required:
-      - componentName
-      properties:
-        projectId:
-          type: string
-          format: uuid
-        componentName:
-          type: string
+      - updates
     CreateTokenDTO:
       type: object
-      required:
-      - expiresAt
       properties:
         expiresAt:
           type: string
           format: date-time
+      required:
+      - expiresAt
     DeleteAccountResponse:
       type: object
     DeleteGrantResponse:
@@ -3277,88 +4373,1030 @@ components:
       type: object
     DeleteTokenResponse:
       type: object
-    DeleteWorkerResponse:
-      type: object
     ErrorBody:
       type: object
-      required:
-      - error
       properties:
         error:
           type: string
+      required:
+      - error
     ErrorsBody:
       type: object
-      required:
-      - errors
       properties:
         errors:
           type: array
           items:
             type: string
-    Export:
+      required:
+      - errors
+    HealthcheckResponse:
       type: object
-      oneOf:
-      - $ref: '#/components/schemas/Export_ExportInstance'
-      - $ref: '#/components/schemas/Export_ExportFunction'
+    OAuth2Data:
+      type: object
+      properties:
+        url:
+          type: string
+        userCode:
+          type: string
+        expires:
+          type: string
+          format: date-time
+        encodedSession:
+          type: string
+      required:
+      - url
+      - userCode
+      - expires
+      - encodedSession
+    Plan:
+      type: object
+      properties:
+        planId:
+          type: string
+          format: uuid
+        planData:
+          $ref: '#/components/schemas/PlanData'
+      required:
+      - planId
+      - planData
+    PlanData:
+      type: object
+      properties:
+        projectLimit:
+          type: integer
+          format: int32
+        componentLimit:
+          type: integer
+          format: int32
+        workerLimit:
+          type: integer
+          format: int32
+        storageLimit:
+          type: integer
+          format: int32
+        monthlyGasLimit:
+          type: integer
+          format: int64
+        monthlyUploadLimit:
+          type: integer
+          format: int32
+      required:
+      - projectLimit
+      - componentLimit
+      - workerLimit
+      - storageLimit
+      - monthlyGasLimit
+      - monthlyUploadLimit
+    Project:
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        projectData:
+          $ref: '#/components/schemas/ProjectData'
+      required:
+      - projectId
+      - projectData
+    ProjectAction:
+      type: string
+      enum:
+      - ViewComponent
+      - CreateComponent
+      - UpdateComponent
+      - DeleteComponent
+      - ViewWorker
+      - CreateWorker
+      - UpdateWorker
+      - DeleteWorker
+      - ViewProjectGrants
+      - CreateProjectGrants
+      - DeleteProjectGrants
+      - ViewApiDefinition
+      - CreateApiDefinition
+      - UpdateApiDefinition
+      - DeleteApiDefinition
+    ProjectActions:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectAction'
+      required:
+      - actions
+    ProjectData:
+      type: object
+      properties:
+        name:
+          type: string
+        ownerAccountId:
+          type: string
+        description:
+          type: string
+        defaultEnvironmentId:
+          type: string
+        projectType:
+          $ref: '#/components/schemas/ProjectType'
+      required:
+      - name
+      - ownerAccountId
+      - description
+      - defaultEnvironmentId
+      - projectType
+    ProjectDataRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        ownerAccountId:
+          type: string
+        description:
+          type: string
+      required:
+      - name
+      - ownerAccountId
+      - description
+    ProjectGrant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        data:
+          $ref: '#/components/schemas/ProjectGrantData'
+      required:
+      - id
+      - data
+    ProjectGrantData:
+      type: object
+      properties:
+        granteeAccountId:
+          type: string
+        grantorProjectId:
+          type: string
+          format: uuid
+        projectPolicyId:
+          type: string
+          format: uuid
+      required:
+      - granteeAccountId
+      - grantorProjectId
+      - projectPolicyId
+    ProjectGrantDataRequest:
+      type: object
+      properties:
+        granteeAccountId:
+          type: string
+        projectPolicyId:
+          type: string
+          format: uuid
+        projectActions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectAction'
+        projectPolicyName:
+          type: string
+      required:
+      - granteeAccountId
+      - projectActions
+    ProjectPolicy:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        projectActions:
+          $ref: '#/components/schemas/ProjectActions'
+      required:
+      - id
+      - name
+      - projectActions
+    ProjectPolicyData:
+      type: object
+      properties:
+        name:
+          type: string
+        projectActions:
+          $ref: '#/components/schemas/ProjectActions'
+      required:
+      - name
+      - projectActions
+    ProjectType:
+      type: string
+      enum:
+      - Default
+      - NonDefault
+    ResourceLimits:
+      type: object
+      properties:
+        availableFuel:
+          type: integer
+          format: int64
+        maxMemoryPerWorker:
+          type: integer
+          format: int64
+      required:
+      - availableFuel
+      - maxMemoryPerWorker
+    Role:
+      type: string
+      enum:
+      - Admin
+      - MarketingAdmin
+      - ViewProject
+      - DeleteProject
+      - CreateProject
+      - InstanceServer
+    Token:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - accountId
+      - createdAt
+      - expiresAt
+    TokenSecret:
+      type: object
+      properties:
+        value:
+          type: string
+          format: uuid
+      required:
+      - value
+    UnsafeToken:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Token'
+        secret:
+          $ref: '#/components/schemas/TokenSecret'
+      required:
+      - data
+      - secret
+    UpdateResourceLimitsResponse:
+      type: object
+    VersionInfo:
+      type: object
+      properties:
+        version:
+          type: string
+      required:
+      - version
+    AnalysedExport:
       discriminator:
         propertyName: type
         mapping:
-          Instance: '#/components/schemas/Export_ExportInstance'
-          Function: '#/components/schemas/Export_ExportFunction'
-    ExportFunction:
+          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
+          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
       type: object
-      required:
-      - name
-      - parameters
-      - results
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
+    AnalysedExport_AnalysedFunction:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Function
+            type: string
+            enum:
+            - Function
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedFunction'
+    AnalysedExport_AnalysedInstance:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Instance
+            type: string
+            enum:
+            - Instance
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedInstance'
+    AnalysedFunction:
+      type: object
       properties:
         name:
           type: string
         parameters:
           type: array
           items:
-            $ref: '#/components/schemas/FunctionParameter'
+            $ref: '#/components/schemas/AnalysedFunctionParameter'
         results:
           type: array
           items:
-            $ref: '#/components/schemas/FunctionResult'
-    ExportInstance:
-      type: object
+            $ref: '#/components/schemas/AnalysedFunctionResult'
       required:
       - name
-      - functions
+      - parameters
+      - results
+    AnalysedFunctionParameter:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+      - typ
+    AnalysedFunctionResult:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - typ
+    AnalysedInstance:
+      type: object
       properties:
         name:
           type: string
         functions:
           type: array
           items:
-            $ref: '#/components/schemas/ExportFunction'
-    Export_ExportFunction:
+            $ref: '#/components/schemas/AnalysedFunction'
+      required:
+      - name
+      - functions
+    AnalysedResourceMode:
+      type: string
+      enum:
+      - Owned
+      - Borrowed
+    AnalysedType:
+      discriminator:
+        propertyName: type
+        mapping:
+          Variant: '#/components/schemas/AnalysedType_TypeVariant'
+          Result: '#/components/schemas/AnalysedType_TypeResult'
+          Option: '#/components/schemas/AnalysedType_TypeOption'
+          Enum: '#/components/schemas/AnalysedType_TypeEnum'
+          Flags: '#/components/schemas/AnalysedType_TypeFlags'
+          Record: '#/components/schemas/AnalysedType_TypeRecord'
+          Tuple: '#/components/schemas/AnalysedType_TypeTuple'
+          List: '#/components/schemas/AnalysedType_TypeList'
+          Str: '#/components/schemas/AnalysedType_TypeStr'
+          Chr: '#/components/schemas/AnalysedType_TypeChr'
+          F64: '#/components/schemas/AnalysedType_TypeF64'
+          F32: '#/components/schemas/AnalysedType_TypeF32'
+          U64: '#/components/schemas/AnalysedType_TypeU64'
+          S64: '#/components/schemas/AnalysedType_TypeS64'
+          U32: '#/components/schemas/AnalysedType_TypeU32'
+          S32: '#/components/schemas/AnalysedType_TypeS32'
+          U16: '#/components/schemas/AnalysedType_TypeU16'
+          S16: '#/components/schemas/AnalysedType_TypeS16'
+          U8: '#/components/schemas/AnalysedType_TypeU8'
+          S8: '#/components/schemas/AnalysedType_TypeS8'
+          Bool: '#/components/schemas/AnalysedType_TypeBool'
+          Handle: '#/components/schemas/AnalysedType_TypeHandle'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedType_TypeVariant'
+      - $ref: '#/components/schemas/AnalysedType_TypeResult'
+      - $ref: '#/components/schemas/AnalysedType_TypeOption'
+      - $ref: '#/components/schemas/AnalysedType_TypeEnum'
+      - $ref: '#/components/schemas/AnalysedType_TypeFlags'
+      - $ref: '#/components/schemas/AnalysedType_TypeRecord'
+      - $ref: '#/components/schemas/AnalysedType_TypeTuple'
+      - $ref: '#/components/schemas/AnalysedType_TypeList'
+      - $ref: '#/components/schemas/AnalysedType_TypeStr'
+      - $ref: '#/components/schemas/AnalysedType_TypeChr'
+      - $ref: '#/components/schemas/AnalysedType_TypeF64'
+      - $ref: '#/components/schemas/AnalysedType_TypeF32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU64'
+      - $ref: '#/components/schemas/AnalysedType_TypeS64'
+      - $ref: '#/components/schemas/AnalysedType_TypeU32'
+      - $ref: '#/components/schemas/AnalysedType_TypeS32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU16'
+      - $ref: '#/components/schemas/AnalysedType_TypeS16'
+      - $ref: '#/components/schemas/AnalysedType_TypeU8'
+      - $ref: '#/components/schemas/AnalysedType_TypeS8'
+      - $ref: '#/components/schemas/AnalysedType_TypeBool'
+      - $ref: '#/components/schemas/AnalysedType_TypeHandle'
+    AnalysedType_TypeBool:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
+            example: Bool
             type: string
-            example: Function
-      - $ref: '#/components/schemas/ExportFunction'
-    Export_ExportInstance:
+            enum:
+            - Bool
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeBool'
+    AnalysedType_TypeChr:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
+            example: Chr
             type: string
-            example: Instance
-      - $ref: '#/components/schemas/ExportInstance'
+            enum:
+            - Chr
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeChr'
+    AnalysedType_TypeEnum:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Enum
+            type: string
+            enum:
+            - Enum
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeEnum'
+    AnalysedType_TypeF32:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: F32
+            type: string
+            enum:
+            - F32
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeF32'
+    AnalysedType_TypeF64:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: F64
+            type: string
+            enum:
+            - F64
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeF64'
+    AnalysedType_TypeFlags:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Flags
+            type: string
+            enum:
+            - Flags
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeFlags'
+    AnalysedType_TypeHandle:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Handle
+            type: string
+            enum:
+            - Handle
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeHandle'
+    AnalysedType_TypeList:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: List
+            type: string
+            enum:
+            - List
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeList'
+    AnalysedType_TypeOption:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Option
+            type: string
+            enum:
+            - Option
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeOption'
+    AnalysedType_TypeRecord:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Record
+            type: string
+            enum:
+            - Record
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeRecord'
+    AnalysedType_TypeResult:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Result
+            type: string
+            enum:
+            - Result
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeResult'
+    AnalysedType_TypeS16:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S16
+            type: string
+            enum:
+            - S16
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS16'
+    AnalysedType_TypeS32:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S32
+            type: string
+            enum:
+            - S32
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS32'
+    AnalysedType_TypeS64:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S64
+            type: string
+            enum:
+            - S64
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS64'
+    AnalysedType_TypeS8:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S8
+            type: string
+            enum:
+            - S8
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS8'
+    AnalysedType_TypeStr:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Str
+            type: string
+            enum:
+            - Str
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeStr'
+    AnalysedType_TypeTuple:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Tuple
+            type: string
+            enum:
+            - Tuple
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeTuple'
+    AnalysedType_TypeU16:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U16
+            type: string
+            enum:
+            - U16
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU16'
+    AnalysedType_TypeU32:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U32
+            type: string
+            enum:
+            - U32
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU32'
+    AnalysedType_TypeU64:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U64
+            type: string
+            enum:
+            - U64
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU64'
+    AnalysedType_TypeU8:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U8
+            type: string
+            enum:
+            - U8
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU8'
+    AnalysedType_TypeVariant:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Variant
+            type: string
+            enum:
+            - Variant
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeVariant'
+    Component:
+      type: object
+      properties:
+        versionedComponentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        componentName:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        metadata:
+          $ref: '#/components/schemas/ComponentMetadata'
+        projectId:
+          type: string
+          format: uuid
+      required:
+      - versionedComponentId
+      - componentName
+      - componentSize
+      - metadata
+      - projectId
+    ComponentMetadata:
+      type: object
+      properties:
+        exports:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedExport'
+        producers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Producers'
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinearMemory'
+      required:
+      - exports
+      - producers
+      - memories
+    ComponentQuery:
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        componentName:
+          type: string
+      required:
+      - componentName
+    LinearMemory:
+      type: object
+      properties:
+        initial:
+          description: Initial size of the linear memory in bytes
+          type: integer
+          format: uint64
+        maximum:
+          description: Optional maximal size of the linear memory in bytes
+          type: integer
+          format: uint64
+      required:
+      - initial
+    NameOptionTypePair:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+    NameTypePair:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+      - typ
+    ProducerField:
+      type: object
+      properties:
+        name:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/VersionedName'
+      required:
+      - name
+      - values
+    Producers:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProducerField'
+      required:
+      - fields
+    TypeBool:
+      type: object
+    TypeChr:
+      type: object
+    TypeEnum:
+      type: object
+      properties:
+        cases:
+          type: array
+          items:
+            type: string
+      required:
+      - cases
+    TypeF32:
+      type: object
+    TypeF64:
+      type: object
+    TypeFlags:
+      type: object
+      properties:
+        names:
+          type: array
+          items:
+            type: string
+      required:
+      - names
+    TypeHandle:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AnalysedResourceMode'
+      required:
+      - resource_id
+      - mode
+    TypeList:
+      type: object
+      properties:
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - inner
+    TypeOption:
+      type: object
+      properties:
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - inner
+    TypeRecord:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameTypePair'
+      required:
+      - fields
+    TypeResult:
+      type: object
+      properties:
+        ok:
+          $ref: '#/components/schemas/AnalysedType'
+        err:
+          $ref: '#/components/schemas/AnalysedType'
+    TypeS16:
+      type: object
+    TypeS32:
+      type: object
+    TypeS64:
+      type: object
+    TypeS8:
+      type: object
+    TypeStr:
+      type: object
+    TypeTuple:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedType'
+      required:
+      - items
+    TypeU16:
+      type: object
+    TypeU32:
+      type: object
+    TypeU64:
+      type: object
+    TypeU8:
+      type: object
+    TypeVariant:
+      type: object
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameOptionTypePair'
+      required:
+      - cases
+    VersionedComponentId:
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: uint64
+      required:
+      - componentId
+      - version
+    VersionedName:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+      required:
+      - name
+      - version
+    ApiDefinitionInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+      required:
+      - id
+      - version
+    ApiDeployment:
+      type: object
+      properties:
+        apiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiDefinitionInfo'
+        projectId:
+          type: string
+          format: uuid
+        site:
+          $ref: '#/components/schemas/ApiSite'
+      required:
+      - apiDefinitions
+      - projectId
+      - site
+    ApiDomain:
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+        nameServers:
+          type: array
+          items:
+            type: string
+      required:
+      - projectId
+      - domainName
+      - nameServers
+    ApiSite:
+      type: object
+      properties:
+        host:
+          type: string
+        subdomain:
+          type: string
+      required:
+      - host
+    Certificate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+      required:
+      - id
+      - projectId
+      - domainName
+    CertificateRequest:
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+        certificateBody:
+          type: string
+        certificatePrivateKey:
+          type: string
+      required:
+      - projectId
+      - domainName
+      - certificateBody
+      - certificatePrivateKey
+    CompleteParameters:
+      type: object
+      properties:
+        oplogIdx:
+          type: integer
+          format: uint64
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+      required:
+      - oplogIdx
+      - data
+    DeleteWorkerResponse:
+      type: object
+    DomainRequest:
+      type: object
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        domainName:
+          type: string
+      required:
+      - projectId
+      - domainName
     FailedUpdate:
       type: object
-      required:
-      - timestamp
-      - targetVersion
       properties:
         timestamp:
           type: string
@@ -3368,6 +5406,9 @@ components:
           format: uint64
         details:
           type: string
+      required:
+      - timestamp
+      - targetVersion
     FilterComparator:
       type: string
       enum:
@@ -3377,50 +5418,7 @@ components:
       - Greater
       - LessEqual
       - Less
-    FunctionParameter:
-      type: object
-      required:
-      - name
-      - typ
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-    FunctionResult:
-      type: object
-      required:
-      - typ
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
     GolemError:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
-      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
-      - $ref: '#/components/schemas/GolemError_GolemErrorComponentDownloadFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorComponentParseFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfComponentFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInterrupted'
-      - $ref: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
-      - $ref: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
-      - $ref: '#/components/schemas/GolemError_GolemErrorValueMismatch'
-      - $ref: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
-      - $ref: '#/components/schemas/GolemError_GolemErrorRuntimeError'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
-      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
-      - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
-      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
       discriminator:
         propertyName: type
         mapping:
@@ -3446,72 +5444,96 @@ components:
           PreviousInvocationExited: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerAlreadyExists'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorWorkerCreationFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorFailedToResumeWorker'
+      - $ref: '#/components/schemas/GolemError_GolemErrorComponentDownloadFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorComponentParseFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorGetLatestVersionOfComponentFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseDropped'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPromiseAlreadyCompleted'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInterrupted'
+      - $ref: '#/components/schemas/GolemError_GolemErrorParamTypeMismatch'
+      - $ref: '#/components/schemas/GolemError_GolemErrorNoValueInMessage'
+      - $ref: '#/components/schemas/GolemError_GolemErrorValueMismatch'
+      - $ref: '#/components/schemas/GolemError_GolemErrorUnexpectedOplogEntry'
+      - $ref: '#/components/schemas/GolemError_GolemErrorRuntimeError'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidShardId'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
+      - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
     GolemErrorBody:
       type: object
-      required:
-      - golemError
       properties:
         golemError:
           $ref: '#/components/schemas/GolemError'
+      required:
+      - golemError
     GolemErrorComponentDownloadFailed:
       type: object
-      required:
-      - componentId
-      - reason
       properties:
         componentId:
           $ref: '#/components/schemas/VersionedComponentId'
         reason:
           type: string
+      required:
+      - componentId
+      - reason
     GolemErrorComponentParseFailed:
       type: object
-      required:
-      - componentId
-      - reason
       properties:
         componentId:
           $ref: '#/components/schemas/VersionedComponentId'
         reason:
           type: string
+      required:
+      - componentId
+      - reason
     GolemErrorFailedToResumeWorker:
       type: object
-      required:
-      - workerId
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
+        reason:
+          $ref: '#/components/schemas/GolemError'
+      required:
+      - workerId
+      - reason
     GolemErrorGetLatestVersionOfComponentFailed:
       type: object
-      required:
-      - componentId
-      - reason
       properties:
         componentId:
           type: string
           format: uuid
         reason:
           type: string
+      required:
+      - componentId
+      - reason
     GolemErrorInterrupted:
       type: object
-      required:
-      - recoverImmediately
       properties:
         recoverImmediately:
           type: boolean
+      required:
+      - recoverImmediately
     GolemErrorInvalidAccount:
       type: object
     GolemErrorInvalidRequest:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorInvalidShardId:
       type: object
-      required:
-      - shardId
-      - shardIds
       properties:
         shardId:
           $ref: '#/components/schemas/ShardId'
@@ -3519,381 +5541,463 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ShardId'
+      required:
+      - shardId
+      - shardIds
     GolemErrorNoValueInMessage:
       type: object
     GolemErrorParamTypeMismatch:
       type: object
+      properties:
+        details:
+          type: string
+      required:
+      - details
     GolemErrorPreviousInvocationExited:
       type: object
     GolemErrorPreviousInvocationFailed:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorPromiseAlreadyCompleted:
       type: object
-      required:
-      - promiseId
       properties:
         promiseId:
           $ref: '#/components/schemas/PromiseId'
+      required:
+      - promiseId
     GolemErrorPromiseDropped:
       type: object
-      required:
-      - promiseId
       properties:
         promiseId:
           $ref: '#/components/schemas/PromiseId'
+      required:
+      - promiseId
     GolemErrorPromiseNotFound:
       type: object
-      required:
-      - promiseId
       properties:
         promiseId:
           $ref: '#/components/schemas/PromiseId'
+      required:
+      - promiseId
     GolemErrorRuntimeError:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorUnexpectedOplogEntry:
       type: object
-      required:
-      - expected
-      - got
       properties:
         expected:
           type: string
         got:
           type: string
+      required:
+      - expected
+      - got
     GolemErrorUnknown:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorValueMismatch:
       type: object
-      required:
-      - details
       properties:
         details:
           type: string
+      required:
+      - details
     GolemErrorWorkerAlreadyExists:
       type: object
-      required:
-      - workerId
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-    GolemErrorWorkerCreationFailed:
-      type: object
       required:
       - workerId
-      - details
+    GolemErrorWorkerCreationFailed:
+      type: object
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
         details:
           type: string
-    GolemErrorWorkerNotFound:
-      type: object
       required:
       - workerId
+      - details
+    GolemErrorWorkerNotFound:
+      type: object
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
+      required:
+      - workerId
     GolemError_GolemErrorComponentDownloadFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: ComponentDownloadFailed
+            type: string
+            enum:
+            - ComponentDownloadFailed
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorComponentDownloadFailed'
     GolemError_GolemErrorComponentParseFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: ComponentParseFailed
+            type: string
+            enum:
+            - ComponentParseFailed
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorComponentParseFailed'
     GolemError_GolemErrorFailedToResumeWorker:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: FailedToResumeWorker
+            type: string
+            enum:
+            - FailedToResumeWorker
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
     GolemError_GolemErrorGetLatestVersionOfComponentFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: GetLatestVersionOfComponentFailed
+            type: string
+            enum:
+            - GetLatestVersionOfComponentFailed
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
     GolemError_GolemErrorInterrupted:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Interrupted
+            type: string
+            enum:
+            - Interrupted
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInterrupted'
     GolemError_GolemErrorInvalidAccount:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: InvalidAccount
+            type: string
+            enum:
+            - InvalidAccount
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInvalidAccount'
     GolemError_GolemErrorInvalidRequest:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: InvalidRequest
+            type: string
+            enum:
+            - InvalidRequest
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInvalidRequest'
     GolemError_GolemErrorInvalidShardId:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: InvalidShardId
+            type: string
+            enum:
+            - InvalidShardId
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorInvalidShardId'
     GolemError_GolemErrorNoValueInMessage:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: NoValueInMessage
+            type: string
+            enum:
+            - NoValueInMessage
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorNoValueInMessage'
     GolemError_GolemErrorParamTypeMismatch:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: ParamTypeMismatch
+            type: string
+            enum:
+            - ParamTypeMismatch
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorParamTypeMismatch'
     GolemError_GolemErrorPreviousInvocationExited:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PreviousInvocationExited
+            type: string
+            enum:
+            - PreviousInvocationExited
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationExited'
     GolemError_GolemErrorPreviousInvocationFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PreviousInvocationFailed
+            type: string
+            enum:
+            - PreviousInvocationFailed
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationFailed'
     GolemError_GolemErrorPromiseAlreadyCompleted:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PromiseAlreadyCompleted
+            type: string
+            enum:
+            - PromiseAlreadyCompleted
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPromiseAlreadyCompleted'
     GolemError_GolemErrorPromiseDropped:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PromiseDropped
+            type: string
+            enum:
+            - PromiseDropped
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPromiseDropped'
     GolemError_GolemErrorPromiseNotFound:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: PromiseNotFound
+            type: string
+            enum:
+            - PromiseNotFound
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorPromiseNotFound'
     GolemError_GolemErrorRuntimeError:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: RuntimeError
+            type: string
+            enum:
+            - RuntimeError
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorRuntimeError'
     GolemError_GolemErrorUnexpectedOplogEntry:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: UnexpectedOplogEntry
+            type: string
+            enum:
+            - UnexpectedOplogEntry
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorUnexpectedOplogEntry'
     GolemError_GolemErrorUnknown:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Unknown
+            type: string
+            enum:
+            - Unknown
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorUnknown'
     GolemError_GolemErrorValueMismatch:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: ValueMismatch
+            type: string
+            enum:
+            - ValueMismatch
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorValueMismatch'
     GolemError_GolemErrorWorkerAlreadyExists:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: WorkerAlreadyExists
+            type: string
+            enum:
+            - WorkerAlreadyExists
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorWorkerAlreadyExists'
     GolemError_GolemErrorWorkerCreationFailed:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: WorkerCreationFailed
+            type: string
+            enum:
+            - WorkerCreationFailed
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorWorkerCreationFailed'
     GolemError_GolemErrorWorkerNotFound:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: WorkerNotFound
+            type: string
+            enum:
+            - WorkerNotFound
+        required:
+        - type
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
-    HealthcheckResponse:
+    GolemWorkerBinding:
       type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        workerName:
+          type: string
+        idempotencyKey:
+          type: string
+        response:
+          type: string
+      required:
+      - componentId
+      - workerName
+      - response
+    HttpApiDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+        draft:
+          type: boolean
+      required:
+      - id
+      - version
+      - routes
+      - draft
+    IndexedWorkerMetadata:
+      type: object
+      properties:
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
+      required:
+      - resourceName
+      - resourceParams
     InterruptResponse:
       type: object
-    InvocationKey:
-      type: object
-      required:
-      - value
-      properties:
-        value:
-          type: string
     InvokeParameters:
       type: object
+      properties:
+        params:
+          type: array
+          items:
+            $ref: '#/components/schemas/TypeAnnotatedValue'
       required:
       - params
-      properties:
-        params: {}
     InvokeResponse:
       type: object
     InvokeResult:
       type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/TypeAnnotatedValue'
       required:
       - result
-      properties:
-        result: {}
-    NameOptionTypePair:
+    MessageBody:
       type: object
-      required:
-      - name
       properties:
-        name:
+        message:
           type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-    NameTypePair:
+      required:
+      - message
+    MessagesErrorsBody:
       type: object
-      required:
-      - name
-      - typ
       properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-    OAuth2Data:
-      type: object
+        errors:
+          type: array
+          items:
+            type: string
       required:
-      - url
-      - userCode
-      - expires
-      - encodedSession
-      properties:
-        url:
-          type: string
-        userCode:
-          type: string
-        expires:
-          type: string
-          format: date-time
-        encodedSession:
-          type: string
+      - errors
+    MethodPattern:
+      type: string
+      enum:
+      - Get
+      - Connect
+      - Post
+      - Delete
+      - Put
+      - Patch
+      - Options
+      - Trace
+      - Head
     PendingUpdate:
       type: object
-      required:
-      - timestamp
-      - targetVersion
       properties:
         timestamp:
           type: string
@@ -3901,262 +6005,82 @@ components:
         targetVersion:
           type: integer
           format: uint64
-    Plan:
-      type: object
       required:
-      - planId
-      - planData
-      properties:
-        planId:
-          type: string
-          format: uuid
-        planData:
-          $ref: '#/components/schemas/PlanData'
-    PlanData:
-      type: object
-      required:
-      - projectLimit
-      - componentLimit
-      - workerLimit
-      - storageLimit
-      - monthlyGasLimit
-      - monthlyUploadLimit
-      properties:
-        projectLimit:
-          type: integer
-          format: int32
-        componentLimit:
-          type: integer
-          format: int32
-        workerLimit:
-          type: integer
-          format: int32
-        storageLimit:
-          type: integer
-          format: int32
-        monthlyGasLimit:
-          type: integer
-          format: int64
-        monthlyUploadLimit:
-          type: integer
-          format: int32
-    ProducerField:
-      type: object
-      required:
-      - name
-      - values
-      properties:
-        name:
-          type: string
-        values:
-          type: array
-          items:
-            $ref: '#/components/schemas/VersionedName'
-    Producers:
-      type: object
-      required:
-      - fields
-      properties:
-        fields:
-          type: array
-          items:
-            $ref: '#/components/schemas/ProducerField'
-    Project:
-      type: object
-      required:
-      - projectId
-      - projectData
-      properties:
-        projectId:
-          type: string
-          format: uuid
-        projectData:
-          $ref: '#/components/schemas/ProjectData'
-    ProjectAction:
-      type: string
-      enum:
-      - ViewComponent
-      - CreateComponent
-      - UpdateComponent
-      - DeleteComponent
-      - ViewWorker
-      - CreateWorker
-      - UpdateWorker
-      - DeleteWorker
-      - ViewProjectGrants
-      - CreateProjectGrants
-      - DeleteProjectGrants
-      - ViewApiDefinition
-      - CreateApiDefinition
-      - UpdateApiDefinition
-      - DeleteApiDefinition
-    ProjectActions:
-      type: object
-      required:
-      - actions
-      properties:
-        actions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ProjectAction'
-    ProjectData:
-      type: object
-      required:
-      - name
-      - ownerAccountId
-      - description
-      - defaultEnvironmentId
-      - projectType
-      properties:
-        name:
-          type: string
-        ownerAccountId:
-          type: string
-        description:
-          type: string
-        defaultEnvironmentId:
-          type: string
-        projectType:
-          $ref: '#/components/schemas/ProjectType'
-    ProjectDataRequest:
-      type: object
-      required:
-      - name
-      - ownerAccountId
-      - description
-      properties:
-        name:
-          type: string
-        ownerAccountId:
-          type: string
-        description:
-          type: string
-    ProjectGrant:
-      type: object
-      required:
-      - id
-      - data
-      properties:
-        id:
-          type: string
-          format: uuid
-        data:
-          $ref: '#/components/schemas/ProjectGrantData'
-    ProjectGrantData:
-      type: object
-      required:
-      - granteeAccountId
-      - grantorProjectId
-      - projectPolicyId
-      properties:
-        granteeAccountId:
-          type: string
-        grantorProjectId:
-          type: string
-          format: uuid
-        projectPolicyId:
-          type: string
-          format: uuid
-    ProjectGrantDataRequest:
-      type: object
-      required:
-      - granteeAccountId
-      - projectActions
-      properties:
-        granteeAccountId:
-          type: string
-        projectPolicyId:
-          type: string
-          format: uuid
-        projectActions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ProjectAction'
-        projectPolicyName:
-          type: string
-    ProjectPolicy:
-      type: object
-      required:
-      - id
-      - name
-      - projectActions
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        projectActions:
-          $ref: '#/components/schemas/ProjectActions'
-    ProjectPolicyData:
-      type: object
-      required:
-      - name
-      - projectActions
-      properties:
-        name:
-          type: string
-        projectActions:
-          $ref: '#/components/schemas/ProjectActions'
-    ProjectType:
-      type: string
-      enum:
-      - Default
-      - NonDefault
+      - timestamp
+      - targetVersion
     PromiseId:
       type: object
-      required:
-      - workerId
-      - oplogIdx
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
         oplogIdx:
           type: integer
           format: uint64
-    ProtectedComponentId:
-      type: object
       required:
-      - versionedComponentId
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-    ResourceLimits:
+      - workerId
+      - oplogIdx
+    ResourceMetadata:
       type: object
-      required:
-      - availableFuel
-      - maxMemoryPerWorker
       properties:
-        availableFuel:
-          type: integer
-          format: int64
-        maxMemoryPerWorker:
-          type: integer
-          format: int64
-    ResourceMode:
-      type: string
-      enum:
-      - Borrowed
-      - Owned
+        createdAt:
+          type: string
+          format: date-time
+        indexed:
+          $ref: '#/components/schemas/IndexedWorkerMetadata'
+      required:
+      - createdAt
     ResumeResponse:
       type: object
-    Role:
-      type: string
-      enum:
-      - Admin
-      - MarketingAdmin
-      - ViewProject
-      - DeleteProject
-      - CreateProject
-      - InstanceServer
+    Route:
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GolemWorkerBinding'
+      required:
+      - method
+      - path
+      - binding
+    RouteValidationError:
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        component:
+          type: string
+          format: uuid
+        detail:
+          type: string
+      required:
+      - method
+      - path
+      - component
+      - detail
+    ScanCursor:
+      type: object
+      properties:
+        cursor:
+          type: integer
+          format: uint64
+        layer:
+          type: integer
+          format: uint64
+      required:
+      - cursor
+      - layer
     ShardId:
       type: object
-      required:
-      - value
       properties:
         value:
           type: integer
           format: int64
+      required:
+      - value
     StringFilterComparator:
       type: string
       enum:
@@ -4166,9 +6090,6 @@ components:
       - NotLike
     SuccessfulUpdate:
       type: object
-      required:
-      - timestamp
-      - targetVersion
       properties:
         timestamp:
           type: string
@@ -4176,6 +6097,66 @@ components:
         targetVersion:
           type: integer
           format: uint64
+      required:
+      - timestamp
+      - targetVersion
+    TypeAnnotatedValue:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - typ
+      - value
+    UpdateRecord:
+      discriminator:
+        propertyName: type
+        mapping:
+          pendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
+          successfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+          failedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UpdateRecord_PendingUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_FailedUpdate'
+    UpdateRecord_FailedUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: failedUpdate
+            type: string
+            enum:
+            - failedUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/FailedUpdate'
+    UpdateRecord_PendingUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: pendingUpdate
+            type: string
+            enum:
+            - pendingUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingUpdate'
+    UpdateRecord_SuccessfulUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: successfulUpdate
+            type: string
+            enum:
+            - successfulUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/SuccessfulUpdate'
     UpdateWorkerRequest:
       type: object
       properties:
@@ -4189,522 +6170,37 @@ components:
       - targetVersion
     UpdateWorkerResponse:
       type: object
-    Token:
+    ValidationErrorsBody:
       type: object
-      required:
-      - id
-      - accountId
-      - createdAt
-      - expiresAt
       properties:
-        id:
-          type: string
-          format: uuid
-        accountId:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
-        expiresAt:
-          type: string
-          format: date-time
-    TokenSecret:
-      type: object
-      required:
-      - value
-      properties:
-        value:
-          type: string
-          format: uuid
-    Type:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/Type_TypeVariant'
-      - $ref: '#/components/schemas/Type_TypeResult'
-      - $ref: '#/components/schemas/Type_TypeOption'
-      - $ref: '#/components/schemas/Type_TypeEnum'
-      - $ref: '#/components/schemas/Type_TypeFlags'
-      - $ref: '#/components/schemas/Type_TypeRecord'
-      - $ref: '#/components/schemas/Type_TypeTuple'
-      - $ref: '#/components/schemas/Type_TypeList'
-      - $ref: '#/components/schemas/Type_TypeStr'
-      - $ref: '#/components/schemas/Type_TypeChr'
-      - $ref: '#/components/schemas/Type_TypeF64'
-      - $ref: '#/components/schemas/Type_TypeF32'
-      - $ref: '#/components/schemas/Type_TypeU64'
-      - $ref: '#/components/schemas/Type_TypeS64'
-      - $ref: '#/components/schemas/Type_TypeU32'
-      - $ref: '#/components/schemas/Type_TypeS32'
-      - $ref: '#/components/schemas/Type_TypeU16'
-      - $ref: '#/components/schemas/Type_TypeS16'
-      - $ref: '#/components/schemas/Type_TypeU8'
-      - $ref: '#/components/schemas/Type_TypeS8'
-      - $ref: '#/components/schemas/Type_TypeBool'
-      - $ref: '#/components/schemas/Type_TypeHandle'
-      discriminator:
-        propertyName: type
-        mapping:
-          Variant: '#/components/schemas/Type_TypeVariant'
-          Result: '#/components/schemas/Type_TypeResult'
-          Option: '#/components/schemas/Type_TypeOption'
-          Enum: '#/components/schemas/Type_TypeEnum'
-          Flags: '#/components/schemas/Type_TypeFlags'
-          Record: '#/components/schemas/Type_TypeRecord'
-          Tuple: '#/components/schemas/Type_TypeTuple'
-          List: '#/components/schemas/Type_TypeList'
-          Str: '#/components/schemas/Type_TypeStr'
-          Chr: '#/components/schemas/Type_TypeChr'
-          F64: '#/components/schemas/Type_TypeF64'
-          F32: '#/components/schemas/Type_TypeF32'
-          U64: '#/components/schemas/Type_TypeU64'
-          S64: '#/components/schemas/Type_TypeS64'
-          U32: '#/components/schemas/Type_TypeU32'
-          S32: '#/components/schemas/Type_TypeS32'
-          U16: '#/components/schemas/Type_TypeU16'
-          S16: '#/components/schemas/Type_TypeS16'
-          U8: '#/components/schemas/Type_TypeU8'
-          S8: '#/components/schemas/Type_TypeS8'
-          Bool: '#/components/schemas/Type_TypeBool'
-          Handle: '#/components/schemas/Type_TypeHandle'
-    TypeBool:
-      type: object
-    TypeChr:
-      type: object
-    TypeEnum:
-      type: object
-      required:
-      - cases
-      properties:
-        cases:
+        errors:
           type: array
           items:
-            type: string
-    TypeF32:
-      type: object
-    TypeF64:
-      type: object
-    TypeFlags:
-      type: object
+            $ref: '#/components/schemas/RouteValidationError'
       required:
-      - cases
-      properties:
-        cases:
-          type: array
-          items:
-            type: string
-    TypeHandle:
-      type: object
-      required:
-      - resource_id
-      - mode
-      properties:
-        resource_id:
-          type: integer
-          format: uint64
-        mode:
-          $ref: '#/components/schemas/ResourceMode'
-    TypeList:
-      type: object
-      required:
-      - inner
-      properties:
-        inner:
-          $ref: '#/components/schemas/Type'
-    TypeOption:
-      type: object
-      required:
-      - inner
-      properties:
-        inner:
-          $ref: '#/components/schemas/Type'
-    TypeRecord:
-      type: object
-      required:
-      - cases
-      properties:
-        cases:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameTypePair'
-    TypeResult:
-      type: object
-      properties:
-        ok:
-          $ref: '#/components/schemas/Type'
-        err:
-          $ref: '#/components/schemas/Type'
-    TypeS16:
-      type: object
-    TypeS32:
-      type: object
-    TypeS64:
-      type: object
-    TypeS8:
-      type: object
-    TypeStr:
-      type: object
-    TypeTuple:
-      type: object
-      required:
-      - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Type'
-    TypeU16:
-      type: object
-    TypeU32:
-      type: object
-    TypeU64:
-      type: object
-    TypeU8:
-      type: object
-    TypeVariant:
-      type: object
-      required:
-      - cases
-      properties:
-        cases:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameOptionTypePair'
-    Type_TypeBool:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Bool
-      - $ref: '#/components/schemas/TypeBool'
-    Type_TypeChr:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Chr
-      - $ref: '#/components/schemas/TypeChr'
-    Type_TypeEnum:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Enum
-      - $ref: '#/components/schemas/TypeEnum'
-    Type_TypeF32:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: F32
-      - $ref: '#/components/schemas/TypeF32'
-    Type_TypeF64:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: F64
-      - $ref: '#/components/schemas/TypeF64'
-    Type_TypeFlags:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Flags
-      - $ref: '#/components/schemas/TypeFlags'
-    Type_TypeHandle:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Handle
-      - $ref: '#/components/schemas/TypeHandle'
-    Type_TypeList:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: List
-      - $ref: '#/components/schemas/TypeList'
-    Type_TypeOption:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Option
-      - $ref: '#/components/schemas/TypeOption'
-    Type_TypeRecord:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Record
-      - $ref: '#/components/schemas/TypeRecord'
-    Type_TypeResult:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Result
-      - $ref: '#/components/schemas/TypeResult'
-    Type_TypeS16:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: S16
-      - $ref: '#/components/schemas/TypeS16'
-    Type_TypeS32:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: S32
-      - $ref: '#/components/schemas/TypeS32'
-    Type_TypeS64:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: S64
-      - $ref: '#/components/schemas/TypeS64'
-    Type_TypeS8:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: S8
-      - $ref: '#/components/schemas/TypeS8'
-    Type_TypeStr:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Str
-      - $ref: '#/components/schemas/TypeStr'
-    Type_TypeTuple:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Tuple
-      - $ref: '#/components/schemas/TypeTuple'
-    Type_TypeU16:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: U16
-      - $ref: '#/components/schemas/TypeU16'
-    Type_TypeU32:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: U32
-      - $ref: '#/components/schemas/TypeU32'
-    Type_TypeU64:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: U64
-      - $ref: '#/components/schemas/TypeU64'
-    Type_TypeU8:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: U8
-      - $ref: '#/components/schemas/TypeU8'
-    Type_TypeVariant:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: Variant
-      - $ref: '#/components/schemas/TypeVariant'
-    UnsafeToken:
-      type: object
-      required:
-      - data
-      - secret
-      properties:
-        data:
-          $ref: '#/components/schemas/Token'
-        secret:
-          $ref: '#/components/schemas/TokenSecret'
-    UpdateRecord:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/UpdateRecord_PendingUpdate'
-      - $ref: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
-      - $ref: '#/components/schemas/UpdateRecord_FailedUpdate'
-      discriminator:
-        propertyName: type
-        mapping:
-          pendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
-          successfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
-          failedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
-    UpdateRecord_FailedUpdate:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: failedUpdate
-      - $ref: '#/components/schemas/FailedUpdate'
-    UpdateRecord_PendingUpdate:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: pendingUpdate
-      - $ref: '#/components/schemas/PendingUpdate'
-    UpdateRecord_SuccessfulUpdate:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            example: successfulUpdate
-      - $ref: '#/components/schemas/SuccessfulUpdate'
-    UpdateResourceLimitsResponse:
-      type: object
-    UserComponentId:
-      type: object
-      required:
-      - versionedComponentId
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-    VersionInfo:
-      type: object
-      required:
-      - version
-      properties:
-        version:
-          type: string
-    VersionedComponentId:
-      type: object
-      required:
-      - componentId
-      - version
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        version:
-          type: integer
-          format: uint64
-    VersionedName:
-      type: object
-      required:
-      - name
-      - version
-      properties:
-        name:
-          type: string
-        version:
-          type: string
+      - errors
     WorkerAndFilter:
       type: object
-      required:
-      - filters
       properties:
         filters:
           type: array
           items:
             $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filters
     WorkerCreatedAtFilter:
       type: object
-      required:
-      - comparator
-      - value
       properties:
         comparator:
           $ref: '#/components/schemas/FilterComparator'
         value:
           type: string
           format: date-time
+      required:
+      - comparator
+      - value
     WorkerCreationRequest:
       type: object
-      required:
-      - name
-      - args
-      - env
       properties:
         name:
           type: string
@@ -4716,23 +6212,23 @@ components:
           type: object
           additionalProperties:
             type: string
+      required:
+      - name
+      - args
+      - env
     WorkerCreationResponse:
       type: object
-      required:
-        - workerId
-        - componentVersion
       properties:
         workerId:
-          $ref: "#/components/schemas/WorkerId"
+          $ref: '#/components/schemas/WorkerId'
         componentVersion:
           type: integer
           format: uint64
+      required:
+      - workerId
+      - componentVersion
     WorkerEnvFilter:
       type: object
-      required:
-      - name
-      - comparator
-      - value
       properties:
         name:
           type: string
@@ -4740,17 +6236,11 @@ components:
           $ref: '#/components/schemas/StringFilterComparator'
         value:
           type: string
+      required:
+      - name
+      - comparator
+      - value
     WorkerFilter:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
       discriminator:
         propertyName: type
         mapping:
@@ -4762,110 +6252,125 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: And
+            type: string
+            enum:
+            - And
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerAndFilter'
     WorkerFilter_WorkerCreatedAtFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: CreatedAt
+            type: string
+            enum:
+            - CreatedAt
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerCreatedAtFilter'
     WorkerFilter_WorkerEnvFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Env
+            type: string
+            enum:
+            - Env
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerEnvFilter'
     WorkerFilter_WorkerNameFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Name
+            type: string
+            enum:
+            - Name
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerNameFilter'
     WorkerFilter_WorkerNotFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Not
+            type: string
+            enum:
+            - Not
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerNotFilter'
     WorkerFilter_WorkerOrFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Or
+            type: string
+            enum:
+            - Or
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerOrFilter'
     WorkerFilter_WorkerStatusFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Status
+            type: string
+            enum:
+            - Status
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerStatusFilter'
     WorkerFilter_WorkerVersionFilter:
       allOf:
       - type: object
-        required:
-        - type
         properties:
           type:
-            type: string
             example: Version
+            type: string
+            enum:
+            - Version
+        required:
+        - type
       - $ref: '#/components/schemas/WorkerVersionFilter'
     WorkerId:
       type: object
-      required:
-      - componentId
-      - workerName
       properties:
         componentId:
           type: string
           format: uuid
         workerName:
           type: string
+      required:
+      - componentId
+      - workerName
     WorkerMetadata:
       type: object
-      required:
-      - workerId
-      - accountId
-      - args
-      - env
-      - status
-      - componentVersion
-      - retryCount
-      - pendingInvocationCount
-      - updates
-      - createdAt
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
@@ -4899,39 +6404,97 @@ components:
           format: date-time
         lastError:
           type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        ownedResources:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ResourceMetadata'
+      required:
+      - workerId
+      - accountId
+      - args
+      - env
+      - status
+      - componentVersion
+      - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - ownedResources
     WorkerNameFilter:
       type: object
-      required:
-      - comparator
-      - value
       properties:
         comparator:
           $ref: '#/components/schemas/StringFilterComparator'
         value:
           type: string
+      required:
+      - comparator
+      - value
     WorkerNotFilter:
       type: object
-      required:
-      - filter
       properties:
         filter:
           $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filter
     WorkerOrFilter:
       type: object
-      required:
-      - filters
       properties:
         filters:
           type: array
           items:
             $ref: '#/components/schemas/WorkerFilter'
+      required:
+      - filters
+    WorkerServiceErrorsBody:
+      discriminator:
+        propertyName: type
+        mapping:
+          Messages: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+          Validation: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_MessagesErrorsBody'
+      - $ref: '#/components/schemas/WorkerServiceErrorsBody_ValidationErrorsBody'
+    WorkerServiceErrorsBody_MessagesErrorsBody:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Messages
+            type: string
+            enum:
+            - Messages
+        required:
+        - type
+      - $ref: '#/components/schemas/MessagesErrorsBody'
+    WorkerServiceErrorsBody_ValidationErrorsBody:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Validation
+            type: string
+            enum:
+            - Validation
+        required:
+        - type
+      - $ref: '#/components/schemas/ValidationErrorsBody'
     WorkerStatus:
-      type: string
       description: |-
         Represents last known status of a worker
 
         This is always recorded together with the current oplog index, and it can only be used
         as a source of truth if there are no newer oplog entries since the record.
+      type: string
       enum:
       - Running
       - Idle
@@ -4942,14 +6505,14 @@ components:
       - Exited
     WorkerStatusFilter:
       type: object
-      required:
-      - comparator
-      - value
       properties:
         comparator:
           $ref: '#/components/schemas/FilterComparator'
         value:
           $ref: '#/components/schemas/WorkerStatus'
+      required:
+      - comparator
+      - value
     WorkerUpdateMode:
       type: string
       enum:
@@ -4957,23 +6520,22 @@ components:
       - Manual
     WorkerVersionFilter:
       type: object
-      required:
-      - comparator
-      - value
       properties:
         comparator:
           $ref: '#/components/schemas/FilterComparator'
         value:
           type: integer
           format: uint64
+      required:
+      - comparator
+      - value
     WorkersMetadataRequest:
       type: object
       properties:
         filter:
           $ref: '#/components/schemas/WorkerFilter'
         cursor:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ScanCursor'
         count:
           type: integer
           format: uint64
@@ -4981,22 +6543,64 @@ components:
           type: boolean
     WorkersMetadataResponse:
       type: object
-      required:
-      - workers
       properties:
         workers:
           type: array
           items:
             $ref: '#/components/schemas/WorkerMetadata'
         cursor:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ScanCursor'
+      required:
+      - workers
   securitySchemes:
     Cookie:
       type: apiKey
-      name: GOLEM_SESSION
       in: cookie
+      name: GOLEM_SESSION
     Token:
       type: http
       scheme: bearer
+tags:
+- name: Account
+  description: The account API allows users to query and manipulate their own account data.
+- name: AccountSummary
+- name: Grant
+- name: HealthCheck
+- name: Limits
+  description: The limits API allows users to query their current resource limits.
+- name: Login
+  description: The login endpoints are implementing an OAuth2 flow.
+- name: Project
+  description: |-
+    Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
 
+    Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
+- name: ProjectGrant
+  description: |-
+    Projects can have grants providing access to other accounts than the project's owner.
+
+    The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
+- name: ProjectPolicy
+  description: |-
+    Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+
+    The following actions can be used in the projectActions fields of this API:
+    - `ViewComponent` grants read access to a component
+    - `CreateComponent` allows creating new components in a project
+    - `UpdateComponent` allows uploading new versions for existing components in a project
+    - `DeleteComponent` allows deleting components from a project
+    - `ViewWorker` allows querying existing workers of a component belonging to the project
+    - `CreateWorker` allows launching new workers of a component in the project
+    - `UpdateWorker` allows manipulating existing workers of a component belonging to the project
+    - `DeleteWorker` allows deleting workers of a component belonging to the project
+    - `ViewProjectGrants` allows listing the existing grants of the project
+    - `CreateProjectGrants` allows creating new grants for the project
+    - `DeleteProjectGrants` allows deleting existing grants of the project
+- name: Token
+  description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: Component
+- name: ApiCertificate
+- name: ApiDefinition
+- name: ApiDeployment
+- name: ApiDomain
+- name: Worker

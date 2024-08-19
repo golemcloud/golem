@@ -3,36 +3,86 @@
     "type": "separator",
     "title": "Getting Started"
   },
-  "intro": "Introduction",
   "why-golem": "Why Golem?",
+  "fundamentals": "Fundamentals",
   "quickstart": "Quickstart",
-  "-- Docs": {
+  "-- Concepts": {
     "type": "separator",
-    "title": "Docs"
+    "title": "Concepts"
   },
-  "building-components": "Building Components",
-  "console": {
-    "title": "Management Console"
+  "concepts-reliability": "Reliability",
+  "concepts-components": "Components",
+  "concepts-workers": "Workers",
+  "concepts-invocations": "Invocations",
+  "concepts-worker-gateway": "Worker Gateway",
+  "concepts-worker-to-worker-communication": "Worker to Worker Communication",
+  "concepts-api-definitions": "API Definitions",
+  "-- Develop": {
+    "type": "separator",
+    "title": "Develop"
   },
-  "updating-components": "Updating components",
-  "rpc": "Worker to Worker communication",
-  "transaction-api": "Transactions",
-  "promises": "Promises",
-  "worker-bridge": "Worker Bridge",
-  "component-interface": "Component Interface",
+  "rust-language-guide": "Rust Language Guide",
+  "ccpp-language-guide": "C/C++ Language Guide",
+  "python-language-guide": "Python Language Guide",
+  "go-language-guide": "Go Language Guide",
+  "experimental-languages": "Experimental Languages",
+  "-- Deploy": {
+    "type": "separator",
+    "title": "Deploy"
+  },
+  "deploy-overview": "Overview",
+  "deploy-docker": "Docker",
+  "deploy-kubernetes": "Kubernetes",
+  "deploy-golem-cloud": "Golem Cloud",
+  "-- Invoke": {
+    "type": "separator",
+    "title": "Invoke"
+  },
+  "invoke-http": "HTTP",
+  "invoke-cli": "CLI",
+  "invoke-making-custom-apis": "Making Custom APIs",
+
+  "-- Operate": {
+    "type": "separator",
+    "title": "Operate"
+  },
+  "operate-persistence": "Persistence",
+  "operate-metrics": "Metrics",
+  "operate-logs": "Logs",
+  "operate-metadata": "Metadata",
+  "-- CLI": {
+    "type": "separator",
+    "title": "CLI"
+  },
+  "cli-introduction": "Introduction",
+  "cli-examples": "Examples",
+  "cli-components": "Components",
+  "cli-workers": "Workers",
+  "cli-profiles": "Profiles",
+  "cli-permissions": "Permissions",
+  "-- Console": {
+    "type": "separator",
+    "title": "Console"
+  },
+  "-- Troubleshooting": {
+    "type": "separator",
+    "title": "Troubleshooting"
+  },
+  "-- References": {
+    "type": "separator",
+    "title": "References"
+  },
   "rib": "Rib",
-  "faq": "FAQ",
-  "technical-details": "Technical details",
-  "release-notes": "Release Notes",
-  "-- API Reference": {
-    "type": "separator",
-    "title": "API Reference"
-  },
-  "runtime-api": "Runtime API",
-  "golem-cli": "Golem CLI",
+  "golem-host-functions": "Golem Host Functions",
+  "function-names": "Function names",
+  "json-wave-mapping": "JSON-WAVE Mapping",
   "rest-api": "REST API",
-  "-- Other": {
-    "type": "separator",
-    "title": "Other"
+  "cloud-rest-api": {
+    "title": "Cloud REST API",
+    "href": "#"
+  },
+  "oss-rest-api": {
+    "title": "OSS REST API",
+    "href": "#"
   }
 }

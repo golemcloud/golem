@@ -1,0 +1,62 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Building Golem Components in Go
+
+Building Golem components written in Go requires a series of steps.
+
+If the project was created with `golem-cli new`, it already has a `Makefile` that incorporates all the necessary steps to build the component, so it is enough to run:
+
+```shell
+$ make build
+```
+
+In details, building the component requires the following steps:
+
+<Steps>
+### Generate the Go bindings
+
+Use the `wit-bindgen` tool to generate the Go bindings from the WIT files:
+
+```shell
+$ wit-bindgen tiny-go --out-dir go_example ./wit
+```
+
+### Compile the Go code
+
+Using the TinyGo compiler, compile the Go code into a WebAssembly module:
+
+```shell
+$ tinygo build -target=wasi -tags=purego -o go_example.module.wasm main.go
+```
+
+### Embed the WIT files in the WebAssembly module
+
+The following command embeds the WIT files into the WebAssembly module:
+
+```shell
+$ wasm-tools component embed ./wit go_example.module.wasm --output go_example.embed.wasm
+```
+
+### Package the Go code into a WASM component
+
+Finally use `wasm-tools` to create the WebAssembly component:
+
+```shell
+$ wasm-tools component new go_example.embed.wasm -o go_example.wasm --adapt adapters/tier1/wasi_snapshot_preview1.wasm
+```
+
+<Callout type="info">
+  The **adapter** WASM can be downloaded from [the golem-wit
+  repository](https://github.com/golemcloud/golem-wit/blob/main/adapters/tier1/wasi_snapshot_preview1.wasm).
+</Callout>
+
+</Steps>
+
+### Reducing the component's size
+
+The generated component's size can be reduced by stripping some parts of it using the `wasm-tools strip` command:
+
+```shell
+$ wasm-tools strip go_example.wasm -o go_example_stripped.wasm
+```

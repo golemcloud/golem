@@ -1,0 +1,48 @@
+# Operate - metadata
+
+Services are using following types of storage:
+
+- Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (mainly for testing purposes)
+- [Redis](https://redis.io/)
+- Blob storage - Shared File System or S3
+
+### Component Service
+
+Service is using RDB and Blob storage as data storage.
+
+RDB tables:
+
+| Table                | Description                                                    |
+| -------------------- | -------------------------------------------------------------- |
+| `components`         | Components data - id, name                                     |
+| `component_versions` | Version specific components data - version, component metadata |
+
+See [RDB migrations](https://github.com/golemcloud/golem/blob/main/golem-component-service/db/migration) for more details.
+
+Blob storage is used to store [components](concepts-components.mdx) binary data.
+
+### Worker Service
+
+Service is using RDB as data storage.
+
+RDB tables:
+
+| Table             | Description          |
+| ----------------- | -------------------- |
+| `api_definitions` | API definitions data |
+| `api_deployments` | API deployments data |
+
+See [RDB migrations](https://github.com/golemcloud/golem/blob/main/golem-worker-service/db/migration) for more details.
+
+### Shard Manager
+
+Service is using Redis as data storage. Redis is used to store shard assignments.
+Shard assignments are stored in one record with key `shard:shard_manager_state`.
+
+### Component Compilation Service
+
+Service is using Blob storage as data storage.
+
+### Worker Executor
+
+See the [persistence](operate-persistence) page for more details about how the worker state get persisted.

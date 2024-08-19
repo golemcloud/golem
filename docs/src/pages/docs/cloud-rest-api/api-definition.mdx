@@ -1,0 +1,236 @@
+# Api Definition API
+
+## Upload an OpenAPI definition
+
+| Path                                      | Method | Protected |
+| ----------------------------------------- | ------ | --------- |
+| `/v1/api/definitions/{project_id}/import` | PUT    | Yes       |
+
+Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+API definition using it.
+
+**Example Request JSON**
+
+```json copy
+null
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "binding": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "response": "string"
+      }
+    }
+  ],
+  "draft": true
+}
+```
+
+## List API definitions
+
+| Path                               | Method | Protected |
+| ---------------------------------- | ------ | --------- |
+| `/v1/api/definitions/{project_id}` | GET    | Yes       |
+
+Lists all API definitions associated with the project.
+
+**Query Parameters**
+
+| Name              | Type   | Required | Description |
+| ----------------- | ------ | -------- | ----------- |
+| api-definition-id | string | No       | -           |
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "string",
+    "version": "string",
+    "routes": [
+      {
+        "method": "Get",
+        "path": "string",
+        "binding": {
+          "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+          "workerName": "string",
+          "idempotencyKey": "string",
+          "response": "string"
+        }
+      }
+    ],
+    "draft": true
+  }
+]
+```
+
+## Create a new API definition
+
+| Path                               | Method | Protected |
+| ---------------------------------- | ------ | --------- |
+| `/v1/api/definitions/{project_id}` | POST   | Yes       |
+
+Creates a new API definition described by Golem's API definition JSON document.
+If an API definition of the same version already exists, its an error.
+
+**Example Request JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "binding": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "response": "string"
+      }
+    }
+  ],
+  "draft": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "binding": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "response": "string"
+      }
+    }
+  ],
+  "draft": true
+}
+```
+
+## Get an API definition
+
+| Path                                              | Method | Protected |
+| ------------------------------------------------- | ------ | --------- |
+| `/v1/api/definitions/{project_id}/{id}/{version}` | GET    | Yes       |
+
+An API definition is selected by its API definition ID and version.
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "binding": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "response": "string"
+      }
+    }
+  ],
+  "draft": true
+}
+```
+
+## Update an existing API definition.
+
+| Path                                              | Method | Protected |
+| ------------------------------------------------- | ------ | --------- |
+| `/v1/api/definitions/{project_id}/{id}/{version}` | PUT    | Yes       |
+
+Only draft API definitions can be updated.
+
+**Example Request JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "binding": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "response": "string"
+      }
+    }
+  ],
+  "draft": true
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "binding": {
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "response": "string"
+      }
+    }
+  ],
+  "draft": true
+}
+```
+
+## Delete an API definition
+
+| Path                                              | Method | Protected |
+| ------------------------------------------------- | ------ | --------- |
+| `/v1/api/definitions/{project_id}/{id}/{version}` | DELETE | Yes       |
+
+Deletes an API definition by its API definition ID and version.
+
+**Example Response JSON**
+
+```json copy
+"string"
+```
+
+## Api Definition API Errors
+
+| Status Code | Description | Body                                      |
+| ----------- | ----------- | ----------------------------------------- |
+| 400         |             | `{"type":"Messages","errors":["string"]}` |
+| 401         |             | `{"error":"string"}`                      |
+| 403         |             | `{"error":"string"}`                      |
+| 404         |             | `{"message":"string"}`                    |
+| 409         |             | `"string"`                                |
+| 500         |             | `{"error":"string"}`                      |

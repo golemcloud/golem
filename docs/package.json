@@ -5,22 +5,25 @@
   "scripts": {
     "postinstall": "lefthook install",
     "dev": "next dev",
-    "build": "lefthook run pre-build && next build",
+    "build:check": "lefthook run pre-build",
+    "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "fix": "lefthook run fix",
-    "generateLocal": "bun run openapi/gen-openapi.ts --local && bun run fix",
-    "generateDev": "bun run openapi/gen-openapi.ts --dev && bun run fix",
-    "generateProd": "bun run openapi/gen-openapi.ts --prod && bun run fix"
+    "lint": "next lint --fix",
+    "format": "prettier --log-level silent --write ./src",
+    "fix": "concurrently -m 1 'npm run lint' 'npm run format'",
+    "generate-local": "concurrently -m 1 'bun run openapi/gen-openapi.ts --local' 'bun run fix'",
+    "generate-dev": "concurrently -m 1 'bun run openapi/gen-openapi.ts --dev' 'bun run fix'",
+    "generate-prod": "concurrently -m 1 'bun run openapi/gen-openapi.ts --prod' 'bun run fix'"
   },
   "dependencies": {
     "@radix-ui/react-icons": "^1.3.0",
-    "lucide-react": "^0.290.0",
+    "lucide-react": "^0.412.0",
     "next": "14.0.0",
     "nextra": "^2.13.2",
     "nextra-theme-docs": "^2.13.2",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "shiki": "^0.14.3"
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^10.1.0",
@@ -29,6 +32,7 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "autoprefixer": "^10",
+    "concurrently": "^8.2.2",
     "eslint": "^8",
     "eslint-config-next": "14.0.0",
     "lefthook": "^1.6.1",

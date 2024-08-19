@@ -1,0 +1,34 @@
+import { Callout } from "nextra/components"
+
+# Using WASI interfaces from JAvaScript
+
+Golem implements and exports a subset of the [WASI](https://wasi.dev) interfaces, as well as its own **runtime interfaces**.
+
+The [Golem JavaScript SDK](/docs/experimental-languages/js-language-guide/golem-js-sdk) provides idiomatic wrappers on a subset of these interfaces, but it is also possible to use the generated bindings directly.
+
+## WIT specifications
+
+The full set of WIT specifications Golem implements is available in the following public repository:
+
+https://github.com/golemcloud/golem-wit/tree/main/wit/deps
+
+The following table lists all packages provided by Golem:
+
+| Package           | Description                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `golem:api`       | Golem's Runtime API                                                                         |
+| `golem:rpc`       | Provides support for Worker to Worker communication                                         |
+| `wasi:blobstore`  | Interface for storing and retrieving large binary data                                      |
+| `wasi:cli`        | Interface for environment variables and standard I/O                                        |
+| `wasi:clocks`     | Interface for querying the system time                                                      |
+| `wasi:filesystem` | Interface for working with files and directories                                            |
+| `wasi:http`       | Interface for making HTTP requests                                                          |
+| `wasi:io`         | Interface for working with futures and streams                                              |
+| `wasi:keyvalue`   | Interface for storing and retrieving key-value pairs - only partially implemented           |
+| `wasi:logging`    | Interface for logging messages                                                              |
+| `wasi:random`     | Interface for generating random numbers                                                     |
+| `wasi:sockets`    | Interface for working with TCP and UDP sockets (currently not supporting durable execution) |
+
+## Additional Golem runtime APIs
+
+This section describes Golem-specific functionalities which are available through the Golem runtime API but does not have an idiomatic Go wrapper in the `golem-ts` library yet.

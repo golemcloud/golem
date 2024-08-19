@@ -1,0 +1,48 @@
+import { Callout } from "nextra/components"
+
+# Using WASI interfaces from Go
+
+Golem implements and exports a subset of the [WASI](https://wasi.dev) interfaces, as well as its own **runtime interfaces**.
+
+The [Golem Go SDK](/docs/go-language-guide/golem-go-sdk) provides idiomatic wrappers on a subset of these interfaces, but it is also possible to use the generated bindings directly.
+
+## WIT specifications
+
+The full set of WIT specifications Golem implements is available in the following public repository:
+
+https://github.com/golemcloud/golem-wit/tree/main/wit/deps
+
+The following table lists all packages provided by Golem:
+
+| Package           | Description                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `golem:api`       | Golem's Runtime API                                                                         |
+| `golem:rpc`       | Provides support for Worker to Worker communication                                         |
+| `wasi:blobstore`  | Interface for storing and retrieving large binary data                                      |
+| `wasi:cli`        | Interface for environment variables and standard I/O                                        |
+| `wasi:clocks`     | Interface for querying the system time                                                      |
+| `wasi:filesystem` | Interface for working with files and directories                                            |
+| `wasi:http`       | Interface for making HTTP requests                                                          |
+| `wasi:io`         | Interface for working with futures and streams                                              |
+| `wasi:keyvalue`   | Interface for storing and retrieving key-value pairs - only partially implemented           |
+| `wasi:logging`    | Interface for logging messages                                                              |
+| `wasi:random`     | Interface for generating random numbers                                                     |
+| `wasi:sockets`    | Interface for working with TCP and UDP sockets (currently not supporting durable execution) |
+
+## Additional Golem runtime APIs
+
+This section describes Golem-specific functionalities which are available through the Golem runtime API but does not have an idiomatic Go wrapper in the `golem-go` library yet.
+
+### Generate an idempotency key
+
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+
+It is guaranteed that this idempotency key will always be the same (per occurrence) even if the worker is restarted due to a crash.
+
+To generate the idempotency key, use:
+
+```go
+key := exmaple.GolemApi0_2_0_HostGenerateIdempotencyKey()
+```
+
+where `example` is the component name used for the `wit` binding generation.

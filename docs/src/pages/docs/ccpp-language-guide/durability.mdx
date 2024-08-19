@@ -1,0 +1,81 @@
+import { Callout } from "nextra/components"
+
+# Control durability guarantees from C/C++
+
+Golem provides a set of functions components can call to control details of the durable execution engine.
+
+### Adding as a dependency
+
+To use Golem's runtime API, add all the WIT files from https://github.com/golemcloud/golem-wit/tree/main/wit/deps in the project's `wit/deps` directory, and then importing this interface to the component's world:
+
+```wit
+world example {
+    import golem:api/host@0.2.0;
+    // ...
+}
+```
+
+<Callout type="info">
+  The `golem-cli new` examples for C automatically create the `wit/deps` directory for you, except
+  the `c-actor-minimal` one.
+</Callout>
+
+### General concepts
+
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/docs/ccpp-language-guide/retries)).
+
+All these features are regional - they can be changed for a section of the code within a single exported function.
+
+As in C/C++ we are directly invoking the runtime API's functions, these regions must be enforced by the user manually.
+
+### Persistence level
+
+The persistence level can be one of the following:
+
+| Level                                                          | Description                                                                                                                                                          |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOLEM_API_HOST_PERSISTENCE_LEVEL_PERSIST_NOTHING`             | Turns off persistence for a section. In case the worker is recovered or restarted, all the side-effecting functions will be reexecuted                               |
+| `GOLEM_API_HOST_PERSISTENCE_LEVEL_PERSIST_REMOTE_SIDE_EFFECTS` | Persists all the side-effects that are affecting the outside world. In case of recovery the side-effects won't be reexecuted and the persisted results will be used. |
+| `GOLEM_API_HOST_PERSISTENCE_LEVEL_SMART`                       | The default setting; Let Golem decide what to persist to optimize performance                                                                                        |
+
+To change the persistence level for a section of the code, use the `golem_api_host_get_oplog_persistence_level` function to get the current one, and the `golem_api_host_set_oplog_persistence_level` function to set a new value:
+
+```c
+golem_api_host_persistence_level_t previous;
+golem_api_host_get_oplog_persistence_level(&previous);
+
+golem_api_host_persistence_level_t current;
+current.tag = GOLEM_API_HOST_PERSISTENCE_LEVEL_PERSIST_NOTHING;
+golem_api_host_set_oplog_persistence_level(&current);
+// ...
+golem_api_host_set_oplog_persistence_level(&previous);
+```
+
+### Idempotence mode
+
+Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried. This behavior can be changed using the `golem_api_host_set_idempotence_mode` function:
+
+```c
+bool idempotence_mode = golem_api_host_get_idempotence_mode();
+golem_api_host_set_idempotence_mode(false);
+// ...
+golem_api_host_set_idempotence_mode(idempotence_mode);
+```
+
+With disabled idempotence mode, in case Golem cannot determine if the request was sent or not, it won't retry it but the worker will fail.
+
+### Atomic regions
+
+By default side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the worker failed or interrupted within the region), all the side effects will be reexecuted.
+
+To define an atomic region, use the `golem_api_host_mark_begin_operation` and `golem_api_host_mark_end_operation` functions:
+
+```c
+golem_api_host_oplog_index_t begin = golem_api_host_mark_begin_operation();
+// ...
+golem_api_host_mark_end_operation(begin);
+```
+
+### Commit oplog
+
+The `golem_api_host_oplog_commit` function waits until the oplog is committed to its persistent storage. The function takes a single argument, `replicas`, with the desired number of storage replicas the worker's journal is replicated to. The function will block until the oplog is committed to the specified number of replicas, or, if this number is larger than the available number of replicas, until it is written to all the replicas.

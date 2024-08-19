@@ -1,0 +1,84 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Setup Go
+
+Creating **Golem components** in **Go** requires using the latest version of the [TinyGo compiler](https://tinygo.org) and installing some common WebAssembly tooling.
+
+## Installing TinyGo
+
+Use the [official guide](https://tinygo.org/getting-started/install/) to install the latest **stable** version of the TinyGo compiler.
+
+<Callout type="info">
+  Note that TinyGo also requires Go to be installed too. Follow the recommended steps
+  [here](https://go.dev/doc/install) to download and install the **latest** recommended version.
+</Callout>
+
+<Callout type="info">
+For MacOS TinyGo can be installed using `brew`:
+
+```bash
+brew tap tinygo-org/tools
+brew install tinygo
+```
+
+</Callout>
+
+## Install WebAssembly tooling
+
+First of all, to install `wasm-tools` via `cargo`, you need to install the latest stable version of Rust. The recommended way to do so is using [https://rustup.rs](https://rustup.rs/):
+
+<Steps>
+
+### Install Rust
+
+Install rustup
+
+```bash copy
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Install the latest stable version of Rust
+
+```bash copy
+rustup install stable && rustup default stable
+```
+
+Add the WASI target
+
+```bash copy
+rustup target add wasm32-wasi
+```
+
+### Install `wasm-tools`
+
+```bash copy
+cargo install --force --locked  wasm-tools@1.210.0
+```
+
+Confirm the installation:
+
+```bash
+wasm-tools --version
+wasm-tools 1.210.0
+```
+
+### Install `wit-bindgen`
+
+```bash copy
+cargo install --force --locked wit-bindgen-cli@0.26.0
+```
+
+Confirm the installation:
+
+```bash
+wit-bindgen --version
+wit-bindgen-cli 0.26.0
+```
+
+</Steps>
+
+<Callout type="warning">
+  Golem requires a **specific version** of `wasm-tools` and `wit-bindgen`. Please make sure the
+  correct version is installed with the commands described above.
+</Callout>

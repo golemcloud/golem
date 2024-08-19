@@ -1,0 +1,148 @@
+import { Callout } from "nextra/components"
+
+# Golem CLI - profiles
+
+Profiles are used for golem CLI configuration.
+Using different profiles you can use `golem-cli` with multiple installations of an open source Golem and the hosted Golem Cloud at the same time.
+
+## Interactive profile creation
+
+To start interactive profile creation run the following command:
+
+```bash filename="Terminal" copy
+golem-cli init
+```
+
+If you want to specify a custom profile name for an interactive profile creation process - you can use the following command:
+
+```bash filename="Terminal" copy
+golem-cli profile init custom-name
+```
+
+On the first step you'll see 3 options:
+
+- Golem Default. Use this options for default local docker compose installation.
+- Golem. Use this option in case of a customised Golem installation, i.e. a custom `GOLEM_ROUTER_PORT` in `.env` file.
+- Golem Cloud. Use this option for a hosted version of Golem.
+
+With Golem Default the hosted Golem Cloud options there are no other specific configuration options.
+To specify a custom location for your local open source Golem installation - please use the `Golem` option.
+
+## Non-interactive profile creation
+
+### Hosted Golem Cloud profile
+
+To create a profile for a hosted Golem Cloud use the following command:
+
+```bash filename="Terminal" copy
+golem-cli profile add --set-active golem-cloud --default-format json my-profile-name
+```
+
+This command creates a new Golem Cloud profile named `my-profile-name` with default output format `json` and sets it as a new active profile.
+If you want to keep default output format `text` - you can omit `--default-format json` part. If you don't want to make the new profile as the new active profile - you can omit `--set-active`.
+
+If you are using `golem-cloud-cli` binary you should omit profile type (`golem-cloud`) since `golem-cloud-cli` does not support other profile types:
+
+```bash filename="Terminal" copy
+golem-cloud-cli profile add my-profile-name
+```
+
+If you are using the open source specific `golem-cli` without Golem Cloud support - you can't create a Golem Cloud profile.
+
+### Local open source Golem
+
+To create a profile for your local open source Golem installation use the following command:
+
+```bash filename="Terminal" copy
+golem-cli profile add --set-active golem --component-url http://localhost:9881 my-oss-profile-name
+```
+
+This command creates a new open source Golem profile named `my-oss-profile-name` with both component and worker service location as `http://localhost:9881` and sets it as the new active profile.
+
+Additionally, you can specify `--default-format` option for `json` or `yaml` instead of human-readable `text` and `--worker-url` in case you want to have worker and component services on different locations.
+
+If you are using an open source specific `golem-cli` - you should omit profile type (`golem`). If you are using a Golem Cloud specific `golem-cloud-cli` - you can't create an open source Golem profile.
+
+## Profile authentication
+
+<Callout>This is Golem Cloud specific part.</Callout>
+
+To authentication your Golem Cloud profile you can run any command that requires authentication, i.e. you can run any command that wants to access Golem Cloud servers.
+The easiest way to authenticate your profile woutd be to run the following command:
+
+```bash filename="Terminal" copy
+golem-cli account get
+```
+
+At the moment the only way to authenticate your account is to use Github Oauth2 authorization. Please follow the instructions in your terminal and authorize zivergetech organisation to use OAuth2:
+
+```
+>>
+>>  Application requests to perform OAuth2
+>>  authorization.
+>>
+>>  Visit following URL in a browser:
+>>
+>>   ┏---------------------------------┓
+>>   ┃ https://github.com/login/device ┃
+>>   ┗---------------------------------┛
+>>
+>>  And enter following code:
+>>
+>>   ┏-----------┓
+>>   ┃ ADFC-A318 ┃
+>>   ┗-----------┛
+>>
+>>  Code will expire in 14 minutes at 15:15:27.
+>>
+Waiting...
+Account with id account-id for name Your Name with email your@email.com.
+```
+
+## Switch profiles
+
+To get the list of your profiles use the following command:
+
+```bash filename="Terminal" copy
+golem-cli profile list
+```
+
+You'll get all available profiles with the active profile marked by `*`:
+
+```
+ * my-oss-profile-name
+   my-profile-name
+```
+
+Please note that `golem-cli` and `golem-cloud-cli` are using the same profile list, but different active profile.
+
+To switch active profile use `profile switch` command:
+
+```bash
+golem-cli profile switch my-profile-name
+```
+
+## Golem profile configuration
+
+At the moment the only configurable option is default output format.
+
+To change the default output format for the current active profile you can use `profile config format` command this way:
+
+```bash
+golem-cli profile config format text
+```
+
+### Output formats
+
+There are 3 output formats:
+
+- text - human-readable format
+- json
+- yaml
+
+Almost all commands can change output format based on `--format` option or default output format configured for the current active profile.
+
+## Profile configuration files
+
+All `golem-cli` configuration files are stored in `.golem` directory in your home directory. This includes the cached authentication token to your Golem Cloud profile.
+It is safe to remove `$HOME/.golem` directory in case of any issues with profiles - you will keep access to your Golem Cloud account as log as you have access to your Github account linked to your Golem Cloud account.

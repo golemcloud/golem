@@ -1,0 +1,236 @@
+# JSON - WAVE mapping
+
+The **invocation API** uses a special JSON format to describe invocation parameters and results. As the parameter and result types are defined by the Web Assembly components, the natural way to encode parameter and return **values** is the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format.
+
+When using the REST API, the JSON-encoded values must be extended with a JSON-encoded **type information** as well. This is described in details in the [Invoke via HTTP](invoke-http) page.
+
+When using the CLI tool, it is possible to either use the WAVE format directly, or use this JSON format as described in details in the [Invoke via CLI](invoke-cli) page.
+
+The following sections define how each WASM type and it's correspodning WAVE value encoding is mapped to Golem's value JSON format.
+
+## Primitive types
+
+| WIT type | JSON type    | Description                  |
+| -------- | ------------ | ---------------------------- |
+| bool     | JSON boolean | Primitive boolean type       |
+| u8       | JSON number  | Unsigned 8-bit integer       |
+| s8       | JSON number  | Signed 8-bit integer         |
+| u16      | JSON number  | Unsigned 16-bit integer      |
+| s16      | JSON number  | Signed 16-bit integer        |
+| u32      | JSON number  | Unsigned 32-bit integer      |
+| s32      | JSON number  | Signed 32-bit integer        |
+| u64      | JSON number  | Unsigned 64-bit integer      |
+| s64      | JSON number  | Signed 64-bit integer        |
+| f32      | JSON number  | 32-bit floating point number |
+| f64      | JSON number  | 64-bit floating point number |
+| char     | JSON number  | UTF-8 character              |
+| string   | JSON string  | String                       |
+
+## Tuples
+
+The following WIT type:
+
+```wit
+tuple<u32, string, char>
+```
+
+is encoded in WAVE as
+
+```wit
+(1234, "hello world", 'g')
+```
+
+and in JSON as an array of the items:
+
+```json
+[1234, "hello world", 103]
+```
+
+## Lists
+
+The following WIT type:
+
+```wit
+list<string>
+```
+
+is encoded in WAVE as
+
+```wit
+["one", "two", "three"]
+```
+
+and in JSON as an array of the items:
+
+```json
+["one", "two", "three"]
+```
+
+## Options
+
+The following WIT type:
+
+```wit
+option<string>
+```
+
+is encoded in WAVE by one of the following:
+
+```wit
+"implicit some", some("explicit some"), none
+```
+
+In the JSON representation we use `null` to reprsent `none` and the inner value if defined:
+
+```json
+"implicit some"
+null
+```
+
+## Results
+
+For the following WIT type:
+
+```wit
+result<string, string>
+```
+
+The WAVE representation is
+
+```wit
+"implicit ok", ok("explicit ok"), err("explicit err")
+```
+
+The result type is represented in JSON by an **object** with either an `ok` or an `err` field:
+
+```json
+{ "ok": "explicit ok" }
+{ "err": "explicit err" }
+```
+
+If the type is _unit_ in the WIT definition, the JSON representation should use `null`:
+
+```wit
+result<_, string>
+```
+
+```json
+{ "ok": null }
+```
+
+## Handles
+
+Handles are identifying **resources** and returned by invoking **resource constructors** through the Golem invocation API. Handles are represented as strings in the JSON format
+and they are not supported by WAVE.
+
+Handles must not be constructed by hand, just forwarded to method invocations as they were returned from the constructors.
+
+Example handle value in JSON representation:
+
+```json
+"urn:worker:component-id/worker-name/resource-id"
+```
+
+## Records
+
+Records are a collection of named fields. The JSON representation uses the same names as they appear in the WIT definition:
+
+```wit
+record {
+    a: string,
+    b: u32
+}
+```
+
+An example WAVE encoding for such a record is:
+
+```wit
+{ a: "hello", b: 1234 }
+```
+
+The JSON representation is just an object with the same field names:
+
+```json
+{ "a": "hello", "b": 1234 }
+```
+
+## Variants
+
+Variants are encoded in JSON by an **object** with a single field, where the field's name matches one of the variant's cases:
+
+```wit
+variant allowed-destinations {
+    none,
+    any,
+    restricted(list<string>),
+}
+```
+
+The WAVE encoding for such a variant is
+
+```wit
+none, any, restricted(["one", "two", "three"])
+```
+
+In JSON the object's single field encodes the case, and the value is `null` if it has no inner value in the type:
+
+```json
+{ "none": null }
+{ "any": null }
+{ "restricted": ["one", "two", "three"] }
+```
+
+## Enums
+
+Enums are simply encoded by the case name as a JSON string.
+
+For example:
+
+```wit
+enum {
+    low,
+    medium,
+    high
+}
+```
+
+The WAVE encoding for such an enum is:
+
+```wit
+low, medium high
+```
+
+and in JSON:
+
+```json
+"low"
+"medium"
+"high"
+```
+
+## Flags
+
+Flags represent a set of selected values.
+
+Take the following example WIT type:
+
+```wit
+flags allowed-methods {
+    get,
+    post,
+    put,
+    delete,
+}
+```
+
+The WAVE encoding lists zero or more elements of the flags within `{}`:
+
+```wit
+{get, put}
+```
+
+The JSON representation is an array of the selected values, each represented by a string:
+
+```json
+["get", "put"]
+```

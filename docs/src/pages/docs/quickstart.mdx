@@ -1,4 +1,5 @@
 import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
 
 # Quickstart
 
@@ -6,11 +7,16 @@ This guide will get you up and running in Golem in minutes.
 
 ### Install Golem CLI
 
-Golem CLI is a command-line application that allows you to deploy new invincible workers onto Golem.
+Golem CLI is a command-line application that allows you to deploy components,
+create and invoke workers, and otherwise manage your Golem applications.
 
-To install `golem-cli` you currently need to use `cargo`, Rust's build tool.
+There are **precompiled binaries** of `golem-cli` (and its other variants) for
+various platforms. Alternatively, you can build Golem CLI for yourself.
 
-To get `cargo` on your system, we recommend to use [rustup](https://rustup.rs/):
+<Callout type="info">
+To build `golem-cli` you need to use `cargo`, Rust's build tool.
+
+To get `cargo` on your system, we recommend using [rustup](https://rustup.rs/):
 
 ```bash filename="Terminal" copy
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -18,66 +24,141 @@ rustup install stable
 rustup default stable
 ```
 
-Then you can install `golem-cli` with the following command:
+</Callout>
+
+#### Recommended CLI
+
+You can download the universal version of `golem-cli` from the following page:
+
+<Cards num={1}>
+  <Card
+    title="Golem Cloud Releases"
+    href="https://github.com/golemcloud/golem-cloud-releases/releases"
+  />
+</Cards>
+
+Alternatively, you can build and install the universal version of `golem-cli`
+with the following command:
+
+```bash filename="Terminal" copy
+cargo install --features universal golem-cloud-cli
+```
+
+This command installs both universal `golem-cli` (with support for cloud and
+open source versions) and the cloud-specific `golem-cloud-cli`.
+
+#### Alternative Versions
+
+You can download the cloud-specific `golem-cloud-cli` without supporting OSS
+deployments from the following page:
+
+<Cards num={1}>
+  <Card
+    title="Golem Cloud Releases"
+    href="https://github.com/golemcloud/golem-cloud-releases/releases"
+  />
+</Cards>
+
+Alternatively, you can build and install cloud-specific `golem-cloud-cli`
+without the universal `golem-cli` with the following command:
+
+```bash filename="Terminal" copy
+cargo install golem-cloud-cli --bin golem-cloud-cli
+```
+
+You can download the open source-specific `golem-cli` without support for Golem
+Cloud from the following page:
+
+<Cards num={1}>
+  <Card title="Golem Releases" href="https://github.com/golemcloud/golem/releases" />
+</Cards>
+
+Alternatively, you can build and install open source-specific `golem-cli`
+without cloud profiles support with the following command:
 
 ```bash filename="Terminal" copy
 cargo install golem-cli
 ```
 
 <Callout type="info">
-  If you want to try out the hosted version of Golem you can [register for the Developer Mode preview](https://golem.cloud/sign-up). You will then be provided with a link to download the Golem Cloud CLI.
+  Open source specific `golem-cli` and universal `golem-cli` can not be installed at the same time.
   {/* prettier-ignore */}
-  You need to create an account and authenticate yourself before using any Golem Cloud commands. This is easy to do with Github OAuth2. Lets do it right now by using the following command:
 
-```bash filename="Terminal" copy
-golem-cloud-cli account get
-```
-
-Once you authenticate, Golem Cloud CLI will cache an API token in a local directory named `$HOME/.golem`. This token will allow you to use Golem Cloud CLI without further authentication.
-
-We will use `golem-cli` as opposed to `golem-cloud-cli` in all examples unless they are specific to Golem Cloud, but `golem-cloud-cli` supports all commands supported by `golem-cli`.
+We will use the universal `golem-cli` in all examples, but `golem-cloud-cli`
+supports all the commands supported by the universal `golem-cli`.
 
 </Callout>
 
-### Setting up Golem
+### Setup
 
 To use the open source version of Golem you need to deploy it in your own infrastructure.
 
-To get started we recommend using the Docker Compose file from the [Golem Docker examples](https://github.com/golemcloud/golem/blob/main/docker-examples/docker-compose-sqlite.yaml). You will need to have [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system.
+To get started we recommend using the Docker Compose file from the [Golem Docker examples](https://github.com/golemcloud/golem/blob/main/docker-examples/docker-compose-.yaml). You will need to have [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system.
 
 Once you have Docker Compose installed, you can make use of docker-compose file in Golem repository to spin up Golem.
 
 ```bash filename="Terminal" copy
 # Download an example docker-compose file along with .env file that has a few common configurations
-curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/docker-compose-sqlite.yaml -O  https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/.env
+curl -O https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/docker-compose-postgres.yaml -O  https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/.env
 
-# Start Golem with backend storage as SQLite and Redis
-docker-compose -f docker-compose-sqlite.yaml up
+# Start Golem with backend storage as PostgreSQL and Redis
+docker-compose -f docker-compose-postgres.yaml up
 ```
 
-Note that, here we are making use of an example docker-compose file. You may need to modify it to suit your needs,
-or refer other examples in Golem [repository](https://github.com/golemcloud/golem/tree/main/docker-examples).
-That said, the example docker-compose file along with .env file should be enough to get you started.
+Note that, here we are making use of an example docker-compose file. You may
+need to modify it to suit your needs, or refer other examples in Golem
+[repository](https://github.com/golemcloud/golem/tree/main/docker-examples).
+That said, the example docker-compose file along with .env file should be enough
+to get you started.
 
-If you are running into any port conflicts you can modify the `.env` file that was downloaded as part of the above curl command.
+If you are running into any port conflicts, you can modify the `.env` file that
+was downloaded as part of the above `curl` command.
 
 <Callout type="info">If you are using the hosted version of Golem, you can skip this step.</Callout>
 
+See also [deployment](deployment-overview.mdx) page for additional deployment
+options.
+
+### Creating a Profile
+
+To specify the Golem service location, run the following command:
+
+```bash filename="Terminal" copy
+golem-cli init
+```
+
+This command starts an iteractive configuration process. For non-interactive options - see [Golem CLI](cli-introduction.mdx) page.
+
+On the first step you'll see 3 options:
+
+- Golem Default. Use this options for default local docker compose installation.
+- Golem. Use this option in case of a customised Golem installation, i.e. a custom `GOLEM_ROUTER_PORT` in `.env` file.
+- Golem Cloud. Use this option for a hosted version of Golem.
+
+If you can't see `Golem Cloud` option - you are using an open source specific version of `golem-cli` instead of universal `golem-cli`.
+
 ### Building an Example
 
-Golem runs components that are WebAssembly programs. Components are like applications, except they may expose functions that can be called externally.
+Golem runs components that are WebAssembly programs. Components are like
+applications, except they may expose functions that can be called externally.
 
-To deploy to Golem, you must first [build a component](/docs/building-components) using any programming language and toolchain that can build WebAssembly components.
+To deploy to Golem, you must first build a [component](concepts-components)
+using any programming language and toolchain that can build WebAssembly
+components.
 
-To get started quickly, you can use Golem CLI to create a component from an example:
+To get started quickly, you can use Golem CLI to create a component from an
+existing example:
 
 ```bash filename="Terminal" copy
 golem-cli new --example rust-shopping-cart --component-name shopping_cart
 ```
 
-This will generate a new `shopping_cart` directory in the current directory with the example for your component.
+This will generate a new `shopping_cart` directory in the current directory with
+the example for your component.
 
-To **build** the newly created component you need some development tools installed. These are collected for each supported **guest language** on the [Building Components](/docs/building-components) page. For the above example, please read the [Rust](/docs/building-components/tier-1/rust) specific instructions to set up `cargo-component`.
+To **build** the newly created component, you need some development tools
+installed. Which tools you need depend on the language you are using. You can
+find more information on the [components](concepts-components) explainer.
 
 Once you have that, navigate to the `shopping_cart`, and run:
 
@@ -140,7 +221,7 @@ If a worker of the specified name has not been created, then when you attempt to
 
 The parameters are either listed one by one with separate `--arg` options using the [WAVE format](https://github.com/lann/wasm-wave), or as a single JSON array using `--parameters`.
 
-Check the [Component interface](/docs/component-interface) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
+Check the [Component interface](concepts-components.mdx) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
 
 ### Next Steps
 
@@ -150,6 +231,6 @@ Take your next steps with Golem by exploring the following resources:
 
 - [Building Components](/docs/building-component) describes you can use different **programming languages** for building Golem components
 - [Promises](/docs/promises) are a way to block your program until an **external condition** fulfills it.
-- The [Golem CLI](/docs/golem-cli) page lists all the commands available on Golem's **command line interface**
-- Golem can also be controlled using its [REST API](/docs/rest-api)
+- The [Golem CLI](cli-introduction.mdx) page lists all the commands available on Golem's **command line interface**
+- Golem can also be controlled using its [REST API](rest-api.mdx)
 - Read the [FAQ](/docs/faq) page for frequently asked questions

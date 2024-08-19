@@ -1,0 +1,71 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Setup development environment for C/C++
+
+To write **Golem components** in C or C++, a couple of common WebAssembly tools need to be installed, as well as the latest version of the **WASM SDK**.
+
+## Install WebAssembly tooling
+
+First of all, to install `wasm-tools` via `cargo`, you need to install the latest stable version of Rust. The recommended way to do so is using [https://rustup.rs](https://rustup.rs/):
+
+<Steps>
+
+### Install Rust
+
+Install rustup
+
+```bash copy
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Install the latest stable version of Rust
+
+```bash copy
+rustup install stable && rustup default stable
+```
+
+Add the WASI target
+
+```bash copy
+rustup target add wasm32-wasi
+```
+
+### Install `wasm-tools`
+
+```bash copy
+cargo install --force --locked  wasm-tools@1.210.0
+```
+
+Confirm the installation:
+
+```bash
+wasm-tools --version
+wasm-tools 1.210.0
+```
+
+### Install `wit-bindgen`
+
+```bash copy
+cargo install --force --locked wit-bindgen-cli@0.26.0
+```
+
+Confirm the installation:
+
+```bash
+wit-bindgen --version
+wit-bindgen-cli 0.26.0
+```
+
+</Steps>
+
+<Callout type="warning">
+  Golem requires a **specific version** of `wasm-tools` and `wit-bindgen`. Please make sure the
+  correct version is installed with the commands described above.
+</Callout>
+
+## Install WASM SDK 23.0
+
+Download and extract [WASI SDK 23.0](https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-23) somewhere - in the examples we assume it is put in `~/wasi-sdk-23.0`.
+
+The SDK contains a version of `Clang` that can compile to WebAssembly modules, which can be converted into Golem components using the `wit-bindgen` and `wasm-tools` command line tools.

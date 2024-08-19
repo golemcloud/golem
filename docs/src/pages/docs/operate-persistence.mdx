@@ -1,0 +1,87 @@
+# Operate - persistence
+
+## Introduction
+
+The Golem Worker Executor uses a set of storage layers for persisting worker state and everything related to the execution of workers. This page gives an overview of what is stored where, as well as some pointers for extending Golem OSS with new storage implementations.
+
+## Storage types
+
+The worker executor requires three types of storage backends:
+
+- A **blob storage** for storing and retrieving arbitrary sized binary blobs
+- A **key-value storge** with some extra requirements for set/sorted-set-like operations
+- An **indexed storage** for an append-only, indexable store for the worker's operation log (oplog)
+
+Currently Golem provides the following implementations, configurable through the worker executor's config file:
+
+| Storage type       | Implementations            |
+| ------------------ | -------------------------- |
+| Blob storage       | S3, file system, in-memory |
+| Key-values storage | Redis, in-memory           |
+| Indexed storage    | Redis (streams), in-memory |
+
+## Compilation cache
+
+The Golem **component service** stores the component WASM files in its own storage layer (configured to be either S3 or a persistent volume) and exposes them through its [download API](oss-rest-api/component) for the worker executor. The WASM files need to be **compiled** to native code before execution, which is a time-consuming task. To reduce the time required for instantiating workers, these compiled binaries are cached in the worker executor's **blob storage**.
+
+The **component compilation service** is a special, horizontally scalable component of the Golem system which shares this storage with worker executors and is capable of precompiling components before they are being used by any of the executors.
+
+## Oplog
+
+Running workers continously persist operations into the worker's **oplog**. The oplog is append-only (persisted entries are never modified) and it is indexable (during the recovery of a worker it is read from the earliest entry to the latest one).
+The oplog is stored in multiple configurable layers. The default configuration is the following:
+
+- The **primary oplog layer** uses the **indexed storage**. This is the one where running worker's entries are appended to
+- There is a **secondary layer** that is also persisted to the **indexed storage**, but on this level each entry holds a compressed set of oplog entries.
+- A **tertiary layer** holds even larger chunks of compressed oplog entries and stores them in the **blob storage**.
+
+Oplogs are continuously moved towards the lower layers to prevent the primary oplog storage (Redis) from getting full. Workers which were not active for a while are fully stored in the blob storage only.
+
+In addition to the above, there are oplog entries holding user-defined data (such as invocation parameters). As these user-defined payloads can have an arbitrary size, the worker executor has to protect its storage layer against putting too large entries into the primary oplog. For this reason large payloads are written to the **blob storage** and the corresponding oplog entry only stores a reference to them. Payloads below a configurable limit are stored inline in the oplog entry.
+
+### Configuration
+
+The `[oplog]` section of the worker executor configuration allows customizing the above described behavior.
+
+The default configuration is the following:
+
+```toml
+[oplog]
+archive_interval = "1day"
+blob_storage_layers = 1
+entry_count_limit = 1024
+indexed_storage_layers = 2
+max_operations_before_commit = 128
+max_payload_size = 65536
+```
+
+These options have the following meaning:
+
+| Option                         | Description                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `archive_interval`             | The period after the old sections of the oplog get moved to one layer down in the layered oplog storage |
+| `blob_storage_layers`          | The number of archive layers using the **blob storage**                                                 |
+| `indexed_storage_layers`       | The total number of layers (one primary + archives) using the **indexed storage**                       |
+| `entry_count_limit`            | The number of oplog entries triggering the archivation of a chunk to the lower oplog layer              |
+| `max_operations_before_commit` | The number of non-critical oplog entries that can be buffered before committed to the oplog             |
+| `max_payload_size`             | The maximum size of user-defined payloads that can be stored inline in an oplog entry                   |
+
+## Worker metadata
+
+The **oplog** is the primary source of truth for everything we need to store about a worker, but for performance reasons the **key value store** is also used to store aggregated worker metadata for workers. This metadata is not always completely up-to-date; it store the last oplog index it was calculated from, and its latest version can be reproduced by reading and processing the newer oplog entries. For workers which has no longer data in the primary oplog, we don't store worker metadata either. When these workers have to be recovered, their metadata is reconstructed by reading the whole archived oplog.
+
+## Promises and schedules
+
+The worker executor also stores **promise information** in its **key-value storage**. This is simply an entry for each created Golem promise, storing it's completion state. Internally Golem also uses scheduled promise completion (for example for waking up workers after long sleeps). These scheduled events are also stored in the **key-value storage**.
+
+## WASI Blob store and Key Value store
+
+Golem implements (partially) the [WASI Blob Store](https://github.com/WebAssembly/wasi-blobstore) and [WASI Key-Value Store](https://github.com/WebAssembly/wasi-keyvalue) proposals. These interfaces allow workers to store blobs and key-value data in the worker executor's configured **blob storage** and **key-value storage** layers.
+
+## Adding new storage implementations
+
+The open-source version of Golem can be easily extended to support alternative databases than the built-in Redis and S3 implementations. Take a look at the following traits:
+
+- [`BlobStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor-base/src/storage/blob/mod.rs)
+- [`KeyValueStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor-base/src/storage/keyvalue/mod.rs)
+- [`IndexedStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor-base/src/storage/indexed/mod.rs)
