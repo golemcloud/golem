@@ -27,7 +27,7 @@ pub fn sequence<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             char(']'),
             sep_by(rib_expr(), char(',').skip(spaces())),
         )
-        .map(Expr::Sequence)
+        .map(Expr::sequence)
         .message("Unable to parse sequece"),
     )
 }
@@ -41,7 +41,7 @@ mod tests {
     fn test_empty_sequence() {
         let input = "[]";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Sequence(vec![]), "")));
+        assert_eq!(result, Ok((Expr::sequence(vec![]), "")));
     }
 
     #[test]
@@ -50,10 +50,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Sequence(vec![Expr::Identifier("foo".to_string())]),
-                ""
-            ))
+            Ok((Expr::sequence(vec![Expr::identifier("foo")]), ""))
         );
     }
 
@@ -64,10 +61,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Identifier("foo".to_string()),
-                    Expr::Identifier("bar".to_string())
-                ]),
+                Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
                 ""
             ))
         );
@@ -80,9 +74,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Not(Box::new(Expr::Identifier("foo".to_string()))),
-                    Expr::Not(Box::new(Expr::Identifier("bar".to_string())))
+                Expr::sequence(vec![
+                    Expr::not(Expr::identifier("foo")),
+                    Expr::not(Expr::identifier("bar"))
                 ]),
                 ""
             ))
@@ -96,10 +90,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Literal("foo".to_string()),
-                    Expr::Literal("bar".to_string())
-                ]),
+                Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")]),
                 ""
             ))
         );
@@ -112,15 +103,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Sequence(vec![
-                        Expr::Identifier("foo".to_string()),
-                        Expr::Identifier("bar".to_string())
-                    ]),
-                    Expr::Sequence(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("bar".to_string())
-                    ])
+                Expr::sequence(vec![
+                    Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("bar")])
                 ]),
                 ""
             ))
@@ -135,10 +120,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Option(Some(Box::new(Expr::Identifier("x".to_string())))),
-                    Expr::Option(Some(Box::new(Expr::Identifier("y".to_string())))),
-                    Expr::Option(Some(Box::new(Expr::Identifier("z".to_string()))))
+                Expr::sequence(vec![
+                    Expr::option(Some(Expr::identifier("x"))),
+                    Expr::option(Some(Expr::identifier("y"))),
+                    Expr::option(Some(Expr::identifier("z")))
                 ]),
                 ""
             ))
@@ -153,10 +138,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Result(Ok(Box::new(Expr::Identifier("x".to_string())))),
-                    Expr::Result(Ok(Box::new(Expr::Identifier("y".to_string())))),
-                    Expr::Result(Ok(Box::new(Expr::Identifier("z".to_string()))))
+                Expr::sequence(vec![
+                    Expr::ok(Expr::identifier("x")),
+                    Expr::ok(Expr::identifier("y")),
+                    Expr::ok(Expr::identifier("z"))
                 ]),
                 ""
             ))
@@ -171,16 +156,16 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Cond(
-                        Box::new(Expr::Identifier("foo".to_string())),
-                        Box::new(Expr::Identifier("bar".to_string())),
-                        Box::new(Expr::Identifier("baz".to_string()))
+                Expr::sequence(vec![
+                    Expr::cond(
+                        Expr::identifier("foo"),
+                        Expr::identifier("bar"),
+                        Expr::identifier("baz")
                     ),
-                    Expr::Cond(
-                        Box::new(Expr::Identifier("qux".to_string())),
-                        Box::new(Expr::Identifier("quux".to_string())),
-                        Box::new(Expr::Identifier("quuz".to_string()))
+                    Expr::cond(
+                        Expr::identifier("qux"),
+                        Expr::identifier("quux"),
+                        Expr::identifier("quuz")
                     )
                 ]),
                 ""
@@ -196,15 +181,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Sequence(vec![
-                    Expr::Tuple(vec![
-                        Expr::Identifier("foo".to_string()),
-                        Expr::Identifier("bar".to_string())
-                    ]),
-                    Expr::Tuple(vec![
-                        Expr::Identifier("baz".to_string()),
-                        Expr::Identifier("qux".to_string())
-                    ])
+                Expr::sequence(vec![
+                    Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+                    Expr::tuple(vec![Expr::identifier("baz"), Expr::identifier("qux")])
                 ]),
                 ""
             ))

@@ -21,7 +21,7 @@ use combine::Parser;
 pub fn not<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     spaces().with(
         (string("!").skip(spaces()), rib_expr())
-            .map(|(_, expr)| Expr::Not(Box::new(expr)))
+            .map(|(_, expr)| Expr::not(expr))
             .message("Unable to parse not"),
     )
 }
@@ -35,10 +35,7 @@ mod tests {
     fn test_not_identifier() {
         let input = "!foo";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((Expr::Not(Box::new(Expr::Identifier("foo".to_string()))), ""))
-        );
+        assert_eq!(result, Ok((Expr::not(Expr::identifier("foo")), "")));
     }
 
     #[test]
@@ -48,10 +45,10 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Not(Box::new(Expr::Sequence(vec![
-                    Expr::Identifier("foo".to_string()),
-                    Expr::Identifier("bar".to_string())
-                ]))),
+                Expr::not(Expr::sequence(vec![
+                    Expr::identifier("foo"),
+                    Expr::identifier("bar")
+                ])),
                 ""
             ))
         );
@@ -63,12 +60,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Not(Box::new(Expr::Not(Box::new(Expr::Identifier(
-                    "foo".to_string()
-                ))))),
-                ""
-            ))
+            Ok((Expr::not(Expr::not(Expr::identifier("foo"))), ""))
         );
     }
 }

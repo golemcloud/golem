@@ -1,20 +1,12 @@
 use crate::api_definition::http::{QueryInfo, VarInfo};
-use crate::merge::Merge;
 
-use crate::primitive::GetPrimitive;
-use golem_service_base::type_inference::infer_analysed_type;
-use golem_wasm_ast::analysis::{AnalysedType, TypeRecord};
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-use golem_wasm_rpc::protobuf::{Type, TypeAnnotatedValue as RootTypeAnnotatedValue};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub enum RequestDetails {
-    Http(TypedHttRequestDetails),
+    Http(HttpRequestDetails),
 }
 impl RequestDetails {
     pub fn from(
@@ -24,7 +16,7 @@ impl RequestDetails {
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
-        Ok(Self::Http(TypedHttRequestDetails::from_input_http_request(
+        Ok(Self::Http(HttpRequestDetails::from_input_http_request(
             path_params,
             query_variable_values,
             query_variable_names,
@@ -33,91 +25,70 @@ impl RequestDetails {
         )?))
     }
 
-    pub fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
+    pub fn as_json(&self) -> Value {
         match self {
-            RequestDetails::Http(http) => http.clone().to_type_annotated_value(),
+            RequestDetails::Http(http_request_details) => {
+                let typed_path_values = http_request_details.request_path_values.clone().0;
+                let typed_query_values = http_request_details.request_query_values.clone().0;
+
+                let mut path_values = serde_json::Map::new();
+
+                for field in typed_path_values.fields.iter() {
+                    path_values.insert(field.name.clone(), field.value.clone());
+                }
+
+                for field in typed_query_values.fields.iter() {
+                    path_values.insert(field.name.clone(), field.value.clone());
+                }
+
+                let merged_request_path_and_query = Value::Object(path_values);
+
+                let mut header_records = serde_json::Map::new();
+
+                for field in http_request_details.request_header_values.0.fields.iter() {
+                    header_records.insert(field.name.clone(), field.value.clone());
+                }
+
+                let header_value = Value::Object(header_records);
+
+                Value::Object(serde_json::Map::from_iter(vec![
+                    ("path".to_string(), merged_request_path_and_query),
+                    (
+                        "body".to_string(),
+                        http_request_details.request_body.0.clone(),
+                    ),
+                    ("headers".to_string(), header_value),
+                ]))
+            }
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct TypedHttRequestDetails {
-    pub typed_path_key_values: TypedPathKeyValues,
-    pub typed_request_body: TypedRequestBody,
-    pub typed_query_values: TypedQueryKeyValues,
-    pub typed_header_values: TypedHeaderValues,
+pub struct HttpRequestDetails {
+    pub request_path_values: RequestPathValues,
+    pub request_body: RequestBody,
+    pub request_query_values: RequestQueryValues,
+    pub request_header_values: RequestHeaderValues,
 }
 
-impl TypedHttRequestDetails {
-    pub fn empty() -> TypedHttRequestDetails {
-        TypedHttRequestDetails {
-            typed_path_key_values: TypedPathKeyValues(TypedKeyValueCollection::default()),
-            typed_request_body: TypedRequestBody(TypeAnnotatedValue::Record(TypedRecord {
-                value: vec![],
-                typ: vec![],
-            })),
-            typed_query_values: TypedQueryKeyValues(TypedKeyValueCollection::default()),
-            typed_header_values: TypedHeaderValues(TypedKeyValueCollection::default()),
+impl HttpRequestDetails {
+    pub fn empty() -> HttpRequestDetails {
+        HttpRequestDetails {
+            request_path_values: RequestPathValues(JsonKeyValues::default()),
+            request_body: RequestBody(Value::Null),
+            request_query_values: RequestQueryValues(JsonKeyValues::default()),
+            request_header_values: RequestHeaderValues(JsonKeyValues::default()),
         }
     }
 
     pub fn get_accept_content_type_header(&self) -> Option<String> {
-        self.typed_header_values
+        self.request_header_values
             .0
             .fields
             .iter()
             .find(|field| field.name == http::header::ACCEPT.to_string())
-            .and_then(|field| field.value.get_primitive().map(|x| x.as_string()))
-    }
-
-    fn to_type_annotated_value(&self) -> TypeAnnotatedValue {
-        let mut typed_path_values: TypeAnnotatedValue = self.typed_path_key_values.clone().0.into();
-        let typed_query_values: TypeAnnotatedValue = self.typed_query_values.clone().0.into();
-        let merged_type_annotated_value = typed_path_values.merge(&typed_query_values).clone();
-
-        TypeAnnotatedValue::Record(TypedRecord {
-            typ: vec![
-                NameTypePair {
-                    name: "path".to_string(),
-                    typ: Type::try_from(&merged_type_annotated_value).ok(),
-                },
-                NameTypePair {
-                    name: "body".to_string(),
-                    typ: Type::try_from(&self.typed_request_body.0).ok(),
-                },
-                NameTypePair {
-                    name: "headers".to_string(),
-                    typ: {
-                        let typ: AnalysedType = self.typed_header_values.0.clone().into();
-                        Some((&typ).into())
-                    },
-                },
-            ],
-            value: vec![
-                NameValuePair {
-                    name: "path".to_string(),
-                    value: Some(RootTypeAnnotatedValue {
-                        type_annotated_value: Some(merged_type_annotated_value),
-                    }),
-                },
-                NameValuePair {
-                    name: "body".to_string(),
-                    value: Some({
-                        RootTypeAnnotatedValue {
-                            type_annotated_value: Some(self.typed_request_body.0.clone()),
-                        }
-                    }),
-                },
-                NameValuePair {
-                    name: "headers".to_string(),
-                    value: Some({
-                        RootTypeAnnotatedValue {
-                            type_annotated_value: Some(self.typed_header_values.clone().0.into()),
-                        }
-                    }),
-                },
-            ],
-        })
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
     }
 
     fn from_input_http_request(
@@ -127,54 +98,54 @@ impl TypedHttRequestDetails {
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
-        let request_body = TypedRequestBody::from(request_body)?;
-        let path_params = TypedPathKeyValues::from(path_params);
-        let query_params = TypedQueryKeyValues::from(query_variable_values, query_variable_names)?;
-        let header_params = TypedHeaderValues::from(headers)?;
+        let request_body = RequestBody::from(request_body)?;
+        let path_params = RequestPathValues::from(path_params);
+        let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
+        let header_params = RequestHeaderValues::from(headers)?;
 
         Ok(Self {
-            typed_path_key_values: path_params,
-            typed_request_body: request_body,
-            typed_query_values: query_params,
-            typed_header_values: header_params,
+            request_path_values: path_params,
+            request_body,
+            request_query_values: query_params,
+            request_header_values: header_params,
         })
     }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct TypedPathKeyValues(pub TypedKeyValueCollection);
+pub struct RequestPathValues(pub JsonKeyValues);
 
-impl TypedPathKeyValues {
-    fn from(path_variables: &HashMap<VarInfo, &str>) -> TypedPathKeyValues {
-        let record_fields: Vec<TypedKeyValue> = path_variables
+impl RequestPathValues {
+    fn from(path_variables: &HashMap<VarInfo, &str>) -> RequestPathValues {
+        let record_fields: Vec<JsonKeyValue> = path_variables
             .iter()
-            .map(|(key, value)| TypedKeyValue {
+            .map(|(key, value)| JsonKeyValue {
                 name: key.key_name.clone(),
-                value: internal::get_typed_value_from_primitive(value),
+                value: internal::refine_json_str_value(value),
             })
             .collect();
 
-        TypedPathKeyValues(TypedKeyValueCollection {
+        RequestPathValues(JsonKeyValues {
             fields: record_fields,
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedQueryKeyValues(pub TypedKeyValueCollection);
+pub struct RequestQueryValues(pub JsonKeyValues);
 
-impl TypedQueryKeyValues {
+impl RequestQueryValues {
     fn from(
         query_key_values: &HashMap<String, String>,
         query_keys: &[QueryInfo],
-    ) -> Result<TypedQueryKeyValues, Vec<String>> {
+    ) -> Result<RequestQueryValues, Vec<String>> {
         let mut unavailable_query_variables: Vec<String> = vec![];
-        let mut query_variable_map: TypedKeyValueCollection = TypedKeyValueCollection::default();
+        let mut query_variable_map: JsonKeyValues = JsonKeyValues::default();
 
         for spec_query_variable in query_keys.iter() {
             let key = &spec_query_variable.key_name;
             if let Some(query_value) = query_key_values.get(key) {
-                let typed_value = internal::get_typed_value_from_primitive(query_value);
+                let typed_value = internal::refine_json_str_value(query_value);
                 query_variable_map.push(key.clone(), typed_value);
             } else {
                 unavailable_query_variables.push(spec_query_variable.to_string());
@@ -182,7 +153,7 @@ impl TypedQueryKeyValues {
         }
 
         if unavailable_query_variables.is_empty() {
-            Ok(TypedQueryKeyValues(query_variable_map))
+            Ok(RequestQueryValues(query_variable_map))
         } else {
             Err(unavailable_query_variables)
         }
@@ -190,110 +161,69 @@ impl TypedQueryKeyValues {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedHeaderValues(TypedKeyValueCollection);
-impl TypedHeaderValues {
-    fn from(headers: &HeaderMap) -> Result<TypedHeaderValues, Vec<String>> {
-        let mut headers_map: TypedKeyValueCollection = TypedKeyValueCollection::default();
+pub struct RequestHeaderValues(JsonKeyValues);
+impl RequestHeaderValues {
+    fn from(headers: &HeaderMap) -> Result<RequestHeaderValues, Vec<String>> {
+        let mut headers_map: JsonKeyValues = JsonKeyValues::default();
 
         for (header_name, header_value) in headers {
             let header_value_str = header_value.to_str().map_err(|err| vec![err.to_string()])?;
 
-            let typed_header_value = internal::get_typed_value_from_primitive(header_value_str);
+            let typed_header_value = internal::refine_json_str_value(header_value_str);
 
             headers_map.push(header_name.to_string(), typed_header_value);
         }
 
-        Ok(TypedHeaderValues(headers_map))
+        Ok(RequestHeaderValues(headers_map))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedRequestBody(TypeAnnotatedValue);
+pub struct RequestBody(Value);
 
-impl TypedRequestBody {
-    fn from(request_body: &Value) -> Result<TypedRequestBody, Vec<String>> {
-        let inferred_type = infer_analysed_type(request_body);
-        let typed_value = TypeAnnotatedValue::parse_with_type(request_body, &inferred_type)?;
-
-        Ok(TypedRequestBody(typed_value))
+impl RequestBody {
+    fn from(request_body: &Value) -> Result<RequestBody, Vec<String>> {
+        Ok(RequestBody(request_body.clone()))
     }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct TypedKeyValueCollection {
-    pub fields: Vec<TypedKeyValue>,
+pub struct JsonKeyValues {
+    pub fields: Vec<JsonKeyValue>,
 }
 
-impl TypedKeyValueCollection {
-    pub fn push(&mut self, key: String, value: TypeAnnotatedValue) {
-        self.fields.push(TypedKeyValue { name: key, value });
-    }
-}
-
-impl From<TypedKeyValueCollection> for AnalysedType {
-    fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
-        let mut fields = Vec::new();
-
-        for record in &typed_key_value_collection.fields {
-            fields.push(golem_wasm_ast::analysis::NameTypePair {
-                name: record.name.clone(),
-                typ: AnalysedType::try_from(&record.value)
-                    .expect("Internal error: Failed to retrieve type from Type Annotated Value"),
-            });
-        }
-
-        AnalysedType::Record(TypeRecord { fields })
-    }
-}
-
-impl From<TypedKeyValueCollection> for TypeAnnotatedValue {
-    fn from(typed_key_value_collection: TypedKeyValueCollection) -> Self {
-        let mut typ: Vec<NameTypePair> = vec![];
-        let mut value: Vec<NameValuePair> = vec![];
-
-        for record in typed_key_value_collection.fields {
-            typ.push(NameTypePair {
-                name: record.name.clone(),
-                typ: Some(
-                    Type::try_from(&record.value).expect(
-                        "Internal error: Failed to retrieve type from Type Annotated Value",
-                    ),
-                ),
-            });
-
-            value.push(NameValuePair {
-                name: record.name.clone(),
-                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(record.value),
-                }),
-            });
-        }
-
-        TypeAnnotatedValue::Record(TypedRecord { typ, value })
+impl JsonKeyValues {
+    pub fn push(&mut self, key: String, value: Value) {
+        self.fields.push(JsonKeyValue { name: key, value });
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct TypedKeyValue {
+pub struct JsonKeyValue {
     pub name: String,
-    pub value: TypeAnnotatedValue,
+    pub value: Value,
 }
 
 mod internal {
+    use rib::{CoercedNumericValue, LiteralValue};
+    use serde_json::Value;
 
-    use crate::primitive::{Number, Primitive};
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-
-    pub(crate) fn get_typed_value_from_primitive(value: impl AsRef<str>) -> TypeAnnotatedValue {
-        let primitive = Primitive::from(value.as_ref().to_string());
+    pub(crate) fn refine_json_str_value(value: impl AsRef<str>) -> Value {
+        let primitive = LiteralValue::from(value.as_ref().to_string());
         match primitive {
-            Primitive::Num(number) => match number {
-                Number::PosInt(value) => TypeAnnotatedValue::U64(value),
-                Number::NegInt(value) => TypeAnnotatedValue::S64(value),
-                Number::Float(value) => TypeAnnotatedValue::F64(value),
+            LiteralValue::Num(number) => match number {
+                CoercedNumericValue::PosInt(value) => {
+                    Value::Number(serde_json::Number::from(value))
+                }
+                CoercedNumericValue::NegInt(value) => {
+                    Value::Number(serde_json::Number::from(value))
+                }
+                CoercedNumericValue::Float(value) => {
+                    Value::Number(serde_json::Number::from_f64(value).unwrap())
+                }
             },
-            Primitive::String(value) => TypeAnnotatedValue::Str(value),
-            Primitive::Bool(value) => TypeAnnotatedValue::Bool(value),
+            LiteralValue::String(value) => Value::String(value),
+            LiteralValue::Bool(value) => Value::Bool(value),
         }
     }
 }

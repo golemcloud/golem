@@ -1,8 +1,15 @@
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use golem_common::model::ComponentId;
     use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
+    use golem_service_base::model::Component;
+    use golem_wasm_ast::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance, AnalysedType, TypeStr,
+    };
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
     use golem_worker_service_base::api_definition::{
         ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
@@ -15,10 +22,11 @@ mod tests {
     use golem_worker_service_base::service::api_deployment::{
         ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
     };
-    use golem_worker_service_base::service::component::{ComponentService, ComponentServiceNoop};
+    use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
     use golem_worker_service_base::service::http::http_api_definition_validator::{
         HttpApiDefinitionValidator, RouteValidationError,
     };
+
     use std::sync::Arc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
@@ -109,12 +117,77 @@ mod tests {
         test_services(api_definition_repo, api_deployment_repo).await;
     }
 
+    struct TestComponentService;
+
+    impl TestComponentService {
+        pub fn test_component() -> Component {
+            use golem_common::model::component_metadata::ComponentMetadata;
+            use golem_service_base::model::{ComponentName, VersionedComponentId};
+
+            let id = VersionedComponentId {
+                component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")
+                    .unwrap(),
+                version: 0,
+            };
+
+            Component {
+                versioned_component_id: id.clone(),
+                component_name: ComponentName("test".to_string()),
+                component_size: 0,
+                metadata: ComponentMetadata {
+                    exports: Self::get_metadata(),
+                    producers: vec![],
+                    memories: vec![],
+                },
+            }
+        }
+
+        fn get_metadata() -> Vec<AnalysedExport> {
+            let analysed_export = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![AnalysedFunction {
+                    name: "get-cart-contents".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "a".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::Str(TypeStr),
+                    }],
+                }],
+            });
+
+            vec![analysed_export]
+        }
+    }
+
+    #[async_trait]
+    impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
+        async fn get_by_version(
+            &self,
+            _component_id: &ComponentId,
+            _version: u64,
+            _auth_ctx: &AuthCtx,
+        ) -> ComponentResult<Component> {
+            Ok(Self::test_component())
+        }
+
+        async fn get_latest(
+            &self,
+            _component_id: &ComponentId,
+            _auth_ctx: &AuthCtx,
+        ) -> ComponentResult<Component> {
+            Ok(Self::test_component())
+        }
+    }
+
     async fn test_services(
         api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send>,
         api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send>,
     ) {
         let component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send> =
-            Arc::new(ComponentServiceNoop {});
+            Arc::new(TestComponentService {});
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
@@ -154,7 +227,7 @@ mod tests {
             "0.0.1",
             "/api/1/foo/{user-id}",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(request.body.foo); let status = if result == \"admin\" then 401 else 200; {status: status } }",
             false,
         );
         let def2draft = get_api_definition(
@@ -162,7 +235,7 @@ mod tests {
             "0.0.1",
             "/api/2/foo/{user-id}",
             "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(request.body.foo); let status = if result == \"admin\" then 401 else 200; {status: status } }",
             true,
         );
         let def2 = HttpApiDefinition {
@@ -174,7 +247,7 @@ mod tests {
             "0.0.1",
             "/api/3/foo/{user-id}?{id}",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(request.body.foo); let status = if result == \"admin\" then 401 else 200; {status: status } }",
             false,
         );
         let def4 = get_api_definition(
@@ -182,7 +255,7 @@ mod tests {
             "0.0.1",
             "/api/4/foo/{user-id}",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(\"doo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(\"doo\"); let status = if result == \"admin\" then 401 else 200; {status: status } }",
             false,
         );
 
@@ -222,7 +295,10 @@ mod tests {
         let definitions = definition_service
             .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 4);
         assert!(
             definitions.contains(&def2draft)
@@ -237,7 +313,10 @@ mod tests {
         let definitions = definition_service
             .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 4);
         assert!(
             definitions.contains(&def2)
@@ -249,7 +328,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
@@ -260,7 +342,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 1);
         assert!(definitions.contains(&def4));
@@ -283,7 +368,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 3);
         assert!(
@@ -298,7 +386,10 @@ mod tests {
         let definitions = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1) && definitions.contains(&def2));
@@ -340,7 +431,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker1",
-            "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200 }  }",
+            "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(\"foo\"), status: 200 }  }",
             false,
         );
         let def2 = get_api_definition(
@@ -348,7 +439,7 @@ mod tests {
             "0.0.1",
             "/api/get2",
             "worker2",
-            "${ {body: golem:it/api.{get-cart-contents}()} }",
+            "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
             true,
         );
 
@@ -357,7 +448,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "worker2",
-            "${ {body: golem:it/api.{get-cart-contents}()} }",
+            "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
             false,
         );
 
@@ -429,7 +520,7 @@ mod tests {
             "0.0.1",
             "/api/get1",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{get-cart-contents}();  {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then 401 else 200; status }",
             false,
         );
         let def1v1_upd = get_api_definition(
@@ -437,7 +528,7 @@ mod tests {
             "0.0.1",
             "/api/get1/1",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then 401 else 200; status }",
             false,
         );
         let def1v2 = get_api_definition(
@@ -445,7 +536,7 @@ mod tests {
             "0.0.2",
             "/api/get1/2",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then 401 else 200; status }",
             true,
         );
 
@@ -454,7 +545,7 @@ mod tests {
             "0.0.2",
             "/api/get1/22",
             "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{get-cart-contents}(); {status: if result.user == \"admin\" then 401 else 200 } }",
+            "${ let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then 401 else 200; status }",
             true,
         );
 
@@ -482,7 +573,10 @@ mod tests {
                 &EmptyAuthCtx::default(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2));
 
@@ -517,7 +611,10 @@ mod tests {
                 &EmptyAuthCtx::default(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
         assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2_upd));
 
@@ -619,7 +716,9 @@ mod tests {
           - method: Get
             path: {}
             binding:
-              componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
               workerName: '{}'
               response: '{}'
         "#,

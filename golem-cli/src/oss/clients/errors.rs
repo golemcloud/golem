@@ -213,13 +213,20 @@ fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String 
         WorkerServiceErrorsBody::Validation(validation) => validation
             .errors
             .iter()
-            .map(|e| format!("{}/{}/{}/{}", e.method, e.path, e.component, e.detail))
+            .map(|e| {
+                format!(
+                    "{}/{}/{}/{}",
+                    e.method, e.path, e.component.component_id, e.detail
+                )
+            })
             .join("\n"),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::oss::clients::errors::ResponseContentErrorMapper;
+    use golem_client::model::VersionedComponentId;
     use golem_client::{
         api::ApiDefinitionError,
         model::{
@@ -228,8 +235,6 @@ mod tests {
         },
     };
     use uuid::Uuid;
-
-    use crate::oss::clients::errors::ResponseContentErrorMapper;
 
     #[test]
     fn api_definition_error_409() {
@@ -286,13 +291,21 @@ mod tests {
                     RouteValidationError {
                         method: MethodPattern::Get,
                         path: "path".to_string(),
-                        component: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208").unwrap(),
+                        component: VersionedComponentId {
+                            component_id: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208")
+                                .unwrap(),
+                            version: 0,
+                        },
                         detail: "Duplicate route".to_string(),
                     },
                     RouteValidationError {
                         method: MethodPattern::Post,
                         path: "path2".to_string(),
-                        component: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209").unwrap(),
+                        component: VersionedComponentId {
+                            component_id: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209")
+                                .unwrap(),
+                            version: 0,
+                        },
                         detail: "Other route".to_string(),
                     },
                 ],

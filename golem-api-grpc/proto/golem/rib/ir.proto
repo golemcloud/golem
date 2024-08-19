@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package golem.rib;
+
+import "wasm/ast/type.proto";
+
+import "wasm/rpc/type_annotated_value.proto";
+
+message RibIR {
+    oneof instruction {
+        wasm.rpc.TypeAnnotatedValue push_lit = 1;
+        VariableId assign_var = 2;
+        VariableId load_var = 3;
+        wasm.ast.Type create_and_push_record = 4;
+        string update_record = 5;
+        PushListInstruction push_list = 6;
+        wasm.ast.Type create_some = 7;
+        PushNoneInstruction create_none = 8;
+        wasm.ast.Type create_ok_result = 9;
+        wasm.ast.Type create_err_result = 10;
+        string select_field = 11;
+        uint64 select_index = 12;
+        EqualTo equal_to = 13;
+        GreaterThan greater_than = 14;
+        LessThan less_than = 15;
+        GreaterThanOrEqualTo greater_than_or_equal_to = 16;
+        LessThanOrEqualTo less_than_or_equal_to = 17;
+        JumpInstruction jump_if_false = 18;
+        JumpInstruction jump = 19;
+        JumpInstruction label = 20;
+        wasm.ast.Type deconstruct = 21;
+        CallInstruction call = 22;
+        string throw = 23;
+        wasm.rpc.TypeAnnotatedValue push_flag = 24;
+        GetTag get_tag = 25;
+        VariantConstructionInstruction variant_construction = 26;
+        PushTupleInstruction push_tuple = 27;
+        Negate negate = 28;
+        ConcatInstruction concat = 29;
+    }
+}
+
+message VariableId {
+    oneof variable_id {
+        Global global = 1;
+        Local local = 2;
+    }
+}
+
+message Global {
+    string name = 1;
+}
+
+message Local {
+    string name = 1;
+    optional uint64 id = 2;
+}
+
+message PushListInstruction {
+    wasm.ast.Type list_type = 1;
+    uint64 list_size = 2;
+}
+
+message ConcatInstruction {
+    uint64 arg_size = 1;
+}
+
+message PushTupleInstruction {
+    wasm.ast.Type tuple_type = 1;
+    uint64 tuple_size = 2;
+}
+
+message PushNoneInstruction {
+   optional wasm.ast.Type none_type = 1;
+}
+
+message UpdateInstruction {}
+
+message JumpInstruction {
+    uint64 instruction_id = 1;
+}
+
+message CallInstruction {
+    string function_name = 1;
+    uint64 argument_count = 2;
+    wasm.ast.Type return_type = 3;
+}
+
+message VariantConstructionInstruction {
+    string variant_name = 1;
+    wasm.ast.Type return_type = 3;
+}
+
+message EqualTo {}
+message GreaterThan {}
+message LessThan {}
+message GreaterThanOrEqualTo {}
+message LessThanOrEqualTo {}
+message GetTag {}
+message Negate {}

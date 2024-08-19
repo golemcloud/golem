@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::http::HttpApiDefinition;
+use crate::api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use sqlx::{Database, Pool, Row};
@@ -32,7 +32,7 @@ pub struct ApiDefinitionRecord {
 impl ApiDefinitionRecord {
     pub fn new<Namespace: Display>(
         namespace: Namespace,
-        definition: HttpApiDefinition,
+        definition: CompiledHttpApiDefinition,
     ) -> Result<Self, String> {
         let data = record_data_serde::serialize(&definition.routes)?;
         Ok(Self {
@@ -45,7 +45,7 @@ impl ApiDefinitionRecord {
     }
 }
 
-impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
+impl TryFrom<ApiDefinitionRecord> for CompiledHttpApiDefinition {
     type Error = String;
     fn try_from(value: ApiDefinitionRecord) -> Result<Self, Self::Error> {
         let routes = record_data_serde::deserialize(&value.data)?;
@@ -56,6 +56,15 @@ impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
             routes,
             draft: value.draft,
         })
+    }
+}
+
+impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
+    type Error = String;
+    fn try_from(value: ApiDefinitionRecord) -> Result<Self, Self::Error> {
+        let compiled_http_api_definition = CompiledHttpApiDefinition::try_from(value)?;
+        let http_api_definition = HttpApiDefinition::from(compiled_http_api_definition);
+        Ok(http_api_definition)
     }
 }
 
@@ -376,21 +385,23 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
 }
 
 pub mod record_data_serde {
-    use crate::api_definition::http::Route;
+    use crate::api_definition::http::CompiledRoute;
     use bytes::{BufMut, Bytes, BytesMut};
-    use golem_api_grpc::proto::golem::apidefinition::{HttpApiDefinition, HttpRoute};
+    use golem_api_grpc::proto::golem::apidefinition::{
+        CompiledHttpApiDefinition, CompiledHttpRoute,
+    };
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &[Route]) -> Result<Bytes, String> {
-        let routes: Vec<HttpRoute> = value
+    pub fn serialize(value: &[CompiledRoute]) -> Result<Bytes, String> {
+        let routes: Vec<CompiledHttpRoute> = value
             .iter()
             .cloned()
-            .map(HttpRoute::try_from)
-            .collect::<Result<Vec<HttpRoute>, String>>()?;
+            .map(CompiledHttpRoute::try_from)
+            .collect::<Result<Vec<CompiledHttpRoute>, String>>()?;
 
-        let proto_value: HttpApiDefinition = HttpApiDefinition { routes };
+        let proto_value: CompiledHttpApiDefinition = CompiledHttpApiDefinition { routes };
 
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
@@ -398,19 +409,19 @@ pub mod record_data_serde {
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<Vec<Route>, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<Vec<CompiledRoute>, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let proto_value: HttpApiDefinition = Message::decode(data)
+                let proto_value: CompiledHttpApiDefinition = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
                 let value = proto_value
                     .routes
                     .into_iter()
-                    .map(Route::try_from)
-                    .collect::<Result<Vec<Route>, String>>()?;
+                    .map(CompiledRoute::try_from)
+                    .collect::<Result<Vec<CompiledRoute>, String>>()?;
 
                 Ok(value)
             }

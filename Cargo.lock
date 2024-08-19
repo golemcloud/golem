@@ -3336,7 +3336,7 @@ dependencies = [
  "cargo_metadata",
  "futures-core",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "prost",
  "prost-types",
  "serde 1.0.207",
@@ -3370,7 +3370,7 @@ dependencies = [
  "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "golem-wasm-rpc-stubgen",
  "h2 0.3.26",
  "http 1.1.0",
@@ -3448,7 +3448,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-rib",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "http 0.2.12",
  "humantime-serde",
  "iso8601-timestamp",
@@ -3517,7 +3517,7 @@ dependencies = [
  "golem-component-service-base",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "http 0.2.12",
  "humantime-serde",
  "lazy_static 1.5.0",
@@ -3622,10 +3622,11 @@ dependencies = [
  "combine",
  "golem-api-grpc",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "semver",
  "serde 1.0.207",
  "serde_json",
+ "tokio",
  "wasm-wave",
 ]
 
@@ -3643,9 +3644,8 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -3718,7 +3718,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "itertools 0.13.0",
  "k8s-openapi",
  "kill_tree",
@@ -3788,6 +3788,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-wasm-rpc"
+version = "0.0.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5374f28548d7de07725665e22ffbcc0f79edfb48b967ca36747d73d936e89172"
+dependencies = [
+ "arbitrary",
+ "async-recursion",
+ "async-trait",
+ "bigdecimal",
+ "bincode",
+ "cargo_metadata",
+ "golem-wasm-ast",
+ "poem-openapi",
+ "prost",
+ "prost-build",
+ "serde 1.0.207",
+ "serde_json",
+ "wasm-wave",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wit-bindgen-rt",
+]
+
+[[package]]
 name = "golem-wasm-rpc-stubgen"
 version = "0.0.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3801,7 +3825,7 @@ dependencies = [
  "dir-diff",
  "fs_extra",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.39",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.4.0",
@@ -3837,7 +3861,7 @@ dependencies = [
  "figment",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "golem-worker-executor-base",
  "humantime-serde",
  "prometheus",
@@ -3892,7 +3916,7 @@ dependencies = [
  "golem-rib",
  "golem-test-framework",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "golem-wit",
  "hex",
  "http 0.2.12",
@@ -3959,7 +3983,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "golem-worker-service-base",
  "http 0.2.12",
  "http 1.1.0",
@@ -4012,7 +4036,7 @@ dependencies = [
  "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -4712,7 +4736,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
- "golem-wasm-rpc",
+ "golem-wasm-rpc 0.0.40",
  "plotters",
  "poem",
  "rand 0.8.5",

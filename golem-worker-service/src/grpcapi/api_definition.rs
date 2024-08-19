@@ -325,6 +325,7 @@ impl GrpcApiDefinitionService {
                 &EmptyAuthCtx::default(),
             )
             .await?
+            .map(golem_worker_service_base::api_definition::http::HttpApiDefinition::from)
             .ok_or_else(|| {
                 not_found(format!(
                     "Api Definition with id: {} and version: {} not found",
@@ -354,6 +355,7 @@ impl GrpcApiDefinitionService {
 
         let definitions = definitions
             .into_iter()
+            .map(golem_worker_service_base::api_definition::http::HttpApiDefinition::from)
             .map(|d| d.try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(internal_error)?;
@@ -372,6 +374,7 @@ impl GrpcApiDefinitionService {
 
         let definitions = definitions
             .into_iter()
+            .map(golem_worker_service_base::api_definition::http::HttpApiDefinition::from)
             .map(|d| d.try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(internal_error)?;

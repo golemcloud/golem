@@ -32,7 +32,7 @@ pub fn identifier<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
                     ))
                 }
             })
-            .map(|s: Vec<char>| Expr::Identifier(s.into_iter().collect()))
+            .map(|s: Vec<char>| Expr::identifier(s.into_iter().collect::<String>().as_str()))
             .message("Unable to parse identifier"),
     )
 }
@@ -47,6 +47,6 @@ mod tests {
     fn test_identifier() {
         let input = "foo";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::Identifier("foo".to_string()), "")));
+        assert_eq!(result, Ok((Expr::identifier("foo"), "")));
     }
 }
