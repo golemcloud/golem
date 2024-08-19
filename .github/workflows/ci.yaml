@@ -297,13 +297,45 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make unit-tests
+  worker-tests-group1:
+    runs-on: ubuntu-latest-large
+    name: worker-tests-group1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug-workertests
+          cache-all-crates: true
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.3
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.29.0
+        with:
+          redis-version: latest
+          auto-start: false
+      - name: Worker Executor integration tests
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make worker-executor-tests-group1
+        timeout-minutes: 20
   worker-tests:
+    needs: [ worker-tests-group1 ]
     runs-on: ubuntu-latest-large
     strategy:
       fail-fast: true
       matrix:
         group:
-          - name: group1
           - name: group2
           - name: group3
           - name: group4
@@ -321,7 +353,7 @@ jobs:
         with:
           shared-key: debug-workertests
           cache-all-crates: true
-          save-if: ${{ matrix.group.name == 'group1' }}
+          save-if: false
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
@@ -339,7 +371,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 40
   integration-tests:
     runs-on: ubuntu-latest-large
     steps:
