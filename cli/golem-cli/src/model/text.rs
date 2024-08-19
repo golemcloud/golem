@@ -78,7 +78,7 @@ struct RouteView {
 impl From<&Route> for RouteView {
     fn from(value: &Route) -> Self {
         let component_urn = ComponentUrn {
-            id: ComponentId(value.binding.component_id),
+            id: ComponentId(value.binding.component_id.component_id),
         };
         let component_str = component_urn.to_string();
         let component_end = &component_str[component_str.len() - 12..];
