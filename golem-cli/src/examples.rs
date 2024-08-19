@@ -33,7 +33,7 @@ pub fn process_new(
             let cwd = env::current_dir().expect("Failed to get current working directory");
             match GolemExamples::instantiate(
                 example,
-                ExampleParameters {
+                &ExampleParameters {
                     component_name,
                     package_name: package_name
                         .unwrap_or(PackageName::from_string("golem:component").unwrap()),
