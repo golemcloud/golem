@@ -489,6 +489,7 @@ mod test {
                   "x-golem-worker-bridge": {
                     "worker-name": "worker-${request.path.user-id}",
                     "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
+                    "component-version": "0",
                     "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
                   },
                   "get": {
