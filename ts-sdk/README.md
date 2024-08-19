@@ -19,4 +19,4 @@ npm install @golemcloud/golem-ts
   - Persistence Level: Control the persistence level of operations to balance performance and durability.
   - Atomic Operations: Perform multiple operations atomically to maintain data integrity.
 - **Result Type**: `golem-ts` introduces a `Result` type that enables typed errors, making error handling more robust and expressive.
-- **Async to Sync**: utility functions for converting a async function into a synchronous function.
+- **Async to Sync**: utility functions for converting an async function into a synchronous one.

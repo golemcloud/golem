@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export function golemCreatePromise(): PromiseId;
-export function golemAwaitPromise(promiseId: PromiseId): Uint8Array;
-export function golemCompletePromise(promiseId: PromiseId, data: Uint8Array): boolean;
-export function golemDeletePromise(promiseId: PromiseId): void;
+export function createPromise(): PromiseId;
+export function awaitPromise(promiseId: PromiseId): Uint8Array;
+export function completePromise(promiseId: PromiseId, data: Uint8Array): boolean;
+export function deletePromise(promiseId: PromiseId): void;
 export function getSelfUri(functionName: string): Uri;
 export function getOplogIndex(): OplogIndex;
 export function setOplogIndex(oplogIdx: OplogIndex): void;
