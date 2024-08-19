@@ -260,6 +260,8 @@ mod internal {
             TypeAnnotatedValue::Record(record) => {
                 let mut existing_fields = record.value;
 
+                dbg!(existing_fields.clone());
+
                 let name_value_pair = NameValuePair {
                     name: field_name.clone(),
                     value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
@@ -390,6 +392,8 @@ mod internal {
         let record = interpreter_stack
             .pop()
             .ok_or("Failed to get a record from the stack to select a field".to_string())?;
+
+        dbg!(record.clone());
 
         match record {
             RibInterpreterResult::Val(TypeAnnotatedValue::Record(record)) => {
@@ -608,7 +612,6 @@ mod internal {
             .pop_val()
             .ok_or("Failed to get a value from the stack to wrap in Some".to_string())?;
 
-        dbg!(value.clone());
         match analysed_type {
             AnalysedType::Option(analysed_type) => {
                 interpreter_stack.push_some(value, analysed_type.inner.deref());

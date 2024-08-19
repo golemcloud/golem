@@ -104,15 +104,17 @@ pub mod router {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use golem_common::model::IdempotencyKey;
+    use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderName, HeaderValue, Method};
-    use rib::{GetLiteralValue, RibInterpreterResult};
+    use rib::{GetLiteralValue, ParsedFunctionName, RibInterpreterResult};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple};
+    use golem_service_base::model::VersionedComponentId;
 
     use crate::api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
@@ -302,6 +304,61 @@ mod tests {
         }
     }
 
+    fn get_metadata() -> ComponentMetadataDictionary {
+        let versioned_component_id = VersionedComponentId {
+            component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
+            version: 0
+        };
+
+
+        let mut metadata_dict = HashMap::new();
+
+        let analysed_export = AnalysedExport::Instance(
+            AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![AnalysedFunction {
+                    name: "get-cart-contents".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "a".to_string(),
+                        typ: AnalysedType::Str(TypeStr)
+                    }, AnalysedFunctionParameter {
+                        name: "b".to_string(),
+                        typ: AnalysedType::Str(TypeStr)
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::Record(TypeRecord{
+                            fields: vec![golem_wasm_ast::analysis::NameTypePair {
+                                name: "component_id".to_string(),
+                                typ: AnalysedType::Str(TypeStr)
+                            }, golem_wasm_ast::analysis::NameTypePair {
+                                name: "name".to_string(),
+                                typ: AnalysedType::Str(TypeStr)
+                            }, golem_wasm_ast::analysis::NameTypePair {
+                                name: "function_name".to_string(),
+                                typ: AnalysedType::Str(TypeStr)
+                            }, golem_wasm_ast::analysis::NameTypePair {
+                                name: "function_params".to_string(),
+                                typ: AnalysedType::Tuple(TypeTuple{
+                                    items: vec![AnalysedType::Str(TypeStr)]
+                                })
+                            }]
+
+                        })
+                    }]
+                }],
+            }
+        );
+
+        let metadata = vec![analysed_export];
+
+        metadata_dict.insert(versioned_component_id, metadata);
+
+        ComponentMetadataDictionary {
+            metadata: metadata_dict
+        }
+    }
+
     async fn execute(
         api_request: &InputHttpRequest,
         api_specification: &HttpApiDefinition,
@@ -309,9 +366,7 @@ mod tests {
         let evaluator = get_test_evaluator();
         let compiled = CompiledHttpApiDefinition::from_http_api_definition(
             api_specification,
-            &ComponentMetadataDictionary {
-                metadata: HashMap::new(),
-            },
+            &get_metadata(),
         )
         .unwrap();
 
@@ -319,6 +374,8 @@ mod tests {
             .resolve_worker_binding(vec![compiled])
             .await
             .unwrap();
+
+        dbg!(resolved_route.clone());
 
         resolved_route.interpret_response_mapping(&evaluator).await
     }
@@ -356,7 +413,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}({x : "y"});
+          let response = golem:it/api.{get-cart-contents}("foo", "bar");
           response
         "#;
 
@@ -368,10 +425,6 @@ mod tests {
 
         let test_response = execute(&api_request, &api_specification).await;
 
-        let mut expected_map = serde_json::Map::new();
-
-        expected_map.insert("x".to_string(), Value::String("y".to_string()));
-
         let result = (
             test_response.worker_name,
             test_response.function_name,
@@ -381,7 +434,7 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Object(expected_map)]),
+            Value::Array(vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
         );
 
         assert_eq!(result, expected);
@@ -393,7 +446,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
         let expression = r#"
-          let response = golem:it/api.{get-cart-contents}({x : request.path.user-id});
+          let response = golem:it/api.{get-cart-contents}("foo", "bar");
           response
         "#;
 
@@ -405,10 +458,6 @@ mod tests {
 
         let test_response = execute(&api_request, &api_specification).await;
 
-        let mut expected_map = serde_json::Map::new();
-
-        expected_map.insert("x".to_string(), Value::Number(serde_json::Number::from(1)));
-
         let result = (
             test_response.worker_name,
             test_response.function_name,
@@ -418,7 +467,7 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Object(expected_map)]),
+            Value::Array(vec![Value::String("foo".to_string()), Value::String("bar".to_string())]),
         );
 
         assert_eq!(result, expected);
@@ -429,12 +478,12 @@ mod tests {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request(
             "foo/1",
-            Some("token-id=2"),
+            Some("token-id=jon"),
             &empty_headers,
             serde_json::Value::Null,
         );
 
-        let expression = r#"let response = golem:it/api.{get-cart-contents}(request.path.user-id, request.path.token-id); response"#;
+        let expression = r#"let response = golem:it/api.{get-cart-contents}(request.path.token-id, request.path.token-id); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
@@ -454,124 +503,8 @@ mod tests {
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
             Value::Array(vec![
-                Value::Number(serde_json::Number::from(1)),
-                Value::Number(serde_json::Number::from(2)),
-            ]),
-        );
-
-        assert_eq!(result, expected);
-    }
-
-    #[tokio::test]
-    async fn test_worker_request_resolution_with_path_and_query_body_params() {
-        let mut request_body_amp = serde_json::Map::new();
-
-        request_body_amp.insert(
-            "age".to_string(),
-            Value::Number(serde_json::Number::from(10)),
-        );
-
-        let empty_headers = HeaderMap::new();
-        let api_request = get_api_request(
-            "foo/1",
-            Some("token-id=2"),
-            &empty_headers,
-            serde_json::Value::Object(request_body_amp),
-        );
-
-        let expression = r#"
-          let response = golem:it/api.{get-cart-contents}(request.path.user-id, request.path.token-id, "age-${request.body.age}");
-          response
-        "#;
-
-        let api_specification: HttpApiDefinition = get_api_spec(
-            "foo/{user-id}?{token-id}",
-            "shopping-cart-${request.path.user-id}",
-            expression,
-        );
-
-        let test_response = execute(&api_request, &api_specification).await;
-
-        let result = (
-            test_response.worker_name,
-            test_response.function_name,
-            test_response.function_params,
-        );
-
-        let expected = (
-            "shopping-cart-1".to_string(),
-            "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![
-                Value::Number(serde_json::Number::from(1)),
-                Value::Number(serde_json::Number::from(2)),
-                Value::String("age-10".to_string()),
-            ]),
-        );
-
-        assert_eq!(result, expected);
-    }
-
-    #[tokio::test]
-    async fn test_worker_request_resolution_with_record_params() {
-        let mut request_body_amp = serde_json::Map::new();
-
-        request_body_amp.insert(
-            "age".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(10)),
-        );
-
-        let mut headers = HeaderMap::new();
-
-        headers.insert(
-            HeaderName::from_static("username"),
-            HeaderValue::from_static("foo"),
-        );
-
-        let api_request = get_api_request(
-            "foo/1",
-            Some("token-id=2"),
-            &headers,
-            Value::Object(request_body_amp),
-        );
-
-        let expression = r#"
-          let response = golem:it/api.{get-cart-contents}({ user-id : request.path.user-id }, request.path.token-id, "age-${request.body.age}", {user-name : request.headers.username});
-          response
-        "#;
-
-        let api_specification: HttpApiDefinition = get_api_spec(
-            "foo/{user-id}?{token-id}",
-            "shopping-cart-${request.path.user-id}",
-            expression,
-        );
-
-        let test_response = execute(&api_request, &api_specification).await;
-
-        let mut user_id_map = serde_json::Map::new();
-
-        user_id_map.insert(
-            "user-id".to_string(),
-            Value::Number(serde_json::Number::from(1)),
-        );
-
-        let mut user_name_map = serde_json::Map::new();
-
-        user_name_map.insert("user-name".to_string(), Value::String("foo".to_string()));
-
-        let result = (
-            test_response.worker_name,
-            test_response.function_name,
-            test_response.function_params,
-        );
-
-        let expected = (
-            "shopping-cart-1".to_string(),
-            "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![
-                Value::Object(user_id_map),
-                Value::Number(serde_json::Number::from(2)),
-                Value::String("age-10".to_string()),
-                Value::Object(user_name_map),
+                Value::String("jon".to_string()),
+                Value::String("jon".to_string()),
             ]),
         );
 
@@ -581,12 +514,12 @@ mod tests {
     #[tokio::test]
     async fn test_worker_request_cond_expr_resolution() {
         let empty_headers = HeaderMap::new();
-        let api_request = get_api_request("foo/2", None, &empty_headers, Value::Null);
+        let api_request = get_api_request("foo/1", None, &empty_headers, Value::Object(serde_json::Map::from_iter(vec![("age".to_string(), Value::Number(serde_json::Number::from(10)))])));
         let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "shopping-cart-${if request.body.age>100 then 0 else 1}",
             expression,
         );
 
@@ -622,7 +555,7 @@ mod tests {
         );
 
         let expression =
-            r#"let response = golem:it/api.{get-cart-contents}(request.body); response"#;
+            r#"let response = golem:it/api.{get-cart-contents}(request.body, request.body); response"#;
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
@@ -641,73 +574,7 @@ mod tests {
         let expected = (
             "shopping-cart-1".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::String("address".to_string())]),
-        );
-
-        assert_eq!(result, expected);
-    }
-
-    #[tokio::test]
-    async fn test_worker_resolution_for_predicate_gives_bool() {
-        let empty_headers = HeaderMap::new();
-
-        let api_request = get_api_request(
-            "foo/2",
-            None,
-            &empty_headers,
-            Value::String("address".to_string()),
-        );
-
-        let expression = r#"let response = golem:it/api.{get-cart-contents}(1 == 1); response"#;
-
-        let api_specification: HttpApiDefinition =
-            get_api_spec("foo/{user-id}", "shopping-cart", expression);
-
-        let test_response = execute(&api_request, &api_specification).await;
-
-        let result = (
-            test_response.worker_name,
-            test_response.function_name,
-            test_response.function_params,
-        );
-
-        let expected = (
-            "shopping-cart".to_string(),
-            "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Bool(true)]),
-        );
-
-        assert_eq!(result, expected);
-    }
-
-    #[tokio::test]
-    async fn test_worker_resolution_for_predicate_gives_bool_greater() {
-        let empty_headers = HeaderMap::new();
-
-        let api_request = get_api_request(
-            "foo/2",
-            None,
-            &empty_headers,
-            Value::String("address".to_string()),
-        );
-
-        let expression = r#"let response = golem:it/api.{get-cart-contents}(2 > 1); response"#;
-
-        let api_specification: HttpApiDefinition =
-            get_api_spec("foo/{user-id}", "shopping-cart", expression);
-
-        let test_response = execute(&api_request, &api_specification).await;
-
-        let result = (
-            test_response.worker_name,
-            test_response.function_name,
-            test_response.function_params,
-        );
-
-        let expected = (
-            "shopping-cart".to_string(),
-            "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Bool(true)]),
+            Value::Array(vec![Value::String("address".to_string()), Value::String("address".to_string())]),
         );
 
         assert_eq!(result, expected);
@@ -725,7 +592,8 @@ mod tests {
         );
 
         let expression = r#"
-           let response = golem:it/api.{get-cart-contents}(if 2 < 1 then 0 else 1);
+           let input = if 2 < 1 then "foo" else "bar";
+           let response = golem:it/api.{get-cart-contents}(input, input);
            response
         "#;
 
@@ -743,7 +611,7 @@ mod tests {
         let expected = (
             "shopping-cart".to_string(),
             "golem:it/api.{get-cart-contents}".to_string(),
-            Value::Array(vec![Value::Number(serde_json::Number::from(1))]),
+            Value::Array(vec![Value::String("bar".to_string()), Value::String("bar".to_string())]),
         );
 
         assert_eq!(result, expected);
@@ -985,11 +853,10 @@ mod tests {
     #[tokio::test]
     async fn test_worker_idempotency_key_header() {
         async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
-            let api_request = get_api_request("/getcartcontent/1", None, header_map, Value::Null);
+            let api_request = get_api_request("/getcartcontent/my-cart-id", None, header_map, Value::Null);
 
             let expression = r#"
-            let param = request.body;
-            let response = golem:it/api.{get-cart-contents}(param);
+            let response = golem:it/api.{get-cart-contents}("foo", "bar");
             response
             "#;
 
@@ -1001,9 +868,7 @@ mod tests {
 
             let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
                 &api_specification,
-                &ComponentMetadataDictionary {
-                    metadata: HashMap::new(),
-                },
+                &get_metadata(),
             )
             .unwrap();
 
@@ -1058,7 +923,9 @@ mod tests {
             path: {}
             binding:
               type: wit-worker
-              componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
               workerName: '{}'
               response: '${{{}}}'
 

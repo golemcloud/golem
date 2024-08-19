@@ -1,5 +1,5 @@
 pub use byte_code::*;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeStr};
 pub use ir::*;
 pub use type_with_unit::*;
 
@@ -23,15 +23,44 @@ pub fn compile(
         .infer_types(&type_registry)
         .map_err(|e| e.join("\n"))?;
 
-    dbg!(expr_cloned.clone());
-
-    //let rib_input = RibInputTypeInfo::from_expr(&mut expr_cloned)?;
+    let rib_input = RibInputTypeInfo::from_expr(&mut expr_cloned)?;
     let rib_byte_code = RibByteCode::from_expr(expr_cloned)?;
 
 
     Ok(CompilerOutput {
         byte_code: rib_byte_code,
-        rib_input: RibInputTypeInfo::empty(),
+        rib_input
+    })
+}
+
+// A pure expression doesn't require any metadata as it won't call any worker functions
+// And this results in possibility of unknown types in the input requirement, and the compiler
+// choose to fall back to an AnalysedType::Str
+// example: worker-name: "request.path.user.id". It implies input has to be a request of type
+// record having field path, which itself should a record having field user, which is a record
+// having field id, which is really unknown. At this point compiler decides it has to be a string
+// This is mainly used for 1 liner expressions like worker-name, idempotency-key etc, which implies
+// there is no need for fields like `id` to be a record, or other complex types.
+// If not Str, it is configurable with an optional alternative_type but it should be ideally literal
+pub fn compile_pure(
+    expr: &Expr,
+    export_metadata: &Vec<AnalysedExport>,
+    alternative_type: Option<AnalysedType>,
+) -> Result<CompilerOutput, String> {
+    let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
+
+    let mut expr_cloned = expr.clone();
+
+    expr_cloned
+        .infer_types(&type_registry)
+        .map_err(|e| e.join("\n"))?;
+
+    let rib_input = RibInputTypeInfo::from_pure_expr(&mut expr_cloned, alternative_type.unwrap_or(AnalysedType::Str(TypeStr)));
+    let rib_byte_code = RibByteCode::from_expr(expr_cloned)?;
+
+    Ok(CompilerOutput {
+        byte_code: rib_byte_code,
+        rib_input
     })
 }
 

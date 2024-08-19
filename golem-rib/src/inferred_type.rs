@@ -51,6 +51,7 @@ pub enum InferredType {
 pub struct TypeErrorMessage(pub String);
 
 impl InferredType {
+
     pub fn is_unknown(&self) -> bool {
         matches!(self, InferredType::Unknown)
     }

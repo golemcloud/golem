@@ -708,8 +708,6 @@ mod tests {
             .unwrap_err()
             .0;
 
-        dbg!(result.clone());
-
         assert!(result.contains("Field street2 not found in the record"));
     }
 

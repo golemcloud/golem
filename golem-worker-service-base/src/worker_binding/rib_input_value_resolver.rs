@@ -21,7 +21,7 @@ impl Display for RibInputTypeMismatch {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RibInputValue {
     pub value: HashMap<String, TypeAnnotatedValue>,
 }
