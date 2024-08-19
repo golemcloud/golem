@@ -984,7 +984,7 @@ mod match_tests {
 
     #[test]
     fn test_round_trip_match_expr() {
-        let input_expr = Expr::pattern_match(
+        let mut input_expr = Expr::pattern_match(
             Expr::identifier("request"),
             vec![
                 MatchArm::match_arm(ArmPattern::ok("foo"), Expr::literal("success".to_string())),
@@ -992,10 +992,13 @@ mod match_tests {
             ],
         );
 
+        input_expr.reset_type();
+
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
             r#"${match request {  ok(foo) => "success", err(msg) => "failure" } }"#.to_string();
-        let output_expr = from_string(expr_str.as_str()).unwrap();
+        let mut output_expr = from_string(expr_str.as_str()).unwrap();
+        output_expr.reset_type();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
 

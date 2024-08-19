@@ -8,6 +8,7 @@ pub use type_pull_up::*;
 pub use type_push_down::*;
 pub use type_unification::*;
 pub use variant_resolution::*;
+pub use type_reset::*;
 
 mod expr_visitor;
 mod function_type_inference;
@@ -19,6 +20,7 @@ mod type_pull_up;
 mod type_push_down;
 mod type_unification;
 mod variant_resolution;
+mod type_reset;
 
 #[cfg(test)]
 mod type_inference_tests {

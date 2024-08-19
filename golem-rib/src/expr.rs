@@ -479,6 +479,10 @@ impl Expr {
         }
     }
 
+    pub fn reset_type(&mut self) {
+        type_inference::reset_type_info(self);
+    }
+
     pub fn override_type_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier(_, inferred_type)
@@ -1108,10 +1112,13 @@ impl ArmPattern {
     pub fn ok(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(
             Ok(Box::new(Expr::Identifier(
-                VariableId::local_with_no_id(binding_variable),
+                VariableId::global(binding_variable.to_string()),
                 InferredType::Unknown,
             ))),
-            InferredType::Unknown,
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::Unknown)),
+                error: Some(Box::new(InferredType::Unknown)),
+            },
         )))
     }
 
@@ -1119,10 +1126,13 @@ impl ArmPattern {
     pub fn err(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Result(
             Err(Box::new(Expr::Identifier(
-                VariableId::local_with_no_id(binding_variable),
+                VariableId::global(binding_variable.to_string()),
                 InferredType::Unknown,
             ))),
-            InferredType::Unknown,
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::Unknown)),
+                error: Some(Box::new(InferredType::Unknown)),
+            },
         )))
     }
 
@@ -1143,7 +1153,7 @@ impl ArmPattern {
 
     pub fn identifier(binding_variable: &str) -> ArmPattern {
         ArmPattern::Literal(Box::new(Expr::Identifier(
-            VariableId::local_with_no_id(binding_variable),
+            VariableId::global(binding_variable.to_string()),
             InferredType::Unknown,
         )))
     }
