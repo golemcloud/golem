@@ -239,11 +239,15 @@ where
 
         let components = self.get_all_components(definition, auth_ctx).await?;
 
+        dbg!(components.clone());
+
         self.api_definition_validator
             .validate(definition, components.as_slice())?;
 
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
+
+        dbg!(component_metadata_dictionary.clone());
 
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
             definition,

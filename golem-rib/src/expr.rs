@@ -330,7 +330,9 @@ impl Expr {
         self.pull_types_up();
         self.infer_all_identifiers();
         self.infer_input_type();
-        self.type_check()?;
+        self.pull_types_up();
+        self.infer_all_identifiers();
+        dbg!(self.clone());
         self.unify_types()
     }
 

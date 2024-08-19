@@ -693,14 +693,10 @@ impl InferredType {
                 }
 
                 (inferred_type, InferredType::AllOf(types)) => {
-                    if types.iter().all(|t| t == inferred_type) {
-                        Ok(inferred_type.clone())
-                    } else {
-                        Err(vec![format!(
-                            "Here2: AllOf types do not match. {:?}, {:?}",
-                            types, inferred_type,
-                        )])
-                    }
+
+                    let result = InferredType::AllOf(types.clone()).unify_types()?;
+
+                    result.unify_with_required(inferred_type)
                 }
 
                 (inferred_type1, inferred_type2) => {

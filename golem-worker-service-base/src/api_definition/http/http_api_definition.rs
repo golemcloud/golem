@@ -323,6 +323,7 @@ pub enum RouteCompilationErrors {
     RibCompilationError(String),
 }
 
+#[derive(Clone, Debug)]
 pub struct ComponentMetadataDictionary {
     pub metadata: HashMap<VersionedComponentId, Vec<AnalysedExport>>,
 }
