@@ -16,7 +16,7 @@ use crate::command::profile::UniversalProfileAdd;
 use crate::config::{OssProfile, ProfileName};
 use crate::examples;
 use crate::factory::ServiceFactory;
-use crate::init::{CliKind, DummyProfileAuth, PrintCompletion};
+use crate::init::{init_profile, CliKind, PrintCompletion, ProfileAuth};
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
@@ -35,6 +35,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     cli_kind: CliKind,
     config_dir: PathBuf,
     print_completion: Box<dyn PrintCompletion>,
+    profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let OssProfile {
         url,
@@ -116,13 +117,20 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }
         OssCommand::Profile { subcommand } => {
             subcommand
-                .handle(cli_kind, &config_dir, &DummyProfileAuth {})
+                .handle(cli_kind, &config_dir, profile_auth.as_ref())
                 .await
         }
         OssCommand::Init {} => {
-            crate::init::init_profile(cli_kind, ProfileName::default(cli_kind), &config_dir)
-                .await
-                .map(|_| GolemResult::Str("Profile created".to_string()))
+            let profile_name = ProfileName::default(cli_kind);
+
+            let res =
+                init_profile(cli_kind, profile_name, &config_dir, profile_auth.as_ref()).await?;
+
+            if res.auth_required {
+                profile_auth.auth(&res.profile_name, &config_dir).await?
+            }
+
+            Ok(GolemResult::Str("Profile created".to_string()))
         }
         OssCommand::Get { uri } => {
             check_version(&factory, &cmd.verbosity).await?;
