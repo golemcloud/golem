@@ -14,7 +14,6 @@
 
 export * from "./bindgen/bindgen";
 export * from "./eventloop";
-export * from "./fetch";
 export * from "./guard";
 export * from "./result";
 export * from "./transaction";
