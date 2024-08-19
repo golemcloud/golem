@@ -178,11 +178,6 @@ mod tests {
             expr: &Expr,
             input: &RequestDetails,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
-        async fn evaluate_with_worker_response_no_function_invoke(
-            &self,
-            expr: &Expr,
-            worker_bridge_response: &TypeAnnotatedValue,
-        ) -> Result<TypeAnnotatedValue, EvaluationError>;
 
         async fn evaluate_with_worker_response(
             &self,
@@ -192,22 +187,9 @@ mod tests {
             input: Option<(RequestDetails, AnalysedType)>,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
 
-        async fn evaluate_with(
-            &self,
-            expr: &Expr,
-            input: &RequestDetails,
-            worker_response: &TypeAnnotatedValue,
-        ) -> Result<RibInterpreterResult, EvaluationError>;
-
         async fn evaluate_pure_expr(
             &self,
             expr: &Expr,
-        ) -> Result<RibInterpreterResult, EvaluationError>;
-
-        async fn evaluate_pure_expr_with_any_global_input(
-            &self,
-            expr: &Expr,
-            rib_input_value: &RibInputValue,
         ) -> Result<RibInterpreterResult, EvaluationError>;
     }
 
@@ -295,88 +277,6 @@ mod tests {
             eval_result.get_val().ok_or(EvaluationError(
                 "The text is evaluated to unit and doesn't have a value".to_string(),
             ))
-        }
-
-        async fn evaluate_with_worker_response_no_function_invoke(
-            &self,
-            expr: &Expr,
-            worker_bridge_response: &TypeAnnotatedValue,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let mut expr = expr.clone();
-            // let _ =expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-            let compiled = rib::compile(&expr, &vec![]).unwrap();
-
-            let worker_response_analysed_type =
-                AnalysedType::try_from(worker_bridge_response).unwrap();
-            let mut type_info = HashMap::new();
-            type_info.insert("worker".to_string(), worker_response_analysed_type);
-
-            let mut worker_response_rib_input = HashMap::new();
-            worker_response_rib_input.insert("worker".to_string(), worker_bridge_response.clone());
-
-            let eval_result = self
-                .evaluate_pure(
-                    &compiled.byte_code,
-                    &RibInputValue {
-                        value: worker_response_rib_input,
-                    },
-                )
-                .await?;
-
-            Ok(eval_result
-                .get_val()
-                .ok_or("The text is evaluated to unit and doesn't have a value".to_string())?)
-        }
-
-        async fn evaluate_with(
-            &self,
-            expr: &Expr,
-            input: &RequestDetails,
-            worker_response: &TypeAnnotatedValue,
-        ) -> Result<RibInterpreterResult, EvaluationError> {
-            let mut expr = expr.clone();
-            let _ = expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-            let compiled = rib::compile(&expr, &vec![]).unwrap();
-
-            let worker_response_analysed_type = AnalysedType::try_from(worker_response).unwrap();
-            let mut type_info = HashMap::new();
-            type_info.insert("worker".to_string(), worker_response_analysed_type);
-
-            let mut worker_response_rib_input = HashMap::new();
-            worker_response_rib_input.insert("worker".to_string(), worker_response.clone());
-
-            let worker_response_rib_input_value = RibInputValue {
-                value: worker_response_rib_input,
-            };
-
-            let rib_input_json = input.as_json(); // Simply convert to json and try and infer the analysed type
-            let analysed_type = infer_analysed_type(&rib_input_json);
-            let mut type_info = HashMap::new();
-            type_info.insert("request".to_string(), analysed_type);
-
-            let request_rib_input_value = input
-                .resolve_rib_input_value(&RibInputTypeInfo { types: type_info })
-                .unwrap();
-
-            let eval_result = self
-                .evaluate_pure(
-                    &compiled.byte_code,
-                    &worker_response_rib_input_value.merge(request_rib_input_value),
-                )
-                .await?;
-            Ok(eval_result)
-        }
-
-        // There are no function calls but it does require input
-        async fn evaluate_pure_expr_with_any_global_input(
-            &self,
-            expr: &Expr,
-            rib_input_value: &RibInputValue,
-        ) -> Result<RibInterpreterResult, EvaluationError> {
-            let compiled = rib::compile(&expr, &vec![]).unwrap();
-
-            self.evaluate_pure(&compiled.byte_code, rib_input_value)
-                .await
         }
 
         async fn evaluate_pure_expr(
@@ -1295,7 +1195,7 @@ mod tests {
             r#"${
               let x = request;
               let foo_result = foo(x);
-              if request.path.id == "foo" then "bar" else match foo_result { ok(value) => value.id, err(msg) => "empty" }
+              if request.path.id == "foo" then "bar" else match foo_result { ok(value) => request.path.id, err(msg) => "empty" }
              }"#,
         )
             .unwrap();
@@ -2347,19 +2247,6 @@ mod tests {
                 }),
             ]
         }
-
-        // pub(crate) fn get_simple_worker_response_ok() -> TypeAnnotatedValue {
-        //     let worker_response_value = TypeAnnotatedValue::parse_with_type(
-        //         &json!({"ok": "afsal" }),
-        //         &AnalysedType::Result(TypeResult {
-        //             err: None,
-        //             ok: Some(Box::new(AnalysedType::Str(TypeStr))),
-        //         }),
-        //     )
-        //     .unwrap();
-        //
-        //     worker_response_value
-        // }
 
         pub(crate) fn get_simple_worker_response_err() -> TypeAnnotatedValue {
             let worker_response_value = TypeAnnotatedValue::parse_with_type(

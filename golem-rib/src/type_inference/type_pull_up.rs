@@ -62,13 +62,15 @@ pub fn pull_types_up(expr: &mut Expr) {
         }
 
         Expr::Cond(_, then_, else_, inferred_type) => {
+            then_.pull_types_up();
+            else_.pull_types_up();
             let then_type = then_.inferred_type();
             let else_type = else_.inferred_type();
 
             if then_type == else_type {
                 inferred_type.update(then_type);
             } else {
-                let cond_then_else_type = InferredType::OneOf(vec![then_type, else_type]);
+                let cond_then_else_type = InferredType::AllOf(vec![then_type, else_type]);
                 inferred_type.update(cond_then_else_type)
             }
         }

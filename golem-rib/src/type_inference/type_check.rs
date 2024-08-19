@@ -79,7 +79,7 @@ mod internal {
         match result {
             Ok(_) => {}
             Err(errs) => {
-                let error_message = format!("Type error for : {:?}", expr);
+                let error_message = format!("Type error: {}", expr);
                 errors.push(TypeErrorMessage(error_message));
                 errors.extend(errs)
             },
