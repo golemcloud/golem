@@ -20,6 +20,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use golem_wasm_rpc::Value;
 use semver::{BuildMetadata, Prerelease};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
 
@@ -595,6 +596,23 @@ impl From<ParsedFunctionReference> for golem_api_grpc::proto::golem::rib::Parsed
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: ParsedFunctionReference,
+}
+
+impl Serialize for ParsedFunctionName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let function_name = self.to_string();
+        serializer.serialize_str(&function_name)
+    }
+}
+
+impl<'de> Deserialize<'de> for ParsedFunctionName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let function_name = String::deserialize(deserializer)?;
+        ParsedFunctionName::parse(&function_name).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Display for ParsedFunctionName {

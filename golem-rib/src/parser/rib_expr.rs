@@ -49,7 +49,7 @@ pub fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         if expressions.len() == 1 {
             expressions.first().unwrap().clone()
         } else {
-            Expr::Multiple(expressions)
+            Expr::multiple(expressions)
         }
     })
 }
@@ -163,69 +163,52 @@ mod tests {
     }
 
     fn expected() -> Expr {
-        Expr::Multiple(vec![
-            Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-            Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2))),
-            Expr::Let(
-                "result".to_string(),
-                Box::new(Expr::GreaterThan(
-                    Box::new(Expr::Identifier("x".to_string())),
-                    Box::new(Expr::Identifier("y".to_string())),
-                )),
+        Expr::multiple(vec![
+            Expr::let_binding("x", Expr::number(1f64)),
+            Expr::let_binding("y", Expr::number(2f64)),
+            Expr::let_binding(
+                "result",
+                Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),
             ),
-            Expr::Let(
-                "foo".to_string(),
-                Box::new(Expr::Option(Some(Box::new(Expr::Identifier(
-                    "result".to_string(),
-                ))))),
-            ),
-            Expr::Let(
-                "bar".to_string(),
-                Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
-                    "result".to_string(),
-                ))))),
-            ),
-            Expr::Let(
-                "baz".to_string(),
-                Box::new(Expr::PatternMatch(
-                    Box::new(Expr::Identifier("foo".to_string())),
+            Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result")))),
+            Expr::let_binding("bar", Expr::ok(Expr::identifier("result"))),
+            Expr::let_binding(
+                "baz",
+                Expr::pattern_match(
+                    Expr::identifier("foo"),
                     vec![
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Option(Some(Box::new(
-                                Expr::Identifier("x".to_string()),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
+                                "x",
                             ))))),
-                            Box::new(Expr::Identifier("x".to_string())),
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Option(None))),
-                            Box::new(Expr::Boolean(false)),
-                        )),
+                            Expr::identifier("x"),
+                        ),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            Expr::boolean(false),
+                        ),
                     ],
-                )),
+                ),
             ),
-            Expr::Let(
-                "qux".to_string(),
-                Box::new(Expr::PatternMatch(
-                    Box::new(Expr::Identifier("bar".to_string())),
+            Expr::let_binding(
+                "qux",
+                Expr::pattern_match(
+                    Expr::identifier("bar"),
                     vec![
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Result(Ok(Box::new(
-                                Expr::Identifier("x".to_string()),
-                            ))))),
-                            Box::new(Expr::Identifier("x".to_string())),
-                        )),
-                        MatchArm((
-                            ArmPattern::Literal(Box::new(Expr::Result(Err(Box::new(
-                                Expr::Identifier("msg".to_string()),
-                            ))))),
-                            Box::new(Expr::Boolean(false)),
-                        )),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
+                            Expr::identifier("x"),
+                        ),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("msg")))),
+                            Expr::boolean(false),
+                        ),
                     ],
-                )),
+                ),
             ),
-            Expr::Let(
-                "result".to_string(),
-                Box::new(Expr::Call(
+            Expr::let_binding(
+                "result",
+                Expr::call(
                     ParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "ns".to_string(),
@@ -238,13 +221,10 @@ mod tests {
                             method: "do-something-static".to_string(),
                         },
                     },
-                    vec![
-                        Expr::Identifier("baz".to_string()),
-                        Expr::Identifier("qux".to_string()),
-                    ],
-                )),
+                    vec![Expr::identifier("baz"), Expr::identifier("qux")],
+                ),
             ),
-            Expr::Identifier("result".to_string()),
+            Expr::identifier("result"),
         ])
     }
 
@@ -252,13 +232,7 @@ mod tests {
     fn test_rib_expr() {
         let input = "let x = 1";
         let result = rib_expr().easy_parse(input);
-        assert_eq!(
-            result,
-            Ok((
-                Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                ""
-            ))
-        );
+        assert_eq!(result, Ok((Expr::let_binding("x", Expr::number(1f64)), "")));
     }
 
     #[test]
@@ -268,9 +242,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Multiple(vec![
-                    Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2)))
+                Expr::multiple(vec![
+                    Expr::let_binding("x", Expr::number(1f64)),
+                    Expr::let_binding("y", Expr::number(2f64))
                 ]),
                 ""
             ))
@@ -284,9 +258,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Multiple(vec![
-                    Expr::Let("x".to_string(), Box::new(Expr::unsigned_integer(1))),
-                    Expr::Let("y".to_string(), Box::new(Expr::unsigned_integer(2)))
+                Expr::multiple(vec![
+                    Expr::let_binding("x", Expr::number(1f64)),
+                    Expr::let_binding("y", Expr::number(2f64))
                 ]),
                 ""
             ))

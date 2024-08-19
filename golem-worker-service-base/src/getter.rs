@@ -2,7 +2,7 @@ use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
 
-use crate::evaluator::path::{Path, PathComponent};
+use crate::path::{Path, PathComponent};
 
 pub trait Getter<T> {
     fn get(&self, key: &Path) -> Result<T, GetError>;
@@ -20,6 +20,7 @@ pub enum GetError {
     NotArray { index: usize, found: String },
 }
 
+// To deal with fields in a TypeAnnotatedValue (that's returned from golem-rib)
 impl Getter<TypeAnnotatedValue> for TypeAnnotatedValue {
     fn get(&self, key: &Path) -> Result<TypeAnnotatedValue, GetError> {
         let size = key.0.len();

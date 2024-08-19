@@ -1,7 +1,9 @@
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_component_from_file;
 use golem_cli::model::component::ComponentView;
-use golem_client::model::{GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route};
+use golem_client::model::{
+    GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route, VersionedComponentId,
+};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
@@ -112,7 +114,10 @@ fn golem_def_with_response(id: &str, component_id: &str, response: String) -> Ht
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
             binding: GolemWorkerBinding {
-                component_id: Uuid::parse_str(component_id).unwrap(),
+                component_id: VersionedComponentId {
+                    component_id: Uuid::parse_str(component_id).unwrap(),
+                    version: 0,
+                },
                 worker_name: "worker-${request.path.user-id}".to_string(),
                 idempotency_key: None,
                 response,
@@ -122,7 +127,12 @@ fn golem_def_with_response(id: &str, component_id: &str, response: String) -> Ht
 }
 
 pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinition {
-    golem_def_with_response(id, component_id, "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: worker.response, status: 200}}".to_string())
+    golem_def_with_response(
+        id,
+        component_id,
+        "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
+            .to_string(),
+    )
 }
 
 pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
@@ -131,7 +141,11 @@ pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
     make_file(&def.id, &golem_json)
 }
 
-pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Failed> {
+pub fn make_open_api_file(
+    id: &str,
+    component_id: &str,
+    component_version: u64,
+) -> Result<PathBuf, Failed> {
     let open_api_json = json!(
       {
         "openapi": "3.0.0",
@@ -146,7 +160,8 @@ pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Faile
               "x-golem-worker-bridge": {
                 "worker-name": "worker-${request.path.user-id}",
                 "component-id": component_id,
-                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: worker.response, status: 200}}"
+                "component-version": component_version,
+                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
               },
               "get": {
                 "summary": "Get Cart Contents",
@@ -214,7 +229,8 @@ fn api_definition_import(
     let component_name = format!("api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let path = make_open_api_file(&component_name, &component_id)?;
+    let component_version = component.component_version;
+    let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
 
@@ -263,7 +279,7 @@ fn api_definition_update(
     let updated = golem_def_with_response(
         &component_name,
         &component_id,
-        "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: 200}}"
+        "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"baz\", status: 200}}"
             .to_string(),
     );
     let path = make_golem_file(&updated)?;

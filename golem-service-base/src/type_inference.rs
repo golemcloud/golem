@@ -4,11 +4,9 @@ use golem_wasm_ast::analysis::{
 };
 use serde_json::Value;
 
-// This not to be used unless necessary
-// This is mostly used in worker-bridge request body resolution where users
-// can send arbitrary json to without specifying type.
-// Note that json::null is inferred as AnalysedType::Option(Box<AnalysedType::Str>)
-// and empty array is inferred AnalysedType:List(Box<AnalysedType::Str>)
+// This should be used only for testing
+// that we don't need to manually create the analysed_type
+// to test the happy path compilations of the worker service related rib expressions,
 pub fn infer_analysed_type(value: &Value) -> AnalysedType {
     match value {
         Value::Bool(_) => AnalysedType::Bool(TypeBool),

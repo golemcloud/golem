@@ -2887,8 +2887,7 @@ components:
       type: object
       properties:
         componentId:
-          type: string
-          format: uuid
+          $ref: '#/components/schemas/VersionedComponentId'
         workerName:
           type: string
         idempotencyKey:
@@ -3047,8 +3046,7 @@ components:
         path:
           type: string
         component:
-          type: string
-          format: uuid
+          $ref: '#/components/schemas/VersionedComponentId'
         detail:
           type: string
       required:

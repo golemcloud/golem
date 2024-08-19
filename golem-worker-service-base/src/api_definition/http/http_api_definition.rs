@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use Iterator;
 
 use bincode::{Decode, Encode};
 use derive_more::Display;
+use golem_service_base::model::{Component, VersionedComponentId};
+use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
@@ -11,6 +14,7 @@ use serde_json::Value;
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
+use crate::worker_binding::CompiledGolemWorkerBinding;
 use crate::worker_binding::GolemWorkerBinding;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
@@ -21,6 +25,52 @@ pub struct HttpApiDefinition {
     pub routes: Vec<Route>,
     #[serde(default)]
     pub draft: bool,
+}
+
+impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
+    fn from(compiled_http_api_definition: CompiledHttpApiDefinition) -> Self {
+        HttpApiDefinition {
+            id: compiled_http_api_definition.id,
+            version: compiled_http_api_definition.version,
+            routes: compiled_http_api_definition
+                .routes
+                .into_iter()
+                .map(Route::from)
+                .collect(),
+            draft: compiled_http_api_definition.draft,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledHttpApiDefinition {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub routes: Vec<CompiledRoute>,
+    #[serde(default)]
+    pub draft: bool,
+}
+
+impl CompiledHttpApiDefinition {
+    pub fn from_http_api_definition(
+        http_api_definition: &HttpApiDefinition,
+        metadata_dictionary: &ComponentMetadataDictionary,
+    ) -> Result<Self, RouteCompilationErrors> {
+        let mut compiled_routes = vec![];
+
+        for route in &http_api_definition.routes {
+            let compiled_route = CompiledRoute::from_route(route, metadata_dictionary)?;
+            compiled_routes.push(compiled_route);
+        }
+
+        Ok(CompiledHttpApiDefinition {
+            id: http_api_definition.id.clone(),
+            version: http_api_definition.version.clone(),
+            routes: compiled_routes,
+            draft: http_api_definition.draft,
+        })
+    }
 }
 
 impl HasGolemWorkerBindings for HttpApiDefinition {
@@ -260,6 +310,72 @@ pub struct Route {
     pub binding: GolemWorkerBinding,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct CompiledRoute {
+    pub method: MethodPattern,
+    pub path: AllPathPatterns,
+    pub binding: CompiledGolemWorkerBinding,
+}
+
+#[derive(Debug)]
+pub enum RouteCompilationErrors {
+    MetadataNotFoundError(VersionedComponentId),
+    RibCompilationError(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct ComponentMetadataDictionary {
+    pub metadata: HashMap<VersionedComponentId, Vec<AnalysedExport>>,
+}
+
+impl ComponentMetadataDictionary {
+    pub fn from_components(components: &Vec<Component>) -> ComponentMetadataDictionary {
+        let mut metadata = HashMap::new();
+        for component in components {
+            metadata.insert(
+                component.versioned_component_id.clone(),
+                component.metadata.exports.clone(),
+            );
+        }
+
+        ComponentMetadataDictionary { metadata }
+    }
+}
+
+impl CompiledRoute {
+    pub fn from_route(
+        route: &Route,
+        metadata_dictionary: &ComponentMetadataDictionary,
+    ) -> Result<Self, RouteCompilationErrors> {
+        let metadata = metadata_dictionary
+            .metadata
+            .get(&route.binding.component_id)
+            .ok_or(RouteCompilationErrors::MetadataNotFoundError(
+                route.binding.component_id.clone(),
+            ))?;
+
+        let binding =
+            CompiledGolemWorkerBinding::from_golem_worker_binding(&route.binding, metadata)
+                .map_err(RouteCompilationErrors::RibCompilationError)?;
+
+        Ok(CompiledRoute {
+            method: route.method.clone(),
+            path: route.path.clone(),
+            binding,
+        })
+    }
+}
+
+impl From<CompiledRoute> for Route {
+    fn from(compiled_route: CompiledRoute) -> Self {
+        Route {
+            method: compiled_route.method,
+            path: compiled_route.path,
+            binding: compiled_route.binding.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,7 +576,9 @@ mod tests {
           - method: Get
             path: {}
             binding:
-              componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+              componentId:
+                version: 0
+                componentId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
               workerName: '{}'
               response: '{}'
 

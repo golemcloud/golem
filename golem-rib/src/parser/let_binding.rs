@@ -32,7 +32,7 @@ pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             char_('=').skip(spaces()),
             rib_expr(),
         )
-            .map(|(_, var, _, expr)| Expr::Let(var, Box::new(expr))),
+            .map(|(_, var, _, expr)| Expr::let_binding(var.as_str(), expr)),
     )
 }
 
@@ -62,13 +62,7 @@ mod tests {
         let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::Identifier("bar".to_string()))
-                ),
-                ""
-            ))
+            Ok((Expr::let_binding("foo", Expr::identifier("bar")), ""))
         );
     }
 
@@ -79,12 +73,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::Sequence(vec![
-                        Expr::Identifier("bar".to_string()),
-                        Expr::Identifier("baz".to_string())
-                    ]))
+                Expr::let_binding(
+                    "foo",
+                    Expr::sequence(vec![Expr::identifier("bar"), Expr::identifier("baz")])
                 ),
                 ""
             ))
@@ -98,12 +89,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::EqualTo(
-                        Box::new(Expr::Identifier("bar".to_string())),
-                        Box::new(Expr::Identifier("baz".to_string()))
-                    ))
+                Expr::let_binding(
+                    "foo",
+                    Expr::equal_to(Expr::identifier("bar"), Expr::identifier("baz"))
                 ),
                 ""
             ))
@@ -117,12 +105,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::Option(Some(Box::new(Expr::Identifier(
-                        "bar".to_string()
-                    )))))
-                ),
+                Expr::let_binding("foo", Expr::option(Some(Expr::identifier("bar")))),
                 ""
             ))
         );
@@ -135,12 +118,7 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::Result(Ok(Box::new(Expr::Identifier(
-                        "bar".to_string()
-                    )))))
-                ),
+                Expr::let_binding("foo", Expr::ok(Expr::identifier("bar"))),
                 ""
             ))
         );
@@ -152,13 +130,7 @@ mod tests {
         let result = let_binding().easy_parse(input);
         assert_eq!(
             result,
-            Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::Literal("bar".to_string()))
-                ),
-                ""
-            ))
+            Ok((Expr::let_binding("foo", Expr::literal("bar")), ""))
         );
     }
 
@@ -169,12 +141,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::Let(
-                    "foo".to_string(),
-                    Box::new(Expr::Record(vec![(
-                        "bar".to_string(),
-                        Box::new(Expr::Identifier("baz".to_string()))
-                    )]))
+                Expr::let_binding(
+                    "foo",
+                    Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
                 ),
                 ""
             ))

@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api_definition::http::HttpApiDefinition;
-use crate::evaluator::{DefaultEvaluator, Evaluator};
+use crate::api_definition::http::CompiledHttpApiDefinition;
+use crate::worker_service_rib_interpreter::{DefaultEvaluator, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -12,23 +12,23 @@ use tracing::{error, info};
 use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::service::api_definition_lookup::ApiDefinitionsLookup;
 
-use crate::worker_binding::WorkerBindingResolver;
+use crate::worker_binding::RequestToWorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub evaluator: Arc<dyn Evaluator + Sync + Send>,
+    pub evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     pub api_definition_lookup_service:
-        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
         worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         api_definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+            dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
         let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
@@ -95,10 +95,13 @@ impl CustomHttpRequestApi {
             }
         };
 
-        match api_request.resolve(possible_api_definitions).await {
+        match api_request
+            .resolve_worker_binding(possible_api_definitions)
+            .await
+        {
             Ok(resolved_worker_request) => {
                 resolved_worker_request
-                    .execute_with::<poem::Response>(&self.evaluator)
+                    .interpret_response_mapping::<poem::Response>(&self.evaluator)
                     .await
             }
 

@@ -3628,6 +3628,7 @@ dependencies = [
  "semver",
  "serde 1.0.207",
  "serde_json",
+ "tokio",
  "wasm-wave",
 ]
 
@@ -3645,7 +3646,6 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "http 0.2.12",

@@ -70,11 +70,7 @@ message LiteralExpr {
 }
 
 message NumberExpr {
-  oneof number {
-    uint64 unsigned = 1;
-    int64 signed = 2;
-    double float = 3;
-  }
+  double float = 1;
 }
 
 message FlagsExpr {
@@ -149,8 +145,15 @@ message ResultExpr {
 }
 
 message CallExpr {
-  golem.rib.ParsedFunctionName name = 1;
+  InvocationName name = 1;
   repeated Expr params = 2;
+}
+
+message InvocationName {
+   oneof name {
+     golem.rib.ParsedFunctionName parsed = 1;
+     string variant_constructor = 2;
+   }
 }
 
 message MatchArm {
