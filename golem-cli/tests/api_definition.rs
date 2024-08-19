@@ -127,7 +127,12 @@ fn golem_def_with_response(id: &str, component_id: &str, response: String) -> Ht
 }
 
 pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinition {
-    golem_def_with_response(id, component_id, "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}".to_string())
+    golem_def_with_response(
+        id,
+        component_id,
+        "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
+            .to_string(),
+    )
 }
 
 pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
@@ -136,7 +141,11 @@ pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
     make_file(&def.id, &golem_json)
 }
 
-pub fn make_open_api_file(id: &str, component_id: &str, component_version: u64) -> Result<PathBuf, Failed> {
+pub fn make_open_api_file(
+    id: &str,
+    component_id: &str,
+    component_version: u64,
+) -> Result<PathBuf, Failed> {
     let open_api_json = json!(
       {
         "openapi": "3.0.0",
