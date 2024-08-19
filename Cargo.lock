@@ -3747,9 +3747,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.4.1"
+version = "1.0.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b703027fe7bdfebaf8722e3ea87d71e08d2c9033055d8de9d6a6477a7b8279a5"
+checksum = "770844a7ec2727fcef6dad6f11283a99682f10c81985f1ec2c75828316076b94"
 dependencies = [
  "bincode",
  "leb128",
@@ -3767,9 +3767,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.39"
+version = "1.0.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "724537ba6da8e69b89439a583f26aed72718dc92a2280ee6697f7489a93deaba"
+checksum = "91951471a6504b3649e9687a32971dbd768f2027dcab052145809502f31454fc"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3791,9 +3791,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "0.0.39"
+version = "1.0.0-rc1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "648daf25b18fe35fb5e824f50f352d8b09465df71f717aef64323e1f60262c12"
+checksum = "491cf02dde768a310d7ba4907b072bbbcb93ed7bb703146733d3e3a908635676"
 dependencies = [
  "anyhow",
  "cargo-component",
