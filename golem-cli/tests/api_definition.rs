@@ -146,7 +146,7 @@ pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Faile
               "x-golem-worker-bridge": {
                 "worker-name": "worker-${request.path.user-id}",
                 "component-id": component_id,
-                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: worker.response, status: 200}}"
+                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: \"random\", status: 200}}"
               },
               "get": {
                 "summary": "Get Cart Contents",
