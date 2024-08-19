@@ -127,7 +127,7 @@ fn golem_def_with_response(id: &str, component_id: &str, response: String) -> Ht
 }
 
 pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinition {
-    golem_def_with_response(id, component_id, "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: worker.response, status: 200}}".to_string())
+    golem_def_with_response(id, component_id, "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}".to_string())
 }
 
 pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
