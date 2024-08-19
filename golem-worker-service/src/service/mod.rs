@@ -3,7 +3,7 @@ pub mod worker;
 
 use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
-use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
@@ -52,7 +52,7 @@ pub struct Services {
     >,
     pub deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
-        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
