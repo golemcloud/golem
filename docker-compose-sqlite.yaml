@@ -106,7 +106,7 @@ services:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
       - GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem"
-      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/component_compiled_store"
+      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/worker_executor_store"
       - GOLEM__COMPONENT_SERVICE__HOST=golem-component-service
       - GOLEM__COMPONENT_SERVICE__PORT=${COMPONENT_SERVICE_GRPC_PORT}
       - GOLEM__COMPONENT_SERVICE__ACCESS_TOKEN="5C832D93-FF85-4A8F-9803-513950FDFDB1"
@@ -114,7 +114,7 @@ services:
       - GOLEM__HTTP_PORT=${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}
       - GOLEM__GRPC_PORT=${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
     volumes:
-      - component_compiled_store:/component_compiled_store
+      - worker_executor_store:/worker_executor_store
     ports:
       - "${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}:${COMPONENT_COMPILATION_SERVICE_HTTP_PORT}"
       - "${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}:${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}"
@@ -135,7 +135,7 @@ services:
       - GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST=redis
       - GOLEM__INDEXED_STORAGE__TYPE="KVStoreRedis"
       - GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem"
-      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/component_compiled_store"
+      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/worker_executor_store"
       - GOLEM__COMPONENT_SERVICE__CONFIG__HOST=golem-component-service
       - GOLEM__COMPONENT_SERVICE__CONFIG__PORT=${COMPONENT_SERVICE_GRPC_PORT}
       - GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN="2A354594-7A63-4091-A46B-CC58D379F677"
@@ -153,7 +153,7 @@ services:
       - GOLEM__COMPILED_COMPONENT_SERVICE__TYPE="Enabled"
       - GOLEM__SHARD_MANAGER_SERVICE__TYPE="Grpc"
     volumes:
-      - component_compiled_store:/component_compiled_store
+      - worker_executor_store:/worker_executor_store
     ports:
       - "${WORKER_EXECUTOR_HTTP_PORT}:${WORKER_EXECUTOR_HTTP_PORT}"
     depends_on:
@@ -166,5 +166,5 @@ volumes:
     driver: local
   golem_db:
     driver: local
-  component_compiled_store:
+  worker_executor_store:
     driver: local

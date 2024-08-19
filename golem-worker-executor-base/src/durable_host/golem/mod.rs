@@ -448,7 +448,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "generate_idempotency_key");
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
-            WrappedFunctionType::ReadLocal,
+            WrappedFunctionType::WriteRemote,
             "golem api::generate_idempotency_key",
             |_ctx| {
                 Box::pin(async move {

@@ -26,6 +26,9 @@ impl ApiDeploymentApi {
         Self { deployment_service }
     }
 
+    /// Creates or updates a deployment
+    ///
+    /// Deploys a set of API definitions to a site (specific host and subdomain).
     #[oai(path = "/deploy", method = "post", operation_id = "deploy")]
     async fn create_or_update(
         &self,
@@ -69,6 +72,10 @@ impl ApiDeploymentApi {
         record.result(response)
     }
 
+    /// Get one or more API deployments
+    ///
+    /// If `api-definition-id` is not set, it lists all API deployments.
+    /// If `api-definition-id` is set, returns a single API deployment.
     #[oai(path = "/", method = "get", operation_id = "list_deployments")]
     async fn list(
         &self,
@@ -92,6 +99,9 @@ impl ApiDeploymentApi {
         record.result(response)
     }
 
+    /// Get API deployment by site
+    ///
+    /// Gets an API deployment by the host name (optionally with a subdomain) it is deployed to.
     #[oai(path = "/:site", method = "get", operation_id = "get_deployment")]
     async fn get(&self, site: Path<String>) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let record = recorded_http_api_request!("get_deployment", site = site.0);
@@ -110,6 +120,9 @@ impl ApiDeploymentApi {
         record.result(response)
     }
 
+    /// Delete API deployment by site
+    ///
+    /// Deletes an API deployment by the host name (optionally with a subdomain) it is deployed to.
     #[oai(path = "/:site", method = "delete", operation_id = "delete_deployment")]
     async fn delete(&self, site: Path<String>) -> Result<Json<String>, ApiEndpointError> {
         let record = recorded_http_api_request!("delete_deployment", site = site.0);
