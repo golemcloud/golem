@@ -180,7 +180,7 @@ mod internal {
             .get("component-version")
             .ok_or("No component-version found")?
             .as_u64()
-            .ok_or("component-version is not a string")?;
+            .ok_or("component-version is not a u64")?;
 
         let component_id =
             ComponentId(Uuid::parse_str(component_id_str).map_err(|err| err.to_string())?);
