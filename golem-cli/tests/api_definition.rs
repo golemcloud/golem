@@ -160,8 +160,8 @@ pub fn make_open_api_file(
               "x-golem-worker-bridge": {
                 "worker-name": "worker-${request.path.user-id}",
                 "component-id": component_id,
-                "component-version": component_version,
-                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: \"random\", status: 200}}"
+                "component-version": component_version.to_string(),
+                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
               },
               "get": {
                 "summary": "Get Cart Contents",
