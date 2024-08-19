@@ -283,9 +283,7 @@ mod tests {
             &self,
             expr: &Expr,
         ) -> Result<RibInterpreterResult, EvaluationError> {
-            let compiled = rib::compile(&expr, &vec![]).unwrap();
-
-            dbg!(compiled.byte_code.clone());
+            let compiled = rib::compile_pure(&expr, &vec![], Some(AnalysedType::Str(TypeStr))).unwrap();
 
             self.evaluate_pure(&compiled.byte_code, &RibInputValue::empty())
                 .await
