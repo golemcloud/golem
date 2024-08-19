@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::uri::cloud::url::{AccountUrl, ProjectUrl};
+use crate::uri::cloud::{ACCOUNT_TYPE_NAME, PROJECT_TYPE_NAME};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use url::Url;
 
+pub mod cloud;
+pub mod macros;
 pub mod oss;
 
 pub const COMPONENT_TYPE_NAME: &str = "component";
@@ -505,6 +510,50 @@ pub trait TypedGolemUrl {
             Ok(())
         }
     }
+
+    fn expect_query(
+        query: Option<&str>,
+        expected_keys: &'static [&'static str],
+    ) -> Result<HashMap<&'static str, String>, GolemUrlTransformError> {
+        let pairs = url::form_urlencoded::parse(query.unwrap_or("").as_bytes()).collect::<Vec<_>>();
+
+        let mut res = HashMap::new();
+
+        for (k, v) in pairs {
+            match expected_keys.iter().find(|ek| k == **ek) {
+                Some(ek) => {
+                    let _ = res.insert(*ek, v.to_string());
+                }
+                None => {
+                    return Err(GolemUrlTransformError::UnexpectedQuery {
+                        target_type: Self::resource_type(),
+                        key: k.to_string(),
+                    })
+                }
+            }
+        }
+
+        Ok(res)
+    }
+
+    fn expect_project_query(
+        query: Option<&str>,
+    ) -> Result<Option<ProjectUrl>, GolemUrlTransformError> {
+        let mut query = Self::expect_query(query, &[ACCOUNT_TYPE_NAME, PROJECT_TYPE_NAME])?;
+
+        let account = query
+            .remove(&ACCOUNT_TYPE_NAME)
+            .map(|account_name| AccountUrl { name: account_name });
+
+        let project = query
+            .remove(&PROJECT_TYPE_NAME)
+            .map(|project_name| ProjectUrl {
+                name: project_name,
+                account,
+            });
+
+        Ok(project)
+    }
 }
 
 pub fn try_from_golem_url<T: TypedGolemUrl>(url: &GolemUrl) -> Result<T, GolemUrlTransformError> {
@@ -539,7 +588,7 @@ impl Display for GolemUrl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}://{}", self.resource_type, self.path)?;
         if let Some(query) = &self.query {
-            write!(f, "&{query}")?;
+            write!(f, "?{query}")?;
         }
 
         Ok(())

@@ -3452,6 +3452,7 @@ dependencies = [
  "http 0.2.12",
  "humantime-serde",
  "iso8601-timestamp",
+ "itertools 0.13.0",
  "lazy_static 1.5.0",
  "poem",
  "poem-openapi",

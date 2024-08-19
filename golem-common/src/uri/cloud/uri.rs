@@ -1,24 +1,12 @@
-// Copyright 2024 Golem Cloud
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use crate::uri::oss::url::{
-    ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl, ComponentVersionUrl,
-    ResourceUrl, WorkerFunctionUrl, WorkerOrFunctionUrl, WorkerUrl,
+use crate::uri::cloud::url::{
+    AccountUrl, ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
+    ComponentVersionUrl, ProjectUrl, ResourceUrl, ToOssUrl, WorkerFunctionUrl, WorkerOrFunctionUrl,
+    WorkerUrl,
 };
-use crate::uri::oss::urn::{
-    ApiDefinitionUrn, ApiDeploymentUrn, ComponentOrVersionUrn, ComponentUrn, ComponentVersionUrn,
-    ResourceUrn, WorkerFunctionUrn, WorkerOrFunctionUrn, WorkerUrn,
+use crate::uri::cloud::urn::{
+    AccountUrn, ApiDefinitionUrn, ApiDeploymentUrn, ComponentOrVersionUrn, ComponentUrn,
+    ComponentVersionUrn, ProjectUrn, ResourceUrn, WorkerFunctionUrn, WorkerOrFunctionUrn,
+    WorkerUrn,
 };
 use crate::uri::{GolemUri, GolemUriParseError, GolemUrlTransformError, GolemUrnTransformError};
 use crate::uri_from_into;
@@ -48,12 +36,56 @@ impl Display for GolemUriTransformError {
     }
 }
 
+macro_rules! to_oss_uri {
+    ($name:ident) => {
+        impl ToOssUri for $name {
+            type Target = crate::uri::oss::uri::$name;
+
+            fn to_oss_uri(self) -> (Self::Target, Option<ProjectUrl>) {
+                match self {
+                    $name::URN(urn) => (crate::uri::oss::uri::$name::URN(urn), None),
+                    $name::URL(url) => {
+                        let (url, p) = url.to_oss_url();
+
+                        (crate::uri::oss::uri::$name::URL(url), p)
+                    }
+                }
+            }
+        }
+    };
+}
+
+/// Typed Golem URI for account
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AccountUri {
+    URN(AccountUrn),
+    URL(AccountUrl),
+}
+
+uri_from_into!(AccountUri);
+
+/// Typed Golem URI for project
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ProjectUri {
+    URN(ProjectUrn),
+    URL(ProjectUrl),
+}
+
+uri_from_into!(ProjectUri);
+
+pub trait ToOssUri {
+    type Target;
+    fn to_oss_uri(self) -> (Self::Target, Option<ProjectUrl>);
+}
+
 /// Typed Golem URI for component
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ComponentUri {
     URN(ComponentUrn),
     URL(ComponentUrl),
 }
+
+to_oss_uri!(ComponentUri);
 
 uri_from_into!(ComponentUri);
 
@@ -64,6 +96,8 @@ pub enum ComponentVersionUri {
     URL(ComponentVersionUrl),
 }
 
+to_oss_uri!(ComponentVersionUri);
+
 uri_from_into!(ComponentVersionUri);
 
 /// Typed Golem URI for component or component version
@@ -72,6 +106,8 @@ pub enum ComponentOrVersionUri {
     URN(ComponentOrVersionUrn),
     URL(ComponentOrVersionUrl),
 }
+
+to_oss_uri!(ComponentOrVersionUri);
 
 uri_from_into!(ComponentOrVersionUri);
 
@@ -82,6 +118,8 @@ pub enum WorkerUri {
     URL(WorkerUrl),
 }
 
+to_oss_uri!(WorkerUri);
+
 uri_from_into!(WorkerUri);
 
 /// Typed Golem URI for worker function
@@ -90,6 +128,8 @@ pub enum WorkerFunctionUri {
     URN(WorkerFunctionUrn),
     URL(WorkerFunctionUrl),
 }
+
+to_oss_uri!(WorkerFunctionUri);
 
 uri_from_into!(WorkerFunctionUri);
 
@@ -100,6 +140,8 @@ pub enum WorkerOrFunctionUri {
     URL(WorkerOrFunctionUrl),
 }
 
+to_oss_uri!(WorkerOrFunctionUri);
+
 uri_from_into!(WorkerOrFunctionUri);
 
 /// Typed Golem URI for API definition
@@ -109,6 +151,8 @@ pub enum ApiDefinitionUri {
     URL(ApiDefinitionUrl),
 }
 
+to_oss_uri!(ApiDefinitionUri);
+
 uri_from_into!(ApiDefinitionUri);
 
 /// Typed Golem URI for API definition
@@ -117,6 +161,8 @@ pub enum ApiDeploymentUri {
     URN(ApiDeploymentUrn),
     URL(ApiDeploymentUrl),
 }
+
+to_oss_uri!(ApiDeploymentUri);
 
 uri_from_into!(ApiDeploymentUri);
 
@@ -132,15 +178,15 @@ uri_from_into!(ResourceUri);
 #[cfg(test)]
 mod tests {
     use crate::model::{ComponentId, WorkerId};
-    use crate::uri::oss::uri::{
+    use crate::uri::cloud::uri::{
         ApiDefinitionUri, ApiDeploymentUri, ComponentOrVersionUri, ComponentUri,
         ComponentVersionUri, ResourceUri, WorkerFunctionUri, WorkerOrFunctionUri, WorkerUri,
     };
-    use crate::uri::oss::url::{
+    use crate::uri::cloud::url::{
         ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
         ComponentVersionUrl, WorkerFunctionUrl, WorkerOrFunctionUrl, WorkerUrl,
     };
-    use crate::uri::oss::urn::{
+    use crate::uri::cloud::urn::{
         ApiDefinitionUrn, ApiDeploymentUrn, ComponentOrVersionUrn, ComponentUrn,
         ComponentVersionUrn, WorkerFunctionUrn, WorkerOrFunctionUrn, WorkerUrn,
     };
@@ -152,6 +198,7 @@ mod tests {
     pub fn component_uri_to_uri() {
         let typed_url = ComponentUri::URL(ComponentUrl {
             name: "some  name".to_string(),
+            project: None,
         });
         let typed_urn = ComponentUri::URN(ComponentUrn {
             id: ComponentId(Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap()),
@@ -212,6 +259,7 @@ mod tests {
         let typed_url = ComponentVersionUri::URL(ComponentVersionUrl {
             name: "some  name".to_string(),
             version: 13,
+            project: None,
         });
         let typed_urn = ComponentVersionUri::URN(ComponentVersionUrn {
             id: ComponentId(Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap()),
@@ -278,6 +326,7 @@ mod tests {
             ComponentOrVersionUri::URL(ComponentOrVersionUrl::Version(ComponentVersionUrl {
                 name: "some  name".to_string(),
                 version: 13,
+                project: None,
             }));
         let typed_urn =
             ComponentOrVersionUri::URN(ComponentOrVersionUrn::Component(ComponentUrn {
@@ -327,6 +376,7 @@ mod tests {
         let typed_url = WorkerUri::URL(WorkerUrl {
             component_name: "my comp".to_string(),
             worker_name: "my worker".to_string(),
+            project: None,
         });
         let typed_urn = WorkerUri::URN(WorkerUrn {
             id: WorkerId {
@@ -398,6 +448,7 @@ mod tests {
             component_name: "my comp".to_string(),
             worker_name: "my worker".to_string(),
             function: "fn a".to_string(),
+            project: None,
         });
         let typed_urn = WorkerFunctionUri::URN(WorkerFunctionUrn {
             id: WorkerId {
@@ -476,6 +527,7 @@ mod tests {
                 component_name: "my comp".to_string(),
                 worker_name: "my worker".to_string(),
                 function: "fn a".to_string(),
+                project: None,
             }));
         let typed_urn = WorkerOrFunctionUri::URN(WorkerOrFunctionUrn::Worker(WorkerUrn {
             id: WorkerId {
@@ -531,6 +583,7 @@ mod tests {
         let typed_url = ApiDefinitionUri::URL(ApiDefinitionUrl {
             name: "my def".to_string(),
             version: "1.2.3".to_string(),
+            project: None,
         });
         let typed_urn = ApiDefinitionUri::URN(ApiDefinitionUrn {
             id: "my def".to_string(),
@@ -583,6 +636,7 @@ mod tests {
     pub fn api_deployment_uri_to_uri() {
         let typed_url = ApiDeploymentUri::URL(ApiDeploymentUrl {
             site: "example.com".to_string(),
+            project: None,
         });
         let typed_urn = ApiDeploymentUri::URN(ApiDeploymentUrn {
             site: "example.com".to_string(),
@@ -645,10 +699,10 @@ mod tests {
 
     #[test]
     pub fn resource_uri_from_str() {
-        let typed_cv = ResourceUri::from_str("component:///comp_name/11").unwrap();
-        let typed_ad = ResourceUri::from_str("urn:api-deployment:example.com").unwrap();
+        let typed_a = ResourceUri::from_str("urn:account:acc").unwrap();
+        let typed_p = ResourceUri::from_str("project:///proj").unwrap();
 
-        assert_eq!(typed_cv.to_string(), "component:///comp_name/11");
-        assert_eq!(typed_ad.to_string(), "urn:api-deployment:example.com");
+        assert_eq!(typed_a.to_string(), "urn:account:acc");
+        assert_eq!(typed_p.to_string(), "project:///proj");
     }
 }

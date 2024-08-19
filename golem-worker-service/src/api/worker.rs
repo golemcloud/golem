@@ -23,6 +23,14 @@ type Result<T> = std::result::Result<T, WorkerApiBaseError>;
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
+    /// Launch a new worker.
+    ///
+    /// Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+    ///
+    /// The parameters in the request are the following:
+    /// - `name` is the name of the created worker. This has to be unique, but only for a given component
+    /// - `args` is a list of strings which appear as command line arguments for the worker
+    /// - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
     #[oai(
         path = "/:component_id/workers",
         method = "post",
@@ -80,6 +88,9 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Delete a worker
+    ///
+    /// Interrupts and deletes an existing worker.
     #[oai(
         path = "/:component_id/workers/:worker_name",
         method = "delete",
@@ -108,6 +119,9 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Invoke a function and await it's resolution
+    ///
+    /// Supply the parameters in the request body as JSON.
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke-and-await",
         method = "post",
@@ -149,6 +163,9 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Invoke a function
+    ///
+    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke",
         method = "post",
@@ -191,6 +208,11 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Complete a promise
+    ///
+    /// Completes a promise with a given custom array of bytes.
+    /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+    /// The data field is sent back to the worker and it has no predefined meaning.
     #[oai(
         path = "/:component_id/workers/:worker_name/complete",
         method = "post",
@@ -226,6 +248,12 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Interrupt a worker
+    ///
+    /// Interrupts the execution of a worker.
+    /// The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+    /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+    /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
     #[oai(
         path = "/:component_id/workers/:worker_name/interrupt",
         method = "post",
@@ -258,6 +286,23 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Get metadata of a worker
+    ///
+    /// Returns metadata about an existing worker:
+    /// - `workerId` is a combination of the used component and the worker's user specified name
+    /// - `accountId` the account the worker is created by
+    /// - `args` is the provided command line arguments passed to the worker
+    /// - `env` is the provided map of environment variables passed to the worker
+    /// - `componentVersion` is the version of the component used by the worker
+    /// - `retryCount` is the number of retries the worker did in case of a failure
+    /// - `status` is the worker's current status, one of the following:
+    ///     - `Running` if the worker is currently executing
+    ///     - `Idle` if the worker is waiting for an invocation
+    ///     - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+    ///     - `Interrupted` if the worker was interrupted by the user
+    ///     - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+    ///     - `Failed` if the worker failed and there are no more retries scheduled for it
+    ///     - `Exited` if the worker explicitly exited using the exit WASI function
     #[oai(
         path = "/:component_id/workers/:worker_name",
         method = "get",
@@ -288,6 +333,27 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Get metadata of multiple workers
+    ///
+    /// ### Filters
+    ///
+    /// | Property    | Comparator             | Description                    | Example                         |
+    /// |-------------|------------------------|--------------------------------|----------------------------------|
+    /// | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+    /// | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+    /// | status      | FilterComparator       | Status of worker               | `status = Running`               |
+    /// | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+    /// | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+    ///
+    ///
+    /// ### Comparators
+    ///
+    /// - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+    /// - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+    ///
+    /// Returns metadata about an existing component workers:
+    /// - `workers` list of workers metadata
+    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
         path = "/:component_id/workers",
         method = "get",
@@ -341,6 +407,27 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Advanced search for workers
+    ///
+    /// ### Filter types
+    /// | Type      | Comparator             | Description                    | Example                                                                                       |
+    /// |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+    /// | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+    /// | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+    /// | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+    /// | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+    /// | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+    /// | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+    /// | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+    /// | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+    ///
+    /// ### Comparators
+    /// - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+    /// - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+    ///
+    /// Returns metadata about an existing component workers:
+    /// - `workers` list of workers metadata
+    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
         path = "/:component_id/workers/find",
         method = "post",
@@ -375,6 +462,7 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Resume a worker
     #[oai(
         path = "/:component_id/workers/:worker_name/resume",
         method = "post",
@@ -403,6 +491,7 @@ impl WorkerApi {
         record.result(response)
     }
 
+    /// Update a worker
     #[oai(
         path = "/:component_id/workers/:worker_name/update",
         method = "post",

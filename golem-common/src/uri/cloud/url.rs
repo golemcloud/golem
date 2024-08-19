@@ -1,38 +1,128 @@
-// Copyright 2024 Golem Cloud
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use crate::model::ComponentVersion;
+use crate::uri::cloud::{ACCOUNT_TYPE_NAME, PROJECT_TYPE_NAME};
 use crate::uri::{
-    try_from_golem_url, GolemUrl, GolemUrlTransformError, TypedGolemUrl, API_DEFINITION_TYPE_NAME,
-    API_DEPLOYMENT_TYPE_NAME, COMPONENT_TYPE_NAME, WORKER_TYPE_NAME,
+    try_from_golem_url, urlencode, GolemUrl, GolemUrlTransformError, TypedGolemUrl,
+    API_DEFINITION_TYPE_NAME, API_DEPLOYMENT_TYPE_NAME, COMPONENT_TYPE_NAME, WORKER_TYPE_NAME,
 };
 use crate::url_from_into;
+use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-/// Typed Golem URL for component
+/// Typed Golem URL for account
 ///
-/// Format: `component:///{name}`
+/// Format with optional account: `account:///{name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct ComponentUrl {
+pub struct AccountUrl {
     pub name: String,
 }
 
-const CLOUD_CONTEXT_ACCOUNT: &str = "account";
-const CLOUD_CONTEXT_PROJECT: &str = "project";
-const CLOUD_CONTEXT: &[&str] = &[CLOUD_CONTEXT_ACCOUNT, CLOUD_CONTEXT_PROJECT];
+impl TypedGolemUrl for AccountUrl {
+    fn resource_type() -> &'static str {
+        ACCOUNT_TYPE_NAME
+    }
+
+    fn try_from_parts(path: &str, query: Option<&str>) -> Result<Self, GolemUrlTransformError>
+    where
+        Self: Sized,
+    {
+        let name = Self::expect_path1(path)?;
+
+        let _ = Self::expect_query(query, &[])?;
+
+        Ok(Self { name })
+    }
+
+    fn to_parts(&self) -> (String, Option<String>) {
+        (Self::make_path1(&self.name), None)
+    }
+}
+
+url_from_into!(AccountUrl);
+
+/// Typed Golem URL for project
+///
+/// Format with optional account: `project:///{name}?account={account_name}`
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ProjectUrl {
+    pub name: String,
+    pub account: Option<AccountUrl>,
+}
+
+impl TypedGolemUrl for ProjectUrl {
+    fn resource_type() -> &'static str {
+        PROJECT_TYPE_NAME
+    }
+
+    fn try_from_parts(path: &str, query: Option<&str>) -> Result<Self, GolemUrlTransformError>
+    where
+        Self: Sized,
+    {
+        let name = Self::expect_path1(path)?;
+        let mut query = Self::expect_query(query, &[ACCOUNT_TYPE_NAME])?;
+        let account = query
+            .remove(&ACCOUNT_TYPE_NAME)
+            .map(|account_name| AccountUrl { name: account_name });
+
+        Ok(Self { name, account })
+    }
+
+    fn to_parts(&self) -> (String, Option<String>) {
+        let query = self
+            .account
+            .as_ref()
+            .map(|AccountUrl { name: account_name }| {
+                format!("{ACCOUNT_TYPE_NAME}={}", urlencode(account_name))
+            });
+        (Self::make_path1(&self.name), query)
+    }
+}
+
+url_from_into!(ProjectUrl);
+
+pub trait ToOssUrl {
+    type Target;
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>);
+}
+
+/// Typed Golem URL for component
+///
+/// Format with optional project and account: `component:///{name}?account={account_name}&project={project_name}`
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ComponentUrl {
+    pub name: String,
+    pub project: Option<ProjectUrl>,
+}
+
+impl ToOssUrl for ComponentUrl {
+    type Target = crate::uri::oss::url::ComponentUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        (
+            crate::uri::oss::url::ComponentUrl { name: self.name },
+            self.project,
+        )
+    }
+}
+
+fn to_project_query(project: &Option<ProjectUrl>) -> Option<String> {
+    match project {
+        None => None,
+        Some(ProjectUrl {
+            name: project_name,
+            account,
+        }) => {
+            let account_part = account.as_ref().map(|AccountUrl { name: account_name }| {
+                format!("{ACCOUNT_TYPE_NAME}={}", urlencode(account_name))
+            });
+
+            let project_part = Some(format!("{PROJECT_TYPE_NAME}={}", urlencode(project_name)));
+
+            Some([account_part, project_part].into_iter().flatten().join("&"))
+        }
+    }
+}
 
 impl TypedGolemUrl for ComponentUrl {
     fn resource_type() -> &'static str {
@@ -44,13 +134,16 @@ impl TypedGolemUrl for ComponentUrl {
         Self: Sized,
     {
         let name = Self::expect_path1(path)?;
-        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+        let project = Self::expect_project_query(query)?;
 
-        Ok(Self { name })
+        Ok(Self { name, project })
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
-        (Self::make_path1(&self.name), None)
+        (
+            Self::make_path1(&self.name),
+            to_project_query(&self.project),
+        )
     }
 }
 
@@ -58,11 +151,26 @@ url_from_into!(ComponentUrl);
 
 /// Typed Golem URL for component version
 ///
-/// Format: `component:///{name}/{version}`
+/// Format with optional project and account: `component:///{name}/{version}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ComponentVersionUrl {
     pub name: String,
     pub version: ComponentVersion,
+    pub project: Option<ProjectUrl>,
+}
+
+impl ToOssUrl for ComponentVersionUrl {
+    type Target = crate::uri::oss::url::ComponentVersionUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        (
+            crate::uri::oss::url::ComponentVersionUrl {
+                name: self.name,
+                version: self.version,
+            },
+            self.project,
+        )
+    }
 }
 
 impl TypedGolemUrl for ComponentVersionUrl {
@@ -79,15 +187,19 @@ impl TypedGolemUrl for ComponentVersionUrl {
             .parse()
             .map_err(|err| Self::invalid_path(format!("Failed to parse version: {err}")))?;
 
-        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+        let project = Self::expect_project_query(query)?;
 
-        Ok(Self { name, version })
+        Ok(Self {
+            name,
+            version,
+            project,
+        })
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
         (
             Self::make_path2(&self.name, &self.version.to_string()),
-            None,
+            to_project_query(&self.project),
         )
     }
 }
@@ -96,11 +208,31 @@ url_from_into!(ComponentVersionUrl);
 
 /// Typed Golem URL for component or component version
 ///
-/// Format: `component:///{name}` or `component:///{name}/{version}`
+/// Format with optional project and account: `component:///{name}?account={account_name}&project={project_name}`
+/// or `component:///{name}/{version}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ComponentOrVersionUrl {
     Component(ComponentUrl),
     Version(ComponentVersionUrl),
+}
+
+impl ToOssUrl for ComponentOrVersionUrl {
+    type Target = crate::uri::oss::url::ComponentOrVersionUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        match self {
+            ComponentOrVersionUrl::Component(c) => {
+                let (c, p) = c.to_oss_url();
+
+                (crate::uri::oss::url::ComponentOrVersionUrl::Component(c), p)
+            }
+            ComponentOrVersionUrl::Version(v) => {
+                let (v, p) = v.to_oss_url();
+
+                (crate::uri::oss::url::ComponentOrVersionUrl::Version(v), p)
+            }
+        }
+    }
 }
 
 impl TypedGolemUrl for ComponentOrVersionUrl {
@@ -135,11 +267,27 @@ url_from_into!(ComponentOrVersionUrl);
 
 /// Typed Golem URL for worker
 ///
-/// Format: `worker:///{component_name}/{worker_name}`
+/// Format with optional project and account:
+/// `worker:///{component_name}/{worker_name}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WorkerUrl {
     pub component_name: String,
     pub worker_name: String,
+    pub project: Option<ProjectUrl>,
+}
+
+impl ToOssUrl for WorkerUrl {
+    type Target = crate::uri::oss::url::WorkerUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        (
+            crate::uri::oss::url::WorkerUrl {
+                component_name: self.component_name,
+                worker_name: self.worker_name,
+            },
+            self.project,
+        )
+    }
 }
 
 impl TypedGolemUrl for WorkerUrl {
@@ -153,18 +301,19 @@ impl TypedGolemUrl for WorkerUrl {
     {
         let (component_name, worker_name) = Self::expect_path2(path)?;
 
-        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+        let project = Self::expect_project_query(query)?;
 
         Ok(Self {
             component_name,
             worker_name,
+            project,
         })
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
         (
             Self::make_path2(&self.component_name, &self.worker_name),
-            None,
+            to_project_query(&self.project),
         )
     }
 }
@@ -173,12 +322,29 @@ url_from_into!(WorkerUrl);
 
 /// Typed Golem URL for worker function
 ///
-/// Format: `worker:///{component_name}/{worker_name}/{function}`
+/// Format with optional project and account:
+/// `worker:///{component_name}/{worker_name}/{function}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WorkerFunctionUrl {
     pub component_name: String,
     pub worker_name: String,
     pub function: String,
+    pub project: Option<ProjectUrl>,
+}
+
+impl ToOssUrl for WorkerFunctionUrl {
+    type Target = crate::uri::oss::url::WorkerFunctionUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        (
+            crate::uri::oss::url::WorkerFunctionUrl {
+                component_name: self.component_name,
+                worker_name: self.worker_name,
+                function: self.function,
+            },
+            self.project,
+        )
+    }
 }
 
 impl TypedGolemUrl for WorkerFunctionUrl {
@@ -192,19 +358,20 @@ impl TypedGolemUrl for WorkerFunctionUrl {
     {
         let (component_name, worker_name, function) = Self::expect_path3(path)?;
 
-        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+        let project = Self::expect_project_query(query)?;
 
         Ok(Self {
             component_name,
             worker_name,
             function,
+            project,
         })
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
         (
             Self::make_path3(&self.component_name, &self.worker_name, &self.function),
-            None,
+            to_project_query(&self.project),
         )
     }
 }
@@ -213,11 +380,32 @@ url_from_into!(WorkerFunctionUrl);
 
 /// Typed Golem URL for worker or worker function
 ///
-/// Format: `worker:///{component_name}/{worker_name}` or `worker:///{component_name}/{worker_name}/{function}`
+/// Format with optional project and account:
+/// `worker:///{component_name}/{worker_name}?account={account_name}&project={project_name}`
+/// or `worker:///{component_name}/{worker_name}/{function}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum WorkerOrFunctionUrl {
     Worker(WorkerUrl),
     Function(WorkerFunctionUrl),
+}
+
+impl ToOssUrl for WorkerOrFunctionUrl {
+    type Target = crate::uri::oss::url::WorkerOrFunctionUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        match self {
+            WorkerOrFunctionUrl::Worker(w) => {
+                let (w, p) = w.to_oss_url();
+
+                (crate::uri::oss::url::WorkerOrFunctionUrl::Worker(w), p)
+            }
+            WorkerOrFunctionUrl::Function(f) => {
+                let (f, p) = f.to_oss_url();
+
+                (crate::uri::oss::url::WorkerOrFunctionUrl::Function(f), p)
+            }
+        }
+    }
 }
 
 impl TypedGolemUrl for WorkerOrFunctionUrl {
@@ -260,11 +448,27 @@ url_from_into!(WorkerOrFunctionUrl);
 
 /// Typed Golem URL for API definition
 ///
-/// Format: `api-definition:///{name}/{version}`
+/// Format with optional project and account:
+/// `api-definition:///{name}/{version}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ApiDefinitionUrl {
     pub name: String,
     pub version: String,
+    pub project: Option<ProjectUrl>,
+}
+
+impl ToOssUrl for ApiDefinitionUrl {
+    type Target = crate::uri::oss::url::ApiDefinitionUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        (
+            crate::uri::oss::url::ApiDefinitionUrl {
+                name: self.name,
+                version: self.version,
+            },
+            self.project,
+        )
+    }
 }
 
 impl TypedGolemUrl for ApiDefinitionUrl {
@@ -278,13 +482,20 @@ impl TypedGolemUrl for ApiDefinitionUrl {
     {
         let (name, version) = Self::expect_path2(path)?;
 
-        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+        let project = Self::expect_project_query(query)?;
 
-        Ok(Self { name, version })
+        Ok(Self {
+            name,
+            version,
+            project,
+        })
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
-        (Self::make_path2(&self.name, &self.version), None)
+        (
+            Self::make_path2(&self.name, &self.version),
+            to_project_query(&self.project),
+        )
     }
 }
 
@@ -292,10 +503,23 @@ url_from_into!(ApiDefinitionUrl);
 
 /// Typed Golem URL for API deployment
 ///
-/// Format: `api-deployment:///{site}`
+/// Format with optional project and account:
+/// `api-deployment:///{site}?account={account_name}&project={project_name}`
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ApiDeploymentUrl {
     pub site: String,
+    pub project: Option<ProjectUrl>,
+}
+
+impl ToOssUrl for ApiDeploymentUrl {
+    type Target = crate::uri::oss::url::ApiDeploymentUrl;
+
+    fn to_oss_url(self) -> (Self::Target, Option<ProjectUrl>) {
+        (
+            crate::uri::oss::url::ApiDeploymentUrl { site: self.site },
+            self.project,
+        )
+    }
 }
 
 impl TypedGolemUrl for ApiDeploymentUrl {
@@ -309,13 +533,16 @@ impl TypedGolemUrl for ApiDeploymentUrl {
     {
         let site = Self::expect_path1(path)?;
 
-        Self::expect_empty_query(query, CLOUD_CONTEXT)?;
+        let project = Self::expect_project_query(query)?;
 
-        Ok(Self { site })
+        Ok(Self { site, project })
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
-        (Self::make_path1(&self.site), None)
+        (
+            Self::make_path1(&self.site),
+            to_project_query(&self.project),
+        )
     }
 }
 
@@ -324,6 +551,8 @@ url_from_into!(ApiDeploymentUrl);
 /// Any valid URL for a known Golem resource
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ResourceUrl {
+    Account(AccountUrl),
+    Project(ProjectUrl),
     Component(ComponentUrl),
     ComponentVersion(ComponentVersionUrl),
     Worker(WorkerUrl),
@@ -337,6 +566,8 @@ impl TryFrom<&GolemUrl> for ResourceUrl {
 
     fn try_from(value: &GolemUrl) -> Result<Self, Self::Error> {
         match value.resource_type.as_str() {
+            ACCOUNT_TYPE_NAME => Ok(ResourceUrl::Account(AccountUrl::try_from(value)?)),
+            PROJECT_TYPE_NAME => Ok(ResourceUrl::Project(ProjectUrl::try_from(value)?)),
             COMPONENT_TYPE_NAME => match ComponentOrVersionUrl::try_from(value)? {
                 ComponentOrVersionUrl::Component(c) => Ok(ResourceUrl::Component(c)),
                 ComponentOrVersionUrl::Version(v) => Ok(ResourceUrl::ComponentVersion(v)),
@@ -353,6 +584,8 @@ impl TryFrom<&GolemUrl> for ResourceUrl {
             )?)),
             typ => Err(GolemUrlTransformError::UnexpectedType {
                 expected_types: vec![
+                    ACCOUNT_TYPE_NAME,
+                    PROJECT_TYPE_NAME,
                     COMPONENT_TYPE_NAME,
                     WORKER_TYPE_NAME,
                     API_DEFINITION_TYPE_NAME,
@@ -375,6 +608,8 @@ impl TryFrom<GolemUrl> for ResourceUrl {
 impl From<&ResourceUrl> for GolemUrl {
     fn from(value: &ResourceUrl) -> Self {
         match value {
+            ResourceUrl::Account(a) => a.into(),
+            ResourceUrl::Project(p) => p.into(),
             ResourceUrl::Component(c) => c.into(),
             ResourceUrl::ComponentVersion(v) => v.into(),
             ResourceUrl::Worker(w) => w.into(),
@@ -410,17 +645,70 @@ impl Display for ResourceUrl {
 
 #[cfg(test)]
 mod tests {
-    use crate::uri::oss::url::{
-        ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
-        ComponentVersionUrl, ResourceUrl, WorkerFunctionUrl, WorkerOrFunctionUrl, WorkerUrl,
+    use crate::uri::cloud::url::{
+        AccountUrl, ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
+        ComponentVersionUrl, ProjectUrl, ResourceUrl, WorkerFunctionUrl, WorkerOrFunctionUrl,
+        WorkerUrl,
     };
     use crate::uri::GolemUrl;
     use std::str::FromStr;
 
     #[test]
+    pub fn account_url_to_url() {
+        let typed = AccountUrl {
+            name: "acc".to_string(),
+        };
+
+        let untyped: GolemUrl = typed.into();
+        assert_eq!(untyped.to_string(), "account:///acc");
+    }
+
+    #[test]
+    pub fn account_url_from_url() {
+        let untyped = GolemUrl::from_str("account:///acc").unwrap();
+        let typed: AccountUrl = untyped.try_into().unwrap();
+
+        assert_eq!(typed.name, "acc");
+    }
+
+    #[test]
+    pub fn account_url_from_str() {
+        let typed = AccountUrl::from_str("account:///acc").unwrap();
+
+        assert_eq!(typed.name, "acc");
+    }
+
+    #[test]
+    pub fn project_url_to_url() {
+        let typed = ProjectUrl {
+            name: "proj".to_string(),
+            account: None,
+        };
+
+        let untyped: GolemUrl = typed.into();
+        assert_eq!(untyped.to_string(), "project:///proj");
+    }
+
+    #[test]
+    pub fn project_url_from_url() {
+        let untyped = GolemUrl::from_str("project:///proj").unwrap();
+        let typed: ProjectUrl = untyped.try_into().unwrap();
+
+        assert_eq!(typed.name, "proj");
+    }
+
+    #[test]
+    pub fn project_url_from_str() {
+        let typed = ProjectUrl::from_str("project:///proj").unwrap();
+
+        assert_eq!(typed.name, "proj");
+    }
+
+    #[test]
     pub fn component_url_to_url() {
         let typed = ComponentUrl {
             name: "some  name".to_string(),
+            project: None,
         };
 
         let untyped: GolemUrl = typed.into();
@@ -447,6 +735,7 @@ mod tests {
         let typed = ComponentVersionUrl {
             name: "some  name".to_string(),
             version: 8,
+            project: None,
         };
 
         let untyped: GolemUrl = typed.into();
@@ -475,6 +764,7 @@ mod tests {
         let typed = ComponentOrVersionUrl::Version(ComponentVersionUrl {
             name: "some  name".to_string(),
             version: 8,
+            project: None,
         });
 
         let untyped: GolemUrl = typed.into();
@@ -506,6 +796,7 @@ mod tests {
         let typed = WorkerUrl {
             component_name: "my component".to_string(),
             worker_name: "my worker".to_string(),
+            project: None,
         };
 
         let untyped: GolemUrl = typed.into();
@@ -535,6 +826,7 @@ mod tests {
             component_name: "my component".to_string(),
             worker_name: "my worker".to_string(),
             function: "fn a".to_string(),
+            project: None,
         };
 
         let untyped: GolemUrl = typed.into();
@@ -565,11 +857,13 @@ mod tests {
         let typed_w = WorkerOrFunctionUrl::Worker(WorkerUrl {
             component_name: "my component".to_string(),
             worker_name: "my worker".to_string(),
+            project: None,
         });
         let typed_f = WorkerOrFunctionUrl::Function(WorkerFunctionUrl {
             component_name: "my component".to_string(),
             worker_name: "my worker".to_string(),
             function: "fn a".to_string(),
+            project: None,
         });
 
         let untyped_w: GolemUrl = typed_w.into();
@@ -609,6 +903,7 @@ mod tests {
         let typed = ApiDefinitionUrl {
             name: "my def".to_string(),
             version: "1.2.3".to_string(),
+            project: None,
         };
 
         let untyped: GolemUrl = typed.into();
@@ -636,6 +931,7 @@ mod tests {
     pub fn api_deployment_url_to_url() {
         let typed = ApiDeploymentUrl {
             site: "example.com".to_string(),
+            project: None,
         };
 
         let untyped: GolemUrl = typed.into();
@@ -676,10 +972,53 @@ mod tests {
 
     #[test]
     pub fn resource_url_from_str() {
-        let typed_cv = ResourceUrl::from_str("component:///comp_name/11").unwrap();
-        let typed_ad = ResourceUrl::from_str("api-deployment:///example.com").unwrap();
+        let typed_a = ResourceUrl::from_str("account:///acc").unwrap();
+        let typed_p = ResourceUrl::from_str("project:///proj").unwrap();
 
-        assert_eq!(typed_cv.to_string(), "component:///comp_name/11");
-        assert_eq!(typed_ad.to_string(), "api-deployment:///example.com");
+        assert_eq!(typed_a.to_string(), "account:///acc");
+        assert_eq!(typed_p.to_string(), "project:///proj");
+    }
+
+    #[test]
+    pub fn resource_url_context() {
+        let typed_p = ResourceUrl::from_str("project:///proj?account=acc").unwrap();
+        let typed_c = ResourceUrl::from_str("component:///comp?account=acc&project=proj").unwrap();
+        let typed_c2 = ResourceUrl::from_str("component:///comp?project=proj").unwrap();
+        let typed_cv =
+            ResourceUrl::from_str("component:///comp/1?account=acc&project=proj").unwrap();
+        let typed_w = ResourceUrl::from_str("worker:///comp/w?account=acc&project=proj").unwrap();
+        let typed_f = ResourceUrl::from_str("worker:///comp/w/f?account=acc&project=proj").unwrap();
+        let typed_def =
+            ResourceUrl::from_str("api-definition:///def/1.2.3?account=acc&project=proj").unwrap();
+        let typed_dep =
+            ResourceUrl::from_str("api-deployment:///example.com?account=acc&project=proj")
+                .unwrap();
+
+        assert_eq!(typed_p.to_string(), "project:///proj?account=acc");
+        assert_eq!(
+            typed_c.to_string(),
+            "component:///comp?account=acc&project=proj"
+        );
+        assert_eq!(typed_c2.to_string(), "component:///comp?project=proj");
+        assert_eq!(
+            typed_cv.to_string(),
+            "component:///comp/1?account=acc&project=proj"
+        );
+        assert_eq!(
+            typed_w.to_string(),
+            "worker:///comp/w?account=acc&project=proj"
+        );
+        assert_eq!(
+            typed_f.to_string(),
+            "worker:///comp/w/f?account=acc&project=proj"
+        );
+        assert_eq!(
+            typed_def.to_string(),
+            "api-definition:///def/1.2.3?account=acc&project=proj"
+        );
+        assert_eq!(
+            typed_dep.to_string(),
+            "api-deployment:///example.com?account=acc&project=proj"
+        );
     }
 }

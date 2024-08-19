@@ -130,6 +130,7 @@ pub enum CliKind {
 
 #[async_trait]
 pub trait ProfileAuth {
+    fn auth_enabled(&self) -> bool;
     async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError>;
 }
 
@@ -137,6 +138,10 @@ pub struct DummyProfileAuth {}
 
 #[async_trait]
 impl ProfileAuth for DummyProfileAuth {
+    fn auth_enabled(&self) -> bool {
+        false
+    }
+
     async fn auth(
         &self,
         _profile_name: &ProfileName,
@@ -161,7 +166,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         InitCommand::Init {} => {
             let profile_name = ProfileName::default(cli_kind);
 
-            let res = init_profile(cli_kind, profile_name, &config_dir).await?;
+            let res =
+                init_profile(cli_kind, profile_name, &config_dir, profile_auth.as_ref()).await?;
 
             if res.auth_required {
                 profile_auth.auth(&res.profile_name, &config_dir).await?
@@ -477,6 +483,7 @@ pub async fn init_profile(
     cli_kind: CliKind,
     profile_name: ProfileName,
     config_dir: &Path,
+    profile_auth: &(dyn ProfileAuth + Send + Sync),
 ) -> Result<InitResult, GolemError> {
     validate_profile_override(&profile_name, config_dir)?;
     let typ = match cli_kind {
@@ -496,7 +503,11 @@ pub async fn init_profile(
     set_active_profile(cli_kind, &profile_name, config_dir)?;
 
     let auth_required = if let ProfileType::Cloud = typ {
-        ask_auth_cloud().await?
+        if profile_auth.auth_enabled() {
+            ask_auth_cloud().await?
+        } else {
+            false
+        }
     } else {
         false
     };
