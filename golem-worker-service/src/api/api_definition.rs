@@ -451,7 +451,6 @@ mod test {
         body.value().array().assert_len(2)
     }
 
-
     #[ignore] // There is already sql tests that does this
     #[tokio::test]
     async fn decode_openapi_json() {

@@ -1,10 +1,18 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use async_trait::async_trait;
+    use golem_common::model::ComponentId;
     use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
     use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
-    use golem_worker_service_base::api_definition::http::{ComponentMetadataDictionary, HttpApiDefinition};
+    use golem_service_base::model::{Component, VersionedComponentId};
+    use golem_wasm_ast::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple,
+    };
+    use golem_worker_service_base::api_definition::http::{
+        ComponentMetadataDictionary, HttpApiDefinition,
+    };
     use golem_worker_service_base::api_definition::{
         ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
     };
@@ -16,19 +24,18 @@ mod tests {
     use golem_worker_service_base::service::api_deployment::{
         ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
     };
-    use golem_worker_service_base::service::component::{ComponentResult, ComponentService, ComponentServiceNoop};
+    use golem_worker_service_base::service::component::{
+        ComponentResult, ComponentService, ComponentServiceNoop,
+    };
     use golem_worker_service_base::service::http::http_api_definition_validator::{
         HttpApiDefinitionValidator, RouteValidationError,
     };
+    use std::collections::HashMap;
     use std::sync::Arc;
-    use async_trait::async_trait;
-    use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple};
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
-    use golem_common::model::ComponentId;
-    use golem_service_base::model::{Component, VersionedComponentId};
 
     fn start_docker_postgres<'d>(docker: &'d Cli) -> (DbPostgresConfig, Container<'d, Postgres>) {
         let image = RunnableImage::from(Postgres::default()).with_tag("14.7-alpine");
@@ -122,7 +129,8 @@ mod tests {
             use golem_service_base::model::{ComponentName, VersionedComponentId};
 
             let id = VersionedComponentId {
-                component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
+                component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5")
+                    .unwrap(),
                 version: 0,
             };
 
@@ -143,12 +151,10 @@ mod tests {
                 name: "golem:it/api".to_string(),
                 functions: vec![AnalysedFunction {
                     name: "get-cart-contents".to_string(),
-                    parameters: vec![
-                        AnalysedFunctionParameter {
-                            name: "a".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }
-                    ],
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "a".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    }],
                     results: vec![AnalysedFunctionResult {
                         name: None,
                         typ: AnalysedType::Str(TypeStr),
@@ -158,7 +164,6 @@ mod tests {
 
             vec![analysed_export]
         }
-
     }
 
     #[async_trait]
@@ -180,7 +185,6 @@ mod tests {
             Ok(Self::test_component())
         }
     }
-
 
     async fn test_services(
         api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send>,

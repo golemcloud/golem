@@ -3,7 +3,9 @@ pub mod worker;
 
 use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
-use golem_worker_service_base::api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
+use golem_worker_service_base::api_definition::http::{
+    CompiledHttpApiDefinition, HttpApiDefinition,
+};
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
