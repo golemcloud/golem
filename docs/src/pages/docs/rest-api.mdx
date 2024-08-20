@@ -1,11 +1,12 @@
 import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
+import { GolemIcon } from "src/components/golem-logo"
 
 # REST API
 
 The REST APIs are organized in two sections:
 
-<Cards>
-  <Card title="Golem Open Source REST APIs" href="oss-rest-api" />
-  <Card title="Golem Cloud REST APIs" href="cloud-rest-api" />
+<Cards num={2}>
+  <Card title="Golem Open Source" href="oss-rest-api" icon={<GolemIcon />} />
+  <Card title="Golem Cloud" href="cloud-rest-api" icon={<GolemIcon />} />
 </Cards>

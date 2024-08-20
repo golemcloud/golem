@@ -1,0 +1,9 @@
+{
+  "reliability": "Reliability",
+  "components": "Components",
+  "workers": "Workers",
+  "invocations": "Invocations",
+  "worker-gateway": "Worker Gateway",
+  "worker-to-worker-communication": "Worker to Worker Communication",
+  "api-definitions": "API Definitions"
+}

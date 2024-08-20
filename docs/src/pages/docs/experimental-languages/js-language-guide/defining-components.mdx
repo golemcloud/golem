@@ -146,7 +146,7 @@ world example {
 }
 ```
 
-Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/docs/concepts-invocations).
+Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/docs/concepts/invocations).
 
 To implement the above defined WIT resource in JavaScript a few new steps must be taken:
 
@@ -330,7 +330,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](/docs/pages/js-language-guide/worker-to-worker-communication), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](/docs/js-language-guide/worker-to-worker-communication), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 
@@ -338,7 +338,7 @@ This feature makes environment variables a good fit for passing configuration su
 
 As explained earlier, Golem workers can export **resources** and these resources can have **constructor parameters**.
 
-Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](/docs/concepts-invocations).
+Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](/docs/concepts/invocations).
 
 ## Managing state
 

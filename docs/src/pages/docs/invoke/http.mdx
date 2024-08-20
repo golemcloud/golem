@@ -1,7 +1,7 @@
-# Invoke though the REST API
+# Invoke through the REST API
 
 The Golem REST API exposes two endpoints for invoking workers. See the [OSS](oss-rest-api/worker) or [Cloud](cloud-rest-api/worker) Worker REST API reference for details.
-These endpoints provide a direct, low level API for calling the exported functions of the workers. They use a special JSON format for encoding WASM values and types. It is possible, and recommended, to create [custom HTTP APIs](invoke-making-custom-apis) for exposing workers to the world.
+These endpoints provide a direct, low level API for calling the exported functions of the workers. They use a special JSON format for encoding WASM values and types. It is possible, and recommended, to create [custom HTTP APIs](/docs/invoke/making-custom-apis) for exposing workers to the world.
 
 ## Endpoints
 
@@ -50,7 +50,7 @@ The invocation API **requires** type information beside the values.
 
 ### Value format
 
-Read the [JSON-WAVE Mapping](json-wave-mapping) page to see how every WebAssembly value is encoded in JSON.
+Read the [JSON-WAVE Mapping](/json-wave-mapping) page to see how every WebAssembly value is encoded in JSON.
 
 ### Getting the type
 

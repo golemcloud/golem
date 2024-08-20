@@ -1,3 +1,5 @@
+import { Cards, Card } from "nextra/components"
+
 # Deployment
 
 Golem Services are distributed as Docker images. They are available in [Golem Services Docker Hub](https://hub.docker.com/u/golemservices). Each Docker image is built for OS/ARCH-s:
@@ -17,19 +19,19 @@ Following sections provide a description of each service.
 
 ### Component Service
 
-[golem-component-service](https://github.com/golemcloud/golem/tree/main/golem-component-service) is a [component](concepts-components.mdx) registry/management service. Service is using RDB and Blob storage as data storage.
+[golem-component-service](https://github.com/golemcloud/golem/tree/main/golem-component-service) is a [component](/docs/concepts/components.mdx) registry/management service. Service is using RDB and Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-service)
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) providing APIs and [API Gateway](concepts-workers-gateway.mdx) functionality for workers and act like routing service for worker executors. Service is using RDB as data storage.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) providing APIs and [API Gateway](/docs/concepts/worker-gateway.mdx) functionality for workers and act like routing service for worker executors. Service is using RDB as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 
 ### Worker Executor
 
-[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [workers](concepts-workers.mdx) which belongs to assigned shards. Service is using Redis and Blob storage as data storage.
+[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [workers](/docs/concepts/workers.mdx) which belongs to assigned shards. Service is using Redis and Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-executor)
 
@@ -40,7 +42,7 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-sh
 
 ### Component Compilation Service
 
-[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is sidecar service responsible for compiling [components](concepts-components.mdx). Service is using Blob storage as data storage.
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is sidecar service responsible for compiling [components](/docs/concepts/components.mdx). Service is using Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
 
@@ -54,6 +56,8 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-ro
 
 For deployment variants, see the following sections:
 
-- [docker](deploy-docker.mdx) deployment
-- [kubernetes](deploy-kubernetes.mdx) deployment
-- [Golem Cloud](deploy-golem-cloud.mdx) deployment
+<Cards num={3}>
+  <Card title="Docker" href="/docs/deploy/docker" />
+  <Card title="Kubernetes" href="/docs/deploy/kubernetes" />
+  <Card title="Golem Cloud" href="/docs/deploy/golem-cloud" />
+</Cards>
