@@ -12,7 +12,7 @@ For quick start we recommend to download content of [kube](https://github.com/go
 
 which will deploy Golem with Redis and PostgreSQL to kubernetes namespace `golem`.
 Kubernetes [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) are used to store Golem's data.
-[Nginx ingress controller](https://github.com/kubernetes/ingress-nginx) is used to expose [Golem APIs](oss-rest-api.mdx) (http with port 80). For testing, you may need to change [golem-cli](/docs/cli) configuration to use proper host and port.
+[Nginx ingress controller](https://github.com/kubernetes/ingress-nginx) is used to expose [Golem APIs](/docs/rest-api/oss-rest-api.mdx) (http with port 80). For testing, you may need to change [golem-cli](/docs/cli) configuration to use proper host and port.
 Worker [API Gateway](/docs/concepts/worker-gateway.mdx) endpoint is exposed under port 9006.
 
 For production is preferable to use separate PostgreSQL cluster, Redis cluster and reliable Shared File System or S3 for Blob storage.
