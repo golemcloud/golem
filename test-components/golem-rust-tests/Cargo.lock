@@ -209,9 +209,9 @@ checksum = "40ecd4077b5ae9fd2e9e169b102c6c330d0605168eb0e8bf79952b256dbefffd"
 
 [[package]]
 name = "golem-rust"
-version = "1.0.0-rc1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8f3d941713aa3f97381709bbc32bb94310e29659a98597dca6e2974c96ad255"
+checksum = "6b7f8be9a75cef916dabfacdf30b76a65d11d4a96669ffea280602a1fbc7d82a"
 dependencies = [
  "golem-rust-macro",
  "serde",
@@ -222,9 +222,9 @@ dependencies = [
 
 [[package]]
 name = "golem-rust-macro"
-version = "1.0.0-rc1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6922b50bb1052f377242324d4f78e95393891dfa9d45c6f95b8e988234bd9f91"
+checksum = "e1c408863504b22ea4af78ca2ce3837a47451cfa2c045c7fd773bab41352ad7c"
 dependencies = [
  "heck",
  "proc-macro2",
