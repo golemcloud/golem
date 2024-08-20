@@ -41,7 +41,6 @@ use wit_parser::{PackageName, UnresolvedPackage};
 
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
-#[command(bin_name = "wasm-rpc-stubgen")]
 pub enum Command {
     /// Generate a Rust RPC stub crate for a WASM component
     Generate(GenerateArgs),
