@@ -17,12 +17,63 @@ use crate::parser::{GolemParser, ParseError};
 use crate::worker_binding::CompiledGolemWorkerBinding;
 use crate::worker_binding::GolemWorkerBinding;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDefinitionRequest {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub routes: Vec<Route>,
+    #[serde(default)]
+    pub draft: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
+    #[serde(default)]
+    pub draft: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl HttpApiDefinition {
+    pub fn new(
+        request: HttpApiDefinitionRequest,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        HttpApiDefinition {
+            id: request.id,
+            version: request.version,
+            routes: request.routes,
+            draft: request.draft,
+            created_at,
+        }
+    }
+}
+
+impl From<CompiledHttpApiDefinitionRequest> for HttpApiDefinitionRequest {
+    fn from(compiled_http_api_definition: CompiledHttpApiDefinitionRequest) -> Self {
+        HttpApiDefinitionRequest {
+            id: compiled_http_api_definition.id,
+            version: compiled_http_api_definition.version,
+            routes: compiled_http_api_definition
+                .routes
+                .into_iter()
+                .map(Route::from)
+                .collect(),
+            draft: compiled_http_api_definition.draft,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledHttpApiDefinitionRequest {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub routes: Vec<CompiledRoute>,
     #[serde(default)]
     pub draft: bool,
 }
@@ -38,11 +89,12 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
                 .map(Route::from)
                 .collect(),
             draft: compiled_http_api_definition.draft,
+            created_at: compiled_http_api_definition.created_at,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledHttpApiDefinition {
     pub id: ApiDefinitionId,
@@ -50,6 +102,7 @@ pub struct CompiledHttpApiDefinition {
     pub routes: Vec<CompiledRoute>,
     #[serde(default)]
     pub draft: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl CompiledHttpApiDefinition {
@@ -69,6 +122,7 @@ impl CompiledHttpApiDefinition {
             version: http_api_definition.version.clone(),
             routes: compiled_routes,
             draft: http_api_definition.draft,
+            created_at: http_api_definition.created_at,
         })
     }
 }

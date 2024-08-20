@@ -67,7 +67,7 @@ pub enum ProtoApiDefinitionKind {
 
 pub trait HasProtoApiDefinition {
     fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind;
-    fn api_definition(&self) -> Option<&apidefinition::ApiDefinition>;
+    fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest>;
 }
 
 impl HasProtoApiDefinition for apidefinition::v1::create_api_definition_request::ApiDefinition {
@@ -82,7 +82,7 @@ impl HasProtoApiDefinition for apidefinition::v1::create_api_definition_request:
         }
     }
 
-    fn api_definition(&self) -> Option<&apidefinition::ApiDefinition> {
+    fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest> {
         match self {
             apidefinition::v1::create_api_definition_request::ApiDefinition::Definition(
                 api_def,
@@ -104,7 +104,7 @@ impl HasProtoApiDefinition for apidefinition::v1::update_api_definition_request:
         }
     }
 
-    fn api_definition(&self) -> Option<&apidefinition::ApiDefinition> {
+    fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest> {
         match self {
             apidefinition::v1::update_api_definition_request::ApiDefinition::Definition(
                 api_def,

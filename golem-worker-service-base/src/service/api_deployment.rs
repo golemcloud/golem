@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::{ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString};
+use crate::api_definition::{
+    ApiDefinitionId, ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString,
+};
 
 use std::collections::HashSet;
 
@@ -38,12 +40,12 @@ use std::fmt::Display;
 pub trait ApiDeploymentService<Namespace> {
     async fn deploy(
         &self,
-        deployment: &ApiDeployment<Namespace>,
+        deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 
     async fn undeploy(
         &self,
-        deployment: &ApiDeployment<Namespace>,
+        deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 
     // Example: A newer version of API definition is in dev site, and older version of the same definition-id is in prod site.
@@ -156,7 +158,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 {
     async fn deploy(
         &self,
-        deployment: &ApiDeployment<Namespace>,
+        deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Deploy API definitions");
 
@@ -291,7 +293,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 
     async fn undeploy(
         &self,
-        deployment: &ApiDeployment<Namespace>,
+        deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Undeploying API definitions");
 
@@ -380,6 +382,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                         site,
                         namespace,
                         api_definition_keys: vec![api_definition_key],
+                        created_at: deployment_record.created_at,
                     });
                 }
             }
@@ -404,6 +407,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 
         let mut namespace: Option<Namespace> = None;
 
+        let mut created_at: Option<chrono::DateTime<chrono::Utc>> = None;
+
         for deployment_record in existing_deployment_records {
             if site.is_none() {
                 site = Some(ApiSite {
@@ -418,17 +423,23 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 })?);
             }
 
+            if created_at.is_none() || created_at.is_some_and(|t| t > deployment_record.created_at)
+            {
+                created_at = Some(deployment_record.created_at);
+            }
+
             api_definition_keys.push(ApiDefinitionIdWithVersion {
                 id: deployment_record.definition_id.into(),
                 version: deployment_record.definition_version.into(),
             });
         }
 
-        match (site, namespace) {
-            (Some(site), Some(namespace)) => Ok(Some(ApiDeployment {
+        match (site, namespace, created_at) {
+            (Some(site), Some(namespace), Some(created_at)) => Ok(Some(ApiDeployment {
                 namespace,
                 site,
                 api_definition_keys,
+                created_at,
             })),
             _ => Ok(None),
         }
@@ -498,14 +509,14 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
 {
     async fn deploy(
         &self,
-        _deployment: &ApiDeployment<Namespace>,
+        _deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         Ok(())
     }
 
     async fn undeploy(
         &self,
-        _deployment: &ApiDeployment<Namespace>,
+        _deployment: &ApiDeploymentRequest<Namespace>,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         Ok(())
     }

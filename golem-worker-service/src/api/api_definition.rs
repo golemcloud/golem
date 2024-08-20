@@ -6,8 +6,10 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinition;
+use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api_definition::http::get_api_definition;
-use golem_worker_service_base::api_definition::http::HttpApiDefinition as CoreHttpApiDefinition;
+use golem_worker_service_base::api_definition::http::CompiledHttpApiDefinition;
+use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use golem_worker_service_base::api_definition::http::JsonOpenApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
@@ -54,11 +56,12 @@ impl RegisterApiDefinitionApi {
                 ApiEndpointError::bad_request(e)
             })?;
 
-            self.create_api(&definition)
+            let result = self
+                .create_api(&definition)
                 .instrument(record.span.clone())
                 .await?;
 
-            definition
+            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
                 .try_into()
                 .map_err(ApiEndpointError::internal)
                 .map(Json)
@@ -74,7 +77,7 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
-        payload: Json<HttpApiDefinition>,
+        payload: Json<HttpApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "create_definition",
@@ -84,16 +87,17 @@ impl RegisterApiDefinitionApi {
         );
 
         let response = {
-            let definition: CoreHttpApiDefinition = payload
+            let definition: CoreHttpApiDefinitionRequest = payload
                 .0
                 .try_into()
                 .map_err(ApiEndpointError::bad_request)?;
 
-            self.create_api(&definition)
+            let result = self
+                .create_api(&definition)
                 .instrument(record.span.clone())
                 .await?;
 
-            definition
+            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
                 .try_into()
                 .map_err(ApiEndpointError::internal)
                 .map(Json)
@@ -114,7 +118,7 @@ impl RegisterApiDefinitionApi {
         &self,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-        payload: Json<HttpApiDefinition>,
+        payload: Json<HttpApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "update_definition",
@@ -124,7 +128,7 @@ impl RegisterApiDefinitionApi {
         );
 
         let response = {
-            let definition: CoreHttpApiDefinition = payload
+            let definition: CoreHttpApiDefinitionRequest = payload
                 .0
                 .try_into()
                 .map_err(ApiEndpointError::bad_request)?;
@@ -136,7 +140,8 @@ impl RegisterApiDefinitionApi {
                     "Unmatched url and body versions.",
                 ))
             } else {
-                self.definition_service
+                let result = self
+                    .definition_service
                     .update(
                         &definition,
                         &DefaultNamespace::default(),
@@ -145,7 +150,7 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                definition
+                golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
                     .try_into()
                     .map_err(ApiEndpointError::internal)
                     .map(Json)
@@ -289,8 +294,12 @@ impl RegisterApiDefinitionApi {
 }
 
 impl RegisterApiDefinitionApi {
-    async fn create_api(&self, definition: &CoreHttpApiDefinition) -> Result<(), ApiEndpointError> {
-        self.definition_service
+    async fn create_api(
+        &self,
+        definition: &CoreHttpApiDefinitionRequest,
+    ) -> Result<CompiledHttpApiDefinition, ApiEndpointError> {
+        let result = self
+            .definition_service
             .create(
                 definition,
                 &DefaultNamespace::default(),
@@ -305,7 +314,7 @@ impl RegisterApiDefinitionApi {
                 e
             })?;
 
-        Ok(())
+        Ok(result)
     }
 }
 
@@ -387,12 +396,13 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId("test".to_string()),
-            version: ApiVersion("1.0".to_string()),
-            routes: vec![],
-            draft: false,
-        };
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("test".to_string()),
+                version: ApiVersion("1.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
 
         let response = client
             .post("/v1/api/definitions")
@@ -416,12 +426,13 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId("test".to_string()),
-            version: ApiVersion("42.0".to_string()),
-            routes: vec![],
-            draft: false,
-        };
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("test".to_string()),
+                version: ApiVersion("42.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
 
         let response = client
             .put(format!(
@@ -440,12 +451,13 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId("test".to_string()),
-            version: ApiVersion("1.0".to_string()),
-            routes: vec![],
-            draft: false,
-        };
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("test".to_string()),
+                version: ApiVersion("1.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
         let response = client
             .post("/v1/api/definitions")
             .body_json(&definition)
@@ -453,12 +465,13 @@ mod test {
             .await;
         response.assert_status_is_ok();
 
-        let definition = golem_worker_service_base::api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId("test".to_string()),
-            version: ApiVersion("2.0".to_string()),
-            routes: vec![],
-            draft: false,
-        };
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("test".to_string()),
+                version: ApiVersion("2.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
         let response = client
             .post("/v1/api/definitions")
             .body_json(&definition)

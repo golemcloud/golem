@@ -44,16 +44,22 @@ pub trait HasGolemWorkerBindings {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
 }
 
-#[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
-)]
-pub struct ApiDeployment<Namespace> {
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
+pub struct ApiDeploymentRequest<Namespace> {
     pub namespace: Namespace,
     pub api_definition_keys: Vec<ApiDefinitionIdWithVersion>,
     pub site: ApiSite,
 }
 
-#[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
+pub struct ApiDeployment<Namespace> {
+    pub namespace: Namespace,
+    pub api_definition_keys: Vec<ApiDefinitionIdWithVersion>,
+    pub site: ApiSite,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Object)]
 pub struct ApiSite {
     pub host: String,
     pub subdomain: Option<String>,
@@ -69,7 +75,7 @@ impl Display for ApiSite {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash, Serialize, Deserialize, NewType)]
 pub struct ApiSiteString(pub String);
 
 impl From<&ApiSite> for ApiSiteString {

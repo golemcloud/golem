@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use crate::api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
-    RouteCompilationErrors,
+    HttpApiDefinitionRequest, RouteCompilationErrors,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -95,17 +95,17 @@ impl<E> From<RouteCompilationErrors> for ApiDefinitionError<E> {
 pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
     async fn create(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, ValidationError>;
+    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError>;
 
     async fn update(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, ValidationError>;
+    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError>;
 
     async fn get(
         &self,
@@ -216,10 +216,10 @@ where
 {
     async fn create(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, ValidationError> {
+    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError> {
         info!(namespace = %namespace, "Create API definition");
         let created_at = Utc::now();
 
@@ -238,36 +238,39 @@ where
             ));
         }
 
-        let components = self.get_all_components(definition, auth_ctx).await?;
+        let definition = HttpApiDefinition::new(definition.clone(), created_at.clone());
+
+        let components = self.get_all_components(&definition, auth_ctx).await?;
 
         self.api_definition_validator
-            .validate(definition, components.as_slice())?;
+            .validate(&definition, components.as_slice())?;
 
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
 
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
-            definition,
+            &definition,
             &component_metadata_dictionary,
         )?;
 
-        let record =
-            ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition, created_at)
-                .map_err(|_| {
-                ApiDefinitionError::InternalError("Failed to convert record".to_string())
-            })?;
+        let record = ApiDefinitionRecord::new(
+            namespace.clone(),
+            compiled_http_api_definition.clone(),
+            created_at,
+        )
+        .map_err(|_| ApiDefinitionError::InternalError("Failed to convert record".to_string()))?;
 
         self.definition_repo.create(&record).await?;
 
-        Ok(definition.id.clone())
+        Ok(compiled_http_api_definition)
     }
 
     async fn update(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, ValidationError> {
+    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError> {
         info!(namespace = %namespace, "Update API definition");
 
         let existing_record = self
@@ -288,29 +291,31 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
+        let definition = HttpApiDefinition::new(definition.clone(), created_at.clone());
 
-        let components = self.get_all_components(definition, auth_ctx).await?;
+        let components = self.get_all_components(&definition, auth_ctx).await?;
 
         self.api_definition_validator
-            .validate(definition, components.as_slice())?;
+            .validate(&definition, components.as_slice())?;
 
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
 
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
-            definition,
+            &definition,
             &component_metadata_dictionary,
         )?;
 
-        let record =
-            ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition, created_at)
-                .map_err(|_| {
-                ApiDefinitionError::InternalError("Failed to convert record".to_string())
-            })?;
+        let record = ApiDefinitionRecord::new(
+            namespace.clone(),
+            compiled_http_api_definition.clone(),
+            created_at,
+        )
+        .map_err(|_| ApiDefinitionError::InternalError("Failed to convert record".to_string()))?;
 
         self.definition_repo.update(&record).await?;
 
-        Ok(definition.id.clone())
+        Ok(compiled_http_api_definition)
     }
 
     async fn get(
@@ -427,20 +432,32 @@ where
 {
     async fn create(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        Ok(definition.id.clone())
+    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError> {
+        Ok(CompiledHttpApiDefinition {
+            id: definition.id.clone(),
+            version: definition.version.clone(),
+            routes: vec![],
+            draft: definition.draft,
+            created_at: Utc::now(),
+        })
     }
 
     async fn update(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<ApiDefinitionId, ValidationError> {
-        Ok(definition.id.clone())
+    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError> {
+        Ok(CompiledHttpApiDefinition {
+            id: definition.id.clone(),
+            version: definition.version.clone(),
+            routes: vec![],
+            draft: definition.draft,
+            created_at: Utc::now(),
+        })
     }
 
     async fn get(

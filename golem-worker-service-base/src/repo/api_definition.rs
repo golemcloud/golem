@@ -58,6 +58,7 @@ impl TryFrom<ApiDefinitionRecord> for CompiledHttpApiDefinition {
             version: value.version.into(),
             routes,
             draft: value.draft,
+            created_at: value.created_at,
         })
     }
 }

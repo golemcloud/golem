@@ -11,8 +11,9 @@ mod tests {
         AnalysedInstance, AnalysedType, TypeStr,
     };
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+    use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest;
     use golem_worker_service_base::api_definition::{
-        ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
+        ApiDefinitionId, ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
     };
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
@@ -238,7 +239,7 @@ mod tests {
             "${ let result = golem:it/api.{get-cart-contents}(request.body.foo); let status = if result == \"admin\" then 401 else 200; {status: status } }",
             true,
         );
-        let def2 = HttpApiDefinition {
+        let def2 = HttpApiDefinitionRequest {
             draft: false,
             ..def2draft.clone()
         };
@@ -680,7 +681,7 @@ mod tests {
         host: &str,
         subdomain: Option<&str>,
         definitions: Vec<&str>,
-    ) -> ApiDeployment<DefaultNamespace> {
+    ) -> ApiDeploymentRequest<DefaultNamespace> {
         let api_definition_keys: Vec<ApiDefinitionIdWithVersion> = definitions
             .into_iter()
             .map(|id| ApiDefinitionIdWithVersion {
@@ -689,7 +690,7 @@ mod tests {
             })
             .collect();
 
-        ApiDeployment {
+        ApiDeploymentRequest {
             namespace: DefaultNamespace::default(),
             api_definition_keys,
             site: ApiSite {
@@ -706,7 +707,7 @@ mod tests {
         worker_id: &str,
         response_mapping: &str,
         draft: bool,
-    ) -> HttpApiDefinition {
+    ) -> HttpApiDefinitionRequest {
         let yaml_string = format!(
             r#"
           id: {}
