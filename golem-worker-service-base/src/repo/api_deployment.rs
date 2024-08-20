@@ -30,6 +30,7 @@ pub struct ApiDeploymentRecord {
     pub subdomain: Option<String>,
     pub definition_id: String,
     pub definition_version: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl ApiDeploymentRecord {
@@ -37,6 +38,7 @@ impl ApiDeploymentRecord {
         namespace: Namespace,
         site: ApiSite,
         definition_id: ApiDefinitionIdWithVersion,
+        created_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
             namespace: namespace.to_string(),
@@ -45,6 +47,7 @@ impl ApiDeploymentRecord {
             subdomain: site.subdomain.clone(),
             definition_id: definition_id.id.0,
             definition_version: definition_id.version.0,
+            created_at,
         }
     }
 }
@@ -95,9 +98,9 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
                 sqlx::query(
                     r#"
                       INSERT INTO api_deployments
-                        (namespace, site, host, subdomain, definition_id, definition_version)
+                        (namespace, site, host, subdomain, definition_id, definition_version, created_at)
                       VALUES
-                        ($1, $2, $3, $4, $5, $6)
+                        ($1, $2, $3, $4, $5, $6, $7)
                        "#,
                 )
                 .bind(deployment.namespace.clone())
@@ -106,6 +109,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
                 .bind(deployment.subdomain.clone())
                 .bind(deployment.definition_id.clone())
                 .bind(deployment.definition_version.clone())
+                .bind(deployment.created_at.clone())
                 .execute(&mut *transaction)
                 .await?;
             }
@@ -142,7 +146,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
-                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
                 WHERE namespace = $1 AND definition_id = $2
                 "#,
@@ -162,7 +166,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
-                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
                 WHERE namespace = $1 AND definition_id = $2 AND definition_version = $3
                 "#,
@@ -178,7 +182,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
-                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
                 WHERE site = $1
                 "#,
@@ -195,7 +199,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Sqlite> {
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
-                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data
+                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data, api_definitions.created_at
                 FROM api_deployments
                   JOIN api_definitions ON api_deployments.namespace = api_definitions.namespace AND api_deployments.definition_id = api_definitions.id AND api_deployments.definition_version = api_definitions.version
                 WHERE
@@ -218,9 +222,9 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 sqlx::query(
                     r#"
                       INSERT INTO api_deployments
-                        (namespace, site, host, subdomain, definition_id, definition_version)
+                        (namespace, site, host, subdomain, definition_id, definition_version, created_at)
                       VALUES
-                        ($1, $2, $3, $4, $5, $6)
+                        ($1, $2, $3, $4, $5, $6, $7)
                        "#,
                 )
                 .bind(deployment.namespace.clone())
@@ -229,6 +233,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
                 .bind(deployment.subdomain.clone())
                 .bind(deployment.definition_id.clone())
                 .bind(deployment.definition_version.clone())
+                .bind(deployment.created_at.clone())
                 .execute(&mut *transaction)
                 .await?;
             }
@@ -265,7 +270,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
-                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
                 WHERE namespace = $1 AND definition_id = $2
                 "#,
@@ -285,7 +290,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
-                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
                 WHERE namespace = $1 AND definition_id = $2 AND definition_version = $3
                 "#,
@@ -301,7 +306,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
-                SELECT namespace, site, host, subdomain, definition_id, definition_version
+                SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at
                 FROM api_deployments
                 WHERE
                  site = $1
@@ -319,7 +324,7 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>(
             r#"
-                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data AS data
+                SELECT api_definitions.namespace, api_definitions.id, api_definitions.version, api_definitions.draft, api_definitions.data AS data, api_definitions.created_at
                 FROM api_deployments
                   JOIN api_definitions ON api_deployments.namespace = api_definitions.namespace AND api_deployments.definition_id = api_definitions.id AND api_deployments.definition_version = api_definitions.version
                 WHERE

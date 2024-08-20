@@ -31,6 +31,7 @@ use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::repo::RepoError;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
+use chrono::Utc;
 use std::fmt::Display;
 
 #[async_trait]
@@ -159,6 +160,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Deploy API definitions");
 
+        let created_at = Utc::now();
+
         // Existing deployment
         let existing_deployment_records = self
             .deployment_repo
@@ -230,6 +233,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                     deployment.namespace.clone(),
                     deployment.site.clone(),
                     api_definition_key.clone(),
+                    created_at.clone(),
                 ));
             }
         }

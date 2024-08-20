@@ -16,12 +16,12 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use crate::api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     RouteCompilationErrors,
 };
+use async_trait::async_trait;
+use chrono::Utc;
 use golem_service_base::model::{Component, VersionedComponentId};
 use tracing::{error, info};
 
@@ -221,6 +221,7 @@ where
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
         info!(namespace = %namespace, "Create API definition");
+        let created_at = Utc::now();
 
         let exists = self
             .definition_repo
@@ -250,8 +251,9 @@ where
             &component_metadata_dictionary,
         )?;
 
-        let record = ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition)
-            .map_err(|_| {
+        let record =
+            ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition, created_at)
+                .map_err(|_| {
                 ApiDefinitionError::InternalError("Failed to convert record".to_string())
             })?;
 
@@ -267,28 +269,25 @@ where
         auth_ctx: &AuthCtx,
     ) -> ApiResult<ApiDefinitionId, ValidationError> {
         info!(namespace = %namespace, "Update API definition");
-        let draft = self
+
+        let existing_record = self
             .definition_repo
-            .get_draft(
+            .get(
                 namespace.to_string().as_str(),
                 definition.id.0.as_str(),
                 definition.version.0.as_str(),
             )
             .await?;
 
-        match draft {
-            Some(draft) if !draft => {
-                return Err(ApiDefinitionError::ApiDefinitionNotDraft(
-                    definition.id.clone(),
-                ))
-            }
-            None => {
-                return Err(ApiDefinitionError::ApiDefinitionNotFound(
-                    definition.id.clone(),
-                ))
-            }
-            _ => (),
-        }
+        let created_at = match existing_record {
+            None => Err(ApiDefinitionError::ApiDefinitionNotFound(
+                definition.id.clone(),
+            )),
+            Some(record) if !record.draft => Err(ApiDefinitionError::ApiDefinitionNotDraft(
+                definition.id.clone(),
+            )),
+            Some(record) => Ok(record.created_at),
+        }?;
 
         let components = self.get_all_components(definition, auth_ctx).await?;
 
@@ -303,8 +302,9 @@ where
             &component_metadata_dictionary,
         )?;
 
-        let record = ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition)
-            .map_err(|_| {
+        let record =
+            ApiDefinitionRecord::new(namespace.clone(), compiled_http_api_definition, created_at)
+                .map_err(|_| {
                 ApiDefinitionError::InternalError("Failed to convert record".to_string())
             })?;
 
