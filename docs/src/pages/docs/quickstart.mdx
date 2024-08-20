@@ -49,45 +49,7 @@ open source versions) and the cloud-specific `golem-cloud-cli`.
 
 #### Alternative Versions
 
-You can download the cloud-specific `golem-cloud-cli` without supporting OSS
-deployments from the following page:
-
-<Cards num={1}>
-  <Card
-    title="Golem Cloud Releases"
-    href="https://github.com/golemcloud/golem-cloud-releases/releases"
-  />
-</Cards>
-
-Alternatively, you can build and install cloud-specific `golem-cloud-cli`
-without the universal `golem-cli` with the following command:
-
-```bash filename="Terminal" copy
-cargo install golem-cloud-cli --bin golem-cloud-cli
-```
-
-You can download the open source-specific `golem-cli` without support for Golem
-Cloud from the following page:
-
-<Cards num={1}>
-  <Card title="Golem Releases" href="https://github.com/golemcloud/golem/releases" />
-</Cards>
-
-Alternatively, you can build and install open source-specific `golem-cli`
-without cloud profiles support with the following command:
-
-```bash filename="Terminal" copy
-cargo install golem-cli
-```
-
-<Callout type="info">
-  Open source specific `golem-cli` and universal `golem-cli` can not be installed at the same time.
-  {/* prettier-ignore */}
-
-We will use the universal `golem-cli` in all examples, but `golem-cloud-cli`
-supports all the commands supported by the universal `golem-cli`.
-
-</Callout>
+There are alternative versions of `golem-cli`. Please read the [CLI page](/docs/cli) for more information.
 
 ### Setup
 
@@ -127,7 +89,7 @@ To specify the Golem service location, run the following command:
 golem-cli init
 ```
 
-This command starts an iteractive configuration process. For non-interactive options - see [Golem CLI](/docs/cli) page.
+This command starts an interactive configuration process. For non-interactive options - see [Golem CLI](/docs/cli) page.
 
 On the first step you'll see 3 options:
 
@@ -221,7 +183,7 @@ If a worker of the specified name has not been created, then when you attempt to
 
 The parameters are either listed one by one with separate `--arg` options using the [WAVE format](https://github.com/lann/wasm-wave), or as a single JSON array using `--parameters`.
 
-Check the [Component interface](/docs/concepts/components.mdx) section to learn about how to figure out the **function name** and how to encode your parameters in JSON.
+Check the [Invoke section](/docs/invoke) to learn about how to figure out the **function name** and how to encode your parameters in JSON.
 
 ### Next Steps
 
@@ -229,6 +191,11 @@ In this guide, you have learned how to build and deploy invincible serverless wo
 
 Take your next steps with Golem by exploring the following resources:
 
-- [Building Components](/docs/concepts/components) describes you can use different **programming languages** for building Golem components
-- The [Golem CLI](/docs/cli) page lists all the commands available on Golem's **command line interface**
-- Golem can also be controlled using its [REST API](/docs/rest-api)
+- Read about the [fundamentals of Golem](/docs/fundamentals)
+- Learn about the [main concepts](/docs/concepts)
+- Read one of the [language-specific guides](/docs/develop-overview) to learn how to develop Golem components
+- Check out how to [deploy](/docs/deploy) Golem to your infrastructure
+- Read the details of how to [invoke workers](/docs/invoke)
+- Learn more about the [Golem CLI](/docs/cli)
+- Explore operational aspects such as [how worker state is persisted](/docs/operate/persistence), what [metrics](/docs/operate/metrics) and [logs](/docs/operate/logs) are available
+- Check the **References** section for detailed information on APIs and syntaxes

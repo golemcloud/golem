@@ -18,19 +18,21 @@ Using `golem-cli worker` command you can:
 
 ## Start new worker
 
-Even though worker can automatically start on first worker function call you can explicitly start worker.
-
-Explicit worker startup allows you to specify command line arguments and environment variables for the worker.
+Even though workers can automatically start on the first invocation, it is possible to explicitly start a worker.
+This allows specifying command line arguments and environment variables for the worker.
 
 ```bash
-$ golem-cli worker add --component urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799 --worker-name counter1 --env A=1 --env B=2 arg1 arg2
+golem-cli worker add --component urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799 --worker-name counter1 --env A=1 --env B=2 arg1 arg2
+```
+
+```
 New worker created for component urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799, with name counter1.
 Worker URN: urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
 ```
 
 You can see the URN for your new worker in command output. You can use URN whenever you want to specify worker instead of component and worker name.
 
-## Search workers
+## Get worker metadata
 
 ### Using URN
 
@@ -60,14 +62,17 @@ You can get worker metadata using worker name and component (via `--component` w
 golem-cli worker get --component urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799 --worker-name counter1
 ```
 
-### Search workers
+## Search workers
 
 You can search for workers of some components using `worker list` command with repeated `--filter` argument.
 
 For instance lets find idle workers with component version older than 2:
 
 ```bash
-$ golem-cli worker list --component urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799 --filter "status = Idle" --filter "version < 2"
+golem-cli worker list --component urn:component:d8bc9194-a4a2-4a57-8545-43408fc38799 --filter "status = Idle" --filter "version < 2"
+```
+
+```
 +----------------------------------------------------+----------+--------+-------------------+
 | Component                                          | Name     | Status | Component version |
 +----------------------------------------------------+----------+--------+-------------------+
@@ -75,7 +80,14 @@ $ golem-cli worker list --component urn:component:d8bc9194-a4a2-4a57-8545-43408f
 +----------------------------------------------------+----------+--------+-------------------+
 ```
 
+<Callout type="warning">
+  Enumerating workers is a slow operation and should only be used for debugging an administrative
+  tasks.
+</Callout>
+
 ## Invoke functions
+
+The folowig section shows the basics of invoking workers through the CLI. See the [dedicated invocation with CLI page](/docs/invoke/cli) for more details.
 
 ### Without waiting for result
 
@@ -136,7 +148,7 @@ golem-cli worker update-many --component urn:component:d8bc9194-a4a2-4a57-8545-4
 
 ## Interrupt and resume workers
 
-If you want to interrupt and later resume long-running worker you can use `interrupt` and `resume` commands:
+If you want to interrupt and later resume a long-running worker you can use `interrupt` and `resume` commands:
 
 ```bash
 golem-cli worker interrupt --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
@@ -153,7 +165,7 @@ golem-cli worker simulated-crash --worker urn:worker:d8bc9194-a4a2-4a57-8545-434
 
 ## Stopping workers
 
-Idle worker should not consume CPU resources and RAM, but in some cases you might want to delete worker. It can be done using `worker delete` command:
+Idle worker are not actively consuming resources but they take storage as their state is persisted. A worker can be deleted using the `worker delete` command:
 
 ```bash
 golem-cli worker delete --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
@@ -164,8 +176,11 @@ This command deletes worker state.
 Please note that even though the worker can be deleted this way it would be started again (with the fresh state) if used:
 
 ```bash
-$ golem-cli worker delete --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
-$ golem-cli worker invoke-and-await --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --function 'rpc:counters/api.{get-global-value}'
+golem-cli worker delete --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1
+golem-cli worker invoke-and-await --worker urn:worker:d8bc9194-a4a2-4a57-8545-43408fc38799/counter1 --function 'rpc:counters/api.{get-global-value}'
+```
+
+```
 Invocation results in WAVE format:
 - '0'
 ```

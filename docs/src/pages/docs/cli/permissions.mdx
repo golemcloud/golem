@@ -1,1 +1,97 @@
+import { Callout } from "nextra/components"
+
 # Golem CLI Permissions
+
+<Callout type="info">This page only applies to the hosted **Golem Cloud**.</Callout>
+
+## Tokens
+
+Tokens are API keys that allow accessing **Golem Cloud** APIs from external services. The `golem-cloud-cli` tool allows managing these tokens.
+To manage them programmatically, check [the token API](/docs/rest-api/cloud-rest-api/token).
+
+### Listing existing tokens
+
+The following command lists all the tokens associated with your account:
+
+```bash filename="Terminal" copy
+golem-cloud-cli token list
+```
+
+### Creating a new token
+
+To create a new token, use the following command:
+
+```bash filename="Terminal" copy
+golem-cloud-cli token add
+```
+
+```
+New token created with id 08bc0eac-5c51-40a5-8bc6-5c8928efb475 and expiration date 2100-01-01 00:00:00 UTC.
+Please save this token secret, you can't get this data later:
+64cf566c-ed72-48e5-b786-b88aa0298fb4
+```
+
+Optionally, an expiration date can be specified with `--expires-at`. If not specified, default expiration date is `2100-01-01 00:00:00 UTC`.
+
+### Deleting a token
+
+Each token has a **token ID**. Use the `token delete` command to remove a token using it's identifier:
+
+```bash filename="Terminal" copy
+golem-cloud-cli token delete 08bc0eac-5c51-40a5-8bc6-5c8928efb475
+```
+
+## Project sharing
+
+On **Golem Cloud** components are organized into **projects**.
+
+### Listing projects
+
+Existing projects can be listed using the `project list` subcommand:
+
+```bash filename="Terminal" copy
+golem-cloud-cli project list
+```
+
+### Adding projects
+
+A new project can be created using `project add`. The command expects a project name and description:
+
+```bash filename="Terminal" copy
+golem-cloud-cli project add --project-name "Golem Demo" --project-description "A new project for demonstrating the project feature"
+```
+
+When creating components or workers, the project can be specified with the `--project-name` flag. Every user has a **default project** which is used when no explicit project is specified.
+
+### Sharing projects with other accounts
+
+Projects can be shared among multiple Golem Cloud accounts.
+
+To share a project, use the `share` subcommand:
+
+```bash filename="Terminal" copy
+golem-cloud-cli share --project-name "Golem Demo" --recipient-account-id 08bc0eac-5c51-40a5-8bc6-5c8928efb475 --project-actions ViewWorker --project-actions ViewComponent
+```
+
+This example shares the "Golem Demo" project with the account identified by `08bc0eac-5c51-40a5-8bc6-5c8928efb475` and grants component and worker **view** permissions for it.
+
+<Callout>
+  Alternatively it is possible to create and manage **project policies** using the `project-policy`
+  subcommand, and refer to these policies in the `share` command later.
+</Callout>
+
+The following table lists all the **actions** that can be granted to a project:
+
+| Action                | Description                                   |
+| --------------------- | --------------------------------------------- |
+| `ViewComponent`       | List, download and get metadata of components |
+| `CreateComponent`     | Create new components                         |
+| `UpdateComponent`     | Update existing components                    |
+| `DeleteComponent`     | Delete components                             |
+| `ViewWorker`          | List and get metadata of workers              |
+| `CreateWorker`        | Create new workers                            |
+| `UpdateWorker`        | Update existing workers                       |
+| `DeleteWorker`        | Delete workers                                |
+| `ViewProjectGrants`   | List existing project grants                  |
+| `CreateProjectGrants` | Grant more access for the project             |
+| `DeleteProjectGrants` | Revoke access for the project                 |

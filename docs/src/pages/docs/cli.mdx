@@ -1,1 +1,101 @@
+import { Callout } from "nextra/components"
+import { Card, Cards } from "nextra/components"
+
 # Golem CLI Introduction
+
+Golem CLI is a command-line interface for interacting with Golem. Golem CLI allows users to upload their components, launch new workers based on these components and call functions on running workers.
+
+## Golem CLI versions
+
+There are 3 different Golem CLI versions available for installation:
+
+- **Universal** golem-cli that supports both open sourse and hosted versions of Golem.
+- **Open source** specific golem-cli without support for the hosted version of Golem.
+- **Cloud** version without support for the open source version of Golem.
+
+The universla Golem CLI includes all the functionality of the open source specific Golem CLI and Golem Cloud CLI. For these examples we will use universal `golem-cli` unless specified otherwise.
+
+## Installation
+
+There are two ways to install any of the above described versions of Golem CLI:
+
+- Downloading a precompiled platform-specific binary
+- Installing from source using Rust tooling
+
+<Callout type="info">
+  Open source specific `golem-cli` and universal `golem-cli` can not be installed at the same time.
+  {/* prettier-ignore */}
+</Callout>
+
+### Downloading precompiled binaries
+
+You can download the precompiled version of `golem-cli` from one of the following pages:
+
+<Cards num={2}>
+  <Card
+    title="Universal and Golem Cloud Releases"
+    href="https://github.com/golemcloud/golem-cloud-releases/releases/tag/v1.0.0"
+  />
+  <Card
+    title="Open Source Golem Releases"
+    href="https://github.com/golemcloud/golem/releases/tag/v1.0.0"
+  />
+</Cards>
+
+We provide precompiled binaries for the following platforms:
+
+- Mac arm64
+- Mac x86_6
+- Linux arm64
+- Linux x86_64
+- Windows x86_64
+
+<Callout type="warning">
+  The Windows binaries currently does not have the `.exe` extension, please rename them after
+  download.
+</Callout>
+
+<Callout type="info">
+  Some platforms may protect by default from running these downloaded binaries. You may need to
+  allow running them in your system settings.
+</Callout>
+
+### Installing from source
+
+To build `golem-cli` you need to use `cargo`, Rust's build tool.
+
+To get `cargo` on your system, we recommend using [rustup](https://rustup.rs/):
+
+```bash filename="Terminal" copy
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup install stable
+rustup default stable
+```
+
+Then use **one** of the following commands to install the desired version of Golem CLI:
+
+```bash filename="Universal Golem CLI" copy
+cargo install --features universal golem-cloud-cli
+```
+
+```bash filename="Open source Golem CLI" copy
+cargo install golem-cli
+```
+
+```bash filename="Cloud-only Golem CLI" copy
+cargo install golem-cloud-cli --bin golem-cloud-cli
+```
+
+## Profiles
+
+The Golem CLI can have multiple profiles configured, each selecting a specific Golem cluster to connect to, as well as some settings like the default output format.
+
+See the [Golem CLI profiles page](/docs/cli/profiles) for more information.
+
+## Working with components
+
+Golem CLI can manage [Golem Components](/docs/concepts/components). See the [Golem CLI components page](/docs/cli/components) for details.
+
+## Interacting with workers
+
+Golem CLI allows creating, invoking and observing [Golem Workers](/docs/concepts/workers). See the [Golem CLI workers page](/docs/cli/workers) for more information.
