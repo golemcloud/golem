@@ -13,6 +13,7 @@ use crate::cloud::clients::project_grant::{ProjectGrantClient, ProjectGrantClien
 use crate::cloud::clients::token::{TokenClient, TokenClientLive};
 use crate::cloud::clients::worker::WorkerClientLive;
 use crate::cloud::clients::CloudAuthentication;
+use crate::cloud::main::get_auth;
 use crate::cloud::model::ProjectRef;
 use crate::cloud::service::account::{AccountService, AccountServiceLive};
 use crate::cloud::service::certificate::{CertificateService, CertificateServiceLive};
@@ -22,17 +23,20 @@ use crate::cloud::service::policy::{ProjectPolicyService, ProjectPolicyServiceLi
 use crate::cloud::service::project::{CloudProjectResolver, ProjectService, ProjectServiceLive};
 use crate::cloud::service::project_grant::{ProjectGrantService, ProjectGrantServiceLive};
 use crate::cloud::service::token::{TokenService, TokenServiceLive};
+use async_trait::async_trait;
 use golem_cli::clients::api_definition::ApiDefinitionClient;
 use golem_cli::clients::api_deployment::ApiDeploymentClient;
 use golem_cli::clients::component::ComponentClient;
 use golem_cli::clients::health_check::HealthCheckClient;
 use golem_cli::clients::worker::WorkerClient;
 use golem_cli::cloud::ProjectId;
-use golem_cli::config::CloudProfile;
+use golem_cli::config::{CloudProfile, Config, Profile, ProfileName};
 use golem_cli::factory::{FactoryWithAuth, ServiceFactory};
+use golem_cli::init::ProfileAuth;
 use golem_cli::model::GolemError;
 use golem_cli::service::project::ProjectResolver;
 use golem_cloud_client::{Context, Security};
+use std::path::Path;
 use std::sync::Arc;
 use url::Url;
 
@@ -396,5 +400,29 @@ impl ServiceFactory for CloudServiceFactory {
                 },
             }),
         ])
+    }
+}
+
+pub struct CloudProfileAuth();
+
+#[async_trait]
+impl ProfileAuth for CloudProfileAuth {
+    fn auth_enabled(&self) -> bool {
+        true
+    }
+
+    async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError> {
+        let profile = Config::get_profile(profile_name, config_dir)
+            .ok_or(GolemError(format!("Can't find profile '{profile_name}'")))?;
+
+        match profile {
+            Profile::Golem(_) => Ok(()),
+            Profile::GolemCloud(profile) => {
+                let factory = CloudServiceFactory::from_profile(&profile);
+
+                let _ = get_auth(None, profile_name, &profile, config_dir, &factory).await?;
+                Ok(())
+            }
+        }
     }
 }

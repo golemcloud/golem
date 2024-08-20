@@ -1,12 +1,11 @@
 use crate::cloud::clients::CloudAuthentication;
 use crate::cloud::command::{CloudCommand, GolemCloudCommand};
-use crate::cloud::factory::CloudServiceFactory;
+use crate::cloud::factory::{CloudProfileAuth, CloudServiceFactory};
 use crate::cloud::model::ProjectRef;
-use async_trait::async_trait;
 use colored::Colorize;
 use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cli::command::profile::UniversalProfileAdd;
-use golem_cli::config::{CloudProfile, Config, Profile, ProfileName};
+use golem_cli::config::{CloudProfile, ProfileName};
 use golem_cli::examples;
 use golem_cli::factory::ServiceFactory;
 use golem_cli::init::{CliKind, PrintCompletion, ProfileAuth};
@@ -20,7 +19,7 @@ use golem_common::uri::cloud::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-async fn get_auth(
+pub async fn get_auth(
     auth_token: Option<Uuid>,
     profile_name: &ProfileName,
     profile: &CloudProfile,
@@ -271,9 +270,11 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
         }
         CloudCommand::Profile { subcommand } => {
-            subcommand.handle(cli_kind, &config_dir, &factory).await
+            subcommand
+                .handle(cli_kind, &config_dir, &CloudProfileAuth())
+                .await
         }
-        CloudCommand::Init {} => init(cli_kind, &config_dir, &factory).await,
+        CloudCommand::Init {} => init(cli_kind, &config_dir, &CloudProfileAuth()).await,
         CloudCommand::Completion { generator } => {
             print_completion.print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
@@ -286,26 +287,6 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             Ok(())
         }
         Err(err) => Err(Box::new(err)),
-    }
-}
-
-#[async_trait]
-impl ProfileAuth for CloudServiceFactory {
-    fn auth_enabled(&self) -> bool {
-        true
-    }
-
-    async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError> {
-        let profile = Config::get_profile(profile_name, config_dir)
-            .ok_or(GolemError(format!("Can't find profile '{profile_name}'")))?;
-
-        match profile {
-            Profile::Golem(_) => Ok(()),
-            Profile::GolemCloud(profile) => {
-                let _ = get_auth(None, profile_name, &profile, config_dir, self).await?;
-                Ok(())
-            }
-        }
     }
 }
 

@@ -9,12 +9,13 @@ use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
-use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand, PrintCompletion};
+use golem_cli::init::{CliKind, GolemInitCommand, PrintCompletion};
 use golem_cli::oss;
 use golem_cli::oss::command::GolemOssCommand;
 use golem_cloud_cli::cloud;
 use golem_cloud_cli::cloud::command::GolemCloudCommand;
 use golem_cloud_cli::cloud::completion::PrintCloudUniversalCompletion;
+use golem_cloud_cli::cloud::factory::CloudProfileAuth;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap();
@@ -43,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         CliKind::Universal,
                         config_dir,
                         Box::new(PrintOssUniversalCompletion()),
-                        Box::new(DummyProfileAuth {}),
+                        Box::new(CloudProfileAuth()),
                     ))
             }
             Profile::GolemCloud(p) => {
@@ -80,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 command,
                 CliKind::Universal,
                 config_dir,
-                Box::new(DummyProfileAuth {}),
+                Box::new(CloudProfileAuth()),
                 Box::new(PrintCloudUniversalCompletion()),
             ))
     }
