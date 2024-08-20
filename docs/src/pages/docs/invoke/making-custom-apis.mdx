@@ -44,14 +44,14 @@ The following API definition exposes the `get-cart-contents` function as a custo
 
 The API definition's fields have the following meaning:
 
-| Field     | Description                                                                                                                                                                                                                                 |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `id`      | This field represents the unique identifier for the API definition. In this case, it is set to "shopping-cart-v1".                                                                                                                          |
-| `version` | This field indicates the version of the API definition. Here, it is set to "0.0.3".                                                                                                                                                         |
-| `routes`  | This field contains an array of route objects, each representing a specific endpoint definition.                                                                                                                                            |
-| `method`  | Indicates the HTTP method associated with the route. In this example, it is set to "Get", indicating that this route handles GET requests.                                                                                                  |
-| `path`    | Specifies the URL path pattern for the route. It may include path parameters enclosed in curly braces. Here, the path is `/{user-id}/get-cart-contents`, indicating that this route handles requests to retrieve the contents of a shopping | cart for a specific user. |
-| `binding` | This object contains information about how the request should be handled by the Golem worker.                                                                                                                                               |
+| Field     | Description                                                                                                                                                                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`      | This field represents the unique identifier for the API definition. In this case, it is set to "shopping-cart-v1".                                                                                                                                                    |
+| `version` | This field indicates the version of the API definition. Here, it is set to "0.0.3".                                                                                                                                                                                   |
+| `routes`  | This field contains an array of route objects, each representing a specific endpoint definition.                                                                                                                                                                      |
+| `method`  | Indicates the HTTP method associated with the route. In this example, it is set to "Get", indicating that this route handles GET requests.                                                                                                                            |
+| `path`    | Specifies the URL path pattern for the route. It may include path parameters enclosed in curly braces. Here, the path is `/{user-id}/get-cart-contents`, indicating that this route handles requests to retrieve the contents of a shopping cart for a specific user. |
+| `binding` | This object contains information about how the request should be handled by the Golem worker.                                                                                                                                                                         |
 
 ### Golem Worker Binding
 

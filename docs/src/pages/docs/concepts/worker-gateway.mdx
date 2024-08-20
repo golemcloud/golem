@@ -6,7 +6,7 @@ import { Card, Cards } from "nextra/components"
 Golem is a durable computing platform that makes it simple to build and deploy
 highly reliabile distributed systems.
 
-Golem is highly scalable, and partitions [workers](#concepts-workers.mdx) across
+Golem is highly scalable, and partitions [workers](/docs/concepts/workers.mdx) across
 many worker executor nodes, which are each in charge of running a different
 subset of workers.
 
@@ -19,7 +19,7 @@ interact with the node directly, because it could fail, and you would have to
 implement logic that detects failure and waits until the worker is recovered on
 a new node before retrying the invocation.
 
-Moreover, the native protocol for [invoking](#concepts-invocation.mdx) workers
+Moreover, the native protocol for [invoking](/docs/concepts/invocations.mdx) workers
 is low-level and inflexible, and most developers will not want to expose the
 invocation API to the outside world or to front-end applications.
 
@@ -36,5 +36,5 @@ The primary functions of the _Worker Gateway_ are as follows:
    technical requirements.
 
 To learn more about how the Worker Gateway supports custom APIs, you can read
-the high-level [introduction to _API Definitions_](#concepts-api-definitions.mdx),
+the high-level [introduction to _API Definitions_](/docs/concepts/api-definitions.mdx),
 which links to further references.
