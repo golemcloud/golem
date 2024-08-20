@@ -18,6 +18,7 @@ pub fn pull_types_up(expr: &mut Expr) {
         Expr::Tuple(exprs, inferred_type) => {
             let mut types = vec![];
             for expr in exprs {
+                expr.pull_types_up();
                 types.push(expr.inferred_type());
             }
             let tuple_type = InferredType::Tuple(types);
@@ -26,6 +27,7 @@ pub fn pull_types_up(expr: &mut Expr) {
         Expr::Sequence(exprs, inferred_type) => {
             let mut types = vec![];
             for expr in exprs {
+                expr.pull_types_up();
                 types.push(expr.inferred_type());
             }
             if let Some(new_inferred_type) = types.first() {
@@ -36,6 +38,7 @@ pub fn pull_types_up(expr: &mut Expr) {
         Expr::Record(exprs, inferred_type) => {
             let mut types = vec![];
             for (field_name, expr) in exprs {
+                expr.pull_types_up();
                 types.push((field_name.clone(), expr.inferred_type()));
             }
             let record_type = InferredType::Record(types);
@@ -46,6 +49,7 @@ pub fn pull_types_up(expr: &mut Expr) {
             inferred_type.update(option_type)
         }
         Expr::Result(Ok(expr), inferred_type) => {
+            expr.pull_types_up();
             let result_type = InferredType::Result {
                 ok: Some(Box::new(expr.inferred_type())),
                 error: None,
@@ -53,6 +57,7 @@ pub fn pull_types_up(expr: &mut Expr) {
             inferred_type.update(result_type)
         }
         Expr::Result(Err(expr), inferred_type) => {
+            expr.pull_types_up();
             let result_type = InferredType::Result {
                 ok: None,
                 error: Some(Box::new(expr.inferred_type())),
@@ -76,10 +81,14 @@ pub fn pull_types_up(expr: &mut Expr) {
 
         // When it comes to pattern match, the only way to resolve the type of the pattern match
         // from children (pulling types up) is from the match_arms
-        Expr::PatternMatch(_, match_arms, inferred_type) => {
+        Expr::PatternMatch(predicate, match_arms, inferred_type) => {
+            predicate.pull_types_up();
             let mut possible_inference_types = vec![];
+
             for match_arm in match_arms {
-                // match_arm.arm_resolution_expr.pull_types_up();
+                internal::pull_up_types_of_arm_pattern(&mut match_arm.arm_pattern);
+
+                match_arm.arm_resolution_expr.pull_types_up();
                 possible_inference_types.push(match_arm.arm_resolution_expr.inferred_type())
             }
 
@@ -157,5 +166,186 @@ pub fn pull_types_up(expr: &mut Expr) {
         Expr::Throw(_, _) => {}
         Expr::Tag(expr, _) => expr.pull_types_up(),
         Expr::Option(None, _) => {}
+    }
+}
+
+mod internal {
+    use crate::ArmPattern;
+
+    pub(crate) fn pull_up_types_of_arm_pattern(arm_pattern: &mut ArmPattern) {
+        match arm_pattern {
+            ArmPattern::WildCard => {}
+            ArmPattern::As(_, arms_patterns) => {
+                pull_up_types_of_arm_pattern(arms_patterns);
+            }
+            ArmPattern::Constructor(_, arm_patterns) => {
+                for arm_pattern in arm_patterns {
+                    pull_up_types_of_arm_pattern(arm_pattern);
+                }
+            }
+            ArmPattern::Literal(expr) => {
+                expr.pull_types_up();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod type_pull_up_tests {
+    use crate::{Expr, InferredType, Number, ParsedFunctionName};
+
+    #[test]
+    pub fn test_pull_up_identifier() {
+        let expr = "foo";
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.add_infer_type_mut(InferredType::Str);
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Str);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_select_field() {
+        let record_identifier =
+            Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
+                "foo".to_string(),
+                InferredType::Record(vec![("bar".to_string(), InferredType::U64)]),
+            )]));
+        let select_expr = Expr::select_field(record_identifier, "foo");
+        let mut expr = Expr::select_field(select_expr, "bar");
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::U64);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_select_index() {
+        let expr =
+            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let mut expr = Expr::select_index(expr, 0);
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::U64);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_sequence() {
+        let mut expr = Expr::Sequence(
+            vec![
+                Expr::Number(Number { value: 1f64 }, InferredType::U64),
+                Expr::Number(Number { value: 1f64 }, InferredType::U32),
+            ],
+            InferredType::Unknown,
+        );
+        expr.pull_types_up();
+        assert_eq!(
+            expr.inferred_type(),
+            InferredType::List(Box::new(InferredType::U64))
+        );
+    }
+
+    #[test]
+    pub fn test_pull_up_for_tuple() {
+        let mut expr = Expr::tuple(vec![
+            Expr::literal("foo"),
+            Expr::Number(Number { value: 1f64 }, InferredType::U64),
+        ]);
+        expr.pull_types_up();
+        assert_eq!(
+            expr.inferred_type(),
+            InferredType::Tuple(vec![InferredType::Str, InferredType::U64])
+        );
+    }
+
+    #[test]
+    pub fn test_pull_up_for_record() {
+        let mut expr = Expr::record(vec![
+            (
+                "foo".to_string(),
+                Expr::Number(Number { value: 1f64 }, InferredType::U64),
+            ),
+            (
+                "bar".to_string(),
+                Expr::Number(Number { value: 1f64 }, InferredType::U64),
+            ),
+        ]);
+        expr.pull_types_up();
+        assert_eq!(
+            expr.inferred_type(),
+            InferredType::Record(vec![
+                ("foo".to_string(), InferredType::U64),
+                ("bar".to_string(), InferredType::U64)
+            ])
+        );
+    }
+
+    #[test]
+    pub fn test_pull_up_for_concat() {
+        let mut expr = Expr::concat(vec![Expr::number(1f64), Expr::number(2f64)]);
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Str);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_not() {
+        let mut expr = Expr::not(Expr::boolean(true));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_greater_than() {
+        let mut expr = Expr::greater_than(Expr::number(1f64), Expr::number(2f64));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_greater_than_or_equal_to() {
+        let mut expr = Expr::greater_than_or_equal_to(Expr::number(1f64), Expr::number(2f64));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_less_than_or_equal_to() {
+        let mut expr = Expr::less_than_or_equal_to(Expr::number(1f64), Expr::number(2f64));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_equal_to() {
+        let mut expr = Expr::equal_to(Expr::number(1f64), Expr::number(2f64));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_less_than() {
+        let mut expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_call() {
+        let mut expr = Expr::call(
+            ParsedFunctionName::parse("global_fn").unwrap(),
+            vec![Expr::number(1f64)],
+        );
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Unknown);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_unwrap() {
+        let mut expr = Expr::option(Some(Expr::number(1f64))).unwrap();
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Unknown);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_tag() {
+        let mut expr = Expr::tag(Expr::number(1f64));
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::Unknown);
     }
 }

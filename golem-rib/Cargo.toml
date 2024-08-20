@@ -20,6 +20,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 wasm-wave = { workspace = true }
 tokio = {workspace = true}
+log = "0.4.22"
 
 [lib]
 name = "rib"

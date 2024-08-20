@@ -3576,9 +3576,9 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "1.0.0-rc2"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ac60c107db14e5f91abe5d68bbf02349f2cb856de14bd9c76b18ae5f9f9e58e"
+checksum = "cdf804c2fba657a45213ab5d3e2460c9ed7dfd4d0e74d4472e4a1aa04c25afa2"
 dependencies = [
  "Inflector",
  "cargo_metadata",
@@ -3625,6 +3625,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "log",
  "semver",
  "serde 1.0.207",
  "serde_json",
@@ -3747,9 +3748,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "1.0.0-rc1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "770844a7ec2727fcef6dad6f11283a99682f10c81985f1ec2c75828316076b94"
+checksum = "eb5a7ea3b63c2b1bc04c7de835d1c74bb40343211879af4d1d866cb8a7b51a61"
 dependencies = [
  "bincode",
  "leb128",
@@ -3767,9 +3768,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "1.0.0-rc1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91951471a6504b3649e9687a32971dbd768f2027dcab052145809502f31454fc"
+checksum = "6cb7a631f0cd0a164765ba699020c06eb4fb2d4ce7d16795c74259914052143d"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3791,9 +3792,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.0.0-rc1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "491cf02dde768a310d7ba4907b072bbbcb93ed7bb703146733d3e3a908635676"
+checksum = "abd968695c1a9bfd04bba247e477d2327ba63b7a896ba825d30c2817195d358b"
 dependencies = [
  "anyhow",
  "cargo-component",
@@ -3824,9 +3825,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wit"
-version = "1.0.0-rc1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44357f9814854f8f672c77c63a1fce2b0258ad6f36115a3773a189976848635e"
+checksum = "419a91ba9038ca4b0d18378d5f3d4631377df436b3982dae0891503b86b2914e"
 
 [[package]]
 name = "golem-worker-executor"

@@ -1,5 +1,5 @@
 use crate::{Expr, InferredType, MatchArm};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 pub fn push_types_down(expr: &mut Expr) {
     let mut queue = VecDeque::new();
@@ -245,9 +245,8 @@ pub fn push_types_down(expr: &mut Expr) {
                 }
             }
 
+            // {bohy
             Expr::Record(expressions, inferred_type) => {
-                // The inferred_type should be ideally record type, i.e, either Unknown type. or all of multiple record types, or one of all record types,
-                // and otherwise we give up inferring the internal type at this phase
                 match inferred_type {
                     InferredType::Record(types) => {
                         for (field_name, expr) in expressions.iter_mut() {
@@ -259,52 +258,21 @@ pub fn push_types_down(expr: &mut Expr) {
                             queue.push_back(expr);
                         }
                     }
+
                     InferredType::AllOf(types) => {
-                        let mut all_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Record(types) = typ {
-                                all_of_types.push(types);
-                            }
-                        }
-
-                        let mut map = HashMap::new();
-
-                        for vec in all_of_types {
-                            for (key, value) in vec {
-                                if !value.is_unknown() {
-                                    map.entry(key).or_insert_with(Vec::new).push(value);
-                                }
-                            }
-                        }
-
-                        let final_type = map
-                            .into_iter()
-                            .map(|(x, y)| {
-                                (
-                                    x.clone(),
-                                    InferredType::AllOf(y.into_iter().map(|x| x.clone()).collect()),
-                                )
-                            })
-                            .collect::<Vec<_>>();
-
-                        *inferred_type = InferredType::Record(final_type);
+                        internal::handle_all_of_push_down_for_record(
+                            types,
+                            expressions,
+                            &mut queue,
+                        );
                     }
 
                     InferredType::OneOf(types) => {
-                        let mut one_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Record(types) = typ {
-                                one_of_types.extend(types);
-                            }
-                        }
-                        for (field_name, expr) in expressions.iter_mut() {
-                            if let Some((_, typ)) =
-                                one_of_types.iter().find(|(name, _)| name == field_name)
-                            {
-                                expr.add_infer_type_mut(typ.clone());
-                            }
-                            queue.push_back(expr);
-                        }
+                        internal::handle_one_of_push_down_for_record(
+                            types,
+                            expressions,
+                            &mut queue,
+                        );
                     }
                     // we can't push down the types otherwise
                     _ => {}
@@ -317,12 +285,69 @@ pub fn push_types_down(expr: &mut Expr) {
 }
 
 mod internal {
-    use crate::{ArmPattern, InferredType};
+    use crate::{ArmPattern, Expr, InferredType};
+    use std::collections::{HashMap, VecDeque};
 
-    // This function is called from pushed down phase, and we push down the predicate
-    // types to arm patterns where ever possible
-    // match some(x) {
-    //   some(some(some(x))) => x
+    pub(crate) fn handle_all_of_push_down_for_record<'a>(
+        outer_inferred_types: &'a mut Vec<InferredType>,
+        inner_expressions: &'a mut [(String, Box<Expr>)],
+        push_down_queue: &mut VecDeque<&'a mut Expr>,
+    ) {
+        handle_push_down_for_record(
+            outer_inferred_types,
+            inner_expressions,
+            push_down_queue,
+            InferredType::all_of,
+        );
+    }
+
+    pub(crate) fn handle_one_of_push_down_for_record<'a>(
+        outer_inferred_types: &'a mut Vec<InferredType>,
+        inner_expressions: &'a mut [(String, Box<Expr>)],
+        push_down_queue: &mut VecDeque<&'a mut Expr>,
+    ) {
+        handle_push_down_for_record(
+            outer_inferred_types,
+            inner_expressions,
+            push_down_queue,
+            InferredType::one_of,
+        );
+    }
+
+    fn handle_push_down_for_record<'a, F>(
+        outer_inferred_types: &'a mut Vec<InferredType>,
+        inner_expressions: &'a mut [(String, Box<Expr>)],
+        push_down_queue: &mut VecDeque<&'a mut Expr>,
+        process_inferred_type: F,
+    ) where
+        F: Fn(Vec<InferredType>) -> InferredType,
+    {
+        let mut all_of_types = vec![];
+
+        for typ in outer_inferred_types {
+            if let InferredType::Record(types) = typ {
+                all_of_types.push(types);
+            }
+        }
+
+        let mut map = HashMap::new();
+
+        for vec in all_of_types {
+            for (key, value) in vec {
+                if !value.is_unknown() {
+                    map.entry(key).or_insert_with(Vec::new).push(value);
+                }
+            }
+        }
+        for (field_name, expr) in inner_expressions.iter_mut() {
+            if let Some(types) = map.get(field_name) {
+                let new_types = types.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
+                expr.add_infer_type_mut(process_inferred_type(new_types));
+            }
+            push_down_queue.push_back(expr);
+        }
+    }
+
     pub(crate) fn update_arm_pattern_type(
         arm_pattern: &mut ArmPattern,
         inferred_type: &InferredType,
@@ -376,5 +401,37 @@ mod internal {
             },
             ArmPattern::WildCard => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod type_push_down_tests {
+    use crate::{Expr, InferredType, VariableId};
+
+    #[test]
+    fn test_push_down_for_record() {
+        let mut expr = Expr::Record(
+            vec![("titles".to_string(), Box::new(Expr::identifier("x")))],
+            InferredType::AllOf(vec![
+                InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
+                InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
+            ]),
+        );
+
+        expr.push_types_down();
+        let expected = Expr::Record(
+            vec![(
+                "titles".to_string(),
+                Box::new(Expr::Identifier(
+                    VariableId::global("x".to_string()),
+                    InferredType::U64,
+                )),
+            )],
+            InferredType::AllOf(vec![
+                InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
+                InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
+            ]),
+        );
+        assert_eq!(expr, expected);
     }
 }
