@@ -165,6 +165,7 @@ impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
             BaseApiDefinitionError::ApiDefinitionDeployed(_) => {
                 ApiEndpointError::bad_request(value)
             }
+            BaseApiDefinitionError::RibCompilationErrors(_) => ApiEndpointError::bad_request(value),
         }
     }
 }

@@ -6,7 +6,9 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 use golem_service_base::config::DbConfig;
 use golem_service_base::db;
-use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::api_definition::http::{
+    CompiledHttpApiDefinition, HttpApiDefinition,
+};
 use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
@@ -73,7 +75,7 @@ pub struct ApiServices {
     pub worker_service: Arc<dyn WorkerService + Sync + Send>,
     pub worker_request_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub http_request_api_definition_lookup_service:
-        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
 }
 
 pub async fn get_api_services(
