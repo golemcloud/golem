@@ -118,7 +118,10 @@ fn to_oss_golem_worker_binding(b: GolemWorkerBinding) -> golem_client::model::Go
     } = b;
 
     golem_client::model::GolemWorkerBinding {
-        component_id,
+        component_id: golem_client::model::VersionedComponentId {
+            component_id: component_id.component_id,
+            version: component_id.version,
+        },
         worker_name,
         idempotency_key,
         response,

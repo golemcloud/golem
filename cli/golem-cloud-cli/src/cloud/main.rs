@@ -291,6 +291,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
 #[async_trait]
 impl ProfileAuth for CloudServiceFactory {
+    fn auth_enabled(&self) -> bool {
+        true
+    }
+
     async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError> {
         let profile = Config::get_profile(profile_name, config_dir)
             .ok_or(GolemError(format!("Can't find profile '{profile_name}'")))?;
@@ -310,8 +314,13 @@ async fn init(
     config_dir: &Path,
     profile_auth: &(dyn ProfileAuth + Send + Sync),
 ) -> Result<GolemResult, GolemError> {
-    let res =
-        golem_cli::init::init_profile(cli_kind, ProfileName::default(cli_kind), config_dir).await?;
+    let res = golem_cli::init::init_profile(
+        cli_kind,
+        ProfileName::default(cli_kind),
+        config_dir,
+        profile_auth,
+    )
+    .await?;
 
     if res.auth_required {
         profile_auth.auth(&res.profile_name, config_dir).await?

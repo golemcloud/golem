@@ -43,6 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         CliKind::Universal,
                         config_dir,
                         Box::new(PrintOssUniversalCompletion()),
+                        Box::new(DummyProfileAuth {}),
                     ))
             }
             Profile::GolemCloud(p) => {

@@ -29,9 +29,9 @@ harness = false
 
 [dependencies]
 golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0"}
-golem-client = "0.0.138"
-golem-cli = "0.0.138"
-golem-common = "0.0.138"
+golem-client = "1.0.0-rc1"
+golem-cli = "1.0.0-rc1"
+golem-common = "1.0.0-rc1"
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -41,10 +41,10 @@ clap_complete = {  version = "4.5.13" }
 derive_more = { workspace = true }
 dirs = "5.0.1"
 futures-util = { workspace = true }
-golem-examples = "0.3.3"
+golem-examples = "1.0.0-rc1"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-golem-wasm-rpc-stubgen = { version = "0.0.39", optional = true }
+golem-wasm-rpc-stubgen = { version = "1.0.0-rc1", optional = true }
 h2 = "0.3.24"
 http = { workspace = true }
 hyper = { workspace = true }
@@ -94,7 +94,7 @@ strip-ansi-escapes = "0.2.0"
 once_cell = "1.19.0"
 golem-api-grpc = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc"}
-golem-test-framework = "0.0.138"
+golem-test-framework = "1.0.0-rc1"
 
 
 [features]
