@@ -95,16 +95,21 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
             .add(component_name.clone(), component_file.clone(), &project)
             .await;
 
-        let can_fallback = format == Format::Text && !non_interactive;
-        let component = match result {
+        let can_fallback = format == Format::Text;
+        let result = match result {
             Err(GolemError(message))
                 if message.starts_with("Component already exists") && can_fallback =>
             {
-                let answer =
-                    inquire::Confirm::new("Would you like to update the existing component?")
-                        .with_default(false)
-                        .with_help_message(&message)
-                        .prompt();
+                let answer = {
+                    if non_interactive {
+                        Ok(true)
+                    } else {
+                        inquire::Confirm::new("Would you like to update the existing component?")
+                            .with_default(false)
+                            .with_help_message(&message)
+                            .prompt()
+                    }
+                };
 
                 match answer {
                     Ok(true) => {
@@ -112,7 +117,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                             name: component_name.0.clone(),
                         });
                         let urn = self.resolve_uri(component_uri, &project).await?;
-                        self.client.update(urn, component_file).await
+                        self.client.update(urn, component_file).await.map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into()))))
 
                     }
                     Ok(false) => Err(GolemError(message)),
@@ -120,11 +125,12 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 }
             }
             Err(other) => Err(other),
-            Ok(component) => Ok(component),
+            Ok(component) => Ok(GolemResult::Ok(Box::new(ComponentAddView(
+                component.into(),
+            )))),
         }?;
 
-        let view: ComponentView = component.into();
-        Ok(GolemResult::Ok(Box::new(ComponentAddView(view))))
+        Ok(result)
     }
 
     async fn update(
@@ -137,17 +143,22 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
     ) -> Result<GolemResult, GolemError> {
         let result = self.resolve_uri(component_uri.clone(), &project).await;
 
-        let can_fallback = format == Format::Text
-            && !non_interactive
-            && matches!(component_uri, ComponentUri::URL { .. });
-        let component = match result {
+        let can_fallback =
+            format == Format::Text && matches!(component_uri, ComponentUri::URL { .. });
+        let result = match result {
             Err(GolemError(message))
                 if message.starts_with("Can't find component") && can_fallback =>
             {
-                let answer = inquire::Confirm::new("Would you like to create a new component?")
-                    .with_default(false)
-                    .with_help_message(&message)
-                    .prompt();
+                let answer = {
+                    if non_interactive {
+                        Ok(true)
+                    } else {
+                        inquire::Confirm::new("Would you like to create a new component?")
+                            .with_default(false)
+                            .with_help_message(&message)
+                            .prompt()
+                    }
+                };
 
                 match answer {
                         Ok(true) => {
@@ -155,7 +166,9 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                                 ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
                                 _ => unreachable!(),
                             };
-                            self.client.add(component_name, component_file, &project).await
+                            self.client.add(component_name, component_file, &project).await.map(|component| {
+                                GolemResult::Ok(Box::new(ComponentAddView(component.into())))
+                            })
 
                         }
                         Ok(false) => Err(GolemError(message)),
@@ -163,12 +176,14 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                     }
             }
             Err(other) => Err(other),
-            Ok(urn) => self.client.update(urn, component_file.clone()).await,
+            Ok(urn) => self
+                .client
+                .update(urn, component_file.clone())
+                .await
+                .map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))),
         }?;
 
-        let view: ComponentView = component.into();
-
-        Ok(GolemResult::Ok(Box::new(ComponentUpdateView(view))))
+        Ok(result)
     }
 
     async fn list(
