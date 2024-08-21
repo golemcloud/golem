@@ -952,6 +952,7 @@ mod tests {
             r#"
           id: users-api
           version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Get
             path: {}
