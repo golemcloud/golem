@@ -1053,6 +1053,7 @@ mod tests {
         assert_eq!(&value1, &expected);
     }
 
+
     #[tokio::test]
     async fn test_evaluation_for_function_returning_unit() {
         let noop_executor = DefaultEvaluator::noop();
@@ -1088,8 +1089,9 @@ mod tests {
             get_analysed_export_for_unit_function("foo", vec![request_type.clone()]);
 
         let expr_str = r#"${
-              foo( { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address });
-              "foo executed"
+              foo( { id: "bId", name: "bName" });
+              let result = foo( { id: "bId", name: "bName" });
+              result
             }"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
@@ -1103,9 +1105,9 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = TypeAnnotatedValue::Str("bStreet".to_string());
+        let json = TypeAnnotatedValue::to_json_value(&value1);
 
-        assert_eq!(&value1, &expected);
+        assert_eq!(json, serde_json::Value::Null);
     }
 
     #[tokio::test]
