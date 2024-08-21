@@ -7,11 +7,13 @@ use golem_cli::model::{GolemError, GolemResult};
 #[derive(Subcommand, Debug)]
 #[command()]
 pub enum DomainSubcommand {
+    /// Retrieves metadata about an existing domain
     #[command()]
     Get {
         #[command(flatten)]
         project_ref: ProjectRef,
     },
+    /// Add new domain
     #[command(alias = "create")]
     Add {
         #[command(flatten)]
@@ -20,6 +22,7 @@ pub enum DomainSubcommand {
         #[arg(short, long, value_hint = clap::ValueHint::Other)]
         domain_name: String,
     },
+    /// Delete an existing domain
     #[command()]
     Delete {
         #[command(flatten)]

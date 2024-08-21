@@ -8,6 +8,7 @@ use golem_cli::model::{GolemError, GolemResult, PathBufOrStdin};
 #[derive(Subcommand, Debug)]
 #[command()]
 pub enum CertificateSubcommand {
+    /// Retrieves metadata about an existing certificate
     #[command()]
     Get {
         #[command(flatten)]
@@ -15,6 +16,7 @@ pub enum CertificateSubcommand {
         #[arg(value_name = "certificate-id", value_hint = clap::ValueHint::Other)]
         certificate_id: Option<Uuid>,
     },
+    /// Add new certificate
     #[command(alias = "create")]
     Add {
         #[command(flatten)]
@@ -29,6 +31,7 @@ pub enum CertificateSubcommand {
         #[arg(short = 'k', long, value_name = "file", value_hint = clap::ValueHint::FilePath)]
         certificate_private_key: PathBufOrStdin,
     },
+    /// Delete an existing certificate
     #[command()]
     Delete {
         #[command(flatten)]

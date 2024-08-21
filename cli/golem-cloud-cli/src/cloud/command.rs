@@ -410,12 +410,14 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
         subcommand: ApiDeploymentSubcommand<ProjectRef>,
     },
 
+    /// Manage certificates
     #[command()]
     Certificate {
         #[command(subcommand)]
         subcommand: CertificateSubcommand,
     },
 
+    /// Manage domains
     #[command()]
     Domain {
         #[command(subcommand)]
