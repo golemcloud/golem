@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{cargo, GenerateArgs};
+use crate::{cargo, GenerateArgs, WasmRpcOverride};
 use heck::ToSnakeCase;
 use std::fs;
 use std::path::Path;
@@ -143,7 +143,7 @@ enum Task {
     Test,
     GenerateStub {
         target: String,
-        wasm_rpc_path_override: Option<String>,
+        wasm_rpc_override: WasmRpcOverride,
         stubgen_command: String,
         stubgen_prefix: Vec<String>,
     },
@@ -261,7 +261,7 @@ impl Task {
             }
             Task::GenerateStub {
                 target,
-                wasm_rpc_path_override,
+                wasm_rpc_override,
                 stubgen_command,
                 stubgen_prefix,
             } => {
@@ -278,9 +278,17 @@ impl Task {
                 args.push(Value::String(format!("{}/wit", target)));
                 args.push(Value::String("-d".to_string()));
                 args.push(Value::String(format!("{}-stub", target)));
-                if let Some(wasm_rpc_path_override) = wasm_rpc_path_override.as_ref() {
+                if let Some(wasm_rpc_path_override) =
+                    wasm_rpc_override.wasm_rpc_path_override.as_ref()
+                {
                     args.push(Value::String("--wasm-rpc-path-override".to_string()));
                     args.push(Value::String(wasm_rpc_path_override.to_string()));
+                }
+                if let Some(wasm_rpc_version_override) =
+                    wasm_rpc_override.wasm_rpc_version_override.as_ref()
+                {
+                    args.push(Value::String("--wasm-rpc-version-override".to_string()));
+                    args.push(Value::String(wasm_rpc_version_override.to_string()));
                 }
                 generate_stub.insert("args".to_string(), Value::Array(args));
 
@@ -413,7 +421,7 @@ impl Task {
 pub fn initialize_workspace(
     targets: &[String],
     callers: &[String],
-    wasm_rpc_path_override: Option<String>,
+    wasm_rpc_override: WasmRpcOverride,
     stubgen_command: &str,
     stubgen_prefix: &[&str],
 ) -> anyhow::Result<()> {
@@ -427,7 +435,7 @@ pub fn initialize_workspace(
                 &mut makefile,
                 targets,
                 callers,
-                wasm_rpc_path_override.clone(),
+                wasm_rpc_override.clone(),
                 stubgen_command,
                 stubgen_prefix,
             );
@@ -440,7 +448,7 @@ pub fn initialize_workspace(
                 &mut makefile,
                 targets,
                 callers,
-                wasm_rpc_path_override.clone(),
+                wasm_rpc_override.clone(),
                 stubgen_command,
                 stubgen_prefix,
             );
@@ -463,7 +471,7 @@ pub fn initialize_workspace(
                 dest_crate_root: cwd.join(stub_name.clone()),
                 world: None,
                 stub_crate_version: "0.0.1".to_string(),
-                wasm_rpc_path_override: wasm_rpc_path_override.clone(),
+                wasm_rpc_override: wasm_rpc_override.clone(),
                 always_inline_types: false,
             })?;
 
@@ -487,7 +495,7 @@ fn generate_makefile(
     makefile: &mut CargoMake,
     targets: &[String],
     callers: &[String],
-    wasm_rpc_path_override: Option<String>,
+    wasm_rpc_override: WasmRpcOverride,
     stubgen_command: &str,
     stubgen_prefix: &[&str],
 ) {
@@ -501,7 +509,7 @@ fn generate_makefile(
     for target in targets {
         let generate_stub_task = Task::GenerateStub {
             target: target.clone(),
-            wasm_rpc_path_override: wasm_rpc_path_override.clone(),
+            wasm_rpc_override: wasm_rpc_override.clone(),
             stubgen_command: stubgen_command.to_string(),
             stubgen_prefix: stubgen_prefix.iter().map(|s| s.to_string()).collect(),
         };

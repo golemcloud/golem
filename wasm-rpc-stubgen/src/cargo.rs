@@ -178,12 +178,16 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     }));
 
     let dep_golem_wasm_rpc = Dependency::Detailed(Box::new(DependencyDetail {
-        version: if def.wasm_rpc_path_override.is_none() {
-            Some(WASM_RPC_VERSION.to_string())
+        version: if def.wasm_rpc_override.wasm_rpc_path_override.is_none() {
+            if let Some(version) = def.wasm_rpc_override.wasm_rpc_version_override.as_ref() {
+                Some(version.to_string())
+            } else {
+                Some(WASM_RPC_VERSION.to_string())
+            }
         } else {
             None
         },
-        path: def.wasm_rpc_path_override.clone(),
+        path: def.wasm_rpc_override.wasm_rpc_path_override.clone(),
         default_features: false,
         features: vec!["stub".to_string()],
         ..Default::default()

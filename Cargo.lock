@@ -659,9 +659,9 @@ dependencies = [
  "wasm-metadata 0.208.1",
  "wasmparser 0.208.1",
  "which",
- "wit-bindgen-core 0.25.0",
- "wit-bindgen-rust 0.25.0",
- "wit-component 0.208.1",
+ "wit-bindgen-core",
+ "wit-bindgen-rust",
+ "wit-component",
  "wit-parser 0.208.1",
 ]
 
@@ -688,7 +688,7 @@ dependencies = [
  "warg-crypto",
  "warg-protocol",
  "windows-sys 0.52.0",
- "wit-component 0.208.1",
+ "wit-component",
  "wit-parser 0.208.1",
 ]
 
@@ -1835,7 +1835,7 @@ dependencies = [
  "tokio",
  "toml 0.8.19",
  "wasm-compose 0.207.0",
- "wit-bindgen-rust 0.26.0",
+ "wit-bindgen-rust",
  "wit-parser 0.207.0",
 ]
 
@@ -5087,15 +5087,6 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.209.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4a05336882dae732ce6bd48b7e11fe597293cb72c13da4f35d7d5f8d53b2a7"
-dependencies = [
- "leb128",
-]
-
-[[package]]
-name = "wasm-encoder"
 version = "0.215.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fb56df3e06b8e6b77e37d2969a50ba51281029a9aeb3855e76b7f49b6418847"
@@ -5133,22 +5124,6 @@ dependencies = [
  "spdx",
  "wasm-encoder 0.208.1",
  "wasmparser 0.208.1",
-]
-
-[[package]]
-name = "wasm-metadata"
-version = "0.209.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d32029ce424f6d3c2b39b4419fb45a0e2d84fb0751e0c0a32b7ce8bd5d97f46"
-dependencies = [
- "anyhow",
- "indexmap 2.3.0",
- "serde 1.0.205",
- "serde_derive",
- "serde_json",
- "spdx",
- "wasm-encoder 0.209.1",
- "wasmparser 0.209.1",
 ]
 
 [[package]]
@@ -5213,19 +5188,6 @@ dependencies = [
  "indexmap 2.3.0",
  "semver",
  "serde 1.0.205",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.209.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07035cc9a9b41e62d3bb3a3815a66ab87c993c06fe1cf6b2a3f2a18499d937db"
-dependencies = [
- "ahash",
- "bitflags 2.6.0",
- "hashbrown 0.14.5",
- "indexmap 2.3.0",
- "semver",
 ]
 
 [[package]]
@@ -5894,17 +5856,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wit-bindgen-core"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36d4706efb67fadfbbde77955b299b111dd096e6776d8c6561d92f6147941880"
-dependencies = [
- "anyhow",
- "heck 0.5.0",
- "wit-parser 0.209.1",
-]
-
-[[package]]
 name = "wit-bindgen-rt"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5923,22 +5874,8 @@ dependencies = [
  "heck 0.5.0",
  "indexmap 2.3.0",
  "wasm-metadata 0.208.1",
- "wit-bindgen-core 0.25.0",
- "wit-component 0.208.1",
-]
-
-[[package]]
-name = "wit-bindgen-rust"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "514295193d1a2f42e6a948cd7d9fd81e2b8fadc319667dcf19fd7aceaf2113a2"
-dependencies = [
- "anyhow",
- "heck 0.5.0",
- "indexmap 2.3.0",
- "wasm-metadata 0.209.1",
- "wit-bindgen-core 0.26.0",
- "wit-component 0.209.1",
+ "wit-bindgen-core",
+ "wit-component",
 ]
 
 [[package]]
@@ -5958,25 +5895,6 @@ dependencies = [
  "wasm-metadata 0.208.1",
  "wasmparser 0.208.1",
  "wit-parser 0.208.1",
-]
-
-[[package]]
-name = "wit-component"
-version = "0.209.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a2bb5b039f9cb03425e1d5a6e54b441ca4ca1b1d4fa6a0924db67a55168f99"
-dependencies = [
- "anyhow",
- "bitflags 2.6.0",
- "indexmap 2.3.0",
- "log",
- "serde 1.0.205",
- "serde_derive",
- "serde_json",
- "wasm-encoder 0.209.1",
- "wasm-metadata 0.209.1",
- "wasmparser 0.209.1",
- "wit-parser 0.209.1",
 ]
 
 [[package]]
@@ -6013,24 +5931,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.208.1",
-]
-
-[[package]]
-name = "wit-parser"
-version = "0.209.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e79b9e3c0b6bb589dec46317e645851e0db2734c44e2be5e251b03ff4a51269"
-dependencies = [
- "anyhow",
- "id-arena",
- "indexmap 2.3.0",
- "log",
- "semver",
- "serde 1.0.205",
- "serde_derive",
- "serde_json",
- "unicode-xid",
- "wasmparser 0.209.1",
 ]
 
 [[package]]
