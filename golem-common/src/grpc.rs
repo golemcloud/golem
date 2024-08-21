@@ -65,12 +65,14 @@ pub enum ProtoApiDefinitionKind {
     OpenAPI,
 }
 
-pub trait HasProtoApiDefinition {
+pub trait HasProtoApiDefinitionRequest {
     fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind;
     fn api_definition(&self) -> Option<&apidefinition::v1::ApiDefinitionRequest>;
 }
 
-impl HasProtoApiDefinition for apidefinition::v1::create_api_definition_request::ApiDefinition {
+impl HasProtoApiDefinitionRequest
+    for apidefinition::v1::create_api_definition_request::ApiDefinition
+{
     fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind {
         match self {
             apidefinition::v1::create_api_definition_request::ApiDefinition::Definition(_) => {
@@ -92,7 +94,9 @@ impl HasProtoApiDefinition for apidefinition::v1::create_api_definition_request:
     }
 }
 
-impl HasProtoApiDefinition for apidefinition::v1::update_api_definition_request::ApiDefinition {
+impl HasProtoApiDefinitionRequest
+    for apidefinition::v1::update_api_definition_request::ApiDefinition
+{
     fn proto_api_definition_kind(&self) -> ProtoApiDefinitionKind {
         match self {
             apidefinition::v1::update_api_definition_request::ApiDefinition::Definition(_) => {
@@ -114,7 +118,7 @@ impl HasProtoApiDefinition for apidefinition::v1::update_api_definition_request:
     }
 }
 
-pub fn proto_api_definition_kind_string<T: HasProtoApiDefinition>(
+pub fn proto_api_definition_kind_string<T: HasProtoApiDefinitionRequest>(
     opt_t: &Option<T>,
 ) -> Option<String> {
     opt_t.as_ref().map(|t| match t.proto_api_definition_kind() {
@@ -123,7 +127,7 @@ pub fn proto_api_definition_kind_string<T: HasProtoApiDefinition>(
     })
 }
 
-pub fn proto_api_definition_id_string<T: HasProtoApiDefinition>(
+pub fn proto_api_definition_id_string<T: HasProtoApiDefinitionRequest>(
     api_definition: &Option<T>,
 ) -> Option<String> {
     api_definition
@@ -133,7 +137,7 @@ pub fn proto_api_definition_id_string<T: HasProtoApiDefinition>(
         .map(|id| id.value)
 }
 
-pub fn proto_api_definition_version_string<T: HasProtoApiDefinition>(
+pub fn proto_api_definition_version_string<T: HasProtoApiDefinitionRequest>(
     api_definition: &Option<T>,
 ) -> Option<String> {
     api_definition
@@ -142,7 +146,7 @@ pub fn proto_api_definition_version_string<T: HasProtoApiDefinition>(
         .map(|d| d.version.clone())
 }
 
-pub fn proto_api_definition_draft_string<T: HasProtoApiDefinition>(
+pub fn proto_api_definition_draft_string<T: HasProtoApiDefinitionRequest>(
     api_definition: &Option<T>,
 ) -> Option<String> {
     api_definition

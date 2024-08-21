@@ -235,7 +235,7 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                     deployment.namespace.clone(),
                     deployment.site.clone(),
                     api_definition_key.clone(),
-                    created_at.clone(),
+                    created_at,
                 ));
             }
         }

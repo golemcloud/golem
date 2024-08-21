@@ -136,7 +136,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         .bind(definition.version.clone())
         .bind(definition.draft)
         .bind(definition.data.clone())
-        .bind(definition.created_at.clone())
+        .bind(definition.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -271,6 +271,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(definition.version.clone())
         .bind(definition.draft)
         .bind(definition.data.clone())
+        .bind(definition.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -290,7 +291,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .bind(definition.version.clone())
         .bind(definition.draft)
         .bind(definition.data.clone())
-        .bind(definition.created_at.clone())
+        .bind(definition.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -325,7 +326,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
             .bind(namespace)
             .bind(id)
             .bind(version)
@@ -368,7 +369,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>(
-            "SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1",
+            "SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1",
         )
         .bind(namespace)
         .fetch_all(self.db_pool.deref())
@@ -381,7 +382,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2")
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2")
             .bind(namespace)
             .bind(id)
             .fetch_all(self.db_pool.deref())

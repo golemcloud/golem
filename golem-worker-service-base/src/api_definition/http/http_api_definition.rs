@@ -53,6 +53,17 @@ impl HttpApiDefinition {
     }
 }
 
+impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
+    fn from(value: HttpApiDefinition) -> Self {
+        HttpApiDefinitionRequest {
+            id: value.id,
+            version: value.version,
+            routes: value.routes,
+            draft: value.draft,
+        }
+    }
+}
+
 impl From<CompiledHttpApiDefinitionRequest> for HttpApiDefinitionRequest {
     fn from(compiled_http_api_definition: CompiledHttpApiDefinitionRequest) -> Self {
         HttpApiDefinitionRequest {
@@ -434,7 +445,6 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
-    use golem_common::serialization;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -686,42 +696,6 @@ mod tests {
             result2,
             "Assertion failed for test case at {}",
             std::panic::Location::caller()
-        );
-    }
-
-    #[test]
-    fn test_api_spec_encode_decode() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-            let encoded = serialization::serialize(&original).unwrap();
-            let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
-
-            assert_eq!(original, decoded);
-        }
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo",
-            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 

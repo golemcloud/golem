@@ -238,7 +238,7 @@ where
             ));
         }
 
-        let definition = HttpApiDefinition::new(definition.clone(), created_at.clone());
+        let definition = HttpApiDefinition::new(definition.clone(), created_at);
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -291,7 +291,7 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let definition = HttpApiDefinition::new(definition.clone(), created_at.clone());
+        let definition = HttpApiDefinition::new(definition.clone(), created_at);
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 

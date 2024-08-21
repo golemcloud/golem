@@ -4023,6 +4023,7 @@ dependencies = [
  "poem-openapi",
  "prometheus",
  "prost",
+ "prost-types",
  "regex",
  "rustc-hash",
  "serde 1.0.207",

@@ -1,10 +1,9 @@
-use chrono::Utc;
+use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
-
-use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
-use golem_service_base::model::VersionedComponentId;
+use std::time::SystemTime;
 
 use crate::api_definition::http::{AllPathPatterns, CompiledRoute, MethodPattern};
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
@@ -262,6 +261,8 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
 
         let definition = grpc_apidefinition::HttpApiDefinition { routes };
 
+        let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
+
         let result = grpc_apidefinition::ApiDefinition {
             id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
             version: value.version.0,
@@ -269,7 +270,7 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
                 definition,
             )),
             draft: value.draft,
-            created_at: None, // FIXME
+            created_at: Some(created_at),
         };
 
         Ok(result)
@@ -289,13 +290,17 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
         };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
+        let created_at = value
+            .created_at
+            .ok_or("Created At is missing")
+            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
 
         let result = crate::api_definition::http::HttpApiDefinition {
             id: crate::api_definition::ApiDefinitionId(id.value),
             version: crate::api_definition::ApiVersion(value.version),
             routes,
             draft: value.draft,
-            created_at: Utc::now(), // FIXME value.created_at,
+            created_at: created_at.into(),
         };
 
         Ok(result)

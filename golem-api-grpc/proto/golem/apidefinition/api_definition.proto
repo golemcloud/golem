@@ -16,7 +16,7 @@ message ApiDefinition {
     HttpApiDefinition http = 3;
   }
   bool draft = 4;
-  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message ApiDefinitionList {
