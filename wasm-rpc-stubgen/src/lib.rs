@@ -34,7 +34,7 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use heck::ToSnakeCase;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
 use wit_parser::{PackageName, UnresolvedPackage};
@@ -266,44 +266,6 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
-    let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
-    let dest_package = target_wit.name.clone();
-
-    if dep_package_name != dest_package {
-        Ok(true)
-    } else {
-        println!(
-            "Skipping the copy of cyclic dependencies {} to the the same as {}",
-            dep_package_name, dest_package
-        );
-        Ok(false)
-    }
-}
-
-fn find_world_name(unresolved_package: UnresolvedPackage) -> anyhow::Result<String> {
-    // In reality, there is only 1 interface in generated stub in 1 _stub.wit
-    for (_, interface) in unresolved_package.interfaces {
-        if let Some(name) = interface.name {
-            if name.starts_with("stub-") {
-                let world_name = name.replace("stub-", "");
-                return Ok(world_name);
-            }
-        }
-    }
-
-    Err(anyhow!("Failed to find world name from the stub. The interface name in stub is expected to have the pattern stub-<world-name>"))
-}
-
-fn dest_owns_stub_world(stub_world_name: &str, destination_wit_root: &UnresolvedPackage) -> bool {
-    destination_wit_root
-        .worlds
-        .iter()
-        .map(|(_, world)| world.name.clone())
-        .collect::<Vec<_>>()
-        .contains(&stub_world_name.to_string())
-}
-
 pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     // The destination's WIT's package details
     let destination_wit_root = UnresolvedPackage::parse_dir(&args.dest_wit_root)?;
@@ -330,12 +292,12 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         ));
     }
 
-    let world_name = find_world_name(parsed)?;
+    let world_name = internal::find_world_name(parsed)?;
     let mut actions = Vec::new();
 
     // If stub generated world points to the destination world (meaning the destination still owns the world for which the stub is generated),
     // we re-generation of stub with inlined types and copy the inlined stub to the destination
-    if dest_owns_stub_world(&world_name, &destination_wit_root) {
+    if internal::dest_owns_stub_world(&world_name, &destination_wit_root) {
         let stub_root = &args
             .stub_wit_root
             .parent()
@@ -354,7 +316,7 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         // We filter the dependencies of stub that's already existing in dest_wit_root
         let filtered_source_deps = source_deps
             .into_iter()
-            .filter(|dep| find_if_same_package(dep, &destination_wit_root).unwrap())
+            .filter(|dep| internal::find_if_same_package(dep, &destination_wit_root).unwrap())
             .collect::<Vec<_>>();
 
         // New stub string
@@ -379,8 +341,31 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         let main_wit_package_name = wit::get_package_name(&main_wit)?;
 
         for source_dir in source_deps {
-            actions.push(WitAction::CopyDepDir { source_dir })
+            let parsed = UnresolvedPackage::parse_dir(&source_dir)?;
+
+            if internal::is_invalid_dependency(&destination_wit_root, &parsed) {
+                println!("Skipping the copy of cyclic dependencies {}", parsed.name);
+            } else {
+                let entries = fs::read_dir(&source_dir)?;
+                for entry in entries {
+                    let dependency_wit_path = entry?.path();
+                    let source_wit = internal::replace_self_imports_from_dependencies(
+                        &dependency_wit_path,
+                        &destination_wit_root,
+                    )?;
+
+                    let dependency_file_name = internal::get_file_name(&dependency_wit_path)?;
+                    let dependency_directory_name = internal::get_file_name(&source_dir)?;
+
+                    actions.push(WitAction::WriteWit {
+                        source_wit,
+                        dir_name: dependency_directory_name,
+                        file_name: dependency_file_name,
+                    });
+                }
+            }
         }
+
         actions.push(WitAction::CopyDepWit {
             source_wit: main_wit,
             dir_name: format!(
@@ -477,4 +462,110 @@ pub fn initialize_workspace(
         stubgen_command,
         stubgen_prefix,
     )
+}
+
+mod internal {
+    use anyhow::anyhow;
+    use regex::Regex;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use wit_parser::UnresolvedPackage;
+
+    pub(crate) fn find_if_same_package(
+        dep_dir: &Path,
+        target_wit: &UnresolvedPackage,
+    ) -> anyhow::Result<bool> {
+        let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
+        let dest_package = target_wit.name.clone();
+
+        if dep_package_name != dest_package {
+            Ok(true)
+        } else {
+            println!(
+                "Skipping the copy of cyclic dependencies {}",
+                dep_package_name
+            );
+            Ok(false)
+        }
+    }
+
+    pub(crate) fn find_world_name(unresolved_package: UnresolvedPackage) -> anyhow::Result<String> {
+        // In reality, there is only 1 interface in generated stub in 1 _stub.wit
+        for (_, interface) in unresolved_package.interfaces {
+            if let Some(name) = interface.name {
+                if name.starts_with("stub-") {
+                    let world_name = name.replace("stub-", "");
+                    return Ok(world_name);
+                }
+            }
+        }
+
+        Err(anyhow!("Failed to find world name from the stub. The interface name in stub is expected to have the pattern stub-<world-name>"))
+    }
+
+    pub(crate) fn dest_owns_stub_world(
+        stub_world_name: &str,
+        destination_wit_root: &UnresolvedPackage,
+    ) -> bool {
+        destination_wit_root
+            .worlds
+            .iter()
+            .map(|(_, world)| world.name.clone())
+            .collect::<Vec<_>>()
+            .contains(&stub_world_name.to_string())
+    }
+
+    // When copying the wit files of the target to the packages wit/deps in the source, we need to ensure
+    // these dependencies are not the source itself, or it's stub version
+    // For cases where adding the stub dependency to its own package is valid (i.e, in case of self-loop/ direct-cycle dependency)
+    // this function is/should-never-be called because, in this case destination owns the stub world (the stub to be copied) already
+    // and forms a different branch of logic.
+    pub(crate) fn is_invalid_dependency(
+        destination_wit_root: &UnresolvedPackage,
+        dependency_package: &UnresolvedPackage,
+    ) -> bool {
+        let self_stub_name = format!("{}-stub", destination_wit_root.name.name);
+
+        dependency_package.name == destination_wit_root.name
+            || (dependency_package.name.namespace == destination_wit_root.name.namespace
+                && dependency_package.name.name == self_stub_name)
+    }
+
+    // For those dependencies we add to the source, if they are importing from the skipped/invalid dependencies
+    // we simply make sure to delete them
+    pub(crate) fn replace_self_imports_from_dependencies(
+        dependency_wit_path: &PathBuf,
+        destination_wit_root: &UnresolvedPackage,
+    ) -> anyhow::Result<String> {
+        let read_data = fs::read_to_string(dependency_wit_path)?;
+        let self_stub_package = format!(
+            "{}:{}-stub",
+            destination_wit_root.name.namespace, destination_wit_root.name.name
+        );
+
+        let re = Regex::new(
+            format!(
+                r"import\s+{}(/[^;]*)?;",
+                regex::escape(self_stub_package.as_str())
+            )
+            .as_str(),
+        )
+        .unwrap();
+
+        Ok(re.replace_all(&read_data, "").to_string())
+    }
+
+    pub fn get_file_name(path: &PathBuf) -> anyhow::Result<String> {
+        let msg = format!(
+            "Failed to get the file name of the dependency wit path {:?}",
+            path
+        );
+
+        Ok(path
+            .file_name()
+            .ok_or(anyhow::Error::msg(msg.clone()))?
+            .to_str()
+            .ok_or(anyhow::Error::msg(msg))?
+            .to_string())
+    }
 }
