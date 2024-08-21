@@ -70,7 +70,7 @@ impl From<RibByteCode> for ProtoRibByteCode {
 
 mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
-    use crate::{Expr, InferredType, InstructionId, InvocationName, RibIR};
+    use crate::{AnalysedTypeWithUnit, Expr, InferredType, InstructionId, InvocationName, RibIR};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -220,18 +220,29 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
-
                 match invocation_name {
                     InvocationName::Function(parsed_function_name) => {
+                        let function_result_type = if inferred_type.is_unit() {
+                            AnalysedTypeWithUnit::Unit
+                        } else {
+                            AnalysedTypeWithUnit::Type(convert_to_analysed_type_for(
+                                expr,
+                                inferred_type,
+                            )?)
+                        };
+
                         instructions.push(RibIR::InvokeFunction(
                             parsed_function_name.clone(),
                             arguments.len(),
-                            analysed_type,
+                            function_result_type,
                         ));
                     }
+
                     InvocationName::VariantConstructor(variant_name) => {
-                        instructions.push(RibIR::PushVariant(variant_name.clone(), analysed_type));
+                        instructions.push(RibIR::PushVariant(
+                            variant_name.clone(),
+                            convert_to_analysed_type_for(expr, inferred_type)?,
+                        ));
                     }
                 }
             }
