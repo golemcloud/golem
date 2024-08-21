@@ -192,7 +192,7 @@ mod internal {
 
 #[cfg(test)]
 mod type_pull_up_tests {
-    use crate::{Expr, InferredType, Number, ParsedFunctionName};
+    use crate::{ArmPattern, Expr, InferredType, Number, ParsedFunctionName};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -347,5 +347,24 @@ mod type_pull_up_tests {
         let mut expr = Expr::tag(Expr::number(1f64));
         expr.pull_types_up();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_pattern_match(){
+        let mut expr = Expr::pattern_match(
+            Expr::number(1f64),
+            vec![
+                crate::MatchArm {
+                    arm_pattern: ArmPattern::Literal(Box::new(Expr::number(1f64))),
+                    arm_resolution_expr: Box::new(Expr::number(1f64)),
+                },
+                crate::MatchArm {
+                    arm_pattern: ArmPattern::Literal(Box::new(Expr::number(2f64))),
+                    arm_resolution_expr: Box::new(Expr::number(2f64)),
+                },
+            ],
+        );
+        expr.pull_types_up();
+        assert_eq!(expr.inferred_type(), InferredType::U64);
     }
 }

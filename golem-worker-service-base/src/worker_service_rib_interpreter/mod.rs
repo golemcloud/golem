@@ -1044,24 +1044,27 @@ mod tests {
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
         let expr_str = r#"${
-              let result = foo( { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address });
-              match result {  some(value) => "personal-id", none =>  request.body.address.street }
+              let result = foo( { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } });
+              result
             }"#;
 
-        let expr1 = rib::from_string(expr_str).unwrap();
-        let value1 = noop_executor
-            .evaluate_with_worker_response(
-                &expr1,
-                worker_response.clone(),
-                component_metadata.clone(),
-                Some((request_details, request_type)),
-            )
-            .await
-            .unwrap();
+        let result = rib::compile(&rib::from_string(expr_str).unwrap(), &component_metadata).unwrap();
+        //dbg!(result.clone());
 
-        let expected = TypeAnnotatedValue::Str("bStreet".to_string());
+        // let expr1 = rib::from_string(expr_str).unwrap();
+        // let value1 = noop_executor
+        //     .evaluate_with_worker_response(
+        //         &expr1,
+        //         worker_response.clone(),
+        //         component_metadata.clone(),
+        //         Some((request_details, request_type)),
+        //     )
+        //     .await
+        //     .unwrap();
+        //
+        // let expected = TypeAnnotatedValue::Str("bStreet".to_string());
 
-        assert_eq!(&value1, &expected);
+        assert_eq!(1, 2);
     }
 
     #[tokio::test]
