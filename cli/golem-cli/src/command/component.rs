@@ -40,7 +40,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: PathBufOrStdin, // TODO: validate exists
 
-        /// Do not ask for performing an update in case the component already exists
+        /// Do not ask for confirmation for performing an update in case the component already exists
         #[arg(short = 'y', long)]
         non_interactive: bool,
     },
@@ -64,7 +64,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(long, default_value = "auto", requires = "try_update_workers")]
         update_mode: WorkerUpdateMode,
 
-        /// Do not ask for creating a new component in case it does not exists
+        /// Do not ask for confirmation for creating a new component in case it does not exist
         #[arg(short = 'y', long)]
         non_interactive: bool,
     },
