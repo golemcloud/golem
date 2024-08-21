@@ -35,7 +35,7 @@ use golem_wasm_ast::IgnoreAllButMetadata;
 use heck::ToSnakeCase;
 use std::fs;
 use std::path::PathBuf;
-use tempdir::TempDir;
+use tempfile::TempDir;
 use wasm_compose::config::Dependency;
 use wit_parser::{PackageName, UnresolvedPackage};
 
@@ -221,11 +221,12 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
 }
 
 pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
-    let target_root = TempDir::new("wasm-rpc-stubgen")?;
+    let target_root = TempDir::new()?;
+    let canonical_target_root = target_root.path().canonicalize()?;
 
     let stub_def = StubDefinition::new(
         &args.source_wit_root,
-        target_root.path(),
+        &canonical_target_root,
         &args.world,
         &args.stub_crate_version,
         &args.wasm_rpc_override,
@@ -248,12 +249,11 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     generate_cargo_toml(&stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(&stub_def).context("Failed to generate the stub Rust source")?;
 
-    compile(target_root.path())
+    compile(&canonical_target_root)
         .await
         .context("Failed to compile the generated stub")?;
 
-    let wasm_path = target_root
-        .path()
+    let wasm_path = canonical_target_root
         .join("target")
         .join("wasm32-wasi")
         .join("release")
@@ -272,7 +272,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         .context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        target_root.path().join("wit"),
+        &canonical_target_root.join("wit"),
         &args.dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
