@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::Utc;
 use http::Uri;
 use tonic::transport::Channel;
 
@@ -215,6 +216,7 @@ impl ComponentServiceNoop {
                 producers: vec![],
                 memories: vec![],
             },
+            created_at: Utc::now(),
         }
     }
 }

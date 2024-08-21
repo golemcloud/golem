@@ -28,6 +28,7 @@ mod tests {
     };
 
     use std::sync::Arc;
+    use chrono::Utc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
     use testcontainers_modules::postgres::Postgres;
@@ -139,6 +140,7 @@ mod tests {
                     producers: vec![],
                     memories: vec![],
                 },
+                created_at: Utc::now()
             }
         }
 

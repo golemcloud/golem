@@ -3758,11 +3758,15 @@ components:
           format: uint64
         metadata:
           $ref: '#/components/schemas/ComponentMetadata'
+        createdAt:
+          type: string
+          format: date-time
       required:
       - versionedComponentId
       - componentName
       - componentSize
       - metadata
+      - createdAt
     ComponentMetadata:
       type: object
       properties:

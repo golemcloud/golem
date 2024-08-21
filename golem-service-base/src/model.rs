@@ -20,6 +20,7 @@ use golem_common::model::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -1500,6 +1501,7 @@ pub struct Component {
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1508,6 +1510,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     fn try_from(
         value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
+        let created_at = value
+            .created_at
+            .ok_or("Missing created_at")
+            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
+
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -1516,6 +1523,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_name: ComponentName(value.component_name),
             component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
+            created_at: created_at.into(),
         })
     }
 }
@@ -1528,6 +1536,9 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             project_id: None,
+            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                value.created_at,
+            ))),
         }
     }
 }

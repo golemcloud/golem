@@ -35,6 +35,7 @@ pub struct ComponentRecord {
     pub size: i32,
     pub version: i64,
     pub metadata: Vec<u8>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl<Namespace> TryFrom<ComponentRecord> for Component<Namespace>
@@ -56,6 +57,7 @@ where
             component_size: value.size as u64,
             metadata,
             versioned_component_id,
+            created_at: value.created_at,
         })
     }
 }
@@ -84,6 +86,7 @@ where
             size: value.component_size as i32,
             version: value.versioned_component_id.version as i64,
             metadata: metadata.into(),
+            created_at: value.created_at,
         })
     }
 }
@@ -167,15 +170,16 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata)
+                (component_id, version, size, metadata, created_at)
               VALUES
-                ($1, $2, $3, $4)
+                ($1, $2, $3, $4, $5)
                "#,
         )
         .bind(component.component_id)
         .bind(component.version)
         .bind(component.size)
         .bind(component.metadata.clone())
+        .bind(component.created_at)
         .execute(&mut *transaction)
         .await?;
 
@@ -193,7 +197,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -214,7 +219,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -238,7 +244,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -264,7 +271,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2
@@ -290,7 +298,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -384,15 +393,16 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata)
+                (component_id, version, size, metadata, created_at)
               VALUES
-                ($1, $2, $3, $4)
+                ($1, $2, $3, $4, $5)
                "#,
         )
         .bind(component.component_id)
         .bind(component.version)
         .bind(component.size)
         .bind(component.metadata.clone())
+        .bind(component.created_at)
         .execute(&mut *transaction)
         .await?;
 
@@ -410,7 +420,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at::timestamptz AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -431,7 +442,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at::timestamptz AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -455,7 +467,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at::timestamptz AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -481,7 +494,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at::timestamptz AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2
@@ -507,7 +521,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.component_id AS component_id,
                     cv.version AS version,
                     cv.size AS size,
-                    cv.metadata AS metadata
+                    cv.metadata AS metadata,
+                    cv.created_at::timestamptz AS created_at
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
