@@ -12,169 +12,231 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
-use golem_wasm_ast::analysis::{
-    AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId, AnalysedResourceMode,
-    AnalysedType,
-};
-use serde_json::{Number, Value as JsonValue};
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::str::FromStr;
 
-use crate::{TypeAnnotatedValue, Uri, Value};
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
+use golem_wasm_ast::analysis::{
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
+    TypeEnum, TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeTuple,
+    TypeVariant,
+};
+use serde_json::{Number, Value as JsonValue};
 
-pub fn function_parameters(
-    value: &JsonValue,
-    expected_parameters: &[AnalysedFunctionParameter],
-) -> Result<Vec<Value>, Vec<String>> {
-    let typed_values = function_parameters_typed(value, expected_parameters)?;
+use crate::json::TypeAnnotatedValueJsonExtensions;
+use crate::protobuf;
+use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
+use crate::protobuf::typed_result::ResultValue;
 
-    let mut errors = vec![];
-    let mut values = vec![];
+// pub fn function_parameters(
+//     value: &JsonValue,
+//     expected_parameters: &[AnalysedFunctionParameter],
+// ) -> Result<Vec<Value>, Vec<String>> {
+//     let typed_values = function_parameters_typed(value, expected_parameters)?;
+//
+//     let mut errors = vec![];
+//     let mut values = vec![];
+//
+//     for typed_value in typed_values {
+//         match Value::try_from(typed_value) {
+//             Ok(value) => {
+//                 values.push(value);
+//             }
+//             Err(err) => {
+//                 errors.push(err);
+//             }
+//         }
+//     }
+//
+//     if errors.is_empty() {
+//         Ok(values)
+//     } else {
+//         Err(errors)
+//     }
+// }
+//
+// pub fn function_parameters_typed(
+//     value: &JsonValue,
+//     expected_parameters: &[AnalysedFunctionParameter],
+// ) -> Result<Vec<TypeAnnotatedValue>, Vec<String>> {
+//     let parameters = value
+//         .as_array()
+//         .ok_or(vec!["Expecting an array for fn_params".to_string()])?;
+//
+//     let mut results = vec![];
+//     let mut errors = vec![];
+//
+//     if parameters.len() == expected_parameters.len() {
+//         for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
+//             match parse_json_with_type(json, &fp.typ) {
+//                 Ok(result) => results.push(result),
+//                 Err(err) => errors.extend(err),
+//             }
+//         }
+//
+//         if errors.is_empty() {
+//             Ok(results)
+//         } else {
+//             Err(errors)
+//         }
+//     } else {
+//         Err(vec![format!(
+//             "Unexpected number of parameters (got {}, expected: {})",
+//             parameters.len(),
+//             expected_parameters.len()
+//         )])
+//     }
+// }
+//
+// pub fn function_result(
+//     values: Vec<Value>,
+//     expected_types: &[AnalysedFunctionResult],
+// ) -> Result<JsonValue, Vec<String>> {
+//     function_result_typed(values, expected_types).map(|result| result.to_json_value())
+// }
+//
 
-    for typed_value in typed_values {
-        match Value::try_from(typed_value) {
-            Ok(value) => {
-                values.push(value);
-            }
-            Err(err) => {
-                errors.push(err);
+impl TypeAnnotatedValueJsonExtensions for TypeAnnotatedValue {
+    fn parse_with_type(json_val: &JsonValue, typ: &AnalysedType) -> Result<Self, Vec<String>> {
+        match typ {
+            AnalysedType::Bool(_) => get_bool(json_val),
+            AnalysedType::S8(_) => get_s8(json_val),
+            AnalysedType::U8(_) => get_u8(json_val),
+            AnalysedType::S16(_) => get_s16(json_val),
+            AnalysedType::U16(_) => get_u16(json_val),
+            AnalysedType::S32(_) => get_s32(json_val),
+            AnalysedType::U32(_) => get_u32(json_val),
+            AnalysedType::S64(_) => get_s64(json_val),
+            AnalysedType::U64(_) => get_u64(json_val),
+            AnalysedType::F64(_) => get_f64(json_val),
+            AnalysedType::F32(_) => get_f32(json_val),
+            AnalysedType::Chr(_) => get_char(json_val),
+            AnalysedType::Str(_) => get_string(json_val),
+            AnalysedType::Enum(TypeEnum { cases }) => get_enum(json_val, cases),
+            AnalysedType::Flags(TypeFlags { names }) => get_flag(json_val, names),
+            AnalysedType::List(TypeList { inner }) => get_list(json_val, inner),
+            AnalysedType::Option(TypeOption { inner }) => get_option(json_val, inner),
+            AnalysedType::Result(TypeResult { ok, err }) => get_result(json_val, ok, err),
+            AnalysedType::Record(TypeRecord { fields }) => get_record(json_val, fields),
+            AnalysedType::Variant(TypeVariant { cases }) => get_variant(json_val, cases),
+            AnalysedType::Tuple(TypeTuple { items }) => get_tuple(json_val, items),
+            AnalysedType::Handle(TypeHandle { resource_id, mode }) => {
+                get_handle(json_val, resource_id.clone(), mode.clone())
             }
         }
     }
 
-    if errors.is_empty() {
-        Ok(values)
-    } else {
-        Err(errors)
-    }
-}
-
-pub fn function_parameters_typed(
-    value: &JsonValue,
-    expected_parameters: &[AnalysedFunctionParameter],
-) -> Result<Vec<TypeAnnotatedValue>, Vec<String>> {
-    let parameters = value
-        .as_array()
-        .ok_or(vec!["Expecting an array for fn_params".to_string()])?;
-
-    let mut results = vec![];
-    let mut errors = vec![];
-
-    if parameters.len() == expected_parameters.len() {
-        for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
-            match get_typed_value_from_json(json, &fp.typ) {
-                Ok(result) => results.push(result),
-                Err(err) => errors.extend(err),
+    fn to_json_value(&self) -> JsonValue {
+        match self {
+            TypeAnnotatedValue::Bool(bool) => JsonValue::Bool(*bool),
+            TypeAnnotatedValue::Flags(protobuf::TypedFlags { typ: _, values }) => JsonValue::Array(
+                values
+                    .iter()
+                    .map(|x| JsonValue::String(x.clone()))
+                    .collect(),
+            ),
+            TypeAnnotatedValue::S8(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::U8(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::S16(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::U16(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::S32(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::U32(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::S64(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::U64(value) => JsonValue::Number(Number::from(*value)),
+            TypeAnnotatedValue::F32(value) => {
+                JsonValue::Number(Number::from_f64(*value as f64).unwrap())
             }
-        }
+            TypeAnnotatedValue::F64(value) => JsonValue::Number(Number::from_f64(*value).unwrap()),
+            TypeAnnotatedValue::Char(value) => JsonValue::Number(Number::from(*value as u32)),
+            TypeAnnotatedValue::Str(value) => JsonValue::String(value.clone()),
+            TypeAnnotatedValue::Enum(protobuf::TypedEnum { typ: _, value }) => {
+                JsonValue::String(value.clone())
+            }
+            TypeAnnotatedValue::Option(option) => match &option.value {
+                Some(value) => value.clone().type_annotated_value.unwrap().to_json_value(),
+                None => JsonValue::Null,
+            },
+            TypeAnnotatedValue::Tuple(protobuf::TypedTuple { typ: _, value }) => {
+                let values: Vec<serde_json::Value> = value
+                    .iter()
+                    .map(|v| v.type_annotated_value.clone().unwrap().to_json_value())
+                    .collect();
+                JsonValue::Array(values)
+            }
+            TypeAnnotatedValue::List(protobuf::TypedList { typ: _, values }) => {
+                let values: Vec<serde_json::Value> = values
+                    .iter()
+                    .map(|v| v.type_annotated_value.clone().unwrap().to_json_value())
+                    .collect();
+                JsonValue::Array(values)
+            }
 
-        if errors.is_empty() {
-            Ok(results)
-        } else {
-            Err(errors)
-        }
-    } else {
-        Err(vec![format!(
-            "Unexpected number of parameters (got {}, expected: {})",
-            parameters.len(),
-            expected_parameters.len()
-        )])
-    }
-}
-
-pub fn function_result(
-    values: Vec<Value>,
-    expected_types: &[AnalysedFunctionResult],
-) -> Result<JsonValue, Vec<String>> {
-    function_result_typed(values, expected_types).map(|result| get_json_from_typed_value(&result))
-}
-
-pub fn function_result_typed(
-    values: Vec<Value>,
-    expected_types: &[AnalysedFunctionResult],
-) -> Result<TypeAnnotatedValue, Vec<String>> {
-    if values.len() != expected_types.len() {
-        Err(vec![format!(
-            "Unexpected number of result values (got {}, expected: {})",
-            values.len(),
-            expected_types.len()
-        )])
-    } else {
-        let mut results = vec![];
-        let mut errors = vec![];
-
-        for (value, expected) in values.into_iter().zip(expected_types.iter()) {
-            let result = TypeAnnotatedValue::from_value(&value, &expected.typ);
-
-            match result {
-                Ok(value) => {
-                    results.push((value, expected.typ.clone()));
+            TypeAnnotatedValue::Record(protobuf::TypedRecord { typ: _, value }) => {
+                let mut map = serde_json::Map::new();
+                for name_value in value {
+                    map.insert(
+                        name_value.name.clone(),
+                        name_value
+                            .value
+                            .clone()
+                            .unwrap()
+                            .type_annotated_value
+                            .unwrap()
+                            .to_json_value(),
+                    );
                 }
-                Err(err) => errors.extend(err),
-            }
-        }
-
-        let all_without_names = expected_types.iter().all(|t| t.name.is_none());
-
-        if all_without_names {
-            Ok(TypeAnnotatedValue::Tuple {
-                typ: results.iter().map(|(_, typ)| typ.clone()).collect(),
-                value: results.into_iter().map(|(v, _)| v).collect(),
-            })
-        } else {
-            let mut named_typs: Vec<(String, AnalysedType)> = vec![];
-            let mut named_values: Vec<(String, TypeAnnotatedValue)> = vec![];
-
-            for (index, ((typed_value, typ), expected)) in
-                results.into_iter().zip(expected_types.iter()).enumerate()
-            {
-                let name = if let Some(name) = &expected.name {
-                    name.clone()
-                } else {
-                    index.to_string()
-                };
-
-                named_typs.push((name.clone(), typ.clone()));
-                named_values.push((name, typed_value));
+                JsonValue::Object(map)
             }
 
-            Ok(TypeAnnotatedValue::Record {
-                typ: named_typs,
-                value: named_values,
-            })
-        }
-    }
-}
+            TypeAnnotatedValue::Variant(variant) => {
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    variant.case_name.clone(),
+                    variant
+                        .case_value
+                        .as_ref()
+                        .map(|x| {
+                            let value = x.clone().deref().type_annotated_value.clone().unwrap();
+                            value.to_json_value()
+                        })
+                        .unwrap_or(JsonValue::Null),
+                );
+                JsonValue::Object(map)
+            }
 
-pub fn get_typed_value_from_json(
-    json_val: &JsonValue,
-    analysed_type: &AnalysedType,
-) -> Result<TypeAnnotatedValue, Vec<String>> {
-    match analysed_type {
-        AnalysedType::Bool => get_bool(json_val),
-        AnalysedType::S8 => get_s8(json_val),
-        AnalysedType::U8 => get_u8(json_val),
-        AnalysedType::S16 => get_s16(json_val),
-        AnalysedType::U16 => get_u16(json_val),
-        AnalysedType::S32 => get_s32(json_val),
-        AnalysedType::U32 => get_u32(json_val),
-        AnalysedType::S64 => get_s64(json_val),
-        AnalysedType::U64 => get_u64(json_val),
-        AnalysedType::F64 => get_f64(json_val),
-        AnalysedType::F32 => get_f32(json_val),
-        AnalysedType::Chr => get_char(json_val),
-        AnalysedType::Str => get_string(json_val),
-        AnalysedType::Enum(names) => get_enum(json_val, names),
-        AnalysedType::Flags(names) => get_flag(json_val, names),
-        AnalysedType::List(elem) => get_list(json_val, elem),
-        AnalysedType::Option(elem) => get_option(json_val, elem),
-        AnalysedType::Result { ok, error } => get_result(json_val, ok, error),
-        AnalysedType::Record(fields) => get_record(json_val, fields),
-        AnalysedType::Variant(cases) => get_variant(json_val, cases),
-        AnalysedType::Tuple(elems) => get_tuple(json_val, elems),
-        AnalysedType::Resource { id, resource_mode } => {
-            get_handle(json_val, id.clone(), resource_mode.clone())
+            TypeAnnotatedValue::Result(result0) => {
+                let mut map = serde_json::Map::new();
+
+                let result_value = result0.result_value.clone().unwrap();
+
+                match result_value {
+                    ResultValue::OkValue(value) => {
+                        map.insert(
+                            "ok".to_string(),
+                            value
+                                .type_annotated_value
+                                .map_or(JsonValue::Null, |v| v.to_json_value()),
+                        );
+                    }
+                    ResultValue::ErrorValue(value) => {
+                        map.insert(
+                            "err".to_string(),
+                            value
+                                .type_annotated_value
+                                .map_or(JsonValue::Null, |v| v.to_json_value()),
+                        );
+                    }
+                }
+
+                JsonValue::Object(map)
+            }
+
+            TypeAnnotatedValue::Handle(protobuf::TypedHandle {
+                typ: _,
+                uri,
+                resource_id,
+            }) => JsonValue::String(format!("{}/{}", uri, resource_id)),
         }
     }
 }
@@ -198,7 +260,7 @@ fn get_s8(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         BigDecimal::from_i8(i8::MIN).expect("Failed to convert i8::MIN to BigDecimal"),
         BigDecimal::from_i8(i8::MAX).expect("Failed to convert i8::MAX to BigDecimal"),
     )
-    .map(|num| TypeAnnotatedValue::S8(num.to_i8().expect("Failed to convert BigDecimal to i8")))
+    .map(|num| TypeAnnotatedValue::S8(num.to_i32().expect("Failed to convert BigDecimal to i8")))
 }
 
 fn get_u8(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -207,7 +269,7 @@ fn get_u8(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         BigDecimal::from_u8(u8::MIN).expect("Failed to convert u8::MIN to BigDecimal"),
         BigDecimal::from_u8(u8::MAX).expect("Failed to convert u8::MAX to BigDecimal"),
     )
-    .map(|num| TypeAnnotatedValue::U8(num.to_u8().expect("Failed to convert BigDecimal to u8")))
+    .map(|num| TypeAnnotatedValue::U8(num.to_u32().expect("Failed to convert BigDecimal to u8")))
 }
 
 fn get_s16(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -216,7 +278,7 @@ fn get_s16(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         BigDecimal::from_i16(i16::MIN).expect("Failed to convert i16::MIN to BigDecimal"),
         BigDecimal::from_i16(i16::MAX).expect("Failed to convert i16::MAX to BigDecimal"),
     )
-    .map(|num| TypeAnnotatedValue::S16(num.to_i16().expect("Failed to convert BigDecimal to i16")))
+    .map(|num| TypeAnnotatedValue::S16(num.to_i32().expect("Failed to convert BigDecimal to i16")))
 }
 
 fn get_u16(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -225,7 +287,7 @@ fn get_u16(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
         BigDecimal::from_u16(u16::MIN).expect("Failed to convert u16::MIN to BigDecimal"),
         BigDecimal::from_u16(u16::MAX).expect("Failed to convert u16::MAX to BigDecimal"),
     )
-    .map(|num| TypeAnnotatedValue::U16(num.to_u16().expect("Failed to convert BigDecimal to u16")))
+    .map(|num| TypeAnnotatedValue::U16(num.to_u32().expect("Failed to convert BigDecimal to u16")))
 }
 
 fn get_s32(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
@@ -296,12 +358,7 @@ fn get_char(json: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
                 num_u64
             )])
         } else {
-            char::from_u32(num_u64 as u32)
-                .ok_or(vec![format!(
-                    "The value {} is not a valid unicode character",
-                    num_u64
-                )])
-                .map(TypeAnnotatedValue::Chr)
+            Ok(TypeAnnotatedValue::Char(num_u64 as i32))
         }
     } else {
         let type_description = type_description(json);
@@ -333,17 +390,24 @@ fn get_tuple(
     let mut vals: Vec<TypeAnnotatedValue> = vec![];
 
     for (json, tpe) in json_array.iter().zip(types.iter()) {
-        match get_typed_value_from_json(json, tpe) {
+        match TypeAnnotatedValue::parse_with_type(json, tpe) {
             Ok(result) => vals.push(result),
             Err(errs) => errors.extend(errs),
         }
     }
 
+    let tuple = protobuf::TypedTuple {
+        typ: types.iter().map(|t| t.into()).collect(),
+        value: vals
+            .iter()
+            .map(|v| protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(v.clone()),
+            })
+            .collect(),
+    };
+
     if errors.is_empty() {
-        Ok(TypeAnnotatedValue::Tuple {
-            typ: types.to_vec(),
-            value: vals,
-        })
+        Ok(TypeAnnotatedValue::Tuple(tuple))
     } else {
         Err(errors)
     }
@@ -354,17 +418,25 @@ fn get_option(
     tpe: &AnalysedType,
 ) -> Result<TypeAnnotatedValue, Vec<String>> {
     match input_json.as_null() {
-        Some(_) => Ok(TypeAnnotatedValue::Option {
-            typ: tpe.clone(),
-            value: None,
-        }),
+        Some(_) => {
+            let option = protobuf::TypedOption {
+                typ: Some(tpe.into()),
+                value: None,
+            };
 
-        None => {
-            get_typed_value_from_json(input_json, tpe).map(|result| TypeAnnotatedValue::Option {
-                typ: tpe.clone(),
-                value: Some(Box::new(result)),
-            })
+            Ok(TypeAnnotatedValue::Option(Box::new(option)))
         }
+
+        None => TypeAnnotatedValue::parse_with_type(input_json, tpe).map(|result| {
+            let option = protobuf::TypedOption {
+                typ: Some(tpe.into()),
+                value: Some(Box::new(protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(result),
+                })),
+            };
+
+            TypeAnnotatedValue::Option(Box::new(option))
+        }),
     }
 }
 
@@ -377,17 +449,24 @@ fn get_list(input_json: &JsonValue, tpe: &AnalysedType) -> Result<TypeAnnotatedV
     let mut vals: Vec<TypeAnnotatedValue> = vec![];
 
     for json in json_array {
-        match get_typed_value_from_json(json, tpe) {
+        match TypeAnnotatedValue::parse_with_type(json, tpe) {
             Ok(result) => vals.push(result),
             Err(errs) => errors.extend(errs),
         }
     }
 
+    let list = protobuf::TypedList {
+        typ: Some(tpe.into()),
+        values: vals
+            .iter()
+            .map(|v| protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(v.clone()),
+            })
+            .collect(),
+    };
+
     if errors.is_empty() {
-        Ok(TypeAnnotatedValue::List {
-            typ: tpe.clone(),
-            values: vals,
-        })
+        Ok(TypeAnnotatedValue::List(list))
     } else {
         Err(errors)
     }
@@ -398,11 +477,12 @@ fn get_enum(input_json: &JsonValue, names: &[String]) -> Result<TypeAnnotatedVal
         .as_str()
         .ok_or(vec![format!("Input {} is not string", input_json)])?;
 
+    let enum_value = protobuf::TypedEnum {
+        typ: names.to_vec(),
+        value: input_enum_value.to_string(),
+    };
     if names.contains(&input_enum_value.to_string()) {
-        Ok(TypeAnnotatedValue::Enum {
-            typ: names.to_vec(),
-            value: input_enum_value.to_string(),
-        })
+        Ok(TypeAnnotatedValue::Enum(enum_value))
     } else {
         Err(vec![format!(
             "Invalid input {}. Valid values are {}",
@@ -423,7 +503,7 @@ fn get_result(
         input_json: &JsonValue,
     ) -> Result<Option<Box<TypeAnnotatedValue>>, Vec<String>> {
         if let Some(typ) = typ {
-            get_typed_value_from_json(input_json, typ).map(|v| Some(Box::new(v)))
+            TypeAnnotatedValue::parse_with_type(input_json, typ).map(|v| Some(Box::new(v)))
         } else if input_json.is_null() {
             Ok(None)
         } else {
@@ -434,17 +514,41 @@ fn get_result(
     }
 
     match input_json.get("ok") {
-        Some(value) => Ok(TypeAnnotatedValue::Result {
-            ok: ok_type.clone(),
-            error: err_type.clone(),
-            value: Ok(validate(ok_type, value)?),
-        }),
+        Some(value) => {
+            let value = validate(ok_type, value)?;
+
+            let result_value = value.map(|value| {
+                ResultValue::OkValue(Box::new(protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(value.deref().clone()),
+                }))
+            });
+
+            let typed_result = protobuf::TypedResult {
+                ok: ok_type.clone().map(|x| x.deref().into()),
+                error: err_type.clone().map(|x| x.deref().into()),
+                result_value,
+            };
+
+            Ok(TypeAnnotatedValue::Result(Box::new(typed_result)))
+        }
         None => match input_json.get("err") {
-            Some(value) => Ok(TypeAnnotatedValue::Result {
-                ok: ok_type.clone(),
-                error: err_type.clone(),
-                value: Err(validate(err_type, value)?),
-            }),
+            Some(value) => {
+                let value = validate(err_type, value)?;
+
+                let result_value = value.map(|value| {
+                    ResultValue::ErrorValue(Box::new(protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(value.deref().clone()),
+                    }))
+                });
+
+                let typed_result = protobuf::TypedResult {
+                    ok: ok_type.clone().map(|x| x.deref().into()),
+                    error: err_type.clone().map(|x| x.deref().into()),
+                    result_value,
+                };
+
+                Ok(TypeAnnotatedValue::Result(Box::new(typed_result)))
+            }
             None => Err(vec![
                 "Failed to retrieve either ok value or err value".to_string()
             ]),
@@ -454,7 +558,7 @@ fn get_result(
 
 fn get_record(
     input_json: &JsonValue,
-    name_type_pairs: &[(String, AnalysedType)],
+    name_type_pairs: &[NameTypePair],
 ) -> Result<TypeAnnotatedValue, Vec<String>> {
     let json_map = input_json.as_object().ok_or(vec![format!(
         "The input {} is not a json object",
@@ -464,9 +568,9 @@ fn get_record(
     let mut errors: Vec<String> = vec![];
     let mut vals: Vec<(String, TypeAnnotatedValue)> = vec![];
 
-    for (name, tpe) in name_type_pairs {
+    for NameTypePair { name, typ } in name_type_pairs {
         if let Some(json_value) = json_map.get(name) {
-            match get_typed_value_from_json(json_value, tpe) {
+            match TypeAnnotatedValue::parse_with_type(json_value, typ) {
                 Ok(result) => vals.push((name.clone(), result)),
                 Err(value_errors) => errors.extend(
                     value_errors
@@ -476,24 +580,45 @@ fn get_record(
                 ),
             }
         } else {
-            match tpe {
-                AnalysedType::Option(_) => vals.push((
-                    name.clone(),
-                    TypeAnnotatedValue::Option {
-                        typ: tpe.clone(),
+            match typ {
+                AnalysedType::Option(_) => {
+                    let option = protobuf::TypedOption {
+                        typ: Some(typ.into()),
                         value: None,
-                    },
-                )),
+                    };
+
+                    vals.push((name.clone(), TypeAnnotatedValue::Option(Box::new(option))))
+                }
                 _ => errors.push(format!("Key '{}' not found in json_map", name)),
             }
         }
     }
 
     if errors.is_empty() {
-        Ok(TypeAnnotatedValue::Record {
-            typ: name_type_pairs.to_vec(),
-            value: vals,
-        })
+        let name_type_pairs = name_type_pairs
+            .iter()
+            .map(|pair| protobuf::NameTypePair {
+                name: pair.name.clone(),
+                typ: Some((&pair.typ).into()),
+            })
+            .collect::<Vec<_>>();
+
+        let name_value_pairs = vals
+            .iter()
+            .map(|(name, value)| protobuf::NameValuePair {
+                name: name.clone(),
+                value: Some(protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(value.clone()),
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let record = protobuf::TypedRecord {
+            typ: name_type_pairs,
+            value: name_value_pairs,
+        };
+
+        Ok(TypeAnnotatedValue::Record(record))
     } else {
         Err(errors)
     }
@@ -530,10 +655,11 @@ fn get_flag(input_json: &JsonValue, names: &[String]) -> Result<TypeAnnotatedVal
     }
 
     if errors.is_empty() {
-        Ok(TypeAnnotatedValue::Flags {
+        let flags = protobuf::TypedFlags {
             typ: names.to_vec(),
             values: vals,
-        })
+        };
+        Ok(TypeAnnotatedValue::Flags(flags))
     } else {
         Err(errors)
     }
@@ -541,11 +667,15 @@ fn get_flag(input_json: &JsonValue, names: &[String]) -> Result<TypeAnnotatedVal
 
 fn get_variant(
     input_json: &JsonValue,
-    types: &[(String, Option<AnalysedType>)],
+    types: &[NameOptionTypePair],
 ) -> Result<TypeAnnotatedValue, Vec<String>> {
     let mut possible_mapping_indexed: HashMap<&String, &Option<AnalysedType>> = HashMap::new();
 
-    for (name, optional_type) in types.iter() {
+    for NameOptionTypePair {
+        name,
+        typ: optional_type,
+    } in types.iter()
+    {
         possible_mapping_indexed.insert(name, optional_type);
     }
 
@@ -561,17 +691,42 @@ fn get_variant(
 
     match possible_mapping_indexed.get(key) {
         Some(Some(tpe)) => {
-            get_typed_value_from_json(json, tpe).map(|result| TypeAnnotatedValue::Variant {
-                typ: types.to_vec(),
+            let result = TypeAnnotatedValue::parse_with_type(json, tpe)?;
+            let variant = protobuf::TypedVariant {
+                typ: Some(protobuf::TypeVariant {
+                    cases: types
+                        .iter()
+                        .map(|pair| protobuf::NameOptionTypePair {
+                            name: pair.name.clone(),
+                            typ: pair.typ.as_ref().map(|t| t.into()),
+                        })
+                        .collect(),
+                }),
                 case_name: key.clone(),
-                case_value: Some(Box::new(result)),
-            })
+                case_value: Some(Box::new(protobuf::TypeAnnotatedValue {
+                    type_annotated_value: Some(result),
+                })),
+            };
+
+            Ok(TypeAnnotatedValue::Variant(Box::new(variant)))
         }
-        Some(None) if json.is_null() => Ok(TypeAnnotatedValue::Variant {
-            typ: types.to_vec(),
-            case_name: key.clone(),
-            case_value: None,
-        }),
+        Some(None) if json.is_null() => {
+            let variant = protobuf::TypedVariant {
+                typ: Some(protobuf::TypeVariant {
+                    cases: types
+                        .iter()
+                        .map(|pair| protobuf::NameOptionTypePair {
+                            name: pair.name.clone(),
+                            typ: pair.typ.as_ref().map(|t| t.into()),
+                        })
+                        .collect(),
+                }),
+                case_name: key.clone(),
+                case_value: None,
+            };
+
+            Ok(TypeAnnotatedValue::Variant(Box::new(variant)))
+        }
         Some(None) => Err(vec![format!("Unit variant {key} has non-null JSON value")]),
         None => Err(vec![format!("Unknown key {key} in the variant")]),
     }
@@ -590,7 +745,19 @@ fn get_handle(
                 match u64::from_str(parts[parts.len() - 1]) {
                     Ok(resource_id) => {
                         let uri = parts[0..(parts.len() - 1)].join("/");
-                        Ok(TypeAnnotatedValue::Handle { id, resource_mode, uri: Uri { value: uri }, resource_id })
+
+                        let handle = protobuf::TypedHandle {
+                            typ: Some(protobuf::TypeHandle {
+                                resource_id: id.0,
+                                mode: match resource_mode {
+                                    AnalysedResourceMode::Owned => 1,
+                                    AnalysedResourceMode::Borrowed => 2,
+                                },
+                            }),
+                            uri,
+                            resource_id
+                        };
+                        Ok(TypeAnnotatedValue::Handle(handle))
                     }
                     Err(err) => {
                         Err(vec![format!("Failed to parse resource-id section of the handle value: {}", err)])
@@ -675,129 +842,34 @@ fn get_u64(value: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
     }
 }
 
-pub fn get_json_from_typed_value(typed_value: &TypeAnnotatedValue) -> JsonValue {
-    match typed_value {
-        TypeAnnotatedValue::Bool(bool) => JsonValue::Bool(*bool),
-        TypeAnnotatedValue::Flags { typ: _, values } => JsonValue::Array(
-            values
-                .iter()
-                .map(|x| JsonValue::String(x.clone()))
-                .collect(),
-        ),
-        TypeAnnotatedValue::S8(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::U8(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::S16(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::U16(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::S32(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::U32(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::S64(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::U64(value) => JsonValue::Number(Number::from(*value)),
-        TypeAnnotatedValue::F32(value) => {
-            JsonValue::Number(Number::from_f64(*value as f64).unwrap())
-        }
-        TypeAnnotatedValue::F64(value) => JsonValue::Number(Number::from_f64(*value).unwrap()),
-        TypeAnnotatedValue::Chr(value) => JsonValue::Number(Number::from(*value as u32)),
-        TypeAnnotatedValue::Str(value) => JsonValue::String(value.clone()),
-        TypeAnnotatedValue::Enum { typ: _, value } => JsonValue::String(value.clone()),
-        TypeAnnotatedValue::Option { typ: _, value } => match value {
-            Some(value) => get_json_from_typed_value(value),
-            None => JsonValue::Null,
-        },
-        TypeAnnotatedValue::Tuple { typ: _, value } => {
-            let values: Vec<serde_json::Value> =
-                value.iter().map(get_json_from_typed_value).collect();
-            JsonValue::Array(values)
-        }
-        TypeAnnotatedValue::List { typ: _, values } => {
-            let values: Vec<serde_json::Value> =
-                values.iter().map(get_json_from_typed_value).collect();
-            JsonValue::Array(values)
-        }
-
-        TypeAnnotatedValue::Record { typ: _, value } => {
-            let mut map = serde_json::Map::new();
-            for (key, value) in value {
-                map.insert(key.clone(), get_json_from_typed_value(value));
-            }
-            JsonValue::Object(map)
-        }
-
-        TypeAnnotatedValue::Variant {
-            typ: _,
-            case_name,
-            case_value,
-        } => {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                case_name.clone(),
-                case_value
-                    .as_ref()
-                    .map(|x| get_json_from_typed_value(x))
-                    .unwrap_or(JsonValue::Null),
-            );
-            JsonValue::Object(map)
-        }
-
-        TypeAnnotatedValue::Result {
-            ok: _,
-            error: _,
-            value,
-        } => {
-            let mut map = serde_json::Map::new();
-            match value {
-                Ok(ok_value) => {
-                    map.insert(
-                        "ok".to_string(),
-                        ok_value
-                            .as_ref()
-                            .map(|x| get_json_from_typed_value(x))
-                            .unwrap_or(JsonValue::Null),
-                    );
-                }
-                Err(err_value) => {
-                    map.insert(
-                        "err".to_string(),
-                        err_value
-                            .as_ref()
-                            .map(|x| get_json_from_typed_value(x))
-                            .unwrap_or(JsonValue::Null),
-                    );
-                }
-            }
-            JsonValue::Object(map)
-        }
-
-        TypeAnnotatedValue::Handle {
-            id: _,
-            resource_mode: _,
-            uri,
-            resource_id,
-        } => JsonValue::String(format!("{}/{}", uri.value, resource_id)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::json::{get_json_from_typed_value, get_typed_value_from_json};
-    use crate::{TypeAnnotatedValue, Value};
-    use golem_wasm_ast::analysis::AnalysedType;
+    use std::collections::HashSet;
+
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
+        TypeF64, TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32,
+        TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+    };
     use proptest::prelude::*;
     use serde_json::{Number, Value as JsonValue};
-    use std::collections::HashSet;
+
+    use crate::json::TypeAnnotatedValueJsonExtensions;
+    use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use crate::{TypeAnnotatedValueConstructors, Value};
 
     fn validate_function_result(
         val: Value,
         expected_type: &AnalysedType,
     ) -> Result<JsonValue, Vec<String>> {
-        TypeAnnotatedValue::from_value(&val, expected_type)
-            .map(|result| get_json_from_typed_value(&result))
+        TypeAnnotatedValue::create(&val, expected_type).map(|result| result.to_json_value())
     }
 
     fn validate_function_parameter(
         json: &JsonValue,
         expected_type: &AnalysedType,
     ) -> Result<Value, Vec<String>> {
-        match get_typed_value_from_json(json, expected_type) {
+        match TypeAnnotatedValue::parse_with_type(json, expected_type) {
             Ok(result) => match Value::try_from(result) {
                 Ok(value) => Ok(value),
                 Err(err) => Err(vec![err]),
@@ -810,98 +882,98 @@ mod tests {
         #[test]
         fn test_u8_param(value: u8) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U8);
+            let result = validate_function_parameter(&json, &AnalysedType::U8(TypeU8));
             prop_assert_eq!(result, Ok(Value::U8(value)));
         }
 
         #[test]
         fn test_u16_param(value: u16) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U16);
+            let result = validate_function_parameter(&json, &AnalysedType::U16(TypeU16));
             prop_assert_eq!(result, Ok(Value::U16(value)));
         }
 
         #[test]
         fn test_u32_param(value: u32) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U32);
+            let result = validate_function_parameter(&json, &AnalysedType::U32(TypeU32));
             prop_assert_eq!(result, Ok(Value::U32(value)));
         }
 
         #[test]
         fn test_u64_param(value: u64) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U64);
+            let result = validate_function_parameter(&json, &AnalysedType::U64(TypeU64));
             prop_assert_eq!(result, Ok(Value::U64(value)));
         }
 
         #[test]
         fn test_s8_param(value: i8) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S8);
+            let result = validate_function_parameter(&json, &AnalysedType::S8(TypeS8));
             prop_assert_eq!(result, Ok(Value::S8(value)));
         }
 
         #[test]
         fn test_s16_param(value: i16) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S16);
+            let result = validate_function_parameter(&json, &AnalysedType::S16(TypeS16));
             prop_assert_eq!(result, Ok(Value::S16(value)));
         }
 
         #[test]
         fn test_s32_param(value: i32) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S32);
+            let result = validate_function_parameter(&json, &AnalysedType::S32(TypeS32));
             prop_assert_eq!(result, Ok(Value::S32(value)));
         }
 
         #[test]
         fn test_s64_param(value: i64) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S64);
+            let result = validate_function_parameter(&json, &AnalysedType::S64(TypeS64));
             prop_assert_eq!(result, Ok(Value::S64(value)));
         }
 
         #[test]
         fn test_f32_param(value: f32) {
             let json = JsonValue::Number(Number::from_f64(value as f64).unwrap());
-            let result = validate_function_parameter(&json, &AnalysedType::F32);
+            let result = validate_function_parameter(&json, &AnalysedType::F32(TypeF32));
             prop_assert_eq!(result, Ok(Value::F32(value)));
         }
 
         #[test]
         fn test_f64_param(value: f64) {
             let json = JsonValue::Number(Number::from_f64(value).unwrap());
-            let result = validate_function_parameter(&json, &AnalysedType::F64);
+            let result = validate_function_parameter(&json, &AnalysedType::F64(TypeF64));
             prop_assert_eq!(result, Ok(Value::F64(value)));
         }
 
         #[test]
         fn test_char_param(value: char) {
             let json = JsonValue::Number(Number::from(value as u32));
-            let result = validate_function_parameter(&json, &AnalysedType::Chr);
+            let result = validate_function_parameter(&json, &AnalysedType::Chr(TypeChr));
             prop_assert_eq!(result, Ok(Value::Char(value)));
         }
 
         #[test]
         fn test_string_param(value: String) {
             let json = JsonValue::String(value.clone());
-            let result = validate_function_parameter(&json, &AnalysedType::Str);
+            let result = validate_function_parameter(&json, &AnalysedType::Str(TypeStr));
             prop_assert_eq!(result, Ok(Value::String(value)));
         }
 
         #[test]
         fn test_list_u8_param(value: Vec<u8>) {
             let json = JsonValue::Array(value.iter().map(|v| JsonValue::Number(Number::from(*v))).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::List(Box::new(AnalysedType::U8)));
+            let result = validate_function_parameter(&json, &AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U8(TypeU8))}));
             prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(Value::U8).collect())));
         }
 
         #[test]
         fn test_list_list_u64_param(value: Vec<Vec<u64>>) {
             let json = JsonValue::Array(value.iter().map(|v| JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect())).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::List(Box::new(AnalysedType::List(Box::new(AnalysedType::U64)))));
+            let result = validate_function_parameter(&json, &AnalysedType::List(TypeList { inner: Box::new(AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U64(TypeU64)) }))}));
             prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::List(v.into_iter().map(Value::U64).collect())).collect())));
         }
 
@@ -913,11 +985,11 @@ mod tests {
                     JsonValue::Number(Number::from(value.1 as u32)),
                     JsonValue::String(value.2.clone()),
                 ]);
-            let result = validate_function_parameter(&json, &AnalysedType::Tuple(vec![
-                AnalysedType::S32,
-                AnalysedType::Chr,
-                AnalysedType::Str,
-            ]));
+            let result = validate_function_parameter(&json, &AnalysedType::Tuple(TypeTuple { items: vec![
+                AnalysedType::S32(TypeS32),
+                AnalysedType::Chr(TypeChr),
+                AnalysedType::Str(TypeStr),
+            ]}));
             prop_assert_eq!(result, Ok(Value::Tuple(
                 vec![
                     Value::S32(value.0),
@@ -934,7 +1006,8 @@ mod tests {
             let json = JsonValue::Object(
                 value.iter().map(|(k, v)| (k.clone(), JsonValue::Bool(*v))).collect());
             let result = validate_function_parameter(&json, &AnalysedType::Record(
-                value.iter().map(|(k, _)| (k.clone(), AnalysedType::Bool)).collect()));
+                TypeRecord { fields:
+                value.iter().map(|(k, _)| NameTypePair { name: k.clone(), typ: AnalysedType::Bool(TypeBool) }).collect()}));
             prop_assert_eq!(result, Ok(Value::Record(
                 value.iter().map(|(_, v)| Value::Bool(*v)).collect())));
         }
@@ -946,8 +1019,8 @@ mod tests {
             ) {
             let enabled: Vec<String> = value.iter().filter(|(_, v)| *v).map(|(k, _)| k.clone()).collect();
             let json = JsonValue::Array(enabled.iter().map(|v| JsonValue::String(v.clone())).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::Flags(
-                value.iter().map(|(k, _)| k.clone()).collect()));
+            let result = validate_function_parameter(&json, &AnalysedType::Flags(TypeFlags{ names:
+                value.iter().map(|(k, _)| k.clone()).collect()}));
             prop_assert_eq!(result, Ok(Value::Flags(
                 value.iter().map(|(_, v)| *v).collect())
             ));
@@ -958,7 +1031,7 @@ mod tests {
             let names: Vec<String> = names.into_iter().collect();
             let idx = idx % names.len();
             let json = JsonValue::String(names[idx].clone());
-            let result = validate_function_parameter(&json, &AnalysedType::Enum(names.into_iter().collect()));
+            let result = validate_function_parameter(&json, &AnalysedType::Enum(TypeEnum { cases: names.into_iter().collect()}));
             prop_assert_eq!(result, Ok(Value::Enum(idx as u32)));
         }
 
@@ -968,7 +1041,7 @@ mod tests {
                 Some(v) => JsonValue::String(v.clone()),
                 None => JsonValue::Null,
             };
-            let result = validate_function_parameter(&json, &AnalysedType::Option(Box::new(AnalysedType::Str)));
+            let result = validate_function_parameter(&json, &AnalysedType::Option(TypeOption { inner: Box::new(AnalysedType::Str(TypeStr)) }));
             prop_assert_eq!(result, Ok(Value::Option(value.map(|v| Box::new(Value::String(v))))));
         }
 
@@ -979,10 +1052,10 @@ mod tests {
                 Ok(Some(v)) => JsonValue::Object(vec![("ok".to_string(), JsonValue::Number(Number::from(*v)))].into_iter().collect()),
                 Err(e) => JsonValue::Object(vec![("err".to_string(), JsonValue::String(e.clone()))].into_iter().collect()),
             };
-            let result = validate_function_parameter(&json, &AnalysedType::Result {
-                ok: Some(Box::new(AnalysedType::Option(Box::new(AnalysedType::S32)))),
-                error: Some(Box::new(AnalysedType::Str)),
-            });
+            let result = validate_function_parameter(&json, &AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::Option(TypeOption { inner: Box::new(AnalysedType::S32(TypeS32))}))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            }));
             prop_assert_eq!(result, Ok(Value::Result(
                 match value {
                     Ok(None) => Ok(Some(Box::new(Value::Option(None)))),
@@ -1006,10 +1079,10 @@ mod tests {
                 ].into_iter().collect()),
                 _ => panic!("Invalid discriminator value"),
             };
-            let result = validate_function_parameter(&json, &AnalysedType::Variant(vec![
-                ("first".to_string(), Some(AnalysedType::Tuple(vec![AnalysedType::U32, AnalysedType::U32]))),
-                ("second".to_string(), Some(AnalysedType::Str)),
-            ]));
+            let result = validate_function_parameter(&json, &AnalysedType::Variant(TypeVariant { cases: vec![
+                NameOptionTypePair { name: "first".to_string(), typ: Some(AnalysedType::Tuple(TypeTuple { items: vec![AnalysedType::U32(TypeU32), AnalysedType::U32(TypeU32)]})) },
+                NameOptionTypePair { name: "second".to_string(), typ: Some(AnalysedType::Str(TypeStr)) },
+            ]}));
             prop_assert_eq!(result, Ok(Value::Variant {
                 case_idx: discriminator as u32,
                 case_value: match discriminator {
@@ -1023,7 +1096,7 @@ mod tests {
         #[test]
         fn test_u8_result(value: u8) {
             let result = Value::U8(value);
-            let expected_type = AnalysedType::U8;
+            let expected_type = AnalysedType::U8(TypeU8);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1031,7 +1104,7 @@ mod tests {
         #[test]
         fn test_u16_result(value: u16) {
             let result = Value::U16(value);
-            let expected_type = AnalysedType::U16;
+            let expected_type = AnalysedType::U16(TypeU16);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1039,7 +1112,7 @@ mod tests {
         #[test]
         fn test_u32_result(value: u32) {
             let result = Value::U32(value);
-            let expected_type = AnalysedType::U32;
+            let expected_type = AnalysedType::U32(TypeU32);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1047,7 +1120,7 @@ mod tests {
         #[test]
         fn test_u64_result(value: u64) {
             let result = Value::U64(value);
-            let expected_type = AnalysedType::U64;
+            let expected_type = AnalysedType::U64(TypeU64);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1055,7 +1128,7 @@ mod tests {
         #[test]
         fn test_s8_result(value: i8) {
             let result = Value::S8(value);
-            let expected_type = AnalysedType::S8;
+            let expected_type = AnalysedType::S8(TypeS8);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1063,7 +1136,7 @@ mod tests {
         #[test]
         fn test_s16_result(value: i16) {
             let result = Value::S16(value);
-            let expected_type = AnalysedType::S16;
+            let expected_type = AnalysedType::S16(TypeS16);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1071,7 +1144,7 @@ mod tests {
         #[test]
         fn test_s32_result(value: i32) {
             let result = Value::S32(value);
-            let expected_type = AnalysedType::S32;
+            let expected_type = AnalysedType::S32(TypeS32);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1079,7 +1152,7 @@ mod tests {
         #[test]
         fn test_s64_result(value: i64) {
             let result = Value::S64(value);
-            let expected_type = AnalysedType::S64;
+            let expected_type = AnalysedType::S64(TypeS64);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1087,7 +1160,7 @@ mod tests {
         #[test]
         fn test_f32_result(value: f32) {
             let result = Value::F32(value);
-            let expected_type = AnalysedType::F32;
+            let expected_type = AnalysedType::F32(TypeF32);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from_f64(value as f64).unwrap())));
         }
@@ -1095,7 +1168,7 @@ mod tests {
         #[test]
         fn test_f64_result(value: f64) {
             let result = Value::F64(value);
-            let expected_type = AnalysedType::F64;
+            let expected_type = AnalysedType::F64(TypeF64);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from_f64(value).unwrap())));
         }
@@ -1103,7 +1176,7 @@ mod tests {
         #[test]
         fn test_char_result(value: char) {
             let result = Value::Char(value);
-            let expected_type = AnalysedType::Chr;
+            let expected_type = AnalysedType::Chr(TypeChr);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value as u32))));
         }
@@ -1111,7 +1184,7 @@ mod tests {
         #[test]
         fn test_string_result(value: String) {
             let result = Value::String(value.clone());
-            let expected_type = AnalysedType::Str;
+            let expected_type = AnalysedType::Str(TypeStr);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::String(value)));
         }
@@ -1119,7 +1192,7 @@ mod tests {
         #[test]
         fn test_list_i32_result(value: Vec<i32>) {
             let result = Value::List(value.iter().map(|v| Value::S32(*v)).collect());
-            let expected_type = AnalysedType::List(Box::new(AnalysedType::S32));
+            let expected_type = AnalysedType::List(TypeList { inner: Box::new(AnalysedType::S32(TypeS32))});
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Array(value.into_iter().map(|v| JsonValue::Number(Number::from(v))).collect())));
         }
@@ -1127,7 +1200,7 @@ mod tests {
         #[test]
         fn test_tuple_string_bool_result(value: (String, bool)) {
             let result = Value::Tuple(vec![Value::String(value.0.clone()), Value::Bool(value.1)]);
-            let expected_type = AnalysedType::Tuple(vec![AnalysedType::Str, AnalysedType::Bool]);
+            let expected_type = AnalysedType::Tuple(TypeTuple { items: vec![AnalysedType::Str(TypeStr), AnalysedType::Bool(TypeBool)]});
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Array(vec![JsonValue::String(value.0), JsonValue::Bool(value.1)])));
         }
@@ -1138,8 +1211,8 @@ mod tests {
         ) {
             let result = Value::Record(
                 value.iter().map(|(_, v)| Value::List(v.iter().map(|n| Value::U8(*n)).collect())).collect());
-            let expected_type = AnalysedType::Record(
-                value.iter().map(|(k, _)| (k.clone(), AnalysedType::List(Box::new(AnalysedType::U8)))).collect());
+            let expected_type = AnalysedType::Record(TypeRecord { fields:
+                value.iter().map(|(k, _)| NameTypePair { name: k.clone(), typ: AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U8(TypeU8))})}).collect()});
             let json = validate_function_result(result, &expected_type);
             let expected_json = JsonValue::Object(
                 value.iter().map(|(k, v)| (k.clone(), JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect()))).collect());
@@ -1153,8 +1226,8 @@ mod tests {
             ) {
             let enabled: Vec<String> = pairs.iter().filter(|(_, v)| *v).map(|(k, _)| k.clone()).collect();
             let value = Value::Flags(pairs.iter().map(|(_, v)| *v).collect());
-            let result = validate_function_result(value, &AnalysedType::Flags(
-                pairs.iter().map(|(k, _)| k.clone()).collect()));
+            let result = validate_function_result(value, &AnalysedType::Flags(TypeFlags{ names:
+                pairs.iter().map(|(k, _)| k.clone()).collect()}));
             prop_assert_eq!(result, Ok(
                 JsonValue::Array(enabled.iter().map(|v| JsonValue::String(v.clone())).collect())
             ));
@@ -1165,14 +1238,14 @@ mod tests {
             let names: Vec<String> = names.into_iter().collect();
             let idx = idx % names.len();
             let value = Value::Enum(idx as u32);
-            let result = validate_function_result(value, &AnalysedType::Enum(names.clone()));
+            let result = validate_function_result(value, &AnalysedType::Enum(TypeEnum { cases: names.clone()}));
             prop_assert_eq!(result, Ok(JsonValue::String(names[idx].clone())));
         }
 
         #[test]
         fn test_option_string_result(opt: Option<String>) {
             let value = Value::Option(opt.clone().map(|v| Box::new(Value::String(v))));
-            let result = validate_function_result(value, &AnalysedType::Option(Box::new(AnalysedType::Str)));
+            let result = validate_function_result(value, &AnalysedType::Option(TypeOption { inner: Box::new(AnalysedType::Str(TypeStr))}));
             let json = match opt {
                 Some(str) => Ok(JsonValue::String(str)),
                 None => Ok(JsonValue::Null),
@@ -1190,10 +1263,10 @@ mod tests {
                     _ => panic!("Invalid discriminator value"),
                 }
             };
-            let result = validate_function_result(value, &AnalysedType::Variant(vec![
-                ("first".to_string(), Some(AnalysedType::Tuple(vec![AnalysedType::U32, AnalysedType::U32]))),
-                ("second".to_string(), Some(AnalysedType::Str)),
-            ]));
+            let result = validate_function_result(value, &AnalysedType::Variant(TypeVariant{ cases: vec![
+                NameOptionTypePair { name: "first".to_string(), typ: Some(AnalysedType::Tuple(TypeTuple { items: vec![AnalysedType::U32(TypeU32), AnalysedType::U32(TypeU32)]}))},
+                NameOptionTypePair { name: "second".to_string(), typ: Some(AnalysedType::Str(TypeStr))},
+            ]}));
             let json = match discriminator {
                 0 => JsonValue::Object(vec![
                     ("first".to_string(), JsonValue::Array(vec![
@@ -1213,8 +1286,12 @@ mod tests {
     #[test]
     fn json_null_works_as_none() {
         let json = JsonValue::Null;
-        let result =
-            validate_function_parameter(&json, &AnalysedType::Option(Box::new(AnalysedType::Str)));
+        let result = validate_function_parameter(
+            &json,
+            &AnalysedType::Option(TypeOption {
+                inner: Box::new(AnalysedType::Str(TypeStr)),
+            }),
+        );
         assert_eq!(result, Ok(Value::Option(None)));
     }
 
@@ -1227,13 +1304,20 @@ mod tests {
         );
         let result = validate_function_parameter(
             &json,
-            &AnalysedType::Record(vec![
-                ("x".to_string(), AnalysedType::Str),
-                (
-                    "y".to_string(),
-                    AnalysedType::Option(Box::new(AnalysedType::Str)),
-                ),
-            ]),
+            &AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "x".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "y".to_string(),
+                        typ: AnalysedType::Option(TypeOption {
+                            inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                    },
+                ],
+            }),
         );
         assert_eq!(
             result,

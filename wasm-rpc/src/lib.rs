@@ -31,6 +31,10 @@ mod extractor;
 #[cfg(feature = "json")]
 pub mod json;
 
+/// Poem OpenAPI integration for some types
+#[cfg(feature = "poem_openapi")]
+pub mod poem;
+
 /// Protobuf-defined value types and conversion to them
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
@@ -39,12 +43,15 @@ pub mod protobuf;
 #[cfg(feature = "serde")]
 pub mod serde;
 
+/// Conversion to/from the WAVE format
 #[cfg(feature = "text")]
 mod text;
 
+/// A version of values annotated with golem-wasm-ast generated type information
 #[cfg(feature = "typeinfo")]
 mod type_annotated_value;
 
+/// Conversion to/from wasmtime's value representation
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
 
@@ -54,10 +61,18 @@ pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc::types::{NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue};
+pub use bindings::golem::rpc::types::{
+    FutureInvokeResult, NodeIndex, RpcError, Uri, WasmRpc, WitNode, WitValue,
+};
+#[cfg(not(feature = "host"))]
+#[cfg(feature = "stub")]
+pub use bindings::wasi::io::poll::Pollable;
 
 #[cfg(feature = "host")]
 use ::wasmtime::component::bindgen;
+
+#[cfg(feature = "host")]
+pub use wasmtime_wasi::Pollable;
 
 #[cfg(feature = "host")]
 bindgen!({
@@ -67,8 +82,11 @@ bindgen!({
     ",
     tracing: false,
     async: true,
+    trappable_imports: true,
     with: {
-        "golem:rpc/types/wasm-rpc": WasmRpcEntry
+        "golem:rpc/types/wasm-rpc": WasmRpcEntry,
+        "golem:rpc/types/future-invoke-result": FutureInvokeResultEntry,
+        "wasi:io/poll/pollable": Pollable,
     }
 });
 
@@ -80,8 +98,32 @@ pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
 }
 
+#[cfg(feature = "host")]
+#[async_trait::async_trait]
+pub trait SubscribeAny: std::any::Any {
+    async fn ready(&mut self);
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+#[cfg(feature = "host")]
+pub struct FutureInvokeResultEntry {
+    pub payload: Box<dyn SubscribeAny + Send + Sync>,
+}
+
+#[cfg(feature = "host")]
+#[async_trait::async_trait]
+impl wasmtime_wasi::Subscribe for FutureInvokeResultEntry {
+    async fn ready(&mut self) {
+        self.payload.ready().await
+    }
+}
+
 #[cfg(feature = "typeinfo")]
 pub use type_annotated_value::*;
+
+#[cfg(feature = "text")]
+pub use text::{type_annotated_value_from_str, type_annotated_value_to_string};
 
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Uri {
@@ -230,6 +272,35 @@ fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     }
 }
 
+impl Value {
+    pub fn type_case_name(&self) -> &'static str {
+        match self {
+            Value::Bool(_) => "bool",
+            Value::U8(_) => "u8",
+            Value::U16(_) => "u16",
+            Value::U32(_) => "u32",
+            Value::U64(_) => "u64",
+            Value::S8(_) => "s8",
+            Value::S16(_) => "s16",
+            Value::S32(_) => "s32",
+            Value::S64(_) => "s64",
+            Value::F32(_) => "f32",
+            Value::F64(_) => "f64",
+            Value::Char(_) => "char",
+            Value::String(_) => "string",
+            Value::List(_) => "list",
+            Value::Tuple(_) => "tuple",
+            Value::Record(_) => "record",
+            Value::Variant { .. } => "variant",
+            Value::Enum(_) => "enum",
+            Value::Flags(_) => "flags",
+            Value::Option(_) => "option",
+            Value::Result(_) => "result",
+            Value::Handle { .. } => "handle",
+        }
+    }
+}
+
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
@@ -321,6 +392,8 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
 
 #[cfg(feature = "host")]
 pub const WASM_RPC_WIT: &str = include_str!("../wit/wasm-rpc.wit");
+#[cfg(feature = "host")]
+pub const WASI_POLL_WIT: &str = include_str!("../wit/deps/io/poll.wit");
 
 pub const WASM_RPC_VERSION: &str = env!("CARGO_PKG_VERSION");
 
