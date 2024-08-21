@@ -163,6 +163,7 @@ mod tests {
     use crate::api_definition::http::AllPathPatterns;
     use crate::worker_binding::{RequestDetails, RibInputValue, RibInputValueResolver};
 
+    use crate::worker_bridge_execution::to_response::ToResponse;
     use crate::worker_service_rib_interpreter::{
         DefaultEvaluator, EvaluationError, WorkerServiceRibInterpreter,
     };
@@ -186,6 +187,14 @@ mod tests {
             metadata: Vec<AnalysedExport>,
             input: Option<(RequestDetails, AnalysedType)>,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
+
+        async fn evaluate_with_worker_response_as_rib_result(
+            &self,
+            expr: &Expr,
+            worker_response: Option<TypeAnnotatedValue>,
+            metadata: Vec<AnalysedExport>,
+            request_input: Option<(RequestDetails, AnalysedType)>,
+        ) -> Result<RibInterpreterResult, EvaluationError>;
 
         async fn evaluate_pure_expr(
             &self,
@@ -223,14 +232,13 @@ mod tests {
             ))?)
         }
 
-        // This will invoke worker
-        async fn evaluate_with_worker_response(
+        async fn evaluate_with_worker_response_as_rib_result(
             &self,
             expr: &Expr,
             worker_response: Option<TypeAnnotatedValue>,
             metadata: Vec<AnalysedExport>,
             request_input: Option<(RequestDetails, AnalysedType)>,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+        ) -> Result<RibInterpreterResult, EvaluationError> {
             let expr = expr.clone();
             let compiled = rib::compile(&expr, &metadata)?;
 
@@ -239,7 +247,8 @@ mod tests {
 
             if let Some(worker_response) = worker_response.clone() {
                 // Collect worker details and request details into rib-input value
-                let worker_response_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
+                let worker_response_analysed_type =
+                    AnalysedType::try_from(&worker_response).unwrap();
                 type_info.insert("worker".to_string(), worker_response_analysed_type);
                 rib_input.insert("worker".to_string(), worker_response.clone());
             }
@@ -277,12 +286,32 @@ mod tests {
             let worker_invoke_function: RibFunctionInvoke = Arc::new(move |_, _| {
                 Box::pin({
                     let value = invoke_result.clone();
-                    async move { Ok(value)
-                    }})
+                    async move { Ok(value) }
+                })
             });
 
-            let eval_result =
+            let result =
                 rib::interpret(&compiled.byte_code, rib_input, worker_invoke_function).await?;
+
+            Ok(result)
+        }
+
+        // This will invoke worker
+        async fn evaluate_with_worker_response(
+            &self,
+            expr: &Expr,
+            worker_response: Option<TypeAnnotatedValue>,
+            metadata: Vec<AnalysedExport>,
+            request_input: Option<(RequestDetails, AnalysedType)>,
+        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let eval_result = self
+                .evaluate_with_worker_response_as_rib_result(
+                    expr,
+                    worker_response,
+                    metadata,
+                    request_input,
+                )
+                .await?;
 
             eval_result.get_val().ok_or(EvaluationError(
                 "The text is evaluated to unit and doesn't have a value".to_string(),
@@ -1053,7 +1082,6 @@ mod tests {
         assert_eq!(&value1, &expected);
     }
 
-
     #[tokio::test]
     async fn test_evaluation_for_function_returning_unit() {
         let noop_executor = DefaultEvaluator::noop();
@@ -1077,14 +1105,6 @@ mod tests {
         let request_type =
             get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
 
-        // Output from worker - doesn't matter
-        let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
-
-        // Output from worker
-        let return_type = AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::try_from(&worker_response).unwrap()),
-        });
-
         let component_metadata =
             get_analysed_export_for_unit_function("foo", vec![request_type.clone()]);
 
@@ -1096,18 +1116,18 @@ mod tests {
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
-            .evaluate_with_worker_response(
+            .evaluate_with_worker_response_as_rib_result(
                 &expr1,
-                Some(worker_response.clone()),
+                None,
                 component_metadata.clone(),
-                Some((request_details, request_type)),
+                Some((request_details.clone(), request_type)),
             )
             .await
             .unwrap();
 
-        let json = TypeAnnotatedValue::to_json_value(&value1);
+        let response: poem::Response = value1.to_response(&request_details);
 
-        assert_eq!(json, serde_json::Value::Null);
+        assert!(response.into_body().is_empty());
     }
 
     #[tokio::test]
