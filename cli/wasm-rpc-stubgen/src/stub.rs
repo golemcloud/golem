@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::WasmRpcOverride;
 use anyhow::{anyhow, bail};
 use indexmap::IndexSet;
 use std::collections::{BTreeMap, HashSet};
@@ -33,7 +34,7 @@ pub struct StubDefinition {
     pub interfaces: Vec<InterfaceStub>,
     pub unresolved_root: UnresolvedPackage,
     pub unresolved_deps: Vec<UnresolvedPackage>,
-    pub wasm_rpc_path_override: Option<String>,
+    pub wasm_rpc_override: WasmRpcOverride,
     pub always_inline_types: bool,
 }
 
@@ -43,7 +44,7 @@ impl StubDefinition {
         target_root: &Path,
         selected_world: &Option<String>,
         stub_crate_version: &str,
-        wasm_rpc_path_override: &Option<String>,
+        wasm_rpc_override: &WasmRpcOverride,
         always_inline_types: bool,
     ) -> anyhow::Result<Self> {
         let (root, deps) = get_unresolved_packages(source_wit_root)?;
@@ -72,7 +73,7 @@ impl StubDefinition {
             interfaces,
             unresolved_root: root,
             unresolved_deps: deps,
-            wasm_rpc_path_override: wasm_rpc_path_override.clone(),
+            wasm_rpc_override: wasm_rpc_override.clone(),
             always_inline_types,
         })
     }
