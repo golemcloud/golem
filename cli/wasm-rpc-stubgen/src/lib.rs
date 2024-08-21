@@ -37,11 +37,10 @@ use std::fs;
 use std::path::PathBuf;
 use tempdir::TempDir;
 use wasm_compose::config::Dependency;
-use wit_parser::UnresolvedPackage;
+use wit_parser::{PackageName, UnresolvedPackage};
 
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
-#[command(bin_name = "wasm-rpc-stubgen")]
 pub enum Command {
     /// Generate a Rust RPC stub crate for a WASM component
     Generate(GenerateArgs),
@@ -79,6 +78,11 @@ pub struct GenerateArgs {
     /// the latest version of `wasm-rpc` will be used.
     #[clap(long)]
     pub wasm_rpc_path_override: Option<String>,
+    /// Always inline all the data types defined in the source WIT instead of copying and depending on
+    /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
+    /// the original component's interface would be added as an import to the final WASM.
+    #[clap(long, default_value_t = false)]
+    pub always_inline_types: bool,
 }
 
 /// Build an RPC stub for a WASM component
@@ -109,6 +113,11 @@ pub struct BuildArgs {
     /// The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used. It needs to be an **absolute path**.
     #[clap(long)]
     pub wasm_rpc_path_override: Option<String>,
+    /// Always inline all the data types defined in the source WIT instead of copying and depending on
+    /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
+    /// the original component's interface would be added as an import to the final WASM.
+    #[clap(long, default_value_t = false)]
+    pub always_inline_types: bool,
 }
 
 /// Adds a generated stub as a dependency to another WASM component
@@ -175,10 +184,18 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &args.world,
         &args.stub_crate_version,
         &args.wasm_rpc_path_override,
+        args.always_inline_types
     )
     .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
 
-    generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
+    let type_gen_strategy = if args.always_inline_types {
+        StubTypeGen::InlineRootTypes
+    } else {
+        StubTypeGen::ImportRootTypes
+    };
+
+    generate_stub_wit(&stub_def, type_gen_strategy)
+        .context("Failed to generate the stub wit file")?;
     copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .verify_target_wits()
@@ -197,10 +214,18 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         &args.world,
         &args.stub_crate_version,
         &args.wasm_rpc_path_override,
+        args.always_inline_types,
     )
     .context("Failed to gather information for the stub generator")?;
 
-    generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
+    let type_gen_strategy = if args.always_inline_types {
+        StubTypeGen::InlineRootTypes
+    } else {
+        StubTypeGen::ImportRootTypes
+    };
+
+    generate_stub_wit(&stub_def, type_gen_strategy)
+        .context("Failed to generate the stub wit file")?;
     copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .verify_target_wits()
@@ -251,6 +276,22 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     let main_wit = args.stub_wit_root.join("_stub.wit");
     let parsed = UnresolvedPackage::parse_file(&main_wit)?;
 
+    let destination_package_name = destination_wit_root.name.clone();
+    let stub_target_package_name = PackageName {
+        name: parsed
+            .name
+            .name
+            .strip_suffix("-stub")
+            .expect("Unexpected stub package name")
+            .to_string(),
+        ..parsed.name.clone()
+    };
+    if destination_package_name == stub_target_package_name {
+        return Err(anyhow!(
+            "Both the caller and the target components are using the same package name ({destination_package_name}), which is not supported."
+        ));
+    }
+
     let world_name = internal::find_world_name(parsed)?;
     let mut actions = Vec::new();
 
@@ -268,7 +309,8 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             stub_root,
             &Some(world_name),
             "0.0.1", // Version is unused when it comes to re-generating stub at this stage.
-            &None, // wasm-rpc path is is unused when it comes to re-generating stub during dependency addition
+            &None, // wasm-rpc path is unused when it comes to re-generating stub during dependency addition
+            true,
         )?;
 
         // We filter the dependencies of stub that's already existing in dest_wit_root
@@ -384,8 +426,9 @@ pub fn compose(args: ComposeArgs) -> anyhow::Result<()> {
             .map_err(|err| anyhow!(err))?;
 
         let state = AnalysisContext::new(stub_component);
-        let stub_exports = state.get_top_level_exports().map_err(|err| match err {
-            AnalysisFailure::Failed(msg) => anyhow!(msg),
+        let stub_exports = state.get_top_level_exports().map_err(|err| {
+            let AnalysisFailure { reason } = err;
+            anyhow!(reason)
         })?;
 
         for export in stub_exports {
