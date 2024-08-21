@@ -85,6 +85,7 @@ pub struct GenerateArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 #[group(required = false, multiple = false)]
+#[derive(Default)]
 pub struct WasmRpcOverride {
     /// The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used. It needs to be an **absolute path**.
     #[clap(long, group = "override")]
@@ -94,14 +95,6 @@ pub struct WasmRpcOverride {
     pub wasm_rpc_version_override: Option<String>,
 }
 
-impl Default for WasmRpcOverride {
-    fn default() -> Self {
-        Self {
-            wasm_rpc_path_override: None,
-            wasm_rpc_version_override: None,
-        }
-    }
-}
 
 /// Build an RPC stub for a WASM component
 ///
@@ -272,7 +265,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         .context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        &canonical_target_root.join("wit"),
+        canonical_target_root.join("wit"),
         &args.dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
