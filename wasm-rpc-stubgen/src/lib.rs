@@ -35,7 +35,7 @@ use golem_wasm_ast::IgnoreAllButMetadata;
 use heck::ToSnakeCase;
 use std::fs;
 use std::path::PathBuf;
-use tempdir::TempDir;
+use tempfile::TempDir;
 use wasm_compose::config::Dependency;
 use wit_parser::{PackageName, UnresolvedPackage};
 
@@ -74,15 +74,25 @@ pub struct GenerateArgs {
     /// The crate version of the generated stub crate
     #[clap(long, default_value = "0.0.1")]
     pub stub_crate_version: String,
-    /// The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified,
-    /// the latest version of `wasm-rpc` will be used.
-    #[clap(long)]
-    pub wasm_rpc_path_override: Option<String>,
+    #[clap(flatten)]
+    pub wasm_rpc_override: WasmRpcOverride,
     /// Always inline all the data types defined in the source WIT instead of copying and depending on
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
     pub always_inline_types: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+#[derive(Default)]
+pub struct WasmRpcOverride {
+    /// The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used. It needs to be an **absolute path**.
+    #[clap(long, group = "override")]
+    pub wasm_rpc_path_override: Option<String>,
+    /// The version of the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used.
+    #[clap(long, group = "override")]
+    pub wasm_rpc_version_override: Option<String>,
 }
 
 /// Build an RPC stub for a WASM component
@@ -110,9 +120,8 @@ pub struct BuildArgs {
     /// The crate version of the generated stub crate
     #[clap(long, default_value = "0.0.1")]
     pub stub_crate_version: String,
-    /// The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified, the latest version of `wasm-rpc` will be used. It needs to be an **absolute path**.
-    #[clap(long)]
-    pub wasm_rpc_path_override: Option<String>,
+    #[clap(flatten)]
+    pub wasm_rpc_override: WasmRpcOverride,
     /// Always inline all the data types defined in the source WIT instead of copying and depending on
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
@@ -171,10 +180,8 @@ pub struct InitializeWorkspaceArgs {
     /// List of subprojects using the generated stubs for calling remote workers
     #[clap(long, required = true)]
     pub callers: Vec<String>,
-    /// The path to the `wasm-rpc` crate to be used in the generated stub crate. If not specified,
-    /// the latest version of `wasm-rpc` will be used.
-    #[clap(long)]
-    pub wasm_rpc_path_override: Option<String>,
+    #[clap(flatten)]
+    pub wasm_rpc_override: WasmRpcOverride,
 }
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
@@ -183,7 +190,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &args.dest_crate_root,
         &args.world,
         &args.stub_crate_version,
-        &args.wasm_rpc_path_override,
+        &args.wasm_rpc_override,
         args.always_inline_types
     )
     .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
@@ -206,14 +213,15 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
 }
 
 pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
-    let target_root = TempDir::new("wasm-rpc-stubgen")?;
+    let target_root = TempDir::new()?;
+    let canonical_target_root = target_root.path().canonicalize()?;
 
     let stub_def = StubDefinition::new(
         &args.source_wit_root,
-        target_root.path(),
+        &canonical_target_root,
         &args.world,
         &args.stub_crate_version,
-        &args.wasm_rpc_path_override,
+        &args.wasm_rpc_override,
         args.always_inline_types,
     )
     .context("Failed to gather information for the stub generator")?;
@@ -233,12 +241,11 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     generate_cargo_toml(&stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(&stub_def).context("Failed to generate the stub Rust source")?;
 
-    compile(target_root.path())
+    compile(&canonical_target_root)
         .await
         .context("Failed to compile the generated stub")?;
 
-    let wasm_path = target_root
-        .path()
+    let wasm_path = canonical_target_root
         .join("target")
         .join("wasm32-wasi")
         .join("release")
@@ -257,7 +264,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         .context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        target_root.path().join("wit"),
+        canonical_target_root.join("wit"),
         &args.dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
@@ -309,7 +316,7 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
             stub_root,
             &Some(world_name),
             "0.0.1", // Version is unused when it comes to re-generating stub at this stage.
-            &None, // wasm-rpc path is unused when it comes to re-generating stub during dependency addition
+            &WasmRpcOverride::default(), // wasm-rpc path is unused when it comes to re-generating stub during dependency addition
             true,
         )?;
 
@@ -458,7 +465,7 @@ pub fn initialize_workspace(
     make::initialize_workspace(
         &args.targets,
         &args.callers,
-        args.wasm_rpc_path_override,
+        args.wasm_rpc_override,
         stubgen_command,
         stubgen_prefix,
     )
