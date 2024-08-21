@@ -239,7 +239,6 @@ mod tests {
             let mut type_info = HashMap::new();
             type_info.insert("worker".to_string(), worker_response_analysed_type);
 
-
             let mut rib_input = HashMap::new();
 
             if let Some(worker_response) = worker_response.clone() {
@@ -264,27 +263,21 @@ mod tests {
             }
 
             let invoke_result = match worker_response {
-                Some(result) => {
-                    TypeAnnotatedValue::Tuple(TypedTuple {
-                        value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                            type_annotated_value: Some(result),
-                        }],
-                        typ: vec![],
-                    })
-                }
-                None => {
-                    TypeAnnotatedValue::Tuple(TypedTuple {
-                        value: vec![],
-                        typ: vec![],
-                    })
-                }
+                Some(result) => TypeAnnotatedValue::Tuple(TypedTuple {
+                    value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(result),
+                    }],
+                    typ: vec![],
+                }),
+                None => TypeAnnotatedValue::Tuple(TypedTuple {
+                    value: vec![],
+                    typ: vec![],
+                }),
             };
 
             let worker_invoke_function: RibFunctionInvoke = Arc::new(move |_, _| {
                 let worker_response_clone = worker_response.clone();
-                Box::pin(async move {
-                    Ok(invoke_result)
-                })
+                Box::pin(async move { Ok(invoke_result) })
             });
 
             let eval_result =
@@ -1007,8 +1000,7 @@ mod tests {
     async fn test_evaluation_for_no_arg_unit_function() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let component_metadata =
-            get_analysed_export_for_no_arg_unit_function("foo");
+        let component_metadata = get_analysed_export_for_no_arg_unit_function("foo");
 
         let expr_str = r#"${
               foo();
@@ -1017,12 +1009,7 @@ mod tests {
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
-            .evaluate_with_worker_response(
-                &expr1,
-                None,
-                component_metadata.clone(),
-                None
-            )
+            .evaluate_with_worker_response(&expr1, None, component_metadata.clone(), None)
             .await
             .unwrap();
 
@@ -1035,16 +1022,14 @@ mod tests {
     async fn test_evaluation_for_no_arg_function() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let worker_response =
-            create_none(Some(&AnalysedType::Str(TypeStr)));
+        let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
 
         // Output from worker
         let return_type = AnalysedType::Option(TypeOption {
             inner: Box::new(AnalysedType::try_from(&worker_response).unwrap()),
         });
 
-        let component_metadata =
-            get_analysed_export_for_no_arg_function("foo", return_type);
+        let component_metadata = get_analysed_export_for_no_arg_function("foo", return_type);
 
         let expr_str = r#"${
               let result = foo();
@@ -1057,7 +1042,7 @@ mod tests {
                 &expr1,
                 Some(worker_response.clone()),
                 component_metadata.clone(),
-                None
+                None,
             )
             .await
             .unwrap();
@@ -2523,7 +2508,12 @@ mod tests {
             let expr2_string = expr1.to_string();
             let expr2 = rib::from_string(expr2_string.as_str()).unwrap();
             let value2 = noop_executor
-                .evaluate_with_worker_response(&expr2, Some(worker_response), component_metadata, None)
+                .evaluate_with_worker_response(
+                    &expr2,
+                    Some(worker_response),
+                    component_metadata,
+                    None,
+                )
                 .await
                 .unwrap();
 
