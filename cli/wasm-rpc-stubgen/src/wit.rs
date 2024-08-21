@@ -65,8 +65,12 @@ pub fn get_stub_wit(
         .flat_map(|i| i.imports.iter().map(|i| (InterfaceStubImport::from(i), i)))
         .collect::<IndexMap<_, _>>();
 
-    writeln!(out, "  use golem:rpc/types@0.1.0.{{uri}};")?;
-    writeln!(out, "  use wasi:io/poll@0.2.0.{{pollable}};")?;
+    // Renaming the mandatory imports to avoid collisions with types coming from the stubbed package
+    writeln!(out, "  use golem:rpc/types@0.1.0.{{uri as golem-rpc-uri}};")?;
+    writeln!(
+        out,
+        "  use wasi:io/poll@0.2.0.{{pollable as wasi-io-pollable}};"
+    )?;
 
     match type_gen_strategy {
         StubTypeGen::ImportRootTypes => {
@@ -114,10 +118,10 @@ pub fn get_stub_wit(
         writeln!(out, "  resource {} {{", &interface.name)?;
         match &interface.constructor_params {
             None => {
-                writeln!(out, "    constructor(location: uri);")?;
+                writeln!(out, "    constructor(location: golem-rpc-uri);")?;
             }
             Some(params) => {
-                write!(out, "    constructor(location: uri")?;
+                write!(out, "    constructor(location: golem-rpc-uri")?;
                 if !params.is_empty() {
                     write!(out, ", ")?;
                 }
@@ -139,10 +143,6 @@ pub fn get_stub_wit(
     writeln!(out)?;
 
     writeln!(out, "world {} {{", def.target_world_name()?)?;
-    dbg!(
-        "The exported world is the selected world for the stub {}.",
-        world.name.clone()
-    );
     writeln!(out, "  export stub-{};", world.name)?;
     writeln!(out, "}}")?;
 
@@ -193,7 +193,7 @@ fn write_async_return_type(
     def: &StubDefinition,
 ) -> anyhow::Result<()> {
     writeln!(out, "  resource {} {{", function.async_result_type(owner))?;
-    writeln!(out, "    subscribe: func() -> pollable;")?;
+    writeln!(out, "    subscribe: func() -> wasi-io-pollable;")?;
     write!(out, "    get: func() -> option<")?;
     write_function_result_type(out, function, def)?;
     writeln!(out, ">;")?;
