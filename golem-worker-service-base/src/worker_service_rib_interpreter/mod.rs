@@ -234,14 +234,13 @@ mod tests {
             let expr = expr.clone();
             let compiled = rib::compile(&expr, &metadata)?;
 
-            // Collect worker details and request details into rib-input value
-            let worker_response_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
             let mut type_info = HashMap::new();
-            type_info.insert("worker".to_string(), worker_response_analysed_type);
-
             let mut rib_input = HashMap::new();
 
             if let Some(worker_response) = worker_response.clone() {
+                // Collect worker details and request details into rib-input value
+                let worker_response_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
+                type_info.insert("worker".to_string(), worker_response_analysed_type);
                 rib_input.insert("worker".to_string(), worker_response.clone());
             }
 
@@ -263,9 +262,9 @@ mod tests {
             }
 
             let invoke_result = match worker_response {
-                Some(result) => TypeAnnotatedValue::Tuple(TypedTuple {
+                Some(ref result) => TypeAnnotatedValue::Tuple(TypedTuple {
                     value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(result),
+                        type_annotated_value: Some(result.clone()),
                     }],
                     typ: vec![],
                 }),
@@ -276,8 +275,10 @@ mod tests {
             };
 
             let worker_invoke_function: RibFunctionInvoke = Arc::new(move |_, _| {
-                let worker_response_clone = worker_response.clone();
-                Box::pin(async move { Ok(invoke_result) })
+                Box::pin({
+                    let value = invoke_result.clone();
+                    async move { Ok(value)
+                    }})
             });
 
             let eval_result =
@@ -1004,7 +1005,7 @@ mod tests {
 
         let expr_str = r#"${
               foo();
-              "foo executed";
+              "foo executed"
             }"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
@@ -1013,7 +1014,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = TypeAnnotatedValue::Str("bStreet".to_string());
+        let expected = TypeAnnotatedValue::Str("foo executed".to_string());
 
         assert_eq!(&value1, &expected);
     }
@@ -1047,7 +1048,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = TypeAnnotatedValue::Str("bStreet".to_string());
+        let expected = TypeAnnotatedValue::Str("err".to_string());
 
         assert_eq!(&value1, &expected);
     }
@@ -1060,7 +1061,7 @@ mod tests {
             r#"
                     {
                            "id": "bId",
-                           "name": "bName",
+                           "name": "bName"
 
                     }"#,
             &HeaderMap::new(),
