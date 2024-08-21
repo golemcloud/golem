@@ -95,7 +95,6 @@ pub struct WasmRpcOverride {
     pub wasm_rpc_version_override: Option<String>,
 }
 
-
 /// Build an RPC stub for a WASM component
 ///
 /// The resulting WASM component implements the **stub interface** corresponding to the source interface, found in the
