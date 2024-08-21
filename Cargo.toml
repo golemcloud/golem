@@ -93,7 +93,9 @@ futures = "0.3"
 futures-core = "0.3.29"
 futures-util = "0.3.29"
 golem-wasm-ast = "1.0.0"
-golem-wasm-rpc = { version = "1.0.0", default-features = false, features = ["host"] }
+golem-wasm-rpc = { version = "1.0.2", default-features = false, features = [
+    "host",
+] }
 http = "1.0.0" # keep in sync with wasmtime
 http_02 = { package = "http", version = "0.2.11" }
 humantime-serde = "1.1.1"
@@ -152,7 +154,11 @@ strum_macros = "0.26.1"
 tap = "1.0.1"
 tempfile = "3.9.0"
 testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
-testcontainers-modules = { version = "0.3.2", features = ["postgres", "redis", "minio"] }
+testcontainers-modules = { version = "0.3.2", features = [
+    "postgres",
+    "redis",
+    "minio",
+] }
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = [
     "macros",
