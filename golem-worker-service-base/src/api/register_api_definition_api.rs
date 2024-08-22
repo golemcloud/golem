@@ -23,7 +23,7 @@ pub struct ApiDeploymentRequest {
 pub struct ApiDeployment {
     pub api_definitions: Vec<ApiDefinitionInfo>,
     pub site: ApiSite,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -60,7 +60,7 @@ pub struct HttpApiDefinition {
     pub routes: Vec<Route>,
     #[serde(default)]
     pub draft: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -94,7 +94,7 @@ impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
         Self {
             api_definitions,
             site: value.site,
-            created_at: value.created_at,
+            created_at: Some(value.created_at),
         }
     }
 }
@@ -116,28 +116,7 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefiniti
             version: value.version,
             routes,
             draft: value.draft,
-            created_at: value.created_at,
-        })
-    }
-}
-
-impl TryInto<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
-    type Error = String;
-
-    fn try_into(self) -> Result<crate::api_definition::http::HttpApiDefinition, Self::Error> {
-        let mut routes = Vec::new();
-
-        for route in self.routes {
-            let v = route.try_into()?;
-            routes.push(v);
-        }
-
-        Ok(crate::api_definition::http::HttpApiDefinition {
-            id: self.id,
-            version: self.version,
-            routes,
-            draft: self.draft,
-            created_at: self.created_at,
+            created_at: Some(value.created_at),
         })
     }
 }

@@ -227,7 +227,7 @@ pub fn make_open_api_file(
 
 pub fn to_definition(
     request: HttpApiDefinitionRequest,
-    created_at: DateTime<Utc>,
+    created_at: Option<DateTime<Utc>>,
 ) -> HttpApiDefinition {
     HttpApiDefinition {
         id: request.id,

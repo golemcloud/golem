@@ -644,7 +644,7 @@ pub struct ApiDeployment {
     pub project_id: Option<Uuid>,
     pub site: ApiSite,
     #[serde(rename = "createdAt")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 impl From<golem_client::model::ApiDeployment> for ApiDeployment {

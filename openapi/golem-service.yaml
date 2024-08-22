@@ -2338,7 +2338,6 @@ components:
       required:
       - apiDefinitions
       - site
-      - createdAt
     ApiDeploymentRequest:
       type: object
       properties:
@@ -2937,7 +2936,6 @@ components:
       - version
       - routes
       - draft
-      - createdAt
     HttpApiDefinitionRequest:
       type: object
       properties:

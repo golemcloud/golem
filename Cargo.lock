@@ -3997,6 +3997,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.7.1",
+ "chrono",
  "criterion",
  "derive_more",
  "fastrand 2.1.0",
