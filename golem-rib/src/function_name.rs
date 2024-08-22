@@ -611,7 +611,7 @@ impl<'de> Deserialize<'de> for ParsedFunctionName {
         D: serde::Deserializer<'de>,
     {
         let function_name = String::deserialize(deserializer)?;
-        ParsedFunctionName::parse(&function_name).map_err(serde::de::Error::custom)
+        ParsedFunctionName::parse(function_name).map_err(serde::de::Error::custom)
     }
 }
 

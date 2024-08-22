@@ -1187,7 +1187,8 @@ mod tests {
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
         let expr_str = r#"${
-              let result = foo( { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address });
+              let input = { body: { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
+              let result = foo(input);
               match result {  some(value) => "personal-id", none =>  request.body.address.street }
             }"#;
 
