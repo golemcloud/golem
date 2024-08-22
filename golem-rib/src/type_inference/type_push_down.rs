@@ -245,7 +245,6 @@ pub fn push_types_down(expr: &mut Expr) {
                 }
             }
 
-            // {bohy
             Expr::Record(expressions, inferred_type) => {
                 match inferred_type {
                     InferredType::Record(types) => {

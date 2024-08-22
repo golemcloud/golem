@@ -568,19 +568,18 @@ impl InferredType {
                 ),
 
                 (InferredType::Option(a_type), inferred_type) => {
-                    if a_type.deref() == inferred_type {
-                        Ok(InferredType::Option(a_type.clone()))
-                    } else {
-                        Err(vec!["Option types do not match".to_string()])
-                    }
+                    let unified_left = a_type.unify_types()?;
+                    let unified_right = inferred_type.unify_types()?;
+                    let combined = unified_left.unify_with_required(&unified_right)?;
+                    Ok(InferredType::Option(Box::new(combined)))
                 }
                 (inferred_type, InferredType::Option(a_type)) => {
-                    if a_type.deref() == inferred_type {
-                        Ok(InferredType::Option(a_type.clone()))
-                    } else {
-                        Err(vec!["Option types do not match".to_string()])
-                    }
+                    let unified_left = a_type.unify_types()?;
+                    let unified_right = inferred_type.unify_types()?;
+                    let combined = unified_left.unify_with_required(&unified_right)?;
+                    Ok(InferredType::Option(Box::new(combined)))
                 }
+
                 (
                     InferredType::Result {
                         ok: a_ok,
