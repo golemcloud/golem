@@ -355,12 +355,24 @@ mod type_pull_up_tests {
             Expr::number(1f64),
             vec![
                 crate::MatchArm {
-                    arm_pattern: ArmPattern::Literal(Box::new(Expr::number(1f64))),
-                    arm_resolution_expr: Box::new(Expr::number(1f64)),
+                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Number(
+                        Number { value: 1f64 },
+                        InferredType::U64,
+                    ))),
+                    arm_resolution_expr: Box::new(Expr::Number(
+                        Number { value: 1f64 },
+                        InferredType::U64,
+                    )),
                 },
                 crate::MatchArm {
-                    arm_pattern: ArmPattern::Literal(Box::new(Expr::number(2f64))),
-                    arm_resolution_expr: Box::new(Expr::number(2f64)),
+                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Number(
+                        Number { value: 2f64 },
+                        InferredType::U64,
+                    ))),
+                    arm_resolution_expr: Box::new(Expr::Number(
+                        Number { value: 2f64 },
+                        InferredType::U64,
+                    )),
                 },
             ],
         );
