@@ -157,7 +157,7 @@ mod tests {
                 memories: vec![],
             },
             project_id: None,
-            created_at: Utc::now(),
+            created_at: Some(Utc::now()),
         };
 
         InvokeResultView::try_parse_or_json(

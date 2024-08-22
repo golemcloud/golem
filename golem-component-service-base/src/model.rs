@@ -33,7 +33,7 @@ impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Compon
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
-            created_at: value.created_at,
+            created_at: Some(value.created_at),
         }
     }
 }

@@ -21,7 +21,7 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub project_id: Option<ProjectId>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<golem_client::model::Component> for Component {

@@ -1430,13 +1430,13 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(err.into())
             }
             GolemError::RuntimeError(err) => {
-               golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::RuntimeError(err.into())
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::RuntimeError(err.into())
             }
             GolemError::InvalidShardId(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvalidShardId(err.into())
             }
             GolemError::PreviousInvocationFailed(err) => {
-               golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(err.into())
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::PreviousInvocationFailed(err.into())
             }
             GolemError::PreviousInvocationExited(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::PreviousInvocationExited(err.into())
@@ -1501,7 +1501,7 @@ pub struct Component {
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1510,11 +1510,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     fn try_from(
         value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
-        let created_at = value
-            .created_at
-            .ok_or("Missing created_at")
-            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
-
+        let created_at = match value.created_at {
+            Some(t) => {
+                let t = SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp")?;
+                Some(t.into())
+            }
+            None => None,
+        };
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -1523,7 +1525,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_name: ComponentName(value.component_name),
             component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
-            created_at: created_at.into(),
+            created_at,
         })
     }
 }
@@ -1536,9 +1538,9 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             project_id: None,
-            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                value.created_at,
-            ))),
+            created_at: value
+                .created_at
+                .map(|t| prost_types::Timestamp::from(SystemTime::from(t))),
         }
     }
 }

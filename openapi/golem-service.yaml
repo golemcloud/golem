@@ -3766,7 +3766,6 @@ components:
       - componentName
       - componentSize
       - metadata
-      - createdAt
     ComponentMetadata:
       type: object
       properties:

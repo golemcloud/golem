@@ -216,7 +216,7 @@ impl ComponentServiceNoop {
                 producers: vec![],
                 memories: vec![],
             },
-            created_at: Utc::now(),
+            created_at: Some(Utc::now()),
         }
     }
 }
