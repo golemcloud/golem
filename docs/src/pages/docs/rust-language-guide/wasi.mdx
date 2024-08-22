@@ -42,7 +42,7 @@ This section describes Golem-specific functionalities which are available throug
 
 ### Generate an idempotency key
 
-Golem provides a function to generate an idempotency key (an UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
 
 It is guaranteed that this idempotency key will always be the same (per occurrence) even if the worker is restarted due to a crash.
 

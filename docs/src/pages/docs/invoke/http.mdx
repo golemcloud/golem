@@ -60,7 +60,7 @@ When constructing invocation requests, the easiest way to get the type part of t
 GET /v1/components/{component_id}/latest
 ```
 
-This request returns the metadata of the **latest version** of the component given by it's identifier (an UUID). This metadata lists all the exported functions and their expected parameter types. These parameter types encode type information in the same format as the invocation API, so it is possible to copy them when constructing invocations.
+This request returns the metadata of the **latest version** of the component given by its identifier (a UUID). This metadata lists all the exported functions and their expected parameter types. These parameter types encode type information in the same format as the invocation API, so it is possible to copy them when constructing invocations.
 
 Note that it is not recommended to do this dynamically; the client using the invocation API should target a specific component version, with parameter types known in advance.
 

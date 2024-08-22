@@ -70,7 +70,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"golem/component/go_default_comp"
+	"github.com/golemcloud/golem-go/golemhost"
 )
 
 workerMetadata := golemhost.GetWorkerMetadata(
@@ -84,4 +84,74 @@ if workerMetadata != nil {
 } else {
 	fmt.Printf("Worker not found")
 }
+```
+
+### Enumerate workers
+
+Worker enumeration is a feature of Golem available both through the public HTTP API and using the WIT interfaces, which have idiomatic Go wrappers in the SDK.
+
+<Callout type="warning">
+  Enumerating workers of a component is a slow operation and should not be used as part of the
+  application logic.
+</Callout>
+
+The following example demonstrates how to enumerate workers by using some filters:
+
+```
+import (
+)
+
+// returns []golemhost.WorkerMetadata
+results := golemhost.GetWorkers(
+	golemhost.ComponentID(uuid.New()),
+	&golemhost.WorkerAnyFilter{
+		Filters: []golemhost.WorkerAllFilter{
+			{
+				Filters: []golemhost.WorkerFilter{
+					{
+						Name:           ptr.New("worker name"),
+						NameComparator: golemhost.StringFilterComparatorLike,
+					},
+					{
+						CreatedAt:           ptr.New(time.Now()),
+						CreatedAtComparator: golemhost.FilterComparatorLessEqual,
+					},
+					{
+						Version:           ptr.New[uint64](10),
+						VersionComparator: golemhost.FilterComparatorNotEqual,
+					},
+					{
+						Status:           ptr.New[golemhost.WorkerStatus](golemhost.WorkerStatusFailed),
+						StatusComparator: golemhost.FilterComparatorEqual,
+					},
+					{
+						Env: &golemhost.WorkerEnvFilter{
+							Name:  "ENV_VAR",
+							Value: "ENV_VAR_VALUE",
+						},
+						EnvComparator: golemhost.StringFilterComparatorEqual,
+					},
+				},
+			},
+		},
+	},
+)
+```
+
+### Generate an idempotency key
+
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+
+It is guaranteed that this idempotency key will always be the same (per occurrence) even if the worker is restarted due to a crash.
+
+To generate and access an idempotency key use the `golemhost.GenerateIdempotencyKey` functions:
+
+```
+import (
+	"github.com/google/uuid"
+
+	"github.com/golemcloud/golem-go/golemhost"
+)
+
+result := golemhost.GenerateIdempotencyKey() // returns uuid.UUID
 ```
