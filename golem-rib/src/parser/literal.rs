@@ -62,7 +62,7 @@ mod internal {
             letter()
                 .or(space())
                 .or(digit())
-                .or(char_('_').or(char_('-').or(char_('.')).or(char_('/')).or(char_(':')))),
+                .or(char_('_').or(char_('-').or(char_('.')).or(char_('/')).or(char_(':').or(char_('@'))))),
         )
         .map(|s: String| Expr::literal(s))
         .message("Unable to parse static part of literal")
