@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 
 	"github.com/golemcloud/golem-go/std"
 	"golem.com/tinygo_wasi/binding"
-
-	// Using a custom client until https://github.com/golemcloud/golem/issues/709 is resolved
-	"golem.com/tinygo_wasi/net/http"
 )
 
 func init() {
@@ -33,9 +31,9 @@ type ExampleResponse struct {
 }
 
 func (i *Impl) Example1(_ string) string {
-	std.Init(std.Modules{
-		Os:   true,
-		Http: true,
+	std.Init(std.Packages{
+		Os:      true,
+		NetHttp: true,
 	})
 
 	port := os.Getenv("PORT")
