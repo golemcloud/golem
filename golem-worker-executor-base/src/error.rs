@@ -260,7 +260,7 @@ impl Display for GolemError {
             }
             GolemError::ShardingNotReady => {
                 write!(f, "Sharding is not ready")
-            },
+            }
             GolemError::Unknown { details } => {
                 write!(f, "Unknown error: {details}")
             }
