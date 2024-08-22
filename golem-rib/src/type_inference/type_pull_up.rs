@@ -350,7 +350,7 @@ mod type_pull_up_tests {
     }
 
     #[test]
-    pub fn test_pull_up_for_pattern_match(){
+    pub fn test_pull_up_for_pattern_match() {
         let mut expr = Expr::pattern_match(
             Expr::number(1f64),
             vec![
