@@ -511,7 +511,6 @@ mod internal {
             .invoke_worker_function_async(parsed_function_name, type_anntoated_values)
             .await?;
 
-        // TODO refactor
         let interpreter_result = match result {
             TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.is_empty() => {
                 Ok(RibInterpreterResult::Unit)

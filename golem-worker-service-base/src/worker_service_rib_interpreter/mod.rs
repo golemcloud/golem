@@ -163,6 +163,7 @@ mod tests {
     use crate::api_definition::http::AllPathPatterns;
     use crate::worker_binding::{RequestDetails, RibInputValue, RibInputValueResolver};
 
+    use crate::worker_bridge_execution::to_response::ToResponse;
     use crate::worker_service_rib_interpreter::{
         DefaultEvaluator, EvaluationError, WorkerServiceRibInterpreter,
     };
@@ -182,10 +183,18 @@ mod tests {
         async fn evaluate_with_worker_response(
             &self,
             expr: &Expr,
-            worker_bridge_response: TypeAnnotatedValue,
+            worker_bridge_response: Option<TypeAnnotatedValue>,
             metadata: Vec<AnalysedExport>,
             input: Option<(RequestDetails, AnalysedType)>,
         ) -> Result<TypeAnnotatedValue, EvaluationError>;
+
+        async fn evaluate_with_worker_response_as_rib_result(
+            &self,
+            expr: &Expr,
+            worker_response: Option<TypeAnnotatedValue>,
+            metadata: Vec<AnalysedExport>,
+            request_input: Option<(RequestDetails, AnalysedType)>,
+        ) -> Result<RibInterpreterResult, EvaluationError>;
 
         async fn evaluate_pure_expr(
             &self,
@@ -223,24 +232,26 @@ mod tests {
             ))?)
         }
 
-        // This will invoke worker
-        async fn evaluate_with_worker_response(
+        async fn evaluate_with_worker_response_as_rib_result(
             &self,
             expr: &Expr,
-            worker_response: TypeAnnotatedValue,
+            worker_response: Option<TypeAnnotatedValue>,
             metadata: Vec<AnalysedExport>,
             request_input: Option<(RequestDetails, AnalysedType)>,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+        ) -> Result<RibInterpreterResult, EvaluationError> {
             let expr = expr.clone();
             let compiled = rib::compile(&expr, &metadata)?;
 
-            // Collect worker details and request details into rib-input value
-            let worker_response_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
             let mut type_info = HashMap::new();
-            type_info.insert("worker".to_string(), worker_response_analysed_type);
-
             let mut rib_input = HashMap::new();
-            rib_input.insert("worker".to_string(), worker_response.clone());
+
+            if let Some(worker_response) = worker_response.clone() {
+                // Collect worker details and request details into rib-input value
+                let worker_response_analysed_type =
+                    AnalysedType::try_from(&worker_response).unwrap();
+                type_info.insert("worker".to_string(), worker_response_analysed_type);
+                rib_input.insert("worker".to_string(), worker_response.clone());
+            }
 
             if let Some((request_details, analysed_type)) = request_input {
                 let mut type_info = HashMap::new();
@@ -259,20 +270,48 @@ mod tests {
                 );
             }
 
+            let invoke_result = match worker_response {
+                Some(ref result) => TypeAnnotatedValue::Tuple(TypedTuple {
+                    value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                        type_annotated_value: Some(result.clone()),
+                    }],
+                    typ: vec![],
+                }),
+                None => TypeAnnotatedValue::Tuple(TypedTuple {
+                    value: vec![],
+                    typ: vec![],
+                }),
+            };
+
             let worker_invoke_function: RibFunctionInvoke = Arc::new(move |_, _| {
-                let worker_response_clone = worker_response.clone();
-                Box::pin(async move {
-                    Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-                        value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                            type_annotated_value: Some(worker_response_clone), // To simulate the fact that the worker response is always a list
-                        }],
-                        typ: vec![],
-                    }))
+                Box::pin({
+                    let value = invoke_result.clone();
+                    async move { Ok(value) }
                 })
             });
 
-            let eval_result =
+            let result =
                 rib::interpret(&compiled.byte_code, rib_input, worker_invoke_function).await?;
+
+            Ok(result)
+        }
+
+        // This will invoke worker
+        async fn evaluate_with_worker_response(
+            &self,
+            expr: &Expr,
+            worker_response: Option<TypeAnnotatedValue>,
+            metadata: Vec<AnalysedExport>,
+            request_input: Option<(RequestDetails, AnalysedType)>,
+        ) -> Result<TypeAnnotatedValue, EvaluationError> {
+            let eval_result = self
+                .evaluate_with_worker_response_as_rib_result(
+                    expr,
+                    worker_response,
+                    metadata,
+                    request_input,
+                )
+                .await?;
 
             eval_result.get_val().ok_or(EvaluationError(
                 "The text is evaluated to unit and doesn't have a value".to_string(),
@@ -328,7 +367,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -406,7 +445,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -482,7 +521,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -537,7 +576,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr,
-                worker_response,
+                Some(worker_response),
                 component_metadata,
                 Some((request_details, request_type)),
             )
@@ -621,7 +660,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -699,7 +738,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -775,7 +814,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -852,7 +891,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -919,7 +958,7 @@ mod tests {
         let error_message = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -975,7 +1014,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 Some((request_details, request_type)),
             )
@@ -985,6 +1024,110 @@ mod tests {
         let expected = TypeAnnotatedValue::Str("bName".to_string());
 
         assert_eq!(&value1, &expected);
+    }
+
+    #[tokio::test]
+    async fn test_evaluation_for_no_arg_unit_function() {
+        let noop_executor = DefaultEvaluator::noop();
+
+        let component_metadata = get_analysed_export_for_no_arg_unit_function("foo");
+
+        let expr_str = r#"${
+              foo();
+              "foo executed"
+            }"#;
+
+        let expr1 = rib::from_string(expr_str).unwrap();
+        let value1 = noop_executor
+            .evaluate_with_worker_response(&expr1, None, component_metadata.clone(), None)
+            .await
+            .unwrap();
+
+        let expected = TypeAnnotatedValue::Str("foo executed".to_string());
+
+        assert_eq!(&value1, &expected);
+    }
+
+    #[tokio::test]
+    async fn test_evaluation_for_no_arg_function() {
+        let noop_executor = DefaultEvaluator::noop();
+
+        let worker_response = create_none(Some(&AnalysedType::Str(TypeStr)));
+
+        // Output from worker
+        let return_type = AnalysedType::Option(TypeOption {
+            inner: Box::new(AnalysedType::try_from(&worker_response).unwrap()),
+        });
+
+        let component_metadata = get_analysed_export_for_no_arg_function("foo", return_type);
+
+        let expr_str = r#"${
+              let result = foo();
+              match result { some(value) => "ok", none =>  "err" }
+            }"#;
+
+        let expr1 = rib::from_string(expr_str).unwrap();
+        let value1 = noop_executor
+            .evaluate_with_worker_response(
+                &expr1,
+                Some(worker_response.clone()),
+                component_metadata.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let expected = TypeAnnotatedValue::Str("err".to_string());
+
+        assert_eq!(&value1, &expected);
+    }
+
+    #[tokio::test]
+    async fn test_evaluation_for_function_returning_unit() {
+        let noop_executor = DefaultEvaluator::noop();
+
+        let request_details = get_request_details(
+            r#"
+                    {
+                           "id": "bId",
+                           "name": "bName"
+
+                    }"#,
+            &HeaderMap::new(),
+        );
+
+        // The spec that will become part of the component metadata
+        let request_body_type = get_analysed_type_record(vec![
+            ("id".to_string(), AnalysedType::Str(TypeStr)),
+            ("name".to_string(), AnalysedType::Str(TypeStr)),
+        ]);
+
+        let request_type =
+            get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
+
+        let component_metadata =
+            get_analysed_export_for_unit_function("foo", vec![request_type.clone()]);
+
+        let expr_str = r#"${
+              foo( { id: "bId", name: "bName" });
+              let result = foo( { id: "bId", name: "bName" });
+              result
+            }"#;
+
+        let expr1 = rib::from_string(expr_str).unwrap();
+        let value1 = noop_executor
+            .evaluate_with_worker_response_as_rib_result(
+                &expr1,
+                None,
+                component_metadata.clone(),
+                Some((request_details.clone(), request_type)),
+            )
+            .await
+            .unwrap();
+
+        let response: poem::Response = value1.to_response(&request_details);
+
+        assert!(response.into_body().is_empty());
     }
 
     #[tokio::test]
@@ -1044,27 +1187,24 @@ mod tests {
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
         let expr_str = r#"${
-              let result = foo( { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } });
-              result
+              let result = foo( { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address });
+              match result {  some(value) => "personal-id", none =>  request.body.address.street }
             }"#;
 
-        let result = rib::compile(&rib::from_string(expr_str).unwrap(), &component_metadata).unwrap();
-        //dbg!(result.clone());
+        let expr1 = rib::from_string(expr_str).unwrap();
+        let value1 = noop_executor
+            .evaluate_with_worker_response(
+                &expr1,
+                Some(worker_response.clone()),
+                component_metadata.clone(),
+                Some((request_details, request_type)),
+            )
+            .await
+            .unwrap();
 
-        // let expr1 = rib::from_string(expr_str).unwrap();
-        // let value1 = noop_executor
-        //     .evaluate_with_worker_response(
-        //         &expr1,
-        //         worker_response.clone(),
-        //         component_metadata.clone(),
-        //         Some((request_details, request_type)),
-        //     )
-        //     .await
-        //     .unwrap();
-        //
-        // let expected = TypeAnnotatedValue::Str("bStreet".to_string());
+        let expected = TypeAnnotatedValue::Str("bStreet".to_string());
 
-        assert_eq!(1, 2);
+        assert_eq!(&value1, &expected);
     }
 
     #[tokio::test]
@@ -1112,7 +1252,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1145,7 +1285,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1202,7 +1342,7 @@ mod tests {
         let result1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 metadata.clone(),
                 Some((request_details.clone(), request_type.clone())),
             )
@@ -1220,7 +1360,7 @@ mod tests {
         let result2 = noop_executor
             .evaluate_with_worker_response(
                 &expr2,
-                worker_response,
+                Some(worker_response),
                 metadata.clone(),
                 Some((request_details.clone(), request_type.clone())),
             )
@@ -1239,7 +1379,7 @@ mod tests {
         let result3 = noop_executor
             .evaluate_with_worker_response(
                 &expr2,
-                error_worker_response,
+                Some(error_worker_response),
                 metadata,
                 Some((request_details, request_type)),
             )
@@ -1278,7 +1418,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1313,7 +1453,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1346,7 +1486,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1384,7 +1524,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1413,7 +1553,7 @@ mod tests {
         let value1 = noop_executor
             .evaluate_with_worker_response(
                 &expr1,
-                worker_response.clone(),
+                Some(worker_response.clone()),
                 component_metadata.clone(),
                 None,
             )
@@ -1553,7 +1693,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr,
-                worker_response,
+                Some(worker_response),
                 metadata,
                 Some((request_details, request_type)),
             )
@@ -1623,7 +1763,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr,
-                worker_response,
+                Some(worker_response),
                 component_metadata,
                 Some((request_input, request_type)),
             )
@@ -1710,7 +1850,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr,
-                worker_response,
+                Some(worker_response),
                 component_metadata,
                 Some((request_input, request_type)),
             )
@@ -1795,7 +1935,7 @@ mod tests {
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr,
-                worker_response,
+                Some(worker_response),
                 component_metadata,
                 Some((request_input, request_type)),
             )
@@ -2221,6 +2361,50 @@ mod tests {
             })]
         }
 
+        pub(crate) fn get_analysed_export_for_unit_function(
+            function_name: &str,
+            input_types: Vec<AnalysedType>,
+        ) -> Vec<AnalysedExport> {
+            let analysed_function_parameters = input_types
+                .into_iter()
+                .enumerate()
+                .map(|(index, typ)| AnalysedFunctionParameter {
+                    name: format!("param{}", index),
+                    typ,
+                })
+                .collect();
+
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                results: vec![],
+            })]
+        }
+
+        pub(crate) fn get_analysed_export_for_no_arg_function(
+            function_name: &str,
+            output: AnalysedType,
+        ) -> Vec<AnalysedExport> {
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: vec![],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }],
+            })]
+        }
+
+        pub(crate) fn get_analysed_export_for_no_arg_unit_function(
+            function_name: &str,
+        ) -> Vec<AnalysedExport> {
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: vec![],
+                results: vec![],
+            })]
+        }
+
         pub(crate) fn get_function_response_analysed_type_result() -> Vec<AnalysedExport> {
             vec![
                 AnalysedExport::Function(AnalysedFunction {
@@ -2337,7 +2521,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    worker_response.clone(),
+                    Some(worker_response.clone()),
                     component_metadata.clone(),
                     None,
                 )
@@ -2347,7 +2531,12 @@ mod tests {
             let expr2_string = expr1.to_string();
             let expr2 = rib::from_string(expr2_string.as_str()).unwrap();
             let value2 = noop_executor
-                .evaluate_with_worker_response(&expr2, worker_response, component_metadata, None)
+                .evaluate_with_worker_response(
+                    &expr2,
+                    Some(worker_response),
+                    component_metadata,
+                    None,
+                )
                 .await
                 .unwrap();
 
@@ -2382,7 +2571,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    worker_response.clone(),
+                    Some(worker_response.clone()),
                     component_metadata.clone(),
                     None,
                 )
@@ -2420,7 +2609,7 @@ mod tests {
             let value1 = noop_executor
                 .evaluate_with_worker_response(
                     &expr1,
-                    worker_response.clone(),
+                    Some(worker_response.clone()),
                     component_metadata.clone(),
                     None,
                 )

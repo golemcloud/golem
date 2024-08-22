@@ -1,11 +1,13 @@
 use crate::InferredType;
+use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64,
     TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64,
     TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum AnalysedTypeWithUnit {
     Unit,
     Type(AnalysedType),

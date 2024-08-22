@@ -66,6 +66,12 @@ impl InferredType {
         }
     }
 
+    pub fn is_unit(&self) -> bool {
+        match self {
+            InferredType::Sequence(types) => types.is_empty(),
+            _ => false,
+        }
+    }
     pub fn is_unknown(&self) -> bool {
         matches!(self, InferredType::Unknown)
     }
@@ -562,16 +568,18 @@ impl InferredType {
                 ),
 
                 (InferredType::Option(a_type), inferred_type) => {
-                    let unified_left = a_type.unify_types()?;
-                    let unified_right = inferred_type.unify_types()?;
-                    let combined = unified_left.unify_with_required(&unified_right)?;
-                    Ok(InferredType::Option(Box::new(combined)))
+                    if a_type.deref() == inferred_type {
+                        Ok(InferredType::Option(a_type.clone()))
+                    } else {
+                        Err(vec!["Option types do not match".to_string()])
+                    }
                 }
                 (inferred_type, InferredType::Option(a_type)) => {
-                    let unified_left = a_type.unify_types()?;
-                    let unified_right = inferred_type.unify_types()?;
-                    let combined = unified_left.unify_with_required(&unified_right)?;
-                    Ok(InferredType::Option(Box::new(combined)))
+                    if a_type.deref() == inferred_type {
+                        Ok(InferredType::Option(a_type.clone()))
+                    } else {
+                        Err(vec!["Option types do not match".to_string()])
+                    }
                 }
                 (
                     InferredType::Result {

@@ -1,4 +1,4 @@
-use crate::{ParsedFunctionName, VariableId};
+use crate::{AnalysedTypeWithUnit, ParsedFunctionName, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{
@@ -36,7 +36,7 @@ pub enum RibIR {
     Jump(InstructionId),
     Label(InstructionId),
     Deconstruct,
-    InvokeFunction(ParsedFunctionName, usize, AnalysedType),
+    InvokeFunction(ParsedFunctionName, usize, AnalysedTypeWithUnit),
     PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
     Throw(String),
     GetTag,
@@ -157,19 +157,22 @@ impl TryFrom<ProtoRibIR> for RibIR {
             ))),
             Instruction::Deconstruct(_) => Ok(RibIR::Deconstruct),
             Instruction::Call(call_instruction) => {
-                let return_type = call_instruction
-                    .return_type
-                    .ok_or("Missing return_type for function call".to_string())?;
+                let return_type = match call_instruction.return_type {
+                    Some(return_type) => {
+                        let analysed_type = (&return_type)
+                            .try_into()
+                            .map_err(|_| "Failed to convert AnalysedType".to_string())?;
 
-                let return_analyse_type = (&return_type)
-                    .try_into()
-                    .map_err(|_| "Failed to convert AnalysedType".to_string())?;
+                        AnalysedTypeWithUnit::Type(analysed_type)
+                    }
+                    None => AnalysedTypeWithUnit::Unit,
+                };
 
                 Ok(RibIR::InvokeFunction(
                     ParsedFunctionName::parse(call_instruction.function_name)
                         .map_err(|_| "Failed to convert ParsedFunctionName".to_string())?,
                     call_instruction.argument_count as usize,
-                    return_analyse_type,
+                    return_type,
                 ))
             }
             Instruction::VariantConstruction(variant_construction) => {
@@ -259,12 +262,18 @@ impl From<RibIR> for ProtoRibIR {
             }),
             RibIR::Deconstruct => Instruction::Deconstruct((&AnalysedType::Str(TypeStr)).into()), //TODO; remove type in deconstruct from protobuf
             RibIR::InvokeFunction(name, arg_count, return_type) => {
-                let typ = golem_wasm_ast::analysis::protobuf::Type::from(&return_type);
+                let typ = match return_type {
+                    AnalysedTypeWithUnit::Unit => None,
+                    AnalysedTypeWithUnit::Type(analysed_type) => {
+                        let typ = golem_wasm_ast::analysis::protobuf::Type::from(&analysed_type);
+                        Some(typ)
+                    }
+                };
 
                 Instruction::Call(CallInstruction {
                     function_name: name.to_string(),
                     argument_count: arg_count as u64,
-                    return_type: Some(typ),
+                    return_type: typ,
                 })
             }
             RibIR::PushVariant(name, return_type) => {
