@@ -557,11 +557,14 @@ jobs:
         if: ${{ matrix.cross }}
       - run: cross build -p golem-cli --release --target ${{ matrix.rust-target }}
         if: ${{ matrix.cross }}
-      - run: mv ./target/${{ matrix.rust-target }}/release/golem-cli.exe ./target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}
+      - run: mv ./target/${{ matrix.rust-target }}/release/golem-cli.exe ./target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}.exe
         if: matrix.os == 'windows-latest'
       - run: mv ./target/${{ matrix.rust-target }}/release/golem-cli ./target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}
         if: matrix.os != 'windows-latest'
       - name: Login GH CLI
         shell: bash
         run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
+      - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}.exe
+        if: matrix.os == 'windows-latest'
       - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}
+        if: matrix.os != 'windows-latest'
