@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use std::convert::identity;
 use std::sync::{Arc, RwLock};
 
 use itertools::Itertools;
@@ -27,17 +26,15 @@ use crate::model::ShardAssignmentCheck;
 
 /// Service for assigning shards to worker executors
 pub trait ShardService {
-    fn is_ready(&self) -> bool;
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>);
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>);
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError>;
-    fn opt_current_assignment(&self) -> Option<ShardAssignment>;
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>);
+    fn current_assignment(&self) -> ShardAssignment;
 }
 
 pub struct ShardServiceDefault {
-    shard_assignment: Arc<RwLock<Option<ShardAssignment>>>,
+    shard_assignment: Arc<RwLock<ShardAssignment>>,
 }
 
 impl Default for ShardServiceDefault {
@@ -49,106 +46,58 @@ impl Default for ShardServiceDefault {
 impl ShardServiceDefault {
     pub fn new() -> Self {
         Self {
-            shard_assignment: Arc::new(RwLock::new(None)),
+            shard_assignment: Arc::new(RwLock::new(ShardAssignment::default())),
         }
-    }
-
-    pub fn with_read_shard_assignment<F, O>(&self, f: F) -> Result<O, GolemError>
-    where
-        F: Fn(&ShardAssignment) -> O,
-    {
-        let guard = self.shard_assignment.read().unwrap();
-        match guard.as_ref() {
-            Some(shard_assignment) => Ok(f(shard_assignment)),
-            None => Err(GolemError::ShardingNotReady),
-        }
-    }
-
-    pub fn with_write_shard_assignment<F, O>(&self, f: F) -> O
-    where
-        F: Fn(&mut Option<ShardAssignment>) -> O,
-    {
-        let mut guard = self.shard_assignment.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(ShardAssignment::default())
-        }
-        f(&mut *guard)
     }
 }
 
 impl ShardService for ShardServiceDefault {
-    fn is_ready(&self) -> bool {
-        self.shard_assignment.read().unwrap().is_some()
-    }
-
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
-            Some(shard_assignment) => {
-                debug!(
-                    shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
-                    shard_ids_to_assign = shard_ids.iter().join(", "),
-                    "ShardService.assign_shards"
-                );
-                shard_assignment.assign_shards(shard_ids);
-                let assigned_shard_count = shard_assignment.shard_ids.len();
-                record_assigned_shard_count(assigned_shard_count);
-                Ok(())
-            }
-            None => Err(GolemError::ShardingNotReady),
-        })
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) {
+        let mut shard_assignment = self.shard_assignment.write().unwrap();
+        debug!(
+            shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+            shard_ids_to_assign = shard_ids.iter().join(", "),
+            "ShardService.assign_shards"
+        );
+        shard_assignment.assign_shards(shard_ids);
+        let assigned_shard_count = shard_assignment.shard_ids.len();
+        record_assigned_shard_count(assigned_shard_count);
     }
 
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError> {
-        self.with_read_shard_assignment(|shard_assignment: &ShardAssignment| {
-            shard_assignment.check_worker(worker_id)
-        })
-        .and_then(identity)
+        self.shard_assignment
+            .read()
+            .unwrap()
+            .check_worker(worker_id)
     }
 
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError> {
-        self.with_read_shard_assignment(|shard_assignment| shard_assignment.clone())
+    fn current_assignment(&self) -> ShardAssignment {
+        self.shard_assignment.read().unwrap().clone()
     }
 
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
-        self.with_write_shard_assignment(|shard_assignment| {
-            let shard_assignment = match shard_assignment {
-                Some(shard_assignment) => shard_assignment,
-                None => {
-                    *shard_assignment = Some(ShardAssignment::default());
-                    shard_assignment.as_mut().unwrap()
-                }
-            };
-            debug!(
-                number_of_shards,
-                shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
-                shard_ids_to_assign = shard_ids.iter().join(", "),
-                "ShardService.register"
-            );
-            shard_assignment.register(number_of_shards, shard_ids);
-            let assigned_shard_count = shard_assignment.shard_ids.len();
-            record_assigned_shard_count(assigned_shard_count);
-        })
+        let mut shard_assignment = self.shard_assignment.write().unwrap();
+        debug!(
+            number_of_shards,
+            shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+            shard_ids_to_assign = shard_ids.iter().join(", "),
+            "ShardService.register"
+        );
+        shard_assignment.register(number_of_shards, shard_ids);
+        let assigned_shard_count = shard_assignment.shard_ids.len();
+        record_assigned_shard_count(assigned_shard_count);
     }
 
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
-            Some(shard_assignment) => {
-                debug!(
-                    shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
-                    shard_ids_to_revoke = shard_ids.iter().join(", "),
-                    "ShardService.revoke_shards"
-                );
-                shard_assignment.revoke_shards(shard_ids);
-                let assigned_shard_count = shard_assignment.shard_ids.len();
-                record_assigned_shard_count(assigned_shard_count);
-                Ok(())
-            }
-            None => Err(GolemError::ShardingNotReady),
-        })
-    }
-
-    fn opt_current_assignment(&self) -> Option<ShardAssignment> {
-        self.shard_assignment.read().unwrap().clone()
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) {
+        let mut shard_assignment = self.shard_assignment.write().unwrap();
+        debug!(
+            shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+            shard_ids_to_revoke = shard_ids.iter().join(", "),
+            "ShardService.revoke_shards"
+        );
+        shard_assignment.revoke_shards(shard_ids);
+        let assigned_shard_count = shard_assignment.shard_ids.len();
+        record_assigned_shard_count(assigned_shard_count);
     }
 }
 
@@ -171,21 +120,13 @@ impl ShardServiceMock {
 
 #[cfg(any(feature = "mocks", test))]
 impl ShardService for ShardServiceMock {
-    fn is_ready(&self) -> bool {
-        tracing::info!("ShardServiceMock::is_ready");
-        return true;
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) {
+        tracing::info!("ShardServiceMock::assign_shards {:?}", shard_ids)
     }
-
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        tracing::info!("ShardServiceMock::assign_shards {:?}", shard_ids);
-        Ok(())
-    }
-
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError> {
         tracing::info!("ShardServiceMock::check_worker {:?}", worker_id);
         Ok(())
     }
-
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
         tracing::info!(
             "ShardServiceMock::register {} {:?}",
@@ -193,19 +134,11 @@ impl ShardService for ShardServiceMock {
             shard_ids
         )
     }
-
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        tracing::info!("ShardServiceMock::revoke_shards {:?}", shard_ids);
-        Ok(())
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) {
+        tracing::info!("ShardServiceMock::revoke_shards {:?}", shard_ids)
     }
 
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError> {
-        tracing::info!("ShardServiceMock::current_assignment");
-        Ok(ShardAssignment::default())
-    }
-
-    fn opt_current_assignment(&self) -> Option<ShardAssignment> {
-        tracing::info!("ShardServiceMock::opt_current_assignment");
-        None
+    fn current_assignment(&self) -> ShardAssignment {
+        ShardAssignment::default()
     }
 }

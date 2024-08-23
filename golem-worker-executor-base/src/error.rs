@@ -95,7 +95,6 @@ pub enum GolemError {
         details: String,
     },
     PreviousInvocationExited,
-    ShardingNotReady,
     Unknown {
         details: String,
     },
@@ -258,9 +257,6 @@ impl Display for GolemError {
             GolemError::PreviousInvocationExited => {
                 write!(f, "The previously invoked function exited")
             }
-            GolemError::ShardingNotReady => {
-                write!(f, "Sharding is not ready")
-            },
             GolemError::Unknown { details } => {
                 write!(f, "Unknown error: {details}")
             }
@@ -294,7 +290,6 @@ impl Error for GolemError {
             GolemError::Runtime { .. } => "Runtime error",
             GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
-            GolemError::ShardingNotReady => "Sharding is not ready",
             GolemError::Unknown { .. } => "Unknown error",
         }
     }
@@ -326,7 +321,6 @@ impl TraceErrorKind for GolemError {
             GolemError::Runtime { .. } => "Runtime",
             GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
-            GolemError::ShardingNotReady => "Sharding is not ready",
             GolemError::Unknown { .. } => "Unknown",
         }
     }
@@ -576,13 +570,6 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                         golem::worker::v1::PreviousInvocationExited {},
                     ),
                 ),
-            },
-            GolemError::ShardingNotReady => golem::worker::v1::WorkerExecutionError {
-                error: Some(
-                    golem::worker::v1::worker_execution_error::Error::Unknown(
-                        golem::worker::v1::UnknownError{details: "Sharding is not ready".to_string()}
-                    )
-                )
             },
             GolemError::Unknown { details } => golem::worker::v1::WorkerExecutionError {
                 error: Some(golem::worker::v1::worker_execution_error::Error::Unknown(
