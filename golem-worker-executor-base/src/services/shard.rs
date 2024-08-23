@@ -60,7 +60,7 @@ impl ShardServiceDefault {
         let guard = self.shard_assignment.read().unwrap();
         match guard.as_ref() {
             Some(shard_assignment) => Ok(f(shard_assignment)),
-            None => Err(GolemError::ShardingNotReady),
+            None => Err(sharding_not_ready_error()),
         }
     }
 
@@ -94,7 +94,7 @@ impl ShardService for ShardServiceDefault {
                 record_assigned_shard_count(assigned_shard_count);
                 Ok(())
             }
-            None => Err(GolemError::ShardingNotReady),
+            None => Err(sharding_not_ready_error()),
         })
     }
 
@@ -143,7 +143,7 @@ impl ShardService for ShardServiceDefault {
                 record_assigned_shard_count(assigned_shard_count);
                 Ok(())
             }
-            None => Err(GolemError::ShardingNotReady),
+            None => Err(sharding_not_ready_error()),
         })
     }
 
@@ -207,5 +207,11 @@ impl ShardService for ShardServiceMock {
     fn opt_current_assignment(&self) -> Option<ShardAssignment> {
         tracing::info!("ShardServiceMock::opt_current_assignment");
         None
+    }
+}
+
+fn sharding_not_ready_error() -> GolemError {
+    GolemError::Unknown {
+        details: "Sharding is not ready".to_string(),
     }
 }
