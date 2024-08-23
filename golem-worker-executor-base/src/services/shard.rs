@@ -72,7 +72,7 @@ impl ShardServiceDefault {
         if guard.is_none() {
             *guard = Some(ShardAssignment::default())
         }
-        f(&mut guard)
+        f(&mut *guard)
     }
 }
 
@@ -173,7 +173,7 @@ impl ShardServiceMock {
 impl ShardService for ShardServiceMock {
     fn is_ready(&self) -> bool {
         tracing::info!("ShardServiceMock::is_ready");
-        true
+        return true;
     }
 
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {

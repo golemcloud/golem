@@ -17,7 +17,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use tracing::debug;
 
@@ -249,10 +250,7 @@ impl WorkerService for DefaultWorkerService {
                 panic!("failed to remove worker status in the KV storage: {err}")
             });
 
-        let shard_assignment = self
-            .shard_service
-            .current_assignment()
-            .expect("sharding assigment is not ready");
+        let shard_assignment = self.shard_service.current_assignment().expect("sharding assigment is not ready");
         let shard_id = ShardId::from_worker_id(
             &owned_worker_id.worker_id,
             shard_assignment.number_of_shards,
@@ -288,10 +286,7 @@ impl WorkerService for DefaultWorkerService {
             .await
             .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
-        let shard_assignment = self
-            .shard_service
-            .current_assignment()
-            .expect("sharding assignment is not ready");
+        let shard_assignment = self.shard_service.current_assignment().expect("sharding assignment is not ready");
         let shard_id = ShardId::from_worker_id(
             &owned_worker_id.worker_id,
             shard_assignment.number_of_shards,
