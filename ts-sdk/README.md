@@ -1,5 +1,5 @@
 # golem-ts
-`golem-ts` is a TypeScript library that provides high-level wrappers for Golem's runtime API, including the [transaction API](https://learn.golem.cloud/docs/transaction-api). It simplifies the process of writing Golem programs by offering a set of utilities and abstractions.
+`golem-ts` is a TypeScript library that provides high-level wrappers for Golem's runtime API, including the [transaction API]([https://learn.golem.cloud/docs/transaction-api](https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/transactions)), [durability controls](https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/durability) and customizing the [retry policy](https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/retries). It simplifies the process of writing Golem programs by offering a set of utilities and abstractions.
 
 ## Installation
 
