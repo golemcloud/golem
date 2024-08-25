@@ -18,7 +18,7 @@ type Impl struct {
 }
 
 func (i *Impl) Example1(s string) int32 {
-	std.Init(std.Modules{Os: true})
+	std.Init(std.Packages{Os: true})
 
 	fmt.Println(s)
 

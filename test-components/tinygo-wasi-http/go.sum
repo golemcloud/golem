@@ -1,2 +1,4 @@
 github.com/golemcloud/golem-go v0.5.0 h1:YaJdzEw5dWmadoqH6y5LLpztsqPd4rCYXp2MAL+DHow=
 github.com/golemcloud/golem-go v0.5.0/go.mod h1:O3l4YC7os4nGPWbJc02wPDxsgRelcS5v1L2xxzhNro4=
+github.com/golemcloud/golem-go v0.7.0 h1:8zpNeAtEDJsJllqHUmjji/lyplSJ0kI3v7vN97/N8zs=
+github.com/golemcloud/golem-go v0.7.0/go.mod h1:VLL22qVo5R2+jGLO43tLPpPjf2WrA6B7GQoqXKnSODo=
