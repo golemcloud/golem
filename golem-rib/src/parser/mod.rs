@@ -1,4 +1,5 @@
 mod binary_comparison;
+mod block;
 mod boolean;
 pub(crate) mod call;
 mod cond;

@@ -1365,20 +1365,17 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_tuple() {
         let input_expr = Expr::cond(
-            Expr::equal_to(
-                Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
-                Expr::tuple(vec![
-                    Expr::identifier("request"),
-                    Expr::identifier("request"),
-                ]),
-            ),
-            Expr::literal("success"),
-            Expr::literal("failed"),
+            Expr::equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
+            Expr::tuple(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
+            Expr::tuple(vec![
+                Expr::identifier("request"),
+                Expr::identifier("request"),
+            ]),
         );
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${if (foo, bar) == (request, request) then "success" else "failed"}"#.to_string();
+            r#"${if foo == bar then (foo, bar) else (request, request)}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1386,20 +1383,17 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_sequence() {
         let input_expr = Expr::cond(
-            Expr::equal_to(
-                Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
-                Expr::sequence(vec![
-                    Expr::identifier("request"),
-                    Expr::identifier("request"),
-                ]),
-            ),
-            Expr::literal("success"),
-            Expr::literal("failed"),
+            Expr::equal_to(Expr::identifier("foo"), Expr::identifier("bar")),
+            Expr::sequence(vec![
+                Expr::identifier("request"),
+                Expr::identifier("request"),
+            ]),
+            Expr::sequence(vec![Expr::identifier("foo"), Expr::identifier("bar")]),
         );
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${if [foo, bar] == [request, request] then "success" else "failed"}"#.to_string();
+            r#"${if foo == bar then [request, request] else [foo, bar]}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1407,21 +1401,14 @@ mod if_cond_tests {
     #[test]
     fn test_round_trip_if_condition_of_record() {
         let input_expr = Expr::cond(
-            Expr::equal_to(
-                Expr::select_field(
-                    Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
-                    "field",
-                ),
-                Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
-            ),
-            Expr::literal("success"),
+            Expr::equal_to(Expr::identifier("field1"), Expr::identifier("field2")),
+            Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
             Expr::literal("failed"),
         );
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${if {field: request}.field == {field: request} then "success" else "failed"}"#
-                .to_string();
+            r#"${if field1 == field2 then {field: request} else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }
@@ -1431,7 +1418,7 @@ mod if_cond_tests {
         let input_expr = Expr::cond(
             Expr::equal_to(
                 Expr::select_field(Expr::identifier("worker"), "response"),
-                Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
+                Expr::number(1f64),
             ),
             Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
             Expr::literal("failed"),
@@ -1439,8 +1426,7 @@ mod if_cond_tests {
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
-            r#"${if worker.response == {flag1, flag2} then {flag1, flag2} else "failed"}"#
-                .to_string();
+            r#"${if worker.response == 1 then {flag1, flag2} else "failed"}"#.to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

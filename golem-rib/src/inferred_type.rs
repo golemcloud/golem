@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
+
+// TODO; Clean up Unification
 
 // The reason to replicate analysed_type types
 // in inferred_type can be explained with an example.
@@ -10,7 +12,7 @@ use golem_wasm_ast::analysis::*;
 // yet for a specific field
 // type, and yet be able to say that the root node is of the type record
 // with the field name, and tag their types as InferredTypes.
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum InferredType {
     Bool,
     S8,
@@ -50,19 +52,23 @@ pub enum InferredType {
 pub struct TypeErrorMessage(pub String);
 
 impl InferredType {
-    pub fn all_of(types: Vec<InferredType>) -> InferredType {
-        if types.len() == 1 {
-            types.into_iter().next().unwrap()
+    pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
+        if types.is_empty() {
+            None
+        } else if types.len() == 1 {
+            types.into_iter().next()
         } else {
-            InferredType::AllOf(types)
+            Some(InferredType::AllOf(types))
         }
     }
 
-    pub fn one_of(types: Vec<InferredType>) -> InferredType {
-        if types.len() == 1 {
-            types.into_iter().next().unwrap()
+    pub fn one_of(types: Vec<InferredType>) -> Option<InferredType> {
+        if types.is_empty() {
+            None
+        } else if types.len() == 1 {
+            types.into_iter().next()
         } else {
-            InferredType::OneOf(types)
+            Some(InferredType::OneOf(types))
         }
     }
 
@@ -75,6 +81,11 @@ impl InferredType {
     pub fn is_unknown(&self) -> bool {
         matches!(self, InferredType::Unknown)
     }
+
+    pub fn is_one_of(&self) -> bool {
+        matches!(self, InferredType::OneOf(_))
+    }
+
     pub fn unify_types(&self) -> Result<InferredType, Vec<String>> {
         match self {
             // AllOf types may include AllOf Types and OneOf types within itself
@@ -506,7 +517,7 @@ impl InferredType {
             match (self, other) {
                 // { name: Opt<Str>, age: Option<U32> } and { name: Str }
                 (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
-                    let mut fields = HashMap::new();
+                    let mut fields: HashMap<String, InferredType> = HashMap::new();
                     // Common fields unified else kept it as it is
                     for (a_name, a_type) in a_fields {
                         if let Some((_, b_type)) =
@@ -524,9 +535,7 @@ impl InferredType {
                         }
                     }
 
-                    Ok(InferredType::Record(
-                        fields.iter().map(|(n, t)| (n.clone(), t.clone())).collect(),
-                    ))
+                    Ok(InferredType::Record(internal::sort_and_convert(fields)))
                 }
                 (InferredType::Tuple(a_types), InferredType::Tuple(b_types)) => {
                     if a_types.len() != b_types.len() {
@@ -684,7 +693,8 @@ impl InferredType {
                     if types.contains(inferred_type) {
                         Ok(inferred_type.clone())
                     } else {
-                        Err(vec!["OneOf types do not match".to_string()])
+                        let type_set: HashSet<_> = types.iter().collect::<HashSet<_>>();
+                        Err(vec![format!("Types do not match. Inferred to be any of {:?}, but found (or used as) {:?} ",  type_set, inferred_type)])
                     }
                 }
 
@@ -692,7 +702,9 @@ impl InferredType {
                     if types.contains(inferred_type) {
                         Ok(inferred_type.clone())
                     } else {
-                        Err(vec!["OneOf types do not match. {}, {}".to_string()])
+                        let type_set: HashSet<_> = types.iter().collect::<HashSet<_>>();
+
+                        Err(vec![format!("Types do not match. Inferred to be any of {:?}, but found or used as {:?} ", type_set, inferred_type)])
                     }
                 }
 
@@ -701,7 +713,7 @@ impl InferredType {
                         Ok(inferred_type.clone())
                     } else {
                         Err(vec![format!(
-                            "Here: AllOf types do not match. {:?}, {:?}",
+                            "Conflicting types {:?}, {:?}",
                             types, inferred_type
                         )])
                     }
@@ -1030,11 +1042,20 @@ impl From<AnalysedType> for InferredType {
 
 mod internal {
     use crate::InferredType;
+    use std::collections::HashMap;
 
     pub(crate) fn need_update(
         current_inferred_type: &InferredType,
         new_inferred_type: &InferredType,
     ) -> bool {
-        current_inferred_type != new_inferred_type && new_inferred_type != &InferredType::Unknown
+        current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
+    }
+
+    pub(crate) fn sort_and_convert(
+        hashmap: HashMap<String, InferredType>,
+    ) -> Vec<(String, InferredType)> {
+        let mut vec: Vec<(String, InferredType)> = hashmap.into_iter().collect(); // Step 1: Collect into Vec
+        vec.sort_by(|a, b| a.0.cmp(&b.0)); // Step 2: Sort by String keys
+        vec // Step 3: Return sorted Vec
     }
 }

@@ -189,7 +189,7 @@ mod internal {
 
             Expr::Identifier(identifier, inferred_type) => {
                 let assign_var = Expr::Let(
-                    VariableId::global(identifier.name()),
+                    identifier.clone(),
                     Box::new(pred_expr.clone()),
                     inferred_type.clone(),
                 );
@@ -318,8 +318,12 @@ mod internal {
 
 #[cfg(test)]
 mod desugar_tests {
+    use crate::compiler::desugar::desugar_tests::expectations::{
+        expected_condition_simple, expected_condition_with_identifiers,
+        expected_condition_with_literals,
+    };
     use crate::type_registry::FunctionTypeRegistry;
-    use crate::{Expr, InferredType, Number, VariableId};
+    use crate::Expr;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
@@ -370,25 +374,7 @@ mod desugar_tests {
             _ => panic!("Expected a match expression"),
         };
 
-        let expected = Expr::cond(
-            Expr::equal_to(
-                Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                Expr::Number(Number { value: 1f64 }, InferredType::U64),
-            ),
-            Expr::boolean(true),
-            Expr::cond(
-                Expr::equal_to(
-                    Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                    Expr::Number(Number { value: 2f64 }, InferredType::U64),
-                ),
-                Expr::boolean(false),
-                Expr::Throw("No match found".to_string(), InferredType::Unknown),
-            )
-            .add_infer_type(InferredType::Bool),
-        )
-        .add_infer_type(InferredType::Bool);
-
-        assert_eq!(desugared_expr, expected);
+        assert_eq!(desugared_expr, expected_condition_simple());
     }
 
     #[test]
@@ -412,37 +398,7 @@ mod desugar_tests {
             _ => panic!("Expected a match expression"),
         };
 
-        let expected = Expr::cond(
-            Expr::equal_to(
-                Expr::Unwrap(
-                    Box::new(Expr::option(Some(Expr::Number(
-                        Number { value: 1f64 },
-                        InferredType::U64,
-                    )))),
-                    InferredType::Unknown,
-                ),
-                Expr::Number(Number { value: 2f64 }, InferredType::U64),
-            ),
-            Expr::boolean(true),
-            Expr::cond(
-                Expr::equal_to(
-                    Expr::Unwrap(
-                        Box::new(Expr::option(Some(Expr::Number(
-                            Number { value: 1f64 },
-                            InferredType::U64,
-                        )))),
-                        InferredType::Unknown,
-                    ),
-                    Expr::Number(Number { value: 3f64 }, InferredType::U64),
-                ),
-                Expr::boolean(false),
-                Expr::Throw("No match found".to_string(), InferredType::Unknown),
-            )
-            .add_infer_type(InferredType::Bool),
-        )
-        .add_infer_type(InferredType::Bool);
-
-        assert_eq!(desugared_expr, expected);
+        assert_eq!(desugared_expr, expected_condition_with_literals());
     }
 
     #[test]
@@ -466,88 +422,64 @@ mod desugar_tests {
             _ => panic!("Expected a match expression"),
         };
 
-        let expected_let_binding1 = Expr::let_binding(
-            "x",
-            Expr::Unwrap(
-                Box::new(Expr::option(Some(Expr::Number(
-                    Number { value: 1f64 },
-                    InferredType::U64,
-                )))),
-                InferredType::Unknown,
-            ),
-        )
-        .add_infer_type(InferredType::U64);
+        assert_eq!(desugared_expr, expected_condition_with_identifiers());
+    }
 
-        let first_expected_block = Expr::multiple(vec![
-            expected_let_binding1,
-            Expr::Identifier(VariableId::local_with_no_id("x"), InferredType::U64),
-        ]);
+    mod expectations {
+        use crate::{Expr, InferredType, Number, VariableId};
 
-        let expected_let_binding2 = Expr::let_binding(
-            "y",
-            Expr::Unwrap(
-                Box::new(Expr::option(Some(Expr::Number(
-                    Number { value: 1f64 },
-                    InferredType::U64,
-                )))),
-                InferredType::Unknown,
-            ),
-        )
-        .add_infer_type(InferredType::U64);
-
-        let second_expected_block = Expr::multiple(vec![
-            expected_let_binding2.add_infer_type(InferredType::U64),
-            Expr::Identifier(VariableId::local_with_no_id("y"), InferredType::U64),
-        ]);
-
-        let _expected = Expr::cond(
-            Expr::boolean(true),
-            first_expected_block,
+        pub(crate) fn expected_condition_simple() -> Expr {
             Expr::cond(
+                Expr::equal_to(
+                    Expr::Number(Number { value: 1f64 }, InferredType::U64),
+                    Expr::Number(Number { value: 1f64 }, InferredType::U64),
+                ),
                 Expr::boolean(true),
-                second_expected_block,
-                Expr::Throw("No match found".to_string(), InferredType::Unknown),
-            )
-            .add_infer_type(InferredType::U64),
-        )
-        .add_infer_type(InferredType::U64);
-
-        let expected = Expr::Cond(
-            Box::new(Expr::EqualTo(
-                Box::new(Expr::Tag(
-                    Box::new(Expr::Option(
-                        Some(Box::new(Expr::Number(
-                            Number { value: 1.0 },
-                            InferredType::U64,
-                        ))),
-                        InferredType::Option(Box::new(InferredType::U64)),
-                    )),
-                    InferredType::Unknown,
-                )),
-                Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
-                InferredType::Bool,
-            )),
-            Box::new(Expr::Multiple(
-                vec![
-                    Expr::Let(
-                        VariableId::Global("x".to_string()),
-                        Box::new(Expr::Unwrap(
-                            Box::new(Expr::Option(
-                                Some(Box::new(Expr::Number(
-                                    Number { value: 1.0 },
-                                    InferredType::U64,
-                                ))),
-                                InferredType::Option(Box::new(InferredType::U64)),
-                            )),
-                            InferredType::Unknown,
-                        )),
-                        InferredType::U64,
+                Expr::cond(
+                    Expr::equal_to(
+                        Expr::Number(Number { value: 1f64 }, InferredType::U64),
+                        Expr::Number(Number { value: 2f64 }, InferredType::U64),
                     ),
-                    Expr::Identifier(VariableId::Global("x".to_string()), InferredType::U64),
-                ],
-                InferredType::U64,
-            )),
-            Box::new(Expr::Cond(
+                    Expr::boolean(false),
+                    Expr::Throw("No match found".to_string(), InferredType::Unknown),
+                )
+                .add_infer_type(InferredType::Bool),
+            )
+            .add_infer_type(InferredType::Bool)
+        }
+        pub(crate) fn expected_condition_with_literals() -> Expr {
+            Expr::cond(
+                Expr::equal_to(
+                    Expr::Unwrap(
+                        Box::new(Expr::option(Some(Expr::Number(
+                            Number { value: 1f64 },
+                            InferredType::U64,
+                        )))),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Number(Number { value: 2f64 }, InferredType::U64),
+                ),
+                Expr::boolean(true),
+                Expr::cond(
+                    Expr::equal_to(
+                        Expr::Unwrap(
+                            Box::new(Expr::option(Some(Expr::Number(
+                                Number { value: 1f64 },
+                                InferredType::U64,
+                            )))),
+                            InferredType::Unknown,
+                        ),
+                        Expr::Number(Number { value: 3f64 }, InferredType::U64),
+                    ),
+                    Expr::boolean(false),
+                    Expr::Throw("No match found".to_string(), InferredType::Unknown),
+                )
+                .add_infer_type(InferredType::Bool),
+            )
+            .add_infer_type(InferredType::Bool)
+        }
+        pub(crate) fn expected_condition_with_identifiers() -> Expr {
+            Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::Tag(
                         Box::new(Expr::Option(
@@ -565,7 +497,7 @@ mod desugar_tests {
                 Box::new(Expr::Multiple(
                     vec![
                         Expr::Let(
-                            VariableId::Global("y".to_string()),
+                            VariableId::match_identifier("x".to_string(), 1),
                             Box::new(Expr::Unwrap(
                                 Box::new(Expr::Option(
                                     Some(Box::new(Expr::Number(
@@ -578,19 +510,59 @@ mod desugar_tests {
                             )),
                             InferredType::U64,
                         ),
-                        Expr::Identifier(VariableId::Global("y".to_string()), InferredType::U64),
+                        Expr::Identifier(
+                            VariableId::match_identifier("x".to_string(), 1),
+                            InferredType::U64,
+                        ),
                     ],
                     InferredType::U64,
                 )),
-                Box::new(Expr::Throw(
-                    "No match found".to_string(),
-                    InferredType::Unknown,
+                Box::new(Expr::Cond(
+                    Box::new(Expr::EqualTo(
+                        Box::new(Expr::Tag(
+                            Box::new(Expr::Option(
+                                Some(Box::new(Expr::Number(
+                                    Number { value: 1.0 },
+                                    InferredType::U64,
+                                ))),
+                                InferredType::Option(Box::new(InferredType::U64)),
+                            )),
+                            InferredType::Unknown,
+                        )),
+                        Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
+                        InferredType::Bool,
+                    )),
+                    Box::new(Expr::Multiple(
+                        vec![
+                            Expr::Let(
+                                VariableId::match_identifier("y".to_string(), 2),
+                                Box::new(Expr::Unwrap(
+                                    Box::new(Expr::Option(
+                                        Some(Box::new(Expr::Number(
+                                            Number { value: 1.0 },
+                                            InferredType::U64,
+                                        ))),
+                                        InferredType::Option(Box::new(InferredType::U64)),
+                                    )),
+                                    InferredType::Unknown,
+                                )),
+                                InferredType::U64,
+                            ),
+                            Expr::Identifier(
+                                VariableId::match_identifier("y".to_string(), 2),
+                                InferredType::U64,
+                            ),
+                        ],
+                        InferredType::U64,
+                    )),
+                    Box::new(Expr::Throw(
+                        "No match found".to_string(),
+                        InferredType::Unknown,
+                    )),
+                    InferredType::U64,
                 )),
                 InferredType::U64,
-            )),
-            InferredType::U64,
-        );
-
-        assert_eq!(desugared_expr, expected);
+            )
+        }
     }
 }
