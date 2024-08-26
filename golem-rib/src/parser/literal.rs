@@ -59,10 +59,10 @@ mod internal {
 
     fn static_part<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         many1(
-            letter()
-                .or(space())
-                .or(digit())
-                .or(char_('_').or(char_('-').or(char_('.')).or(char_('/')).or(char_(':')))),
+            letter().or(space()).or(digit()).or(char_('_').or(char_('-')
+                .or(char_('.'))
+                .or(char_('/'))
+                .or(char_(':').or(char_('@'))))),
         )
         .map(|s: String| Expr::literal(s))
         .message("Unable to parse static part of literal")

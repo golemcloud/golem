@@ -3,8 +3,8 @@ use std::sync::Arc;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::DefaultNamespace;
-use golem_worker_service_base::api::ApiDeployment;
 use golem_worker_service_base::api::ApiEndpointError;
+use golem_worker_service_base::api::{ApiDeployment, ApiDeploymentRequest};
 use golem_worker_service_base::api_definition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString};
 use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersion;
@@ -32,7 +32,7 @@ impl ApiDeploymentApi {
     #[oai(path = "/deploy", method = "post", operation_id = "deploy")]
     async fn create_or_update(
         &self,
-        payload: Json<ApiDeployment>,
+        payload: Json<ApiDeploymentRequest>,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let record = recorded_http_api_request!("deploy", site = payload.0.site.to_string());
         let response = {
@@ -45,7 +45,7 @@ impl ApiDeploymentApi {
                 })
                 .collect::<Vec<ApiDefinitionIdWithVersion>>();
 
-            let api_deployment = api_definition::ApiDeployment {
+            let api_deployment = api_definition::ApiDeploymentRequest {
                 namespace: DefaultNamespace::default(),
                 api_definition_keys: api_definition_infos,
                 site: payload.site.clone(),

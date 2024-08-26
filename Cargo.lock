@@ -3572,9 +3572,9 @@ dependencies = [
 
 [[package]]
 name = "golem-examples"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdf804c2fba657a45213ab5d3e2460c9ed7dfd4d0e74d4472e4a1aa04c25afa2"
+checksum = "aea20abd83a992e720ac92bccd6fdc894aa7ec2638cea0411072bcdd582faf06"
 dependencies = [
  "Inflector",
  "cargo_metadata",
@@ -4027,6 +4027,7 @@ dependencies = [
  "poem-openapi",
  "prometheus",
  "prost",
+ "prost-types",
  "regex",
  "rustc-hash",
  "serde 1.0.207",

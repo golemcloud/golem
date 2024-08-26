@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ops::Deref;
 
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
@@ -51,6 +50,22 @@ pub enum InferredType {
 pub struct TypeErrorMessage(pub String);
 
 impl InferredType {
+    pub fn all_of(types: Vec<InferredType>) -> InferredType {
+        if types.len() == 1 {
+            types.into_iter().next().unwrap()
+        } else {
+            InferredType::AllOf(types)
+        }
+    }
+
+    pub fn one_of(types: Vec<InferredType>) -> InferredType {
+        if types.len() == 1 {
+            types.into_iter().next().unwrap()
+        } else {
+            InferredType::OneOf(types)
+        }
+    }
+
     pub fn is_unit(&self) -> bool {
         match self {
             InferredType::Sequence(types) => types.is_empty(),
@@ -553,19 +568,18 @@ impl InferredType {
                 ),
 
                 (InferredType::Option(a_type), inferred_type) => {
-                    if a_type.deref() == inferred_type {
-                        Ok(InferredType::Option(a_type.clone()))
-                    } else {
-                        Err(vec!["Option types do not match".to_string()])
-                    }
+                    let unified_left = a_type.unify_types()?;
+                    let unified_right = inferred_type.unify_types()?;
+                    let combined = unified_left.unify_with_required(&unified_right)?;
+                    Ok(InferredType::Option(Box::new(combined)))
                 }
                 (inferred_type, InferredType::Option(a_type)) => {
-                    if a_type.deref() == inferred_type {
-                        Ok(InferredType::Option(a_type.clone()))
-                    } else {
-                        Err(vec!["Option types do not match".to_string()])
-                    }
+                    let unified_left = a_type.unify_types()?;
+                    let unified_right = inferred_type.unify_types()?;
+                    let combined = unified_left.unify_with_required(&unified_right)?;
+                    Ok(InferredType::Option(Box::new(combined)))
                 }
+
                 (
                     InferredType::Result {
                         ok: a_ok,
