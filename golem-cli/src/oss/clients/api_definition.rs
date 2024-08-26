@@ -19,6 +19,7 @@ use std::io::Read;
 use async_trait::async_trait;
 
 use golem_client::model::HttpApiDefinition;
+use golem_client::model::HttpApiDefinitionRequest;
 
 use crate::clients::api_definition::ApiDefinitionClient;
 use tokio::fs::read_to_string;
@@ -82,13 +83,13 @@ async fn create_or_update_api_definition<
             Ok(client.import_open_api(&value).await?)
         }
         Action::Create => {
-            let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
+            let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
             Ok(client.create_definition(&value).await?)
         }
         Action::Update => {
-            let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
+            let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
             Ok(client

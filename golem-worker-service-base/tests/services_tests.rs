@@ -11,8 +11,9 @@ mod tests {
         AnalysedInstance, AnalysedType, TypeStr,
     };
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+    use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest;
     use golem_worker_service_base::api_definition::{
-        ApiDefinitionId, ApiDeployment, ApiSite, ApiSiteString, ApiVersion,
+        ApiDefinitionId, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
     };
     use golem_worker_service_base::repo::{api_definition, api_deployment};
     use golem_worker_service_base::service::api_definition::{
@@ -238,7 +239,7 @@ mod tests {
             "${ let result = golem:it/api.{get-cart-contents}(request.body.foo); let status = if result == \"admin\" then 401 else 200; {status: status } }",
             true,
         );
-        let def2 = HttpApiDefinition {
+        let def2 = HttpApiDefinitionRequest {
             draft: false,
             ..def2draft.clone()
         };
@@ -292,7 +293,7 @@ mod tests {
             .await
             .unwrap();
 
-        let definitions = definition_service
+        let definitions: Vec<HttpApiDefinition> = definition_service
             .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await
             .unwrap()
@@ -300,17 +301,15 @@ mod tests {
             .map(|x| x.into())
             .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 4);
-        assert!(
-            definitions.contains(&def2draft)
-                && definitions.contains(&def1)
-                && definitions.contains(&def3)
-                && definitions.contains(&def4)
-        );
+        assert!(contains_definitions(
+            definitions,
+            vec![def1.clone(), def2draft.clone(), def3.clone(), def4.clone()]
+        ));
 
         let deployment = get_api_deployment("test.com", None, vec![&def1.id.0, &def2.id.0]);
         deployment_service.deploy(&deployment).await.unwrap();
 
-        let definitions = definition_service
+        let definitions: Vec<HttpApiDefinition> = definition_service
             .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
             .await
             .unwrap()
@@ -318,14 +317,12 @@ mod tests {
             .map(|x| x.into())
             .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 4);
-        assert!(
-            definitions.contains(&def2)
-                && definitions.contains(&def1)
-                && definitions.contains(&def3)
-                && definitions.contains(&def4)
-        );
+        assert!(contains_definitions(
+            definitions,
+            vec![def1.clone(), def2.clone(), def3.clone(), def4.clone()]
+        ));
 
-        let definitions = deployment_service
+        let definitions: Vec<HttpApiDefinition> = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
             .unwrap()
@@ -334,12 +331,15 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1) && definitions.contains(&def2));
+        assert!(contains_definitions(
+            definitions,
+            vec![def1.clone(), def2.clone()]
+        ));
 
         let deployment = get_api_deployment("test.com", Some("my"), vec![&def4.id.0]);
         deployment_service.deploy(&deployment).await.unwrap();
 
-        let definitions = deployment_service
+        let definitions: Vec<HttpApiDefinition> = deployment_service
             .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
             .await
             .unwrap()
@@ -348,7 +348,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 1);
-        assert!(definitions.contains(&def4));
+        assert!(contains_definitions(definitions, vec![def4.clone()]));
 
         let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
         deployment_service.deploy(&deployment).await.unwrap();
@@ -365,7 +365,7 @@ mod tests {
             .unwrap();
         assert!(!deployments.is_empty());
 
-        let definitions = deployment_service
+        let definitions: Vec<HttpApiDefinition> = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
             .unwrap()
@@ -374,16 +374,15 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 3);
-        assert!(
-            definitions.contains(&def1)
-                && definitions.contains(&def2)
-                && definitions.contains(&def3)
-        );
+        assert!(contains_definitions(
+            definitions,
+            vec![def1.clone(), def2.clone(), def3.clone()]
+        ));
 
         let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
         deployment_service.undeploy(&deployment).await.unwrap();
 
-        let definitions = deployment_service
+        let definitions: Vec<HttpApiDefinition> = deployment_service
             .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
             .await
             .unwrap()
@@ -392,7 +391,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1) && definitions.contains(&def2));
+        assert!(contains_definitions(
+            definitions,
+            vec![def1.clone(), def2.clone()]
+        ));
 
         assert!(
             deployment_service
@@ -566,7 +568,7 @@ mod tests {
             .await
             .unwrap();
 
-        let definitions = definition_service
+        let definitions: Vec<HttpApiDefinition> = definition_service
             .get_all_versions(
                 &def1v1.id,
                 &DefaultNamespace::default(),
@@ -578,7 +580,10 @@ mod tests {
             .map(|x| x.into())
             .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2));
+        assert!(contains_definitions(
+            definitions,
+            vec![def1v1.clone(), def1v2.clone()]
+        ));
 
         let update_result = definition_service
             .update(
@@ -604,7 +609,7 @@ mod tests {
             .await;
         assert!(update_result.is_ok());
 
-        let definitions = definition_service
+        let definitions: Vec<HttpApiDefinition> = definition_service
             .get_all_versions(
                 &def1v1.id,
                 &DefaultNamespace::default(),
@@ -616,7 +621,10 @@ mod tests {
             .map(|x| x.into())
             .collect::<Vec<_>>();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.contains(&def1v1) && definitions.contains(&def1v2_upd));
+        assert!(contains_definitions(
+            definitions,
+            vec![def1v1.clone(), def1v2_upd.clone()]
+        ));
 
         assert!(
             definition_service
@@ -680,7 +688,7 @@ mod tests {
         host: &str,
         subdomain: Option<&str>,
         definitions: Vec<&str>,
-    ) -> ApiDeployment<DefaultNamespace> {
+    ) -> ApiDeploymentRequest<DefaultNamespace> {
         let api_definition_keys: Vec<ApiDefinitionIdWithVersion> = definitions
             .into_iter()
             .map(|id| ApiDefinitionIdWithVersion {
@@ -689,7 +697,7 @@ mod tests {
             })
             .collect();
 
-        ApiDeployment {
+        ApiDeploymentRequest {
             namespace: DefaultNamespace::default(),
             api_definition_keys,
             site: ApiSite {
@@ -706,7 +714,7 @@ mod tests {
         worker_id: &str,
         response_mapping: &str,
         draft: bool,
-    ) -> HttpApiDefinition {
+    ) -> HttpApiDefinitionRequest {
         let yaml_string = format!(
             r#"
           id: {}
@@ -726,5 +734,21 @@ mod tests {
         );
 
         serde_yaml::from_str(yaml_string.as_str()).unwrap()
+    }
+
+    fn contains_definitions(
+        result: Vec<HttpApiDefinition>,
+        expected: Vec<HttpApiDefinitionRequest>,
+    ) -> bool {
+        let requests: Vec<HttpApiDefinitionRequest> =
+            result.into_iter().map(|x| x.into()).collect::<Vec<_>>();
+
+        for value in expected.into_iter() {
+            if !requests.contains(&value) {
+                return false;
+            }
+        }
+
+        true
     }
 }

@@ -17,7 +17,17 @@ use crate::parser::{GolemParser, ParseError};
 use crate::worker_binding::CompiledGolemWorkerBinding;
 use crate::worker_binding::GolemWorkerBinding;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDefinitionRequest {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub routes: Vec<Route>,
+    #[serde(default)]
+    pub draft: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
@@ -25,6 +35,33 @@ pub struct HttpApiDefinition {
     pub routes: Vec<Route>,
     #[serde(default)]
     pub draft: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl HttpApiDefinition {
+    pub fn new(
+        request: HttpApiDefinitionRequest,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        HttpApiDefinition {
+            id: request.id,
+            version: request.version,
+            routes: request.routes,
+            draft: request.draft,
+            created_at,
+        }
+    }
+}
+
+impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
+    fn from(value: HttpApiDefinition) -> Self {
+        HttpApiDefinitionRequest {
+            id: value.id,
+            version: value.version,
+            routes: value.routes,
+            draft: value.draft,
+        }
+    }
 }
 
 impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
@@ -38,11 +75,12 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
                 .map(Route::from)
                 .collect(),
             draft: compiled_http_api_definition.draft,
+            created_at: compiled_http_api_definition.created_at,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledHttpApiDefinition {
     pub id: ApiDefinitionId,
@@ -50,6 +88,7 @@ pub struct CompiledHttpApiDefinition {
     pub routes: Vec<CompiledRoute>,
     #[serde(default)]
     pub draft: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl CompiledHttpApiDefinition {
@@ -69,6 +108,7 @@ impl CompiledHttpApiDefinition {
             version: http_api_definition.version.clone(),
             routes: compiled_routes,
             draft: http_api_definition.draft,
+            created_at: http_api_definition.created_at,
         })
     }
 }
@@ -380,7 +420,6 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
-    use golem_common::serialization;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -572,6 +611,7 @@ mod tests {
           id: users-api
           version: 0.0.1
           projectId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
+          createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Get
             path: {}
@@ -632,42 +672,6 @@ mod tests {
             result2,
             "Assertion failed for test case at {}",
             std::panic::Location::caller()
-        );
-    }
-
-    #[test]
-    fn test_api_spec_encode_decode() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-            let encoded = serialization::serialize(&original).unwrap();
-            let decoded: HttpApiDefinition = serialization::deserialize(&encoded).unwrap();
-
-            assert_eq!(original, decoded);
-        }
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo",
-            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
-            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 

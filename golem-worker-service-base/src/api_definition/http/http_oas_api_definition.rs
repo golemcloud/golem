@@ -3,11 +3,11 @@ use openapiv3::OpenAPI;
 use poem_openapi::types::ParseFromJSON;
 use poem_openapi::{registry, types};
 
-use crate::api_definition::http::HttpApiDefinition;
+use crate::api_definition::http::HttpApiDefinitionRequest;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 
-pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String> {
+pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinitionRequest, String> {
     let api_definition_id = ApiDefinitionId(get_root_extension(
         &openapi,
         GOLEM_API_DEFINITION_ID_EXTENSION,
@@ -18,7 +18,7 @@ pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String>
 
     let routes = get_routes(openapi.paths)?;
 
-    Ok(HttpApiDefinition {
+    Ok(HttpApiDefinitionRequest {
         id: api_definition_id,
         version: api_definition_version,
         routes,

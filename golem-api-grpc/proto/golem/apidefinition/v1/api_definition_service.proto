@@ -15,10 +15,18 @@ service ApiDefinitionService {
   rpc DeleteApiDefinition (DeleteApiDefinitionRequest) returns (DeleteApiDefinitionResponse) {}
 }
 
+message ApiDefinitionRequest {
+  ApiDefinitionId id = 1;
+  string version = 2;
+  oneof definition {
+    HttpApiDefinition http = 3;
+  }
+  bool draft = 4;
+}
 
 message CreateApiDefinitionRequest {
   oneof api_definition {
-    ApiDefinition definition = 1;
+    ApiDefinitionRequest definition = 1;
     string openapi = 2;
   }
 }
@@ -32,7 +40,7 @@ message CreateApiDefinitionResponse {
 
 message UpdateApiDefinitionRequest {
   oneof api_definition {
-    ApiDefinition definition = 1;
+    ApiDefinitionRequest definition = 1;
     string openapi = 2;
   }
 }
