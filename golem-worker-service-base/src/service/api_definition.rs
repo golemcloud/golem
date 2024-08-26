@@ -48,9 +48,9 @@ pub struct ApiDefinitionIdWithVersion {
 pub enum ApiDefinitionError<E> {
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors<E>),
-    #[error("Unable to fetch component: {0:?}")]
+    #[error("Unable to fetch component: {}", .0.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "))]
     ComponentNotFoundError(Vec<VersionedComponentId>),
-    #[error("Rib compilation error: {0:?}")]
+    #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
     #[error("API definition not found: {0}")]
     ApiDefinitionNotFound(ApiDefinitionId),

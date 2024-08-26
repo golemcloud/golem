@@ -414,8 +414,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
 
 #[derive(Debug, thiserror::Error)]
 pub enum CallWorkerExecutorError {
-    // TODO: Change to display
-    #[error("Failed to get routing table: {0:?}")]
+    #[error("Failed to get routing table: {0}")]
     FailedToGetRoutingTable(RoutingTableError),
     #[error("Failed to connect to pod: {} {}", .0.code(), .0.message())]
     FailedToConnectToPod(Status),

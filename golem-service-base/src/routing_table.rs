@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,34 @@ pub enum RoutingTableError {
     ShardManagerGrpcError(Status),
     ShardManagerError(ShardManagerError),
     NoResult,
+}
+
+impl Display for RoutingTableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            RoutingTableError::ShardManagerGrpcError(status) => {
+                write!(
+                    f,
+                    "Shard Manager gRPC error: {} {}",
+                    status.code(),
+                    status.message()
+                )
+            }
+            RoutingTableError::ShardManagerError(error) => {
+                let detail = match &error.error {
+                    Some(error) => match error {
+                        Error::InvalidRequest(e) => format!("Invalid Request: {}", e.error),
+                        Error::Timeout(e) => format!("Timeout: {}", e.error),
+                        Error::Unknown(e) => format!("Unknown: {}", e.error),
+                    },
+                    None => "Unknown".to_string(),
+                };
+
+                write!(f, "Shard Manager error: {}", detail)
+            }
+            RoutingTableError::NoResult => write!(f, "No Result"),
+        }
+    }
 }
 
 impl IsRetriableError for RoutingTableError {
