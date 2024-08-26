@@ -268,7 +268,7 @@ enum PromiseState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
-enum RedisPromiseState {
+pub enum RedisPromiseState {
     Pending,
     Complete(Vec<u8>),
 }
