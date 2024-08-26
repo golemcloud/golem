@@ -64,31 +64,6 @@ impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     }
 }
 
-impl From<CompiledHttpApiDefinitionRequest> for HttpApiDefinitionRequest {
-    fn from(compiled_http_api_definition: CompiledHttpApiDefinitionRequest) -> Self {
-        HttpApiDefinitionRequest {
-            id: compiled_http_api_definition.id,
-            version: compiled_http_api_definition.version,
-            routes: compiled_http_api_definition
-                .routes
-                .into_iter()
-                .map(Route::from)
-                .collect(),
-            draft: compiled_http_api_definition.draft,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompiledHttpApiDefinitionRequest {
-    pub id: ApiDefinitionId,
-    pub version: ApiVersion,
-    pub routes: Vec<CompiledRoute>,
-    #[serde(default)]
-    pub draft: bool,
-}
-
 impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
     fn from(compiled_http_api_definition: CompiledHttpApiDefinition) -> Self {
         HttpApiDefinition {
