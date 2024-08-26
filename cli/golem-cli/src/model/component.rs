@@ -21,6 +21,7 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub project_id: Option<ProjectId>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<golem_client::model::Component> for Component {
@@ -30,6 +31,7 @@ impl From<golem_client::model::Component> for Component {
             component_name,
             component_size,
             metadata,
+            created_at,
         } = value;
 
         Component {
@@ -38,6 +40,7 @@ impl From<golem_client::model::Component> for Component {
             component_size,
             metadata,
             project_id: None,
+            created_at,
         }
     }
 }
