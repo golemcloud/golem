@@ -42,6 +42,7 @@ mod common;
 pub mod api;
 pub mod blob_storage;
 pub mod blobstore;
+pub mod compatibility;
 pub mod guest_languages;
 pub mod guest_languages2;
 pub mod hot_update;

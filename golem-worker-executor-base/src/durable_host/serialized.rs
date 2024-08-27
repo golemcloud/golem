@@ -23,10 +23,10 @@ use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::bindings::{filesystem, sockets};
 use wasmtime_wasi::{FsError, SocketError, StreamError};
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableDateTime {
-    seconds: u64,
-    nanoseconds: u32,
+    pub seconds: u64,
+    pub nanoseconds: u32,
 }
 
 impl From<wasmtime_wasi::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
@@ -75,7 +75,7 @@ impl From<cap_std::time::SystemTime> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -442,7 +442,7 @@ impl From<SerializableError> for WorkerProxyError {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -512,7 +512,7 @@ impl From<SerializableIpAddress> for IpAddress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct SerializableIpAddresses(Vec<SerializableIpAddress>);
+pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {
     fn from(value: Vec<IpAddress>) -> Self {
@@ -526,7 +526,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,

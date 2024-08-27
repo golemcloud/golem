@@ -19,7 +19,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_wasm_rpc::WitValue;
-use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::debug;
 
@@ -67,7 +66,7 @@ pub trait Rpc {
     ) -> Result<(), RpcError>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },
