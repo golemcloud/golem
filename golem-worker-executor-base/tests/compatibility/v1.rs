@@ -196,7 +196,7 @@ pub fn wasm_rpc_value() {
     let v8 = Value::S32(-123456789);
     let v9 = Value::S64(-1234567890123456789);
     let v10 = Value::F32(1.234);
-    let v11 = Value::F64(1.234567890123456789);
+    let v11 = Value::F64(1.234_567_890_123_456_7);
     let v12 = Value::Char('a');
     let v13 = Value::String("hello world".to_string());
     let v14 = Value::List(vec![Value::Bool(true), Value::Bool(false)]);
@@ -1140,7 +1140,7 @@ pub fn wit_value() {
     let wv8: WitValue = Value::S32(-123456789).into();
     let wv9: WitValue = Value::S64(-1234567890123456789).into();
     let wv10: WitValue = Value::F32(1.234).into();
-    let wv11: WitValue = Value::F64(1.234567890123456789).into();
+    let wv11: WitValue = Value::F64(1.234_567_890_123_456_7).into();
     let wv12: WitValue = Value::Char('a').into();
     let wv13: WitValue = Value::String("hello world".to_string()).into();
     let wv14: WitValue = Value::List(vec![Value::Bool(true), Value::Bool(false)]).into();
@@ -1604,7 +1604,7 @@ pub fn proto_val() {
     let pv8: golem_wasm_rpc::protobuf::Val = Value::S32(-123456789).into();
     let pv9: golem_wasm_rpc::protobuf::Val = Value::S64(-1234567890123456789).into();
     let pv10: golem_wasm_rpc::protobuf::Val = Value::F32(1.234).into();
-    let pv11: golem_wasm_rpc::protobuf::Val = Value::F64(1.234567890123456789).into();
+    let pv11: golem_wasm_rpc::protobuf::Val = Value::F64(1.234_567_890_123_456_7).into();
     let pv12: golem_wasm_rpc::protobuf::Val = Value::Char('a').into();
     let pv13: golem_wasm_rpc::protobuf::Val = Value::String("hello world".to_string()).into();
     let pv14: golem_wasm_rpc::protobuf::Val =
@@ -1702,7 +1702,7 @@ pub fn type_annotated_value() {
     let tav10 =
         TypeAnnotatedValue::create(&Value::F32(1.234), &AnalysedType::F32(TypeF32)).unwrap();
     let tav11 = TypeAnnotatedValue::create(
-        &Value::F64(1.234567890123456789),
+        &Value::F64(1.234_567_890_123_456_7),
         &AnalysedType::F64(TypeF64),
     )
     .unwrap();
