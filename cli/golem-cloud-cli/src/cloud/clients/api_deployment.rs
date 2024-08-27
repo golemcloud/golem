@@ -42,7 +42,7 @@ impl<C: golem_cloud_client::api::ApiDeploymentClient + Sync + Send> ApiDeploymen
             })
             .collect::<Vec<_>>();
 
-        let deployment = golem_cloud_client::model::ApiDeployment {
+        let deployment = golem_cloud_client::model::ApiDeploymentRequest {
             api_definitions: api_definition_infos,
             project_id: project.0,
             site: ApiSite {

@@ -1,9 +1,11 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
 use crate::worker::make_component_from_file;
+use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
 use golem_client::model::{
-    GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route, VersionedComponentId,
+    GolemWorkerBinding, HttpApiDefinition, HttpApiDefinitionRequest, MethodPattern, Route,
+    VersionedComponentId,
 };
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
@@ -105,8 +107,12 @@ fn make_file(id: &str, json: &serde_json::value::Value) -> Result<PathBuf, Faile
     Ok(path)
 }
 
-fn golem_def_with_response(id: &str, component_id: &str, response: String) -> HttpApiDefinition {
-    HttpApiDefinition {
+fn golem_def_with_response(
+    id: &str,
+    component_id: &str,
+    response: String,
+) -> HttpApiDefinitionRequest {
+    HttpApiDefinitionRequest {
         id: id.to_string(),
         version: "0.1.0".to_string(),
         draft: true,
@@ -126,7 +132,7 @@ fn golem_def_with_response(id: &str, component_id: &str, response: String) -> Ht
     }
 }
 
-pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinition {
+pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
@@ -135,7 +141,7 @@ pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinition {
     )
 }
 
-pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
+pub fn make_golem_file(def: &HttpApiDefinitionRequest) -> Result<PathBuf, Failed> {
     let golem_json = serde_json::to_value(def)?;
 
     make_file(&def.id, &golem_json)
@@ -219,6 +225,19 @@ pub fn make_open_api_file(
     make_file(id, &open_api_json)
 }
 
+pub fn to_definition(
+    request: HttpApiDefinitionRequest,
+    created_at: Option<DateTime<Utc>>,
+) -> HttpApiDefinition {
+    HttpApiDefinition {
+        id: request.id,
+        version: request.version,
+        draft: request.draft,
+        routes: request.routes,
+        created_at,
+    }
+}
+
 fn api_definition_import(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
@@ -234,7 +253,7 @@ fn api_definition_import(
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
 
-    let expected = golem_def(&component_name, &component_id);
+    let expected = to_definition(golem_def(&component_name, &component_id), res.created_at);
 
     assert_eq!(res, expected);
 
@@ -256,7 +275,8 @@ fn api_definition_add(
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def, res.created_at);
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -285,7 +305,9 @@ fn api_definition_update(
     let path = make_golem_file(&updated)?;
     let res: HttpApiDefinition = cli.run(&["api-definition", "update", path.to_str().unwrap()])?;
 
-    assert_eq!(res, updated);
+    let expected = to_definition(updated, res.created_at);
+
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -332,7 +354,12 @@ fn api_definition_list(
 
     let res: Vec<HttpApiDefinition> = cli.run(&["api-definition", "list"])?;
 
-    assert!(res.contains(&def));
+    let found = res.into_iter().find(|d| {
+        let e = to_definition(def.clone(), d.created_at);
+        d == &e
+    });
+
+    assert!(found.is_some());
 
     Ok(())
 }
@@ -361,7 +388,10 @@ fn api_definition_list_versions(
     ])?;
 
     assert_eq!(res.len(), 1);
-    assert_eq!(*res.first().unwrap(), def);
+    let res: HttpApiDefinition = res.first().unwrap().clone();
+    let expected = to_definition(def, res.created_at);
+
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -392,7 +422,9 @@ fn api_definition_get(
         "0.1.0",
     ])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def, res.created_at);
+
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -423,7 +455,9 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def, res.created_at);
+
+    assert_eq!(res, expected);
 
     cli.run_unit(&[
         "api-definition",

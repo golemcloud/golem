@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::{golem_def, make_golem_file, make_shopping_cart_component};
+use crate::api_definition::{
+    golem_def, make_golem_file, make_shopping_cart_component, to_definition,
+};
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
 use crate::worker::make_component;
@@ -152,7 +154,8 @@ fn top_level_get_api_definition(
 
     let res: HttpApiDefinition = cli.run(&["get", &url.to_string()])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def.clone(), res.created_at);
+    assert_eq!(res, expected);
 
     let urn = ApiDefinitionUrn {
         id: component_name.to_string(),
@@ -160,8 +163,8 @@ fn top_level_get_api_definition(
     };
 
     let res: HttpApiDefinition = cli.run(&["get", &urn.to_string()])?;
-
-    assert_eq!(res, def);
+    let expected = to_definition(def.clone(), res.created_at);
+    assert_eq!(res, expected);
 
     Ok(())
 }

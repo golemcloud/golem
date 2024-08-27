@@ -567,12 +567,14 @@ impl ToCli<ApiDeployment> for golem_cloud_client::model::ApiDeployment {
             api_definitions,
             project_id,
             site,
+            created_at,
         } = self;
 
         ApiDeployment {
             api_definitions: api_definitions.into_iter().map(|d| d.to_oss()).collect(),
             project_id: Some(project_id),
             site: site.to_oss(),
+            created_at,
         }
     }
 }
@@ -871,6 +873,7 @@ impl ToCli<Component> for golem_cloud_client::model::Component {
             component_size,
             metadata,
             project_id,
+            created_at,
         } = self;
 
         Component {
@@ -879,6 +882,7 @@ impl ToCli<Component> for golem_cloud_client::model::Component {
             component_size,
             metadata: metadata.to_oss(),
             project_id: Some(ProjectId(project_id)),
+            created_at,
         }
     }
 }

@@ -4,7 +4,9 @@ use std::io::Read;
 
 use async_trait::async_trait;
 
-use golem_cloud_client::model::{GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route};
+use golem_cloud_client::model::{
+    GolemWorkerBinding, HttpApiDefinition, HttpApiDefinitionRequest, MethodPattern, Route,
+};
 
 use golem_cli::clients::api_definition::ApiDefinitionClient;
 use golem_cli::cloud::ProjectId;
@@ -73,7 +75,7 @@ async fn create_or_update_api_definition<
                 .map_err(CloudGolemError::from)?
         }
         Action::Create => {
-            let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
+            let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
             client
@@ -82,7 +84,7 @@ async fn create_or_update_api_definition<
                 .map_err(CloudGolemError::from)?
         }
         Action::Update => {
-            let value: HttpApiDefinition = serde_json::from_str(definition_str.as_str())
+            let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
             client
@@ -148,6 +150,7 @@ fn to_oss_http_api_definition(d: HttpApiDefinition) -> golem_client::model::Http
         version,
         routes,
         draft,
+        created_at,
     } = d;
 
     golem_client::model::HttpApiDefinition {
@@ -155,6 +158,7 @@ fn to_oss_http_api_definition(d: HttpApiDefinition) -> golem_client::model::Http
         version,
         routes: routes.into_iter().map(to_oss_route).collect(),
         draft,
+        created_at,
     }
 }
 
