@@ -30,16 +30,25 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
-    ScheduledAction, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId,
-    WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
+    WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
-use golem_wasm_rpc::{Uri, Value, WitValue};
+use golem_wasm_ast::analysis::{
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
+    TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
+    TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16,
+    TypeU32, TypeU64, TypeU8, TypeVariant,
+};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Uri, Value, WitValue};
 use golem_worker_executor_base::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
+    SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
+    SerializableResponse, SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
 };
 use golem_worker_executor_base::durable_host::serialized::{
-    SerializableError, SerializableIpAddress, SerializableIpAddresses, SerializableStreamError,
+    SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
+    SerializableIpAddresses, SerializableStreamError,
 };
 use golem_worker_executor_base::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
 use golem_worker_executor_base::error::GolemError;
@@ -877,18 +886,172 @@ pub fn blob_store_object_metadata() {
 }
 
 #[test]
+pub fn interrupt_kind() {
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible(
+        "interrupt_kind_interrupt",
+        &mut mint,
+        InterruptKind::Interrupt,
+    );
+    backward_compatible("interrupt_kind_restart", &mut mint, InterruptKind::Restart);
+    backward_compatible("interrupt_kind_suspend", &mut mint, InterruptKind::Suspend);
+    backward_compatible("interrupt_kind_jump", &mut mint, InterruptKind::Jump);
+}
+
+#[test]
+pub fn shard_id() {
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("shard_id", &mut mint, ShardId::new(1));
+}
+
+#[test]
 pub fn golem_error() {
-    todo!()
+    let wid = WorkerId {
+        component_id: ComponentId(Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap()),
+        worker_name: "worker_name".to_string(),
+    };
+    let pid = PromiseId {
+        worker_id: wid.clone(),
+        oplog_idx: OplogIndex::from_u64(100),
+    };
+
+    let g1 = GolemError::InvalidRequest {
+        details: "invalid request".to_string(),
+    };
+    let g2 = GolemError::WorkerAlreadyExists {
+        worker_id: wid.clone(),
+    };
+    let g3 = GolemError::WorkerNotFound {
+        worker_id: wid.clone(),
+    };
+    let g4 = GolemError::WorkerCreationFailed {
+        worker_id: wid.clone(),
+        details: "details".to_string(),
+    };
+    let g5 = GolemError::FailedToResumeWorker {
+        worker_id: wid.clone(),
+        reason: Box::new(GolemError::InvalidRequest {
+            details: "invalid request".to_string(),
+        }),
+    };
+    let g6 = GolemError::ComponentDownloadFailed {
+        component_id: wid.component_id.clone(),
+        component_version: 0,
+        reason: "reason".to_string(),
+    };
+    let g7 = GolemError::ComponentParseFailed {
+        component_id: wid.component_id.clone(),
+        component_version: 0,
+        reason: "reason".to_string(),
+    };
+    let g8 = GolemError::GetLatestVersionOfComponentFailed {
+        component_id: wid.component_id.clone(),
+        reason: "reason".to_string(),
+    };
+    let g9 = GolemError::PromiseNotFound {
+        promise_id: pid.clone(),
+    };
+    let g10 = GolemError::PromiseDropped {
+        promise_id: pid.clone(),
+    };
+    let g11 = GolemError::PromiseAlreadyCompleted {
+        promise_id: pid.clone(),
+    };
+    let g12 = GolemError::Interrupted {
+        kind: InterruptKind::Interrupt,
+    };
+    let g13 = GolemError::ParamTypeMismatch {
+        details: "details".to_string(),
+    };
+    let g14 = GolemError::NoValueInMessage;
+    let g15 = GolemError::ValueMismatch {
+        details: "details".to_string(),
+    };
+    let g16 = GolemError::UnexpectedOplogEntry {
+        expected: "expected".to_string(),
+        got: "actual".to_string(),
+    };
+    let g17 = GolemError::Runtime {
+        details: "details".to_string(),
+    };
+    let g18 = GolemError::InvalidShardId {
+        shard_id: ShardId::new(1),
+        shard_ids: vec![ShardId::new(1)],
+    };
+    let g19 = GolemError::InvalidAccount;
+    let g20 = GolemError::PreviousInvocationFailed {
+        details: "details".to_string(),
+    };
+    let g21 = GolemError::Unknown {
+        details: "details".to_string(),
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("golem_error_invalid_request", &mut mint, g1);
+    backward_compatible("golem_error_worker_already_exists", &mut mint, g2);
+    backward_compatible("golem_error_worker_not_found", &mut mint, g3);
+    backward_compatible("golem_error_worker_creation_failed", &mut mint, g4);
+    backward_compatible("golem_error_failed_to_resume_worker", &mut mint, g5);
+    backward_compatible("golem_error_component_download_failed", &mut mint, g6);
+    backward_compatible("golem_error_component_parse_failed", &mut mint, g7);
+    backward_compatible(
+        "golem_error_get_latest_version_of_component_failed",
+        &mut mint,
+        g8,
+    );
+    backward_compatible("golem_error_promise_not_found", &mut mint, g9);
+    backward_compatible("golem_error_promise_dropped", &mut mint, g10);
+    backward_compatible("golem_error_promise_already_completed", &mut mint, g11);
+    backward_compatible("golem_error_interrupted", &mut mint, g12);
+    backward_compatible("golem_error_param_type_mismatch", &mut mint, g13);
+    backward_compatible("golem_error_no_value_in_message", &mut mint, g14);
+    backward_compatible("golem_error_value_mismatch", &mut mint, g15);
+    backward_compatible("golem_error_unexpected_oplog_entry", &mut mint, g16);
+    backward_compatible("golem_error_runtime", &mut mint, g17);
+    backward_compatible("golem_error_invalid_shard_id", &mut mint, g18);
+    backward_compatible("golem_error_invalid_account", &mut mint, g19);
+    backward_compatible("golem_error_previous_invocation_failed", &mut mint, g20);
+    backward_compatible("golem_error_unknown", &mut mint, g21);
 }
 
 #[test]
 pub fn rpc_error() {
-    todo!()
+    let rpc1 = RpcError::ProtocolError {
+        details: "not working".to_string(),
+    };
+    let rpc2 = RpcError::Denied {
+        details: "not working".to_string(),
+    };
+    let rpc3 = RpcError::NotFound {
+        details: "not working".to_string(),
+    };
+    let rpc4 = RpcError::RemoteInternalError {
+        details: "not working".to_string(),
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("rpc_error_protocol_error", &mut mint, rpc1);
+    backward_compatible("rpc_error_denied", &mut mint, rpc2);
+    backward_compatible("rpc_error_not_found", &mut mint, rpc3);
+    backward_compatible("rpc_error_remote_internal_error", &mut mint, rpc4);
 }
 
 #[test]
 pub fn worker_proxy_error() {
-    todo!()
+    let wpe1 = WorkerProxyError::BadRequest(vec!["x".to_string(), "y".to_string()]);
+    let wpe2 = WorkerProxyError::Unauthorized("unauthorized".to_string());
+    let wpe3 = WorkerProxyError::LimitExceeded("limit exceeded".to_string());
+    let wpe4 = WorkerProxyError::NotFound("not found".to_string());
+    let wpe5 = WorkerProxyError::AlreadyExists("already exists".to_string());
+    let wpe6 = WorkerProxyError::InternalError(GolemError::unknown("internal error"));
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("worker_proxy_error_bad_request", &mut mint, wpe1);
+    backward_compatible("worker_proxy_error_unauthorized", &mut mint, wpe2);
+    backward_compatible("worker_proxy_error_limit_exceeded", &mut mint, wpe3);
+    backward_compatible("worker_proxy_error_not_found", &mut mint, wpe4);
+    backward_compatible("worker_proxy_error_already_exists", &mut mint, wpe5);
+    backward_compatible("worker_proxy_error_internal_error", &mut mint, wpe6);
 }
 
 #[test]
@@ -1045,8 +1208,327 @@ pub fn wit_value() {
 }
 
 #[test]
+pub fn serializable_dns_error_payload() {
+    let sd1 = SerializableDnsErrorPayload {
+        rcode: Some("x".to_string()),
+        info_code: Some(2),
+    };
+    let sd2 = SerializableDnsErrorPayload {
+        rcode: None,
+        info_code: None,
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_dns_error_payload_some", &mut mint, sd1);
+    backward_compatible("serializable_dns_error_payload_none", &mut mint, sd2);
+}
+
+#[test]
+pub fn serializable_tls_alert_received_payload() {
+    let st1 = SerializableTlsAlertReceivedPayload {
+        alert_id: Some(1),
+        alert_message: Some("hello world".to_string()),
+    };
+    let st2 = SerializableTlsAlertReceivedPayload {
+        alert_id: None,
+        alert_message: None,
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible(
+        "serializable_tls_alert_received_payload_some",
+        &mut mint,
+        st1,
+    );
+    backward_compatible(
+        "serializable_tls_alert_received_payload_none",
+        &mut mint,
+        st2,
+    );
+}
+
+#[test]
+pub fn serializable_field_size_payload() {
+    let sf1 = SerializableFieldSizePayload {
+        field_size: Some(1000),
+        field_name: Some("field_name".to_string()),
+    };
+    let sf2 = SerializableFieldSizePayload {
+        field_size: None,
+        field_name: None,
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_field_size_payload_some", &mut mint, sf1);
+    backward_compatible("serializable_field_size_payload_none", &mut mint, sf2);
+}
+
+#[test]
 pub fn serializable_error_code() {
-    todo!()
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible(
+        "serializable_error_code_dns_timeout",
+        &mut mint,
+        SerializableErrorCode::DnsTimeout,
+    );
+    backward_compatible(
+        "serializable_error_code_dns_error",
+        &mut mint,
+        SerializableErrorCode::DnsError(SerializableDnsErrorPayload {
+            rcode: None,
+            info_code: None,
+        }),
+    );
+    backward_compatible(
+        "serializable_error_code_destination_not_found",
+        &mut mint,
+        SerializableErrorCode::DestinationNotFound,
+    );
+    backward_compatible(
+        "serializable_error_code_destination_unavailable",
+        &mut mint,
+        SerializableErrorCode::DestinationUnavailable,
+    );
+    backward_compatible(
+        "serializable_error_code_destination_ip_prohibited",
+        &mut mint,
+        SerializableErrorCode::DestinationIpProhibited,
+    );
+    backward_compatible(
+        "serializable_error_code_destination_ip_unroutable",
+        &mut mint,
+        SerializableErrorCode::DestinationIpUnroutable,
+    );
+    backward_compatible(
+        "serializable_error_code_connection_refused",
+        &mut mint,
+        SerializableErrorCode::ConnectionRefused,
+    );
+    backward_compatible(
+        "serializable_error_code_connection_terminated",
+        &mut mint,
+        SerializableErrorCode::ConnectionTerminated,
+    );
+    backward_compatible(
+        "serializable_error_code_connection_timeout",
+        &mut mint,
+        SerializableErrorCode::ConnectionTimeout,
+    );
+    backward_compatible(
+        "serializable_error_code_connection_read_timeout",
+        &mut mint,
+        SerializableErrorCode::ConnectionReadTimeout,
+    );
+    backward_compatible(
+        "serializable_error_code_connection_write_timeout",
+        &mut mint,
+        SerializableErrorCode::ConnectionWriteTimeout,
+    );
+    backward_compatible(
+        "serializable_error_code_connection_limit_reached",
+        &mut mint,
+        SerializableErrorCode::ConnectionLimitReached,
+    );
+    backward_compatible(
+        "serializable_error_code_tls_protocol_error",
+        &mut mint,
+        SerializableErrorCode::TlsProtocolError,
+    );
+    backward_compatible(
+        "serializable_error_code_tls_certificate_error",
+        &mut mint,
+        SerializableErrorCode::TlsCertificateError,
+    );
+    backward_compatible(
+        "serializable_error_code_tls_alert_received",
+        &mut mint,
+        SerializableErrorCode::TlsAlertReceived(SerializableTlsAlertReceivedPayload {
+            alert_id: None,
+            alert_message: None,
+        }),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_denied",
+        &mut mint,
+        SerializableErrorCode::HttpRequestDenied,
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_length_required",
+        &mut mint,
+        SerializableErrorCode::HttpRequestLengthRequired,
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_body_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpRequestBodySize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_body_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpRequestBodySize(Some(1000)),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_method_invalid",
+        &mut mint,
+        SerializableErrorCode::HttpRequestMethodInvalid,
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_uri_invalid",
+        &mut mint,
+        SerializableErrorCode::HttpRequestUriInvalid,
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_uri_too_long",
+        &mut mint,
+        SerializableErrorCode::HttpRequestUriTooLong,
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_header_section_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpRequestHeaderSectionSize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_header_section_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpRequestHeaderSectionSize(Some(1000)),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_header_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpRequestHeaderSize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_header_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpRequestHeaderSize(Some(SerializableFieldSizePayload {
+            field_size: None,
+            field_name: None,
+        })),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_trailer_section_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpRequestTrailerSectionSize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_trailer_section_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpRequestTrailerSectionSize(Some(1000)),
+    );
+    backward_compatible(
+        "serializable_error_code_http_request_trailer_size",
+        &mut mint,
+        SerializableErrorCode::HttpRequestTrailerSize(SerializableFieldSizePayload {
+            field_size: None,
+            field_name: None,
+        }),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_incomplete",
+        &mut mint,
+        SerializableErrorCode::HttpResponseIncomplete,
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_header_section_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpResponseHeaderSectionSize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_header_section_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpResponseHeaderSectionSize(Some(1000)),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_header_size",
+        &mut mint,
+        SerializableErrorCode::HttpResponseHeaderSize(SerializableFieldSizePayload {
+            field_size: None,
+            field_name: None,
+        }),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_body_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpResponseBodySize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_body_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpResponseBodySize(Some(1000)),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_trailer_section_size_none",
+        &mut mint,
+        SerializableErrorCode::HttpResponseTrailerSectionSize(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_trailer_section_size_some",
+        &mut mint,
+        SerializableErrorCode::HttpResponseTrailerSectionSize(Some(1000)),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_trailer_size",
+        &mut mint,
+        SerializableErrorCode::HttpResponseTrailerSize(SerializableFieldSizePayload {
+            field_size: None,
+            field_name: None,
+        }),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_transfer_coding_none",
+        &mut mint,
+        SerializableErrorCode::HttpResponseTransferCoding(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_transfer_coding_some",
+        &mut mint,
+        SerializableErrorCode::HttpResponseTransferCoding(Some("chunked".to_string())),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_content_coding_none",
+        &mut mint,
+        SerializableErrorCode::HttpResponseContentCoding(None),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_content_coding_some",
+        &mut mint,
+        SerializableErrorCode::HttpResponseContentCoding(Some("gzip".to_string())),
+    );
+    backward_compatible(
+        "serializable_error_code_http_response_timeout",
+        &mut mint,
+        SerializableErrorCode::HttpResponseTimeout,
+    );
+    backward_compatible(
+        "serializable_error_code_http_upgrade_failed",
+        &mut mint,
+        SerializableErrorCode::HttpUpgradeFailed,
+    );
+    backward_compatible(
+        "serializable_error_code_http_protocol_error",
+        &mut mint,
+        SerializableErrorCode::HttpProtocolError,
+    );
+    backward_compatible(
+        "serializable_error_code_loop_detected",
+        &mut mint,
+        SerializableErrorCode::LoopDetected,
+    );
+    backward_compatible(
+        "serializable_error_code_configuration_error",
+        &mut mint,
+        SerializableErrorCode::ConfigurationError,
+    );
+    backward_compatible(
+        "serializable_error_code_internal_error_none",
+        &mut mint,
+        SerializableErrorCode::InternalError(None),
+    );
+    backward_compatible(
+        "serializable_error_code_internal_error_some",
+        &mut mint,
+        SerializableErrorCode::InternalError(Some("details".to_string())),
+    );
 }
 
 #[test]
@@ -1088,7 +1570,321 @@ pub fn serializable_invoke_result() {
     backward_compatible("serializable_invoke_result_completed_err", &mut mint, sir4);
 }
 
-// TODO: proto Val
-// TODO: proto TypeAnnotatedValue
-// TODO: SerializableFileTimes
-// TODO: SerializableErrorCode
+#[test]
+pub fn serializable_file_times() {
+    let sft1 = SerializableFileTimes {
+        data_access_timestamp: Some(SerializableDateTime {
+            seconds: 10000000,
+            nanoseconds: 1234,
+        }),
+        data_modification_timestamp: Some(SerializableDateTime {
+            seconds: 10000000,
+            nanoseconds: 1234,
+        }),
+    };
+    let sft2 = SerializableFileTimes {
+        data_access_timestamp: None,
+        data_modification_timestamp: None,
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_file_times_some", &mut mint, sft1);
+    backward_compatible("serializable_file_times_none", &mut mint, sft2);
+}
+
+#[test]
+pub fn proto_val() {
+    let pv1: golem_wasm_rpc::protobuf::Val = Value::Bool(true).into();
+    let pv2: golem_wasm_rpc::protobuf::Val = Value::U8(1).into();
+    let pv3: golem_wasm_rpc::protobuf::Val = Value::U16(12345).into();
+    let pv4: golem_wasm_rpc::protobuf::Val = Value::U32(123456789).into();
+    let pv5: golem_wasm_rpc::protobuf::Val = Value::U64(12345678901234567890).into();
+    let pv6: golem_wasm_rpc::protobuf::Val = Value::S8(-1).into();
+    let pv7: golem_wasm_rpc::protobuf::Val = Value::S16(-12345).into();
+    let pv8: golem_wasm_rpc::protobuf::Val = Value::S32(-123456789).into();
+    let pv9: golem_wasm_rpc::protobuf::Val = Value::S64(-1234567890123456789).into();
+    let pv10: golem_wasm_rpc::protobuf::Val = Value::F32(1.234).into();
+    let pv11: golem_wasm_rpc::protobuf::Val = Value::F64(1.234567890123456789).into();
+    let pv12: golem_wasm_rpc::protobuf::Val = Value::Char('a').into();
+    let pv13: golem_wasm_rpc::protobuf::Val = Value::String("hello world".to_string()).into();
+    let pv14: golem_wasm_rpc::protobuf::Val =
+        Value::List(vec![Value::Bool(true), Value::Bool(false)]).into();
+    let pv15: golem_wasm_rpc::protobuf::Val =
+        Value::Tuple(vec![Value::Bool(true), Value::Char('x')]).into();
+    let pv16: golem_wasm_rpc::protobuf::Val = Value::Record(vec![
+        Value::Bool(true),
+        Value::Char('x'),
+        Value::List(vec![]),
+    ])
+    .into();
+    let pv17a: golem_wasm_rpc::protobuf::Val = Value::Variant {
+        case_idx: 1,
+        case_value: Some(Box::new(Value::Record(vec![Value::Option(None)]))),
+    }
+    .into();
+    let pv17b: golem_wasm_rpc::protobuf::Val = Value::Variant {
+        case_idx: 1,
+        case_value: None,
+    }
+    .into();
+    let pv18: golem_wasm_rpc::protobuf::Val = Value::Enum(1).into();
+    let pv19: golem_wasm_rpc::protobuf::Val = Value::Flags(vec![true, false, true]).into();
+    let pv20a: golem_wasm_rpc::protobuf::Val =
+        Value::Option(Some(Box::new(Value::Bool(true)))).into();
+    let pv20b: golem_wasm_rpc::protobuf::Val = Value::Option(None).into();
+    let pv21a: golem_wasm_rpc::protobuf::Val =
+        Value::Result(Ok(Some(Box::new(Value::Bool(true))))).into();
+    let pv21b: golem_wasm_rpc::protobuf::Val =
+        Value::Result(Err(Some(Box::new(Value::Bool(true))))).into();
+    let pv21c: golem_wasm_rpc::protobuf::Val = Value::Result(Ok(None)).into();
+    let pv21d: golem_wasm_rpc::protobuf::Val = Value::Result(Err(None)).into();
+    let pv22: golem_wasm_rpc::protobuf::Val = Value::Handle {
+        uri: Uri {
+            value: "uri".to_string(),
+        },
+        resource_id: 123,
+    }
+    .into();
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("proto_val_bool", &mut mint, pv1);
+    backward_compatible("proto_val_u8", &mut mint, pv2);
+    backward_compatible("proto_val_u16", &mut mint, pv3);
+    backward_compatible("proto_val_u32", &mut mint, pv4);
+    backward_compatible("proto_val_u64", &mut mint, pv5);
+    backward_compatible("proto_val_s8", &mut mint, pv6);
+    backward_compatible("proto_val_s16", &mut mint, pv7);
+    backward_compatible("proto_val_s32", &mut mint, pv8);
+    backward_compatible("proto_val_s64", &mut mint, pv9);
+    backward_compatible("proto_val_f32", &mut mint, pv10);
+    backward_compatible("proto_val_f64", &mut mint, pv11);
+    backward_compatible("proto_val_char", &mut mint, pv12);
+    backward_compatible("proto_val_string", &mut mint, pv13);
+    backward_compatible("proto_val_list", &mut mint, pv14);
+    backward_compatible("proto_val_tuple", &mut mint, pv15);
+    backward_compatible("proto_val_record", &mut mint, pv16);
+    backward_compatible("proto_val_variant_some", &mut mint, pv17a);
+    backward_compatible("proto_val_variant_none", &mut mint, pv17b);
+    backward_compatible("proto_val_enum", &mut mint, pv18);
+    backward_compatible("proto_val_flags", &mut mint, pv19);
+    backward_compatible("proto_val_option_some", &mut mint, pv20a);
+    backward_compatible("proto_val_option_none", &mut mint, pv20b);
+    backward_compatible("proto_val_result_ok_some", &mut mint, pv21a);
+    backward_compatible("proto_val_result_err_some", &mut mint, pv21b);
+    backward_compatible("proto_val_result_ok_none", &mut mint, pv21c);
+    backward_compatible("proto_val_result_err_none", &mut mint, pv21d);
+    backward_compatible("proto_val_handle", &mut mint, pv22);
+}
+
+#[test]
+pub fn type_annotated_value() {
+    let tav1 =
+        TypeAnnotatedValue::create(&Value::Bool(true), &AnalysedType::Bool(TypeBool)).unwrap();
+    let tav2 = TypeAnnotatedValue::create(&Value::U8(1), &AnalysedType::U8(TypeU8)).unwrap();
+    let tav3 = TypeAnnotatedValue::create(&Value::U16(12345), &AnalysedType::U16(TypeU16)).unwrap();
+    let tav4 =
+        TypeAnnotatedValue::create(&Value::U32(123456789), &AnalysedType::U32(TypeU32)).unwrap();
+    let tav5 = TypeAnnotatedValue::create(
+        &Value::U64(12345678901234567890),
+        &AnalysedType::U64(TypeU64),
+    )
+    .unwrap();
+    let tav6 = TypeAnnotatedValue::create(&Value::S8(-1), &AnalysedType::S8(TypeS8)).unwrap();
+    let tav7 =
+        TypeAnnotatedValue::create(&Value::S16(-12345), &AnalysedType::S16(TypeS16)).unwrap();
+    let tav8 =
+        TypeAnnotatedValue::create(&Value::S32(-123456789), &AnalysedType::S32(TypeS32)).unwrap();
+    let tav9 = TypeAnnotatedValue::create(
+        &Value::S64(-1234567890123456789),
+        &AnalysedType::S64(TypeS64),
+    )
+    .unwrap();
+    let tav10 =
+        TypeAnnotatedValue::create(&Value::F32(1.234), &AnalysedType::F32(TypeF32)).unwrap();
+    let tav11 = TypeAnnotatedValue::create(
+        &Value::F64(1.234567890123456789),
+        &AnalysedType::F64(TypeF64),
+    )
+    .unwrap();
+    let tav12 = TypeAnnotatedValue::create(&Value::Char('a'), &AnalysedType::Chr(TypeChr)).unwrap();
+    let tav13 = TypeAnnotatedValue::create(
+        &Value::String("hello world".to_string()),
+        &AnalysedType::Str(TypeStr),
+    )
+    .unwrap();
+    let tav14 = TypeAnnotatedValue::create(
+        &Value::List(vec![Value::Bool(true), Value::Bool(false)]),
+        &AnalysedType::List(TypeList {
+            inner: Box::new(AnalysedType::Bool(TypeBool)),
+        }),
+    )
+    .unwrap();
+    let tav15 = TypeAnnotatedValue::create(
+        &Value::Tuple(vec![Value::Bool(true), Value::Char('x')]),
+        &AnalysedType::Tuple(TypeTuple {
+            items: vec![AnalysedType::Bool(TypeBool), AnalysedType::Chr(TypeChr)],
+        }),
+    )
+    .unwrap();
+    let tav16 = TypeAnnotatedValue::create(
+        &Value::Record(vec![
+            Value::Bool(true),
+            Value::Char('x'),
+            Value::List(vec![]),
+        ]),
+        &AnalysedType::Record(TypeRecord {
+            fields: vec![
+                NameTypePair {
+                    name: "a".to_string(),
+                    typ: AnalysedType::Bool(TypeBool),
+                },
+                NameTypePair {
+                    name: "b".to_string(),
+                    typ: AnalysedType::Chr(TypeChr),
+                },
+                NameTypePair {
+                    name: "c".to_string(),
+                    typ: AnalysedType::List(TypeList {
+                        inner: Box::new(AnalysedType::Bool(TypeBool)),
+                    }),
+                },
+            ],
+        }),
+    )
+    .unwrap();
+    let tav17a = TypeAnnotatedValue::create(
+        &Value::Variant {
+            case_idx: 0,
+            case_value: Some(Box::new(Value::Record(vec![Value::Option(None)]))),
+        },
+        &AnalysedType::Variant(TypeVariant {
+            cases: vec![NameOptionTypePair {
+                name: "a".to_string(),
+                typ: Some(AnalysedType::Record(TypeRecord {
+                    fields: vec![NameTypePair {
+                        name: "a".to_string(),
+                        typ: AnalysedType::Option(TypeOption {
+                            inner: Box::new(AnalysedType::Bool(TypeBool)),
+                        }),
+                    }],
+                })),
+            }],
+        }),
+    )
+    .unwrap();
+    let tav17b = TypeAnnotatedValue::create(
+        &Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        },
+        &AnalysedType::Variant(TypeVariant {
+            cases: vec![NameOptionTypePair {
+                name: "a".to_string(),
+                typ: None,
+            }],
+        }),
+    )
+    .unwrap();
+    let tav18 = TypeAnnotatedValue::create(
+        &Value::Enum(1),
+        &AnalysedType::Enum(TypeEnum {
+            cases: vec!["a".to_string(), "b".to_string()],
+        }),
+    )
+    .unwrap();
+    let tav19 = TypeAnnotatedValue::create(
+        &Value::Flags(vec![true, false, true]),
+        &AnalysedType::Flags(TypeFlags {
+            names: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        }),
+    )
+    .unwrap();
+    let tav20a = TypeAnnotatedValue::create(
+        &Value::Option(Some(Box::new(Value::Bool(true)))),
+        &AnalysedType::Option(TypeOption {
+            inner: Box::new(AnalysedType::Bool(TypeBool)),
+        }),
+    )
+    .unwrap();
+    let tav20b = TypeAnnotatedValue::create(
+        &Value::Option(None),
+        &AnalysedType::Option(TypeOption {
+            inner: Box::new(AnalysedType::Bool(TypeBool)),
+        }),
+    )
+    .unwrap();
+    let tav21a = TypeAnnotatedValue::create(
+        &Value::Result(Ok(Some(Box::new(Value::Bool(true))))),
+        &AnalysedType::Result(TypeResult {
+            ok: Some(Box::new(AnalysedType::Bool(TypeBool))),
+            err: Some(Box::new(AnalysedType::Bool(TypeBool))),
+        }),
+    )
+    .unwrap();
+    let tav21b = TypeAnnotatedValue::create(
+        &Value::Result(Err(Some(Box::new(Value::Bool(true))))),
+        &AnalysedType::Result(TypeResult {
+            ok: Some(Box::new(AnalysedType::Bool(TypeBool))),
+            err: Some(Box::new(AnalysedType::Bool(TypeBool))),
+        }),
+    )
+    .unwrap();
+    let tav21c = TypeAnnotatedValue::create(
+        &Value::Result(Ok(None)),
+        &AnalysedType::Result(TypeResult {
+            ok: None,
+            err: None,
+        }),
+    )
+    .unwrap();
+    let tav21d = TypeAnnotatedValue::create(
+        &Value::Result(Err(None)),
+        &AnalysedType::Result(TypeResult {
+            ok: None,
+            err: None,
+        }),
+    )
+    .unwrap();
+    let tav22 = TypeAnnotatedValue::create(
+        &Value::Handle {
+            uri: Uri {
+                value: "uri".to_string(),
+            },
+            resource_id: 123,
+        },
+        &AnalysedType::Handle(TypeHandle {
+            resource_id: AnalysedResourceId(1),
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    )
+    .unwrap();
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("type_annotated_value_bool", &mut mint, tav1);
+    backward_compatible("type_annotated_value_u8", &mut mint, tav2);
+    backward_compatible("type_annotated_value_u16", &mut mint, tav3);
+    backward_compatible("type_annotated_value_u32", &mut mint, tav4);
+    backward_compatible("type_annotated_value_u64", &mut mint, tav5);
+    backward_compatible("type_annotated_value_s8", &mut mint, tav6);
+    backward_compatible("type_annotated_value_s16", &mut mint, tav7);
+    backward_compatible("type_annotated_value_s32", &mut mint, tav8);
+    backward_compatible("type_annotated_value_s64", &mut mint, tav9);
+    backward_compatible("type_annotated_value_f32", &mut mint, tav10);
+    backward_compatible("type_annotated_value_f64", &mut mint, tav11);
+    backward_compatible("type_annotated_value_char", &mut mint, tav12);
+    backward_compatible("type_annotated_value_string", &mut mint, tav13);
+    backward_compatible("type_annotated_value_list", &mut mint, tav14);
+    backward_compatible("type_annotated_value_tuple", &mut mint, tav15);
+    backward_compatible("type_annotated_value_record", &mut mint, tav16);
+    backward_compatible("type_annotated_value_variant_some", &mut mint, tav17a);
+    backward_compatible("type_annotated_value_variant_none", &mut mint, tav17b);
+    backward_compatible("type_annotated_value_enum", &mut mint, tav18);
+    backward_compatible("type_annotated_value_flags", &mut mint, tav19);
+    backward_compatible("type_annotated_value_option_some", &mut mint, tav20a);
+    backward_compatible("type_annotated_value_option_none", &mut mint, tav20b);
+    backward_compatible("type_annotated_value_result_ok_some", &mut mint, tav21a);
+    backward_compatible("type_annotated_value_result_err_some", &mut mint, tav21b);
+    backward_compatible("type_annotated_value_result_ok_none", &mut mint, tav21c);
+    backward_compatible("type_annotated_value_result_err_none", &mut mint, tav21d);
+    backward_compatible("type_annotated_value_handle", &mut mint, tav22);
+}
