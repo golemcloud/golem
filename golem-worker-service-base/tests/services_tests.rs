@@ -28,6 +28,7 @@ mod tests {
         HttpApiDefinitionValidator, RouteValidationError,
     };
 
+    use chrono::Utc;
     use std::sync::Arc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
@@ -140,6 +141,7 @@ mod tests {
                     producers: vec![],
                     memories: vec![],
                 },
+                created_at: Some(Utc::now()),
             }
         }
 

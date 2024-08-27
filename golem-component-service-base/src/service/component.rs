@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
+use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::ComponentId;
 use tap::TapFallible;
@@ -82,6 +83,7 @@ where
         component_name: component_name.clone(),
         component_size: data.len() as u64,
         metadata,
+        created_at: Utc::now(),
         versioned_component_id,
     })
 }
@@ -235,7 +237,7 @@ where
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
-
+        let created_at = Utc::now();
         let metadata =
             process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
 
@@ -266,6 +268,7 @@ where
         let component = Component {
             component_size,
             metadata,
+            created_at,
             ..next_component
         };
         let record = component
@@ -607,6 +610,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
                 component_id: component_id.clone(),
                 version: 0,
             },
+            created_at: Utc::now(),
         };
 
         Ok(fake_component)
@@ -631,6 +635,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
                 component_id: component_id.clone(),
                 version: 0,
             },
+            created_at: Utc::now(),
         };
 
         Ok(fake_component)
