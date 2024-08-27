@@ -1,4 +1,4 @@
-use crate::model::{Certificate, CertificateId};
+use crate::model::{Certificate, CertificateId, CertificateRequest};
 use crate::service::auth::CloudNamespace;
 use async_trait::async_trait;
 use golem_common::model::AccountId;
@@ -14,19 +14,26 @@ pub struct CertificateRecord {
     pub id: Uuid,
     pub domain_name: String,
     pub external_id: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl CertificateRecord {
-    pub fn new(account_id: AccountId, certificate: Certificate, external_id: String) -> Self {
+    pub fn new(
+        account_id: AccountId,
+        certificate: CertificateRequest,
+        external_id: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         Self {
             namespace: CloudNamespace {
                 account_id,
                 project_id: certificate.project_id,
             }
             .to_string(),
-            id: certificate.id.0,
+            id: Uuid::new_v4(),
             domain_name: certificate.domain_name,
             external_id,
+            created_at,
         }
     }
 }
@@ -41,6 +48,7 @@ impl TryFrom<CertificateRecord> for Certificate {
             id: CertificateId(value.id),
             project_id: namespace.project_id,
             domain_name: value.domain_name,
+            created_at: Some(value.created_at),
         })
     }
 }
@@ -73,9 +81,9 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
                INSERT INTO api_certificates
-                (namespace, id, domain_name, external_id)
+                (namespace, id, domain_name, external_id, created_at)
               VALUES
-                ($1, $2, $3, $4)
+                ($1, $2, $3, $4, $5)
               ON CONFLICT (namespace, id) DO UPDATE
               SET domain_name = $3,
                   external_id = $4
@@ -85,6 +93,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Sqlite> {
         .bind(record.id)
         .bind(record.domain_name.clone())
         .bind(record.external_id.clone())
+        .bind(record.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -97,7 +106,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Sqlite> {
         id: &Uuid,
     ) -> Result<Option<CertificateRecord>, RepoError> {
         sqlx::query_as::<_, CertificateRecord>(
-            "SELECT * FROM api_certificates WHERE namespace = $1 AND id = $2",
+            "SELECT namespace, id, domain_name, external_id, created_at FROM api_certificates WHERE namespace = $1 AND id = $2",
         )
         .bind(namespace)
         .bind(id)
@@ -117,7 +126,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Sqlite> {
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<CertificateRecord>, RepoError> {
         sqlx::query_as::<_, CertificateRecord>(
-            "SELECT * FROM api_certificates WHERE namespace = $1",
+            "SELECT namespace, id, domain_name, external_id, created_at FROM api_certificates WHERE namespace = $1",
         )
         .bind(namespace)
         .fetch_all(self.db_pool.deref())
@@ -132,9 +141,9 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
                INSERT INTO api_certificates
-                (namespace, id, domain_name, external_id)
+                (namespace, id, domain_name, external_id, created_at)
               VALUES
-                ($1, $2, $3, $4)
+                ($1, $2, $3, $4, $5)
               ON CONFLICT (namespace, id) DO UPDATE
               SET domain_name = $3,
                   external_id = $4
@@ -144,6 +153,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
         .bind(record.id)
         .bind(record.domain_name.clone())
         .bind(record.external_id.clone())
+        .bind(record.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -156,7 +166,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
         id: &Uuid,
     ) -> Result<Option<CertificateRecord>, RepoError> {
         sqlx::query_as::<_, CertificateRecord>(
-            "SELECT * FROM api_certificates WHERE namespace = $1 AND id = $2",
+            "SELECT namespace, id, domain_name, external_id, created_at::timestamptz FROM api_certificates WHERE namespace = $1 AND id = $2",
         )
         .bind(namespace)
         .bind(id)
@@ -176,7 +186,7 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<CertificateRecord>, RepoError> {
         sqlx::query_as::<_, CertificateRecord>(
-            "SELECT * FROM api_certificates WHERE namespace = $1",
+            "SELECT namespace, id, domain_name, external_id, created_at::timestamptz FROM api_certificates WHERE namespace = $1",
         )
         .bind(namespace)
         .fetch_all(self.db_pool.deref())

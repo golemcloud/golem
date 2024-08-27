@@ -5,6 +5,7 @@ use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNam
 use crate::service::limit::{LimitError, LimitService};
 use crate::service::project::{ProjectError, ProjectService};
 use async_trait::async_trait;
+use chrono::Utc;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
 use cloud_common::model::ProjectAction;
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -501,6 +502,7 @@ impl ComponentService for ComponentServiceNoop {
                 component_id: component_id.clone(),
                 version: 0,
             },
+            created_at: Some(Utc::now()),
         };
 
         Ok(fake_component)
@@ -525,6 +527,7 @@ impl ComponentService for ComponentServiceNoop {
                 component_id: component_id.clone(),
                 version: 0,
             },
+            created_at: Some(Utc::now()),
         };
 
         Ok(fake_component)

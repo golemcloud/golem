@@ -23,6 +23,7 @@ cloud-common = { path = "../cloud-common" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+chrono = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 futures-util = { workspace = true }
@@ -37,6 +38,7 @@ opentelemetry_sdk = { workspace = true }
 poem = { workspace = true, features = ["prometheus", "opentelemetry"] }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
+prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { version = "0.7", features = [

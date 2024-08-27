@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::model::ApiDeployment;
+use crate::model::ApiDeploymentRequest;
 use crate::service::api_domain::RegisterDomainRoute;
 use crate::service::auth::{AuthService, CloudAuthCtx, CloudNamespace};
 use cloud_common::auth::GolemSecurityScheme;
@@ -43,7 +44,7 @@ impl ApiDeploymentApi {
     #[oai(path = "/deploy", method = "post", operation_id = "deploy")]
     async fn create_or_update(
         &self,
-        payload: Json<ApiDeployment>,
+        payload: Json<ApiDeploymentRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let token = token.secret();
@@ -73,7 +74,7 @@ impl ApiDeploymentApi {
 
             let payload_deployment = &payload.0;
 
-            let api_deployment = golem_worker_service_base::api_definition::ApiDeployment {
+            let api_deployment = golem_worker_service_base::api_definition::ApiDeploymentRequest {
                 namespace: namespace.clone(),
                 api_definition_keys: api_definition_infos.clone(),
                 site: payload_deployment.site.clone(),

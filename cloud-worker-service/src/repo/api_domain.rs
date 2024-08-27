@@ -1,4 +1,4 @@
-use crate::model::{AccountApiDomain, ApiDomain};
+use crate::model::{AccountApiDomain, ApiDomain, DomainRequest};
 use crate::service::auth::CloudNamespace;
 use async_trait::async_trait;
 use golem_common::model::AccountId;
@@ -12,10 +12,16 @@ pub struct ApiDomainRecord {
     pub namespace: String,
     pub domain_name: String,
     pub name_servers: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl ApiDomainRecord {
-    pub fn new(account_id: AccountId, domain: ApiDomain) -> Self {
+    pub fn new(
+        account_id: AccountId,
+        domain: DomainRequest,
+        name_servers: Vec<String>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         Self {
             namespace: CloudNamespace {
                 account_id,
@@ -23,7 +29,8 @@ impl ApiDomainRecord {
             }
             .to_string(),
             domain_name: domain.domain_name,
-            name_servers: domain.name_servers.join(","),
+            name_servers: name_servers.join(","),
+            created_at,
         }
     }
 }
@@ -50,6 +57,7 @@ impl TryFrom<ApiDomainRecord> for AccountApiDomain {
                 project_id: namespace.project_id,
                 domain_name: value.domain_name,
                 name_servers,
+                created_at: Some(value.created_at),
             },
         })
     }
@@ -91,9 +99,9 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
                INSERT INTO api_domains
-                (namespace, domain_name, name_servers)
+                (namespace, domain_name, name_servers, created_at)
               VALUES
-                ($1, $2, $3)
+                ($1, $2, $3, $4)
               ON CONFLICT (namespace, domain_name) DO UPDATE
               SET name_servers = $3
             "#,
@@ -101,6 +109,7 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Sqlite> {
         .bind(record.namespace.clone())
         .bind(record.domain_name.clone())
         .bind(record.name_servers.clone())
+        .bind(record.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -108,7 +117,7 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Sqlite> {
     }
 
     async fn get(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDomainRecord>("SELECT * FROM api_domains WHERE domain_name = $1")
+        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at FROM api_domains WHERE domain_name = $1")
             .bind(domain_name)
             .fetch_optional(self.db_pool.deref())
             .await
@@ -124,7 +133,7 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Sqlite> {
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDomainRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDomainRecord>("SELECT * FROM api_domains WHERE namespace = $1")
+        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at FROM api_domains WHERE namespace = $1")
             .bind(namespace)
             .fetch_all(self.db_pool.deref())
             .await
@@ -138,9 +147,9 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
                INSERT INTO api_domains
-                (namespace, domain_name, name_servers)
+                (namespace, domain_name, name_servers, created_at)
               VALUES
-                ($1, $2, $3)
+                ($1, $2, $3, $4)
               ON CONFLICT (namespace, domain_name) DO UPDATE
               SET name_servers = $3
             "#,
@@ -148,6 +157,7 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
         .bind(record.namespace.clone())
         .bind(record.domain_name.clone())
         .bind(record.name_servers.clone())
+        .bind(record.created_at)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -155,7 +165,7 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
     }
 
     async fn get(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDomainRecord>("SELECT * FROM api_domains WHERE domain_name = $1")
+        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at::timestamptz FROM api_domains WHERE domain_name = $1")
             .bind(domain_name)
             .fetch_optional(self.db_pool.deref())
             .await
@@ -171,7 +181,7 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
     }
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDomainRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDomainRecord>("SELECT * FROM api_domains WHERE namespace = $1")
+        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at::timestamptz FROM api_domains WHERE namespace = $1")
             .bind(namespace)
             .fetch_all(self.db_pool.deref())
             .await

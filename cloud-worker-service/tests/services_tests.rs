@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use cloud_common::model::TokenSecret;
     use cloud_worker_service::model::{ApiDomain, CertificateRequest, DomainRequest};
     use cloud_worker_service::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
@@ -249,15 +250,18 @@ mod tests {
             domain_name: domain_name.clone(),
         };
 
-        let domain = ApiDomain {
-            project_id: project_id.clone(),
-            domain_name: domain_name.clone(),
-            name_servers: vec![],
-        };
-
-        let _ = domain_service
+        let domain = domain_service
             .create_or_update(&domain_request, &auth_ctx)
-            .await;
+            .await
+            .unwrap();
+
+        let expected = ApiDomain::new(
+            &domain_request,
+            vec![],
+            domain.created_at.unwrap_or(Utc::now()),
+        );
+
+        assert_eq!(domain, expected);
 
         let result = domain_service.get(&project_id, &auth_ctx).await.unwrap();
 

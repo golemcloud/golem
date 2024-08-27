@@ -7,6 +7,7 @@ use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use cloud_common::model::ProjectAction;
 use derive_more::Display;
 use golem_common::model::AccountId;
@@ -225,10 +226,15 @@ impl ApiDomainService for ApiDomainServiceDefault {
             }
         };
 
-        let domain = ApiDomain::new(payload, name_servers);
+        let record = ApiDomainRecord::new(
+            account_id.clone(),
+            payload.clone(),
+            name_servers,
+            Utc::now(),
+        );
 
         self.domain_repo
-            .create_or_update(&ApiDomainRecord::new(account_id.clone(), domain.clone()))
+            .create_or_update(&record)
             .await
             .map_err(|e| {
                 error!(
@@ -238,6 +244,8 @@ impl ApiDomainService for ApiDomainServiceDefault {
                 );
                 ApiDomainServiceError::internal(e)
             })?;
+
+        let domain = record.try_into().map_err(ApiDomainServiceError::internal)?;
 
         Ok(domain)
     }
@@ -316,7 +324,7 @@ impl ApiDomainService for ApiDomainServiceNoop {
         payload: &DomainRequest,
         _auth: &CloudAuthCtx,
     ) -> Result<ApiDomain, ApiDomainServiceError> {
-        Ok(ApiDomain::new(payload, vec![]))
+        Ok(ApiDomain::new(payload, vec![], Utc::now()))
     }
 
     async fn get(

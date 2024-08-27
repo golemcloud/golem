@@ -1,84 +1,16 @@
 use std::collections::HashMap;
-use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
+use std::fmt::{Debug, Display};
 
 use crate::service::auth::CloudNamespace;
-use bincode::{Decode, Encode};
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
-use derive_more::{Display, FromStr};
-use golem_common::model::{AccountId, ComponentId, ScanCursor};
+use derive_more::FromStr;
+use golem_common::model::{AccountId, ScanCursor};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord, WorkerId};
-use golem_worker_service_base::api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 use uuid::Uuid;
-
-pub enum GolemResult {
-    Ok(Box<dyn PrintRes>),
-    Json(serde_json::value::Value),
-    Str(String),
-}
-
-pub trait PrintRes {
-    fn println(&self, format: &Format);
-}
-
-impl<T> PrintRes for T
-where
-    T: Serialize,
-{
-    fn println(&self, format: &Format) {
-        match format {
-            Format::Json => println!("{}", serde_json::to_string_pretty(self).unwrap()),
-            Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-pub enum Format {
-    Json,
-    Yaml,
-}
-
-impl Display for Format {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-        };
-        Display::fmt(&s, f)
-    }
-}
-
-impl FromStr for Format {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(Format::Json),
-            "yaml" => Ok(Format::Yaml),
-            _ => {
-                let all = Format::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown format: {s}. Expected one of {all}"))
-            }
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ProjectRef {
-    Id(ProjectId),
-    Name(String),
-    Default,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectView {
@@ -106,18 +38,6 @@ impl TryFrom<Project> for ProjectView {
         })
     }
 }
-
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Encode, Decode)]
-pub struct ComponentName(pub String); // TODO: Validate
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ComponentIdOrName {
-    Id(ComponentId),
-    Name(ComponentName, ProjectRef),
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-pub struct WorkerName(pub String); // TODO: Validate
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -203,16 +123,26 @@ pub struct WorkersMetadataResponse {
     pub cursor: Option<ScanCursor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ApiDeploymentRequest {
+    pub api_definitions: Vec<ApiDefinitionInfo>,
+    pub project_id: ProjectId,
+    pub site: ApiSite,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ApiDeployment {
     pub api_definitions: Vec<ApiDefinitionInfo>,
     pub project_id: ProjectId,
     pub site: ApiSite,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ApiDefinitionInfo {
@@ -237,53 +167,37 @@ impl From<golem_worker_service_base::api_definition::ApiDeployment<CloudNamespac
                 .collect(),
             project_id: api_deployment.namespace.project_id.clone(),
             site: api_deployment.site.clone(),
+            created_at: Some(api_deployment.created_at),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountApiDeployment {
-    pub account_id: AccountId,
-    pub deployment: ApiDeployment,
-}
-
-impl AccountApiDeployment {
-    pub fn new(account_id: &AccountId, deployment: &ApiDeployment) -> Self {
-        Self {
-            account_id: account_id.clone(),
-            deployment: deployment.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountApiDefinition {
-    pub account_id: AccountId,
-    pub definition: HttpApiDefinition,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ApiDomain {
     pub project_id: ProjectId,
     pub domain_name: String,
     pub name_servers: Vec<String>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ApiDomain {
-    pub fn new(request: &DomainRequest, name_servers: Vec<String>) -> Self {
+    pub fn new(
+        request: &DomainRequest,
+        name_servers: Vec<String>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         Self {
             project_id: request.project_id.clone(),
             domain_name: request.domain_name.clone(),
             name_servers,
+            created_at: Some(created_at),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountApiDomain {
     pub account_id: AccountId,
@@ -299,7 +213,7 @@ impl AccountApiDomain {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct DomainRequest {
@@ -307,7 +221,7 @@ pub struct DomainRequest {
     pub domain_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct CertificateRequest {
@@ -317,10 +231,8 @@ pub struct CertificateRequest {
     pub certificate_private_key: String,
 }
 
-#[derive(
-    Debug, Clone, Eq, PartialEq, Hash, FromStr, Serialize, Deserialize, Encode, Decode, NewType,
-)]
-pub struct CertificateId(#[bincode(with_serde)] pub Uuid);
+#[derive(Debug, Clone, Eq, PartialEq, Hash, FromStr, Serialize, Deserialize, NewType)]
+pub struct CertificateId(pub Uuid);
 
 impl Display for CertificateId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -328,21 +240,23 @@ impl Display for CertificateId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct Certificate {
     pub id: CertificateId,
     pub project_id: ProjectId,
     pub domain_name: String,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Certificate {
-    pub fn new(request: &CertificateRequest) -> Self {
+    pub fn new(request: &CertificateRequest, created_at: chrono::DateTime<chrono::Utc>) -> Self {
         Self {
             id: CertificateId(Uuid::new_v4()),
             project_id: request.project_id.clone(),
             domain_name: request.domain_name.clone(),
+            created_at: Some(created_at),
         }
     }
 }

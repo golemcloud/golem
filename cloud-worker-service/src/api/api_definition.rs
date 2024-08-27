@@ -9,8 +9,10 @@ use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use golem_worker_service_base::api::HttpApiDefinition;
+use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api_definition::http::{
-    get_api_definition, HttpApiDefinition as CoreHttpApiDefinition, JsonOpenApiDefinition,
+    get_api_definition, HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest,
+    JsonOpenApiDefinition,
 };
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString, ApiVersion};
 use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
@@ -57,7 +59,8 @@ impl ApiDefinitionApi {
         let project_id = &project_id.0;
         let token = token.secret();
 
-        let record = recorded_http_api_request!("import_open_api",);
+        let record =
+            recorded_http_api_request!("import_open_api", project_id = project_id.0.to_string(),);
 
         let response = {
             let definition = get_api_definition(openapi.0).map_err(|e| {
@@ -65,12 +68,13 @@ impl ApiDefinitionApi {
                 ApiEndpointError::bad_request(e)
             })?;
 
-            self.definition_service
+            let (result, _) = self
+                .definition_service
                 .create(project_id, &definition, &CloudAuthCtx::new(token))
                 .instrument(record.span.clone())
                 .await?;
 
-            definition
+            result
                 .try_into()
                 .map_err(ApiEndpointError::internal)
                 .map(Json)
@@ -91,7 +95,7 @@ impl ApiDefinitionApi {
     async fn create(
         &self,
         project_id: Path<ProjectId>,
-        payload: Json<HttpApiDefinition>,
+        payload: Json<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let project_id = &project_id.0;
@@ -105,18 +109,22 @@ impl ApiDefinitionApi {
         );
 
         let response = {
-            let definition: CoreHttpApiDefinition = payload
+            let definition: CoreHttpApiDefinitionRequest = payload
                 .0
                 .clone()
                 .try_into()
                 .map_err(ApiEndpointError::bad_request)?;
 
-            let _ = self
+            let (result, _) = self
                 .definition_service
                 .create(project_id, &definition, &CloudAuthCtx::new(token))
                 .instrument(record.span.clone())
                 .await?;
-            Ok(Json(payload.0))
+
+            result
+                .try_into()
+                .map_err(ApiEndpointError::internal)
+                .map(Json)
         };
 
         record.result(response)
@@ -135,7 +143,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-        payload: Json<HttpApiDefinition>,
+        payload: Json<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
         let project_id = &project_id.0;
@@ -149,7 +157,7 @@ impl ApiDefinitionApi {
         );
 
         let response = {
-            let definition: CoreHttpApiDefinition = payload
+            let definition: CoreHttpApiDefinitionRequest = payload
                 .0
                 .clone()
                 .try_into()
@@ -162,13 +170,16 @@ impl ApiDefinitionApi {
                     "Unmatched url and body versions.",
                 ))
             } else {
-                let _ = self
+                let (result, _) = self
                     .definition_service
                     .update(project_id, &definition, &CloudAuthCtx::new(token))
                     .instrument(record.span.clone())
                     .await?;
 
-                Ok(Json(payload.0))
+                result
+                    .try_into()
+                    .map_err(ApiEndpointError::internal)
+                    .map(Json)
             }
         };
 

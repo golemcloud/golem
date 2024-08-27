@@ -4,6 +4,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use poem_openapi::Object;
+use std::time::SystemTime;
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,
@@ -24,6 +25,7 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub project_id: ProjectId,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Component {
@@ -34,6 +36,7 @@ impl Component {
             component_size: component.component_size,
             metadata: component.metadata,
             project_id,
+            created_at: component.created_at,
         }
     }
 }
@@ -44,6 +47,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     fn try_from(
         value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
+        let created_at = match value.created_at {
+            Some(t) => {
+                let t = SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp")?;
+                Some(t.into())
+            }
+            None => None,
+        };
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -53,6 +63,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_size: value.component_size,
             metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
             project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            created_at,
         })
     }
 }
@@ -65,6 +76,9 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             project_id: Some(value.project_id.into()),
+            created_at: value
+                .created_at
+                .map(|t| prost_types::Timestamp::from(SystemTime::from(t))),
         }
     }
 }
@@ -77,6 +91,7 @@ impl From<golem_component_service_base::model::Component<CloudNamespace>> for Co
             component_size: value.component_size,
             metadata: value.metadata,
             project_id: value.namespace.project_id,
+            created_at: Some(value.created_at),
         }
     }
 }

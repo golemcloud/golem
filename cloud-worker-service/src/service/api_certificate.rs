@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::Utc;
 use cloud_common::model::ProjectAction;
 use derive_more::Display;
 use golem_common::config::RetryConfig;
@@ -158,6 +159,7 @@ impl CertificateService for CertificateServiceDefault {
             request.domain_name
         );
 
+        let created_at = Utc::now();
         let account_id = namespace.account_id;
         let certificate_body = request.certificate_body.clone().leak();
         let certificate_private_key = request.certificate_private_key.clone().leak();
@@ -173,15 +175,14 @@ impl CertificateService for CertificateServiceDefault {
             )
             .await?;
 
-        let certificate = crate::model::Certificate::new(request);
+        let record =
+            CertificateRecord::new(account_id, request.clone(), certificate_id, created_at);
 
-        self.certificate_repo
-            .create_or_update(&CertificateRecord::new(
-                account_id,
-                certificate.clone(),
-                certificate_id,
-            ))
-            .await?;
+        self.certificate_repo.create_or_update(&record).await?;
+
+        let certificate = record
+            .try_into()
+            .map_err(CertificateServiceError::internal)?;
 
         Ok(certificate)
     }
@@ -282,7 +283,7 @@ impl CertificateService for CertificateServiceNoop {
         request: &CertificateRequest,
         _auth: &CloudAuthCtx,
     ) -> Result<crate::model::Certificate, CertificateServiceError> {
-        Ok(crate::model::Certificate::new(request))
+        Ok(crate::model::Certificate::new(request, Utc::now()))
     }
 
     async fn delete(

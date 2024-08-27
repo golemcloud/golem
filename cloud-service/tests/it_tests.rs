@@ -8,7 +8,7 @@ mod tests {
         PlanId, ProjectActions, ProjectAuthorisedActions, ProjectGrantId, ProjectPolicyId, TokenId,
     };
     use cloud_service::auth::AccountAuthorisation;
-    use cloud_service::config::CloudServiceConfig;
+    use cloud_service::config::{make_config_loader, CloudServiceConfig};
     use cloud_service::model::{
         Account, AccountData, OAuth2Provider, OAuth2Token, Project, ProjectData, ProjectGrant,
         ProjectGrantData, ProjectPolicy, ProjectType, Token,
@@ -76,7 +76,10 @@ mod tests {
 
         println!("{:?}", std::env::vars());
 
-        (CloudServiceConfig::default(), container)
+        let config = make_config_loader()
+            .load_or_dump_config()
+            .expect("Failed to load config");
+        (config, container)
     }
 
     fn create_auth(account_id: &AccountId, roles: Vec<Role>) -> AccountAuthorisation {
@@ -537,7 +540,9 @@ mod tests {
 
         println!("{:?}", std::env::vars());
 
-        let config: CloudServiceConfig = CloudServiceConfig::default();
+        let config = make_config_loader()
+            .load_or_dump_config()
+            .expect("Failed to load config");
 
         let db_config = match config.db.clone() {
             DbConfig::Sqlite(db_config) => db_config,

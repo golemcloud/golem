@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use cloud_common::model::ProjectAction;
 use golem_common::model::ProjectId;
 use golem_worker_service_base::{
-    api_definition::{http::HttpApiDefinition, ApiDefinitionId, ApiVersion},
+    api_definition::{
+        http::HttpApiDefinition, http::HttpApiDefinitionRequest, ApiDefinitionId, ApiVersion,
+    },
     service::{
         api_definition::{
             ApiDefinitionError as BaseApiDefinitionError,
@@ -23,16 +25,16 @@ pub trait ApiDefinitionService {
     async fn create(
         &self,
         project_id: &ProjectId,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<ApiDefinitionId>;
+    ) -> ApiDefResult<HttpApiDefinition>;
 
     async fn update(
         &self,
         project_id: &ProjectId,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<ApiDefinitionId>;
+    ) -> ApiDefResult<HttpApiDefinition>;
 
     async fn get(
         &self,
@@ -99,41 +101,41 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
     async fn create(
         &self,
         project_id: &ProjectId,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<ApiDefinitionId> {
+    ) -> ApiDefResult<HttpApiDefinition> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::CreateApiDefinition, ctx)
             .await?;
 
-        let api_definition = definition.clone();
-        let api_definition_id = self
+        let api_definition_request = definition.clone();
+        let api_definition = self
             .api_definition_service
-            .create(&api_definition, &namespace.clone(), ctx)
+            .create(&api_definition_request, &namespace.clone(), ctx)
             .await?;
 
-        Ok((api_definition_id, namespace))
+        Ok((api_definition.into(), namespace))
     }
 
     async fn update(
         &self,
         project_id: &ProjectId,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<ApiDefinitionId> {
+    ) -> ApiDefResult<HttpApiDefinition> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::UpdateApiDefinition, ctx)
             .await?;
 
-        let api_definition = definition.clone();
-        let api_definition_id = self
+        let api_definition_request = definition.clone();
+        let api_definition = self
             .api_definition_service
-            .update(&api_definition, &namespace.clone(), ctx)
+            .update(&api_definition_request, &namespace.clone(), ctx)
             .await?;
 
-        Ok((api_definition_id, namespace))
+        Ok((api_definition.into(), namespace))
     }
 
     async fn get(

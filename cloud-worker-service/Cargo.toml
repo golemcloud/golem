@@ -21,6 +21,7 @@ cloud-common = { path = "../cloud-common" }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
