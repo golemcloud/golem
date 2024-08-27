@@ -23,7 +23,6 @@ use bincode::{Decode, Encode};
 use dashmap::DashMap;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{PromiseId, WorkerId};
-use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::debug;
 
@@ -267,7 +266,7 @@ enum PromiseState {
     Complete(Vec<u8>),
 }
 
-#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Eq, PartialEq, Encode, Decode)]
 pub enum RedisPromiseState {
     Pending,
     Complete(Vec<u8>),

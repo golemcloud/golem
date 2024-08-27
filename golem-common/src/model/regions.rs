@@ -106,7 +106,7 @@ impl DeletedRegionsBuilder {
 
 /// Structure holding all the regions deleted from the oplog by jumps. Deleted regions
 /// can be stacked to introduce temporary overrides.
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct DeletedRegions {
     regions: Vec<BTreeMap<OplogIndex, OplogRegion>>,
 }

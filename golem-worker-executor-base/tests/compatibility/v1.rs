@@ -30,18 +30,38 @@ use golem_common::model::{
     ScheduledAction, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId,
     WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
-use golem_common::serialization::serialize;
+use golem_common::serialization::{deserialize, serialize};
 use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::services::promise::RedisPromiseState;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 use uuid::Uuid;
 
-// TODO: This currently checks if T is still serialized into the same, but that's not really what we need - we should try to deserialize it (so we allow introducing new formats if we still support the old)
-fn backward_compatible<T: Encode + Decode>(name: impl AsRef<str>, mint: &mut Mint, value: T) {
+fn is_deserializable<T: Encode + Decode + PartialEq + Debug>(old: &Path, new: &Path) {
+    let old = std::fs::read(old).unwrap();
+    let new = std::fs::read(new).unwrap();
+
+    // Both the old and the latest binary can be deserialized
+    let old_decoded: T = deserialize(&old).unwrap();
+    let new_decoded: T = deserialize(&new).unwrap();
+
+    // And they represent the same value
+    assert_eq!(old_decoded, new_decoded);
+}
+
+fn backward_compatible<T: Encode + Decode + PartialEq + Debug + 'static>(
+    name: impl AsRef<str>,
+    mint: &mut Mint,
+    value: T,
+) {
     let mut file = mint
-        .new_goldenfile(format!("{}.bin", name.as_ref()))
+        .new_goldenfile_with_differ(
+            format!("{}.bin", name.as_ref()),
+            Box::new(is_deserializable::<T>),
+        )
         .unwrap();
     let encoded = serialize(&value).unwrap();
     file.write_all(&encoded).unwrap();
@@ -113,34 +133,6 @@ pub fn retry_config() {
 
 #[test]
 pub fn wasm_rpc_value() {
-    // Bool(bool),
-    //     U8(u8),
-    //     U16(u16),
-    //     U32(u32),
-    //     U64(u64),
-    //     S8(i8),
-    //     S16(i16),
-    //     S32(i32),
-    //     S64(i64),
-    //     F32(f32),
-    //     F64(f64),
-    //     Char(char),
-    //     String(String),
-    //     List(Vec<Value>),
-    //     Tuple(Vec<Value>),
-    //     Record(Vec<Value>),
-    //     Variant {
-    //         case_idx: u32,
-    //         case_value: Option<Box<Value>>,
-    //     },
-    //     Enum(u32),
-    //     Flags(Vec<bool>),
-    //     Option(Option<Box<Value>>),
-    //     Result(Result<Option<Box<Value>>, Option<Box<Value>>>),
-    //     Handle {
-    //         uri: Uri,
-    //         resource_id: u64,
-    //     },
     let v1 = Value::Bool(true);
     let v2 = Value::U8(1);
     let v3 = Value::U16(12345);
