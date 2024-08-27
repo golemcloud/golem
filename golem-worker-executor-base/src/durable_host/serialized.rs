@@ -75,7 +75,7 @@ impl From<cap_std::time::SystemTime> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -442,7 +442,7 @@ impl From<SerializableError> for WorkerProxyError {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -512,7 +512,7 @@ impl From<SerializableIpAddress> for IpAddress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct SerializableIpAddresses(Vec<SerializableIpAddress>);
+pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {
     fn from(value: Vec<IpAddress>) -> Self {

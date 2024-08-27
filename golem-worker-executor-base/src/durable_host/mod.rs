@@ -82,7 +82,7 @@ mod cli;
 mod clocks;
 mod filesystem;
 pub mod golem;
-mod http;
+pub mod http;
 pub mod io;
 pub mod keyvalue;
 mod logging;
@@ -1369,7 +1369,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
 /// Indicates which step of the http request handling is responsible for closing an open
 /// http request (by calling end_function)
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum HttpRequestCloseOwner {
+pub(crate) enum HttpRequestCloseOwner {
     FutureIncomingResponseDrop,
     IncomingResponseDrop,
     IncomingBodyDropOrFinish,

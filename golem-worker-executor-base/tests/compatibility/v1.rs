@@ -15,6 +15,9 @@
 //! This module contains golden tests ensuring that worker related serialized information
 //! (such as oplog entries, promises, scheduling, etc.) created by Golem OSS 1.0.0 can be deserialized.
 //! Do not regenerate the golden test binaries unless backward compatibility with 1.0 is dropped.
+//!
+//! The tests are assuming composability of the serializer implementation, so if a given type A has a field of type B,
+//! the test for A only contains an example value of B but there exists a separate test that tests the serialization of B.
 
 use bincode::{Decode, Encode};
 use goldenfile::Mint;
@@ -31,8 +34,20 @@ use golem_common::model::{
     WorkerInvocation, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
-use golem_wasm_rpc::{Uri, Value};
+use golem_wasm_rpc::{Uri, Value, WitValue};
+use golem_worker_executor_base::durable_host::http::serialized::{
+    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
+};
+use golem_worker_executor_base::durable_host::serialized::{
+    SerializableError, SerializableIpAddress, SerializableIpAddresses, SerializableStreamError,
+};
+use golem_worker_executor_base::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
+use golem_worker_executor_base::error::GolemError;
+use golem_worker_executor_base::model::InterruptKind;
+use golem_worker_executor_base::services::blob_store;
 use golem_worker_executor_base::services::promise::RedisPromiseState;
+use golem_worker_executor_base::services::rpc::RpcError;
+use golem_worker_executor_base::services::worker_proxy::WorkerProxyError;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Write;
@@ -61,6 +76,35 @@ fn backward_compatible<T: Encode + Decode + PartialEq + Debug + 'static>(
         .new_goldenfile_with_differ(
             format!("{}.bin", name.as_ref()),
             Box::new(is_deserializable::<T>),
+        )
+        .unwrap();
+    let encoded = serialize(&value).unwrap();
+    file.write_all(&encoded).unwrap();
+    file.flush().unwrap();
+}
+
+fn is_deserializable_wit_value(old: &Path, new: &Path) {
+    let old = std::fs::read(old).unwrap();
+    let new = std::fs::read(new).unwrap();
+
+    // Both the old and the latest binary can be deserialized
+    let old_decoded: WitValue = deserialize(&old).unwrap();
+    let new_decoded: WitValue = deserialize(&new).unwrap();
+
+    let old_value: Value = old_decoded.into();
+    let new_value: Value = new_decoded.into();
+
+    // And they represent the same value
+    assert_eq!(old_value, new_value);
+}
+
+/// Special case for WitValue which does not implement PartialEq at the moment, but can be converted
+/// to Value for comparison.
+fn backward_compatible_wit_value(name: impl AsRef<str>, mint: &mut Mint, value: WitValue) {
+    let mut file = mint
+        .new_goldenfile_with_differ(
+            format!("{}.bin", name.as_ref()),
+            Box::new(is_deserializable_wit_value),
         )
         .unwrap();
     let encoded = serialize(&value).unwrap();
@@ -819,8 +863,232 @@ pub fn oplog_entry() {
     backward_compatible("oplog_entry_log", &mut mint, oe24);
 }
 
-// TODO: blob_store::ObjectMetadata
-// TODO: SerializableError
-// TODO: SerializableStreamError
-// TODO: SerializableIpAddresses
-// TODO: WitValue
+#[test]
+pub fn blob_store_object_metadata() {
+    let om1 = blob_store::ObjectMetadata {
+        name: "item".to_string(),
+        container: "container".to_string(),
+        created_at: 1724701938466,
+        size: 500_000_000,
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("blob_store_object_metadata", &mut mint, om1);
+}
+
+#[test]
+pub fn golem_error() {
+    todo!()
+}
+
+#[test]
+pub fn rpc_error() {
+    todo!()
+}
+
+#[test]
+pub fn worker_proxy_error() {
+    todo!()
+}
+
+#[test]
+pub fn serializable_error() {
+    let se1 = SerializableError::FsError { code: 11 };
+    let se2 = SerializableError::Generic {
+        message: "hello world".to_string(),
+    };
+    let se3 = SerializableError::Golem {
+        error: GolemError::Interrupted {
+            kind: InterruptKind::Restart,
+        },
+    };
+    let se4 = SerializableError::SocketError { code: 1 };
+    let se5 = SerializableError::Rpc {
+        error: RpcError::ProtocolError {
+            details: "not working".to_string(),
+        },
+    };
+    let se6 = SerializableError::WorkerProxy {
+        error: WorkerProxyError::AlreadyExists("already exists".to_string()),
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_error_fs_error", &mut mint, se1);
+    backward_compatible("serializable_error_generic", &mut mint, se2);
+    backward_compatible("serializable_error_golem", &mut mint, se3);
+    backward_compatible("serializable_error_socket_error", &mut mint, se4);
+    backward_compatible("serializable_error_rpc", &mut mint, se5);
+    backward_compatible("serializable_error_worker_proxy", &mut mint, se6);
+}
+
+#[test]
+pub fn serializable_stream_error() {
+    let sse1 = SerializableStreamError::Closed;
+    let sse2 = SerializableStreamError::LastOperationFailed(SerializableError::Generic {
+        message: "hello world".to_string(),
+    });
+    let sse3 = SerializableStreamError::Trap(SerializableError::Generic {
+        message: "hello world".to_string(),
+    });
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_stream_error_closed", &mut mint, sse1);
+    backward_compatible(
+        "serializable_stream_error_last_operation_failed",
+        &mut mint,
+        sse2,
+    );
+    backward_compatible("serializable_stream_error_trap", &mut mint, sse3);
+}
+
+#[test]
+pub fn serializable_ip_address() {
+    let sia1 = SerializableIpAddress::IPv4 {
+        address: [127, 0, 0, 1],
+    };
+    let sia2 = SerializableIpAddress::IPv6 {
+        address: [1, 2, 3, 4, 5, 6, 7, 8],
+    };
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_ip_address_ipv4", &mut mint, sia1);
+    backward_compatible("serializable_ip_address_ipv6", &mut mint, sia2);
+}
+
+#[test]
+pub fn serializable_ip_addresses() {
+    let sia1 = SerializableIpAddresses(vec![SerializableIpAddress::IPv4 {
+        address: [127, 0, 0, 1],
+    }]);
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_ip_addresses", &mut mint, sia1);
+}
+
+#[test]
+pub fn wit_value() {
+    let wv1: WitValue = Value::Bool(true).into();
+    let wv2: WitValue = Value::U8(1).into();
+    let wv3: WitValue = Value::U16(12345).into();
+    let wv4: WitValue = Value::U32(123456789).into();
+    let wv5: WitValue = Value::U64(12345678901234567890).into();
+    let wv6: WitValue = Value::S8(-1).into();
+    let wv7: WitValue = Value::S16(-12345).into();
+    let wv8: WitValue = Value::S32(-123456789).into();
+    let wv9: WitValue = Value::S64(-1234567890123456789).into();
+    let wv10: WitValue = Value::F32(1.234).into();
+    let wv11: WitValue = Value::F64(1.234567890123456789).into();
+    let wv12: WitValue = Value::Char('a').into();
+    let wv13: WitValue = Value::String("hello world".to_string()).into();
+    let wv14: WitValue = Value::List(vec![Value::Bool(true), Value::Bool(false)]).into();
+    let wv15: WitValue = Value::Tuple(vec![Value::Bool(true), Value::Char('x')]).into();
+    let wv16: WitValue = Value::Record(vec![
+        Value::Bool(true),
+        Value::Char('x'),
+        Value::List(vec![]),
+    ])
+    .into();
+    let wv17a: WitValue = Value::Variant {
+        case_idx: 1,
+        case_value: Some(Box::new(Value::Record(vec![Value::Option(None)]))),
+    }
+    .into();
+    let wv17b: WitValue = Value::Variant {
+        case_idx: 1,
+        case_value: None,
+    }
+    .into();
+    let wv18: WitValue = Value::Enum(1).into();
+    let wv19: WitValue = Value::Flags(vec![true, false, true]).into();
+    let wv20a: WitValue = Value::Option(Some(Box::new(Value::Bool(true)))).into();
+    let wv20b: WitValue = Value::Option(None).into();
+    let wv21a: WitValue = Value::Result(Ok(Some(Box::new(Value::Bool(true))))).into();
+    let wv21b: WitValue = Value::Result(Err(Some(Box::new(Value::Bool(true))))).into();
+    let wv21c: WitValue = Value::Result(Ok(None)).into();
+    let wv21d: WitValue = Value::Result(Err(None)).into();
+    let wv22: WitValue = Value::Handle {
+        uri: Uri {
+            value: "uri".to_string(),
+        },
+        resource_id: 123,
+    }
+    .into();
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible_wit_value("wit_value_bool", &mut mint, wv1);
+    backward_compatible_wit_value("wit_value_u8", &mut mint, wv2);
+    backward_compatible_wit_value("wit_value_u16", &mut mint, wv3);
+    backward_compatible_wit_value("wit_value_u32", &mut mint, wv4);
+    backward_compatible_wit_value("wit_value_u64", &mut mint, wv5);
+    backward_compatible_wit_value("wit_value_s8", &mut mint, wv6);
+    backward_compatible_wit_value("wit_value_s16", &mut mint, wv7);
+    backward_compatible_wit_value("wit_value_s32", &mut mint, wv8);
+    backward_compatible_wit_value("wit_value_s64", &mut mint, wv9);
+    backward_compatible_wit_value("wit_value_f32", &mut mint, wv10);
+    backward_compatible_wit_value("wit_value_f64", &mut mint, wv11);
+    backward_compatible_wit_value("wit_value_char", &mut mint, wv12);
+    backward_compatible_wit_value("wit_value_string", &mut mint, wv13);
+    backward_compatible_wit_value("wit_value_list", &mut mint, wv14);
+    backward_compatible_wit_value("wit_value_tuple", &mut mint, wv15);
+    backward_compatible_wit_value("wit_value_record", &mut mint, wv16);
+    backward_compatible_wit_value("wit_value_variant_some", &mut mint, wv17a);
+    backward_compatible_wit_value("wit_value_variant_none", &mut mint, wv17b);
+    backward_compatible_wit_value("wit_value_enum", &mut mint, wv18);
+    backward_compatible_wit_value("wit_value_flags", &mut mint, wv19);
+    backward_compatible_wit_value("wit_value_option_some", &mut mint, wv20a);
+    backward_compatible_wit_value("wit_value_option_none", &mut mint, wv20b);
+    backward_compatible_wit_value("wit_value_result_ok_some", &mut mint, wv21a);
+    backward_compatible_wit_value("wit_value_result_err_some", &mut mint, wv21b);
+    backward_compatible_wit_value("wit_value_result_ok_none", &mut mint, wv21c);
+    backward_compatible_wit_value("wit_value_result_err_none", &mut mint, wv21d);
+    backward_compatible_wit_value("wit_value_handle", &mut mint, wv22);
+}
+
+#[test]
+pub fn serializable_error_code() {
+    todo!()
+}
+
+#[test]
+pub fn serializable_response() {
+    let sr1 = SerializableResponse::Pending;
+    let sr2 = SerializableResponse::HeadersReceived(SerializableResponseHeaders {
+        status: 200,
+        headers: HashMap::from_iter(vec![("key".to_string(), vec![0, 1, 2, 3])]),
+    });
+    let sr3 = SerializableResponse::HttpError(SerializableErrorCode::ConnectionLimitReached);
+    let sr4 = SerializableResponse::InternalError(None);
+    let sr5 = SerializableResponse::InternalError(Some(SerializableError::Generic {
+        message: "hello world".to_string(),
+    }));
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_response_pending", &mut mint, sr1);
+    backward_compatible("serializable_response_headers_received", &mut mint, sr2);
+    backward_compatible("serializable_response_http_error", &mut mint, sr3);
+    backward_compatible("serializable_response_internal_error_none", &mut mint, sr4);
+    backward_compatible("serializable_response_internal_error_some", &mut mint, sr5);
+}
+
+#[test]
+pub fn serializable_invoke_result() {
+    let sir1 = SerializableInvokeResult::Pending;
+    let sir2 = SerializableInvokeResult::Failed(SerializableError::Generic {
+        message: "hello world".to_string(),
+    });
+    let sir3 = SerializableInvokeResult::Completed(Ok(Value::Bool(true).into()));
+    let sir4 = SerializableInvokeResult::Completed(Err(RpcError::Denied {
+        details: "not now".to_string(),
+    }));
+
+    let mut mint = Mint::new("tests/goldenfiles");
+    backward_compatible("serializable_invoke_result_pending", &mut mint, sir1);
+    backward_compatible("serializable_invoke_result_failed", &mut mint, sir2);
+    backward_compatible("serializable_invoke_result_completed_ok", &mut mint, sir3);
+    backward_compatible("serializable_invoke_result_completed_err", &mut mint, sir4);
+}
+
+// TODO: proto Val
+// TODO: proto TypeAnnotatedValue
+// TODO: SerializableFileTimes
+// TODO: SerializableErrorCode
