@@ -66,7 +66,7 @@ pub trait WorkerProxy {
     ) -> Result<(), WorkerProxyError>;
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum WorkerProxyError {
     BadRequest(Vec<String>),
     Unauthorized(String),

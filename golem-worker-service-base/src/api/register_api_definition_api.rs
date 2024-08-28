@@ -1,10 +1,9 @@
-use std::result::Result;
-
-use poem_openapi::*;
-use serde::{Deserialize, Serialize};
-
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
+use poem_openapi::*;
+use serde::{Deserialize, Serialize};
+use std::result::Result;
+use std::time::SystemTime;
 
 use crate::api_definition::http::{AllPathPatterns, CompiledRoute, MethodPattern};
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
@@ -13,9 +12,18 @@ use rib::Expr;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+pub struct ApiDeploymentRequest {
+    pub api_definitions: Vec<ApiDefinitionInfo>,
+    pub site: ApiSite,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct ApiDeployment {
     pub api_definitions: Vec<ApiDefinitionInfo>,
     pub site: ApiSite,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -32,12 +40,27 @@ pub struct ApiDefinitionInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
+pub struct HttpApiDefinitionRequest {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub routes: Vec<Route>,
+    #[serde(default)]
+    pub draft: bool,
+}
+
+// Mostly this data structures that represents the actual incoming request
+// exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
+// Consider them to be otherwise same
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
     #[serde(default)]
     pub draft: bool,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -71,6 +94,7 @@ impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
         Self {
             api_definitions,
             site: value.site,
+            created_at: Some(value.created_at),
         }
     }
 }
@@ -92,14 +116,17 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefiniti
             version: value.version,
             routes,
             draft: value.draft,
+            created_at: Some(value.created_at),
         })
     }
 }
 
-impl TryInto<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
+impl TryInto<crate::api_definition::http::HttpApiDefinitionRequest> for HttpApiDefinitionRequest {
     type Error = String;
 
-    fn try_into(self) -> Result<crate::api_definition::http::HttpApiDefinition, Self::Error> {
+    fn try_into(
+        self,
+    ) -> Result<crate::api_definition::http::HttpApiDefinitionRequest, Self::Error> {
         let mut routes = Vec::new();
 
         for route in self.routes {
@@ -107,7 +134,7 @@ impl TryInto<crate::api_definition::http::HttpApiDefinition> for HttpApiDefiniti
             routes.push(v);
         }
 
-        Ok(crate::api_definition::http::HttpApiDefinition {
+        Ok(crate::api_definition::http::HttpApiDefinitionRequest {
             id: self.id,
             version: self.version,
             routes,
@@ -213,6 +240,8 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
 
         let definition = grpc_apidefinition::HttpApiDefinition { routes };
 
+        let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
+
         let result = grpc_apidefinition::ApiDefinition {
             id: Some(grpc_apidefinition::ApiDefinitionId { value: id }),
             version: value.version.0,
@@ -220,6 +249,7 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
                 definition,
             )),
             draft: value.draft,
+            created_at: Some(created_at),
         };
 
         Ok(result)
@@ -239,8 +269,40 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
         };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
+        let created_at = value
+            .created_at
+            .ok_or("Created At is missing")
+            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
 
         let result = crate::api_definition::http::HttpApiDefinition {
+            id: crate::api_definition::ApiDefinitionId(id.value),
+            version: crate::api_definition::ApiVersion(value.version),
+            routes,
+            draft: value.draft,
+            created_at: created_at.into(),
+        };
+
+        Ok(result)
+    }
+}
+
+impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
+    for crate::api_definition::http::HttpApiDefinitionRequest
+{
+    type Error = String;
+
+    fn try_from(value: grpc_apidefinition::v1::ApiDefinitionRequest) -> Result<Self, Self::Error> {
+        let routes = match value.definition.ok_or("definition is missing")? {
+            grpc_apidefinition::v1::api_definition_request::Definition::Http(http) => http
+                .routes
+                .into_iter()
+                .map(crate::api_definition::http::Route::try_from)
+                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
+        };
+
+        let id = value.id.ok_or("Api Definition ID is missing")?;
+
+        let result = crate::api_definition::http::HttpApiDefinitionRequest {
             id: crate::api_definition::ApiDefinitionId(id.value),
             version: crate::api_definition::ApiVersion(value.version),
             routes,

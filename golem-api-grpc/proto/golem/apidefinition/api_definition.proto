@@ -7,6 +7,7 @@ import "golem/rib/expr.proto";
 import "golem/rib/rib_input.proto";
 import "golem/rib/rib_byte_code.proto";
 import "golem/component/versioned_component_id.proto";
+import "google/protobuf/timestamp.proto";
 
 message ApiDefinition {
   ApiDefinitionId id = 1;
@@ -15,6 +16,7 @@ message ApiDefinition {
     HttpApiDefinition http = 3;
   }
   bool draft = 4;
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message ApiDefinitionList {

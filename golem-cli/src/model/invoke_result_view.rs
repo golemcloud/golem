@@ -97,6 +97,7 @@ impl InvokeResultView {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypedTuple;
@@ -156,6 +157,7 @@ mod tests {
                 memories: vec![],
             },
             project_id: None,
+            created_at: Some(Utc::now()),
         };
 
         InvokeResultView::try_parse_or_json(

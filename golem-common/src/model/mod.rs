@@ -393,7 +393,7 @@ impl Display for PromiseId {
 }
 
 /// Actions that can be scheduled to be executed at a given point in time
-#[derive(Debug, Clone, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
 pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
@@ -439,7 +439,7 @@ impl Display for ScheduledAction {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Encode, Decode)]
 pub struct ScheduleId {
     pub timestamp: i64,
     pub action: ScheduledAction,
@@ -802,7 +802,7 @@ pub struct WorkerResourceDescription {
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
@@ -841,14 +841,14 @@ impl Default for WorkerStatusRecord {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,

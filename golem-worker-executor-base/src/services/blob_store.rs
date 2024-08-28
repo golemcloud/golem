@@ -18,7 +18,6 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 
 use golem_common::model::AccountId;
 
@@ -416,7 +415,7 @@ impl BlobStoreService for DefaultBlobStoreService {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,

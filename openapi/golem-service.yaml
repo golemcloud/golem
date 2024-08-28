@@ -1024,7 +1024,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/HttpApiDefinition'
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
       responses:
         '200':
@@ -1163,7 +1163,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/HttpApiDefinition'
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
       responses:
         '200':
@@ -1285,7 +1285,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/ApiDeployment'
+              $ref: '#/components/schemas/ApiDeploymentRequest'
         required: true
       responses:
         '200':
@@ -2332,6 +2332,21 @@ components:
             $ref: '#/components/schemas/ApiDefinitionInfo'
         site:
           $ref: '#/components/schemas/ApiSite'
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - apiDefinitions
+      - site
+    ApiDeploymentRequest:
+      type: object
+      properties:
+        apiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiDefinitionInfo'
+        site:
+          $ref: '#/components/schemas/ApiSite'
       required:
       - apiDefinitions
       - site
@@ -2901,6 +2916,27 @@ components:
     HealthcheckResponse:
       type: object
     HttpApiDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+        draft:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - version
+      - routes
+      - draft
+    HttpApiDefinitionRequest:
       type: object
       properties:
         id:
@@ -3758,6 +3794,9 @@ components:
           format: uint64
         metadata:
           $ref: '#/components/schemas/ComponentMetadata'
+        createdAt:
+          type: string
+          format: date-time
       required:
       - versionedComponentId
       - componentName

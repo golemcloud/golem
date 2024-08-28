@@ -260,7 +260,8 @@ impl GrpcApiDefinitionService {
             }
         };
 
-        self.definition_service
+        let result = self
+            .definition_service
             .create(
                 &internal_definition,
                 &DefaultNamespace::default(),
@@ -268,7 +269,10 @@ impl GrpcApiDefinitionService {
             )
             .await?;
 
-        let definition = internal_definition.try_into().map_err(internal_error)?;
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
+                .try_into()
+                .map_err(internal_error)?;
 
         Ok(definition)
     }
@@ -293,7 +297,8 @@ impl GrpcApiDefinitionService {
             }
         };
 
-        self.definition_service
+        let result = self
+            .definition_service
             .update(
                 &internal_definition,
                 &DefaultNamespace::default(),
@@ -301,7 +306,10 @@ impl GrpcApiDefinitionService {
             )
             .await?;
 
-        let definition = internal_definition.try_into().map_err(internal_error)?;
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
+                .try_into()
+                .map_err(internal_error)?;
 
         Ok(definition)
     }

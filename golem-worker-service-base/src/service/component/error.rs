@@ -15,7 +15,7 @@ pub enum ComponentServiceError {
     Forbidden(String),
     #[error("Not found: {0}")]
     NotFound(String),
-    #[error("Bad Request: {0:?}")]
+    #[error("Bad Request: {}", .0.join(", "))]
     BadRequest(Vec<String>),
     #[error("Already Exists: {0}")]
     AlreadyExists(String),

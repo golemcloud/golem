@@ -21,6 +21,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
@@ -39,6 +40,7 @@ poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
+prost-types = { workspace = true }
 regex = { workspace = true }
 rustc-hash = "1.1.0"
 serde = { workspace = true }

@@ -15,8 +15,10 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 http_02 = { workspace = true }
 prost = { workspace = true }
+prost-types = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
