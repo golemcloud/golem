@@ -28,33 +28,20 @@ async fn javascript_example_3() {
     let component_id = executor.store_component("js-3").await;
     let worker_id = executor.start_worker(&component_id, "js-3").await;
 
-    let timeout_time = 1000;
-    // Invoke_and_await will wait for the timeout to be finished.
-    let result_set = executor
+    let result_fetch_get = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api.{set-timeout}",
-            vec![Value::U64(timeout_time)],
+            "golem:it/api.{fetch-get}",
+            vec![Value::String("https://google.com".to_string())],
         )
-        .await
-        .unwrap();
-
-    let result_get = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
         .await
         .unwrap();
 
     drop(executor);
 
-    let_assert!(Some(Value::U64(start)) = result_set.into_iter().next());
-    let_assert!(Some(Value::U64(end)) = result_get.into_iter().next());
+    let_assert!(Some(Value::String(result_body)) = result_fetch_get.into_iter().next());
 
-    check!(end > start, "End time is not greater than start time");
-
-    let total_time = end - start;
-
-    check!(total_time >= timeout_time);
-    check!(total_time < timeout_time + 100);
+    assert!(result_body.contains("google.com"));
 }
 
 #[tokio::test]
