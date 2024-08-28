@@ -14,23 +14,36 @@ use crate::repo::RepoError;
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
-    Internal(String),
-    Unauthorized(String),
+    #[error("Limit Exceeded: {0}")]
     LimitExceeded(String),
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl ProjectError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        ProjectError::Internal(error.to_string())
-    }
-    pub fn limit_exceeded<T: Display>(error: T) -> Self {
-        ProjectError::LimitExceeded(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn unauthorized<T: Display>(error: T) -> Self {
-        ProjectError::Unauthorized(error.to_string())
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
+    }
+
+    pub fn limit_exceeded<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::LimitExceeded(error.to_string())
     }
 }
 
@@ -43,8 +56,8 @@ impl From<RepoError> for ProjectError {
 impl From<ProjectAuthorisationError> for ProjectError {
     fn from(error: ProjectAuthorisationError) -> Self {
         match error {
-            ProjectAuthorisationError::Internal(error) => ProjectError::Internal(error),
-            ProjectAuthorisationError::Unauthorized(error) => ProjectError::Unauthorized(error),
+            ProjectAuthorisationError::Internal(error) => ProjectError::internal(error),
+            ProjectAuthorisationError::Unauthorized(error) => ProjectError::unauthorized(error),
         }
     }
 }
@@ -52,18 +65,11 @@ impl From<ProjectAuthorisationError> for ProjectError {
 impl From<PlanLimitError> for ProjectError {
     fn from(error: PlanLimitError) -> Self {
         match error {
-            PlanLimitError::Unauthorized(error) => ProjectError::Unauthorized(error),
-            PlanLimitError::Internal(error) => ProjectError::Internal(error),
-            PlanLimitError::AccountIdNotFound(_) => {
-                ProjectError::Internal("Account not found".to_string())
-            }
-            PlanLimitError::ProjectIdNotFound(_) => {
-                ProjectError::Internal("Project not found".to_string())
-            }
-            PlanLimitError::ComponentIdNotFound(_) => {
-                ProjectError::Internal("Component not found".to_string())
-            }
-            PlanLimitError::LimitExceeded(error) => ProjectError::LimitExceeded(error),
+            PlanLimitError::Unauthorized(error) => ProjectError::unauthorized(error),
+            PlanLimitError::Internal(error) => ProjectError::internal(error),
+            PlanLimitError::AccountNotFound(_) => ProjectError::internal(error.to_string()),
+            PlanLimitError::ProjectNotFound(_) => ProjectError::internal(error.to_string()),
+            PlanLimitError::LimitExceeded(error) => ProjectError::limit_exceeded(error),
         }
     }
 }
@@ -155,6 +161,7 @@ impl ProjectService for ProjectServiceDefault {
             )))
         }
     }
+
     async fn delete(
         &self,
         project_id: &ProjectId,
@@ -179,7 +186,7 @@ impl ProjectService for ProjectServiceDefault {
             {
                 self.project_repo.delete(&project_id.0).await?;
             } else {
-                return Err(ProjectError::Unauthorized("Unauthorized".to_string()));
+                return Err(ProjectError::unauthorized("Unauthorized".to_string()));
             }
         }
 
@@ -209,7 +216,7 @@ impl ProjectService for ProjectServiceDefault {
                 .get_own_default(account_id.value.as_str())
                 .await?;
             Ok(result
-                .ok_or(ProjectError::internal("Failed to create default project"))?
+                .ok_or(ProjectError::internal("Failed to create default project."))?
                 .into())
         }
     }

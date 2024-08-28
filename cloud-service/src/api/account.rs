@@ -45,12 +45,12 @@ type Result<T> = std::result::Result<T, AccountError>;
 impl From<AuthServiceError> for AccountError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                AccountError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                AccountError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::InvalidToken(_) => AccountError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => AccountError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -58,20 +58,18 @@ impl From<AuthServiceError> for AccountError {
 impl From<AccountServiceError> for AccountError {
     fn from(value: AccountServiceError) -> Self {
         match value {
-            AccountServiceError::Unauthorized(error) => {
-                AccountError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AccountServiceError::Unexpected(error) => {
-                AccountError::InternalError(Json(ErrorBody { error }))
-            }
+            AccountServiceError::Unauthorized(_) => AccountError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AccountServiceError::Internal(_) => AccountError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
             AccountServiceError::ArgValidation(errors) => {
                 AccountError::BadRequest(Json(ErrorsBody { errors }))
             }
-            AccountServiceError::UnknownAccountId(account_id) => {
-                AccountError::NotFound(Json(ErrorBody {
-                    error: format!("Account ID not found {}", account_id.value),
-                }))
-            }
+            AccountServiceError::AccountNotFound(_) => AccountError::NotFound(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }

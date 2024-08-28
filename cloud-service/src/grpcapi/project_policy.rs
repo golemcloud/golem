@@ -25,12 +25,14 @@ use tracing::Instrument;
 impl From<AuthServiceError> for ProjectPolicyError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                project_policy_error::Error::Unauthorized(ErrorBody { error })
+            AuthServiceError::InvalidToken(_) => {
+                project_policy_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            AuthServiceError::Unexpected(error) => {
-                project_policy_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::Internal(_) => project_policy_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         ProjectPolicyError { error: Some(error) }
     }
@@ -39,8 +41,10 @@ impl From<AuthServiceError> for ProjectPolicyError {
 impl From<project_policy::ProjectPolicyError> for ProjectPolicyError {
     fn from(value: project_policy::ProjectPolicyError) -> Self {
         let error = match value {
-            project_policy::ProjectPolicyError::Internal(error) => {
-                project_policy_error::Error::InternalError(ErrorBody { error })
+            project_policy::ProjectPolicyError::Internal(_) => {
+                project_policy_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                })
             }
         };
         ProjectPolicyError { error: Some(error) }

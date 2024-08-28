@@ -42,12 +42,12 @@ type Result<T> = std::result::Result<T, GrantError>;
 impl From<AuthServiceError> for GrantError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                GrantError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                GrantError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::InvalidToken(_) => GrantError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => GrantError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -55,14 +55,21 @@ impl From<AuthServiceError> for GrantError {
 impl From<AccountGrantServiceError> for GrantError {
     fn from(value: AccountGrantServiceError) -> Self {
         match value {
-            AccountGrantServiceError::Unauthorized(error) => {
-                GrantError::Unauthorized(Json(ErrorBody { error }))
+            AccountGrantServiceError::Unauthorized(_) => {
+                GrantError::Unauthorized(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            AccountGrantServiceError::Unexpected(error) => {
-                GrantError::InternalError(Json(ErrorBody { error }))
-            }
+            AccountGrantServiceError::Internal(_) => GrantError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
             AccountGrantServiceError::ArgValidation(errors) => {
                 GrantError::BadRequest(Json(ErrorsBody { errors }))
+            }
+            AccountGrantServiceError::AccountNotFound(_) => {
+                GrantError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_string()],
+                }))
             }
         }
     }

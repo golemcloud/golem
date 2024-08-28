@@ -47,12 +47,14 @@ type Result<T> = std::result::Result<T, ProjectPolicyError>;
 impl From<AuthServiceError> for ProjectPolicyError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                ProjectPolicyError::Unauthorized(Json(ErrorBody { error }))
+            AuthServiceError::InvalidToken(_) => {
+                ProjectPolicyError::Unauthorized(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            AuthServiceError::Unexpected(error) => {
-                ProjectPolicyError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::Internal(_) => ProjectPolicyError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -60,8 +62,10 @@ impl From<AuthServiceError> for ProjectPolicyError {
 impl From<ProjectPolicyServiceError> for ProjectPolicyError {
     fn from(value: ProjectPolicyServiceError) -> Self {
         match value {
-            ProjectPolicyServiceError::Internal(error) => {
-                ProjectPolicyError::InternalError(Json(ErrorBody { error }))
+            ProjectPolicyServiceError::Internal(_) => {
+                ProjectPolicyError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
         }
     }

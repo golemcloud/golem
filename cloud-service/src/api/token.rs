@@ -46,12 +46,12 @@ type Result<T> = std::result::Result<T, TokenError>;
 impl From<AuthServiceError> for TokenError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                TokenError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                TokenError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::InvalidToken(_) => TokenError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => TokenError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -59,17 +59,20 @@ impl From<AuthServiceError> for TokenError {
 impl From<TokenServiceError> for TokenError {
     fn from(value: TokenServiceError) -> Self {
         match value {
-            TokenServiceError::Unauthorized(error) => {
-                TokenError::Unauthorized(Json(ErrorBody { error }))
-            }
-            TokenServiceError::Unexpected(error) => {
-                TokenError::InternalError(Json(ErrorBody { error }))
-            }
+            TokenServiceError::Unauthorized(_) => TokenError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            TokenServiceError::Internal(_) => TokenError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
             TokenServiceError::ArgValidation(errors) => {
                 TokenError::BadRequest(Json(ErrorsBody { errors }))
             }
-            TokenServiceError::UnknownTokenId(_) => TokenError::NotFound(Json(ErrorBody {
-                error: "Token not found".to_string(),
+            TokenServiceError::UnknownToken(_) => TokenError::NotFound(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            TokenServiceError::AccountNotFound(_) => TokenError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_string()],
             })),
         }
     }

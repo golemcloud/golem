@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::fmt::Display;
 
 use crate::model::{ExternalLogin, OAuth2Provider};
 
@@ -11,15 +12,33 @@ pub trait OAuth2ProviderClient {
     ) -> Result<ExternalLogin, OAuth2ProviderClientError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum OAuth2ProviderClientError {
-    Unexpected(String),
+    #[error("External error: {0}")]
     External(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl OAuth2ProviderClientError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn external<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::External(error.to_string())
+    }
 }
 
 impl From<reqwest::Error> for OAuth2ProviderClientError {
     fn from(error: reqwest::Error) -> Self {
-        OAuth2ProviderClientError::Unexpected(error.to_string())
+        OAuth2ProviderClientError::internal(error.to_string())
     }
 }
 
@@ -115,13 +134,13 @@ where
     let status = response.status();
     if status.is_client_error() || status.is_server_error() {
         let body = response.text().await?;
-        Err(OAuth2ProviderClientError::External(format!(
+        Err(OAuth2ProviderClientError::external(format!(
             "Request failed {prefix}: {status}, Body: {body}",
         )))
     } else {
         let full = response.bytes().await?;
         let json = serde_json::from_slice(&full).map_err(|e| {
-            OAuth2ProviderClientError::Unexpected(format!(
+            OAuth2ProviderClientError::internal(format!(
                 "Failed to deserialize JSON {prefix}: {e}, Status: {status}",
             ))
         })?;

@@ -55,12 +55,12 @@ type Result<T> = std::result::Result<T, ProjectGrantError>;
 impl From<AuthServiceError> for ProjectGrantError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                ProjectGrantError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                ProjectGrantError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::InvalidToken(_) => ProjectGrantError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => ProjectGrantError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -68,15 +68,29 @@ impl From<AuthServiceError> for ProjectGrantError {
 impl From<ProjectGrantServiceError> for ProjectGrantError {
     fn from(value: ProjectGrantServiceError) -> Self {
         match value {
-            ProjectGrantServiceError::Internal(error) => {
-                ProjectGrantError::InternalError(Json(ErrorBody { error }))
+            ProjectGrantServiceError::Internal(_) => {
+                ProjectGrantError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            ProjectGrantServiceError::Unauthorized(error) => {
-                ProjectGrantError::InternalError(Json(ErrorBody { error }))
+            ProjectGrantServiceError::Unauthorized(_) => {
+                ProjectGrantError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            ProjectGrantServiceError::ProjectIdNotFound(_) => {
+            ProjectGrantServiceError::ProjectNotFound(_) => {
                 ProjectGrantError::BadRequest(Json(ErrorsBody {
-                    errors: vec!["Project not found".to_string()],
+                    errors: vec![value.to_string()],
+                }))
+            }
+            ProjectGrantServiceError::ProjectPolicyNotFound(_) => {
+                ProjectGrantError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_string()],
+                }))
+            }
+            ProjectGrantServiceError::AccountNotFound(_) => {
+                ProjectGrantError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_string()],
                 }))
             }
         }
@@ -86,8 +100,10 @@ impl From<ProjectGrantServiceError> for ProjectGrantError {
 impl From<ProjectPolicyServiceError> for ProjectGrantError {
     fn from(value: ProjectPolicyServiceError) -> Self {
         match value {
-            ProjectPolicyServiceError::Internal(error) => {
-                ProjectGrantError::InternalError(Json(ErrorBody { error }))
+            ProjectPolicyServiceError::Internal(_) => {
+                ProjectGrantError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
         }
     }

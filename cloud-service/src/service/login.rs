@@ -17,25 +17,35 @@ use crate::service::oauth2_provider_client::{OAuth2ProviderClient, OAuth2Provide
 use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};
 use crate::service::token::{TokenService, TokenServiceError};
 
+#[derive(Debug, thiserror::Error)]
 pub enum LoginError {
-    Unexpected(String),
+    #[error("External error: {0}")]
     External(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
-impl Display for LoginError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LoginError::Unexpected(msg) => write!(f, "Unexpected error: {}", msg),
-            LoginError::External(msg) => write!(f, "External error: {}", msg),
-        }
+impl LoginError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn external<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::External(error.to_string())
     }
 }
 
 impl From<OAuth2ProviderClientError> for LoginError {
     fn from(err: OAuth2ProviderClientError) -> Self {
         match err {
-            OAuth2ProviderClientError::Unexpected(msg) => LoginError::Unexpected(msg),
-            OAuth2ProviderClientError::External(msg) => LoginError::External(msg),
+            OAuth2ProviderClientError::Internal(msg) => LoginError::internal(msg),
+            OAuth2ProviderClientError::External(msg) => LoginError::external(msg),
         }
     }
 }
@@ -43,8 +53,10 @@ impl From<OAuth2ProviderClientError> for LoginError {
 impl From<OAuth2TokenError> for LoginError {
     fn from(err: OAuth2TokenError) -> Self {
         match err {
-            OAuth2TokenError::Internal(msg) => LoginError::Unexpected(msg),
-            OAuth2TokenError::Unauthorized(msg) => LoginError::Unexpected(msg),
+            OAuth2TokenError::Internal(msg) => LoginError::internal(msg),
+            OAuth2TokenError::Unauthorized(_) => LoginError::internal(err.to_string()),
+            OAuth2TokenError::AccountNotFound(_) => LoginError::internal(err.to_string()),
+            OAuth2TokenError::TokenNotFound(_) => LoginError::internal(err.to_string()),
         }
     }
 }
@@ -52,14 +64,11 @@ impl From<OAuth2TokenError> for LoginError {
 impl From<TokenServiceError> for LoginError {
     fn from(err: TokenServiceError) -> Self {
         match err {
-            TokenServiceError::ArgValidation(errors) => {
-                LoginError::Unexpected(format!("Invalid internal call: {:?}", errors))
-            }
-            TokenServiceError::UnknownTokenId(id) => {
-                LoginError::Unexpected(format!("Can't find token for existing id: {}", id))
-            }
-            TokenServiceError::Unexpected(message) => LoginError::Unexpected(message),
-            TokenServiceError::Unauthorized(message) => LoginError::Unexpected(message),
+            TokenServiceError::ArgValidation(_) => LoginError::internal(err.to_string()),
+            TokenServiceError::UnknownToken(_) => LoginError::internal(err.to_string()),
+            TokenServiceError::AccountNotFound(_) => LoginError::internal(err.to_string()),
+            TokenServiceError::Internal(message) => LoginError::internal(message),
+            TokenServiceError::Unauthorized(_) => LoginError::internal(err.to_string()),
         }
     }
 }
@@ -67,14 +76,10 @@ impl From<TokenServiceError> for LoginError {
 impl From<AccountError> for LoginError {
     fn from(account_error: AccountError) -> Self {
         match account_error {
-            AccountError::UnknownAccountId(id) => {
-                LoginError::Unexpected(format!("Unexpected unknown account id: {}", id))
-            }
-            AccountError::ArgValidation(errors) => {
-                LoginError::Unexpected(format!("Failed to create account: {:?}", errors))
-            }
-            AccountError::Unexpected(message) => LoginError::Unexpected(message),
-            AccountError::Unauthorized(message) => LoginError::Unexpected(message),
+            AccountError::AccountNotFound(_) => LoginError::internal(account_error.to_string()),
+            AccountError::ArgValidation(_) => LoginError::internal(account_error.to_string()),
+            AccountError::Internal(message) => LoginError::internal(message),
+            AccountError::Unauthorized(_) => LoginError::internal(account_error.to_string()),
         }
     }
 }
@@ -156,7 +161,7 @@ impl LoginServiceDefault {
         let expiration = Utc::now()
             // Ten years.
             .checked_add_months(chrono::Months::new(10 * 12))
-            .ok_or(LoginError::Unexpected(
+            .ok_or(LoginError::internal(
                 "Failed to calculate token expiry".to_string(),
             ))?;
 
@@ -271,7 +276,7 @@ impl LoginService for LoginServiceNoOp {
         _provider: &OAuth2Provider,
         _access_token: &str,
     ) -> Result<UnsafeToken, LoginError> {
-        Err(LoginError::Unexpected("Not implemented".to_string()))
+        Err(LoginError::internal("Not implemented".to_string()))
     }
 
     async fn create_initial_users(&self) -> Result<(), LoginError> {

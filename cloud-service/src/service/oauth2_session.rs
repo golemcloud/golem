@@ -1,6 +1,7 @@
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use std::fmt::Display;
 
 use crate::model::{EncodedOAuth2Session, OAuth2Session};
 
@@ -16,21 +17,32 @@ pub trait OAuth2SessionService {
     ) -> Result<OAuth2Session, OAuth2SessionError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum OAuth2SessionError {
-    Unexpected(String),
+    #[error("Invalid Session: {0}")]
     InvalidSession(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl OAuth2SessionError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
 }
 
 impl From<serde_json::Error> for OAuth2SessionError {
     fn from(error: serde_json::Error) -> Self {
-        OAuth2SessionError::Unexpected(error.to_string())
+        OAuth2SessionError::internal(error.to_string())
     }
 }
 
 impl From<jsonwebtoken::errors::Error> for OAuth2SessionError {
     fn from(error: jsonwebtoken::errors::Error) -> Self {
-        OAuth2SessionError::Unexpected(error.to_string())
+        OAuth2SessionError::internal(error.to_string())
     }
 }
 

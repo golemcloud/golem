@@ -12,25 +12,39 @@ use uuid::Uuid;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{ProjectGrant, ProjectPolicy};
+use crate::repo::account::AccountRepo;
 use crate::repo::project::ProjectRepo;
 use crate::repo::project_grant::{ProjectGrantRecord, ProjectGrantRepo};
 use crate::repo::project_policy::ProjectPolicyRepo;
 use crate::repo::RepoError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProjectGrantError {
-    Internal(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
-    ProjectIdNotFound(ProjectId),
+    #[error("Account Not Found: {0}")]
+    AccountNotFound(AccountId),
+    #[error("Project Not Found: {0}")]
+    ProjectNotFound(ProjectId),
+    #[error("Project Policy Not Found: {0}")]
+    ProjectPolicyNotFound(ProjectPolicyId),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl ProjectGrantError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        ProjectGrantError::Internal(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn unauthorized<T: Display>(error: T) -> Self {
-        ProjectGrantError::Unauthorized(error.to_string())
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
     }
 }
 
@@ -79,6 +93,7 @@ pub struct ProjectGrantServiceDefault {
     project_repo: Arc<dyn ProjectRepo + Sync + Send>,
     project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
     project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
+    account_repo: Arc<dyn AccountRepo + Sync + Send>,
 }
 
 impl ProjectGrantServiceDefault {
@@ -86,11 +101,13 @@ impl ProjectGrantServiceDefault {
         project_repo: Arc<dyn ProjectRepo + Sync + Send>,
         project_grant_repo: Arc<dyn ProjectGrantRepo + Sync + Send>,
         project_policy_repo: Arc<dyn ProjectPolicyRepo + Sync + Send>,
+        account_repo: Arc<dyn AccountRepo + Sync + Send>,
     ) -> Self {
         ProjectGrantServiceDefault {
             project_repo,
             project_grant_repo,
             project_policy_repo,
+            account_repo,
         }
     }
 
@@ -184,8 +201,27 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
             "Create project {} grant {}",
             &project_grant.data.grantor_project_id, project_grant.id
         );
+
+        let account_id = project_grant.data.grantee_account_id.clone();
+
+        let account = self.account_repo.get(account_id.value.as_str()).await?;
+
+        if account.is_none() {
+            return Err(ProjectGrantError::AccountNotFound(account_id));
+        }
+
+        let project_policy_id = project_grant.data.project_policy_id.clone();
+
+        let project_policy = self.project_policy_repo.get(&project_policy_id.0).await?;
+
+        if project_policy.is_none() {
+            return Err(ProjectGrantError::ProjectPolicyNotFound(project_policy_id));
+        }
+
         let project_id = project_grant.data.grantor_project_id.clone();
+
         let project = self.project_repo.get(&project_id.0).await?;
+
         if let Some(project) = project {
             if !auth.has_account_or_role(
                 &AccountId::from(project.owner_account_id.as_str()),
@@ -204,7 +240,7 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
                 .await
                 .map_err(ProjectGrantError::internal)
         } else {
-            Err(ProjectGrantError::ProjectIdNotFound(project_id))
+            Err(ProjectGrantError::ProjectNotFound(project_id))
         }
     }
 

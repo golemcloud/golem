@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,23 +13,43 @@ use crate::repo::account::{AccountRecord, AccountRepo};
 use crate::repo::RepoError;
 use crate::service::plan::{PlanError, PlanService};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum AccountError {
-    ArgValidation(Vec<String>),
-    UnknownAccountId(AccountId),
-    Unexpected(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    #[error("Account Not Found: {0}")]
+    AccountNotFound(AccountId),
+    #[error("Arg Validation error: {}", .0.join(", "))]
+    ArgValidation(Vec<String>),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl AccountError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
+    }
 }
 
 impl From<RepoError> for AccountError {
     fn from(_error: RepoError) -> Self {
-        AccountError::Unexpected("DB call failed.".to_string())
+        AccountError::internal("DB call failed.".to_string())
     }
 }
 
 impl From<PlanError> for AccountError {
     fn from(_error: PlanError) -> Self {
-        AccountError::Unexpected("Get plan failed.".to_string())
+        AccountError::internal("Get plan failed.".to_string())
     }
 }
 
@@ -88,7 +109,7 @@ impl AccountServiceDefault {
             .get_default_plan()
             .await
             .map(|plan| plan.plan_id)
-            .map_err(|_| AccountError::Unexpected("Get default plan failed. ".to_string()))
+            .map_err(|_| AccountError::internal("Get default plan failed. ".to_string()))
     }
 }
 
@@ -114,7 +135,7 @@ impl AccountService for AccountServiceDefault {
             .await
         {
             Ok(Some(account_record)) => Ok(account_record.into()),
-            Ok(None) => Err(AccountError::Unexpected(
+            Ok(None) => Err(AccountError::internal(
                 "Duplicated account on fresh id.".to_string(),
             )),
             Err(err) => {
@@ -165,7 +186,7 @@ impl AccountService for AccountServiceDefault {
         let result = self.account_repo.get(&account_id.value).await;
         match result {
             Ok(Some(account_record)) => Ok(account_record.into()),
-            Ok(None) => Err(AccountError::UnknownAccountId(account_id.clone())),
+            Ok(None) => Err(AccountError::AccountNotFound(account_id.clone())),
             Err(err) => {
                 error!("DB call failed. {}", err);
                 Err(err.into())
@@ -184,14 +205,14 @@ impl AccountService for AccountServiceDefault {
             Ok(Some(account_record)) => {
                 match self.plan_service.get(&PlanId(account_record.plan_id)).await {
                     Ok(Some(plan)) => Ok(plan),
-                    Ok(None) => Err(AccountError::Unexpected("Get plan failed.".to_string())),
+                    Ok(None) => Err(AccountError::internal("Get plan failed.".to_string())),
                     Err(err) => {
                         error!("DB call failed. {:?}", err);
                         Err(err.into())
                     }
                 }
             }
-            Ok(None) => Err(AccountError::UnknownAccountId(account_id.clone())),
+            Ok(None) => Err(AccountError::AccountNotFound(account_id.clone())),
             Err(err) => {
                 error!("DB call failed. {}", err);
                 Err(err.into())

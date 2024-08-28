@@ -10,22 +10,18 @@ use crate::model::{Plan, PlanData};
 use crate::repo::plan::{PlanRecord, PlanRepo};
 use crate::repo::RepoError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum PlanError {
-    Internal(String),
-}
-
-impl Display for PlanError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlanError::Internal(msg) => write!(f, "Internal error: {}", msg),
-        }
-    }
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl PlanError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        PlanError::Internal(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 }
 
@@ -81,7 +77,7 @@ impl PlanService for PlanServiceDefault {
 
         match plan {
             Some(plan) => Ok(plan.into()),
-            None => Err(PlanError::Internal("Could not find default plan".into())),
+            None => Err(PlanError::internal("Could not find default plan")),
         }
     }
 

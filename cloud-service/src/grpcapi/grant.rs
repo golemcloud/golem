@@ -25,12 +25,12 @@ use tracing::Instrument;
 impl From<AuthServiceError> for GrantError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                grant_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                grant_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::InvalidToken(_) => grant_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
+            AuthServiceError::Internal(_) => grant_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         GrantError { error: Some(error) }
     }
@@ -39,14 +39,21 @@ impl From<AuthServiceError> for GrantError {
 impl From<AccountGrantServiceError> for GrantError {
     fn from(value: AccountGrantServiceError) -> Self {
         let error = match value {
-            AccountGrantServiceError::Unauthorized(error) => {
-                grant_error::Error::Unauthorized(ErrorBody { error })
+            AccountGrantServiceError::Unauthorized(_) => {
+                grant_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            AccountGrantServiceError::Unexpected(error) => {
-                grant_error::Error::InternalError(ErrorBody { error })
-            }
+            AccountGrantServiceError::Internal(_) => grant_error::Error::InternalError(ErrorBody {
+                error: value.to_string(),
+            }),
             AccountGrantServiceError::ArgValidation(errors) => {
                 grant_error::Error::BadRequest(ErrorsBody { errors })
+            }
+            AccountGrantServiceError::AccountNotFound(_) => {
+                grant_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_string()],
+                })
             }
         };
         GrantError { error: Some(error) }

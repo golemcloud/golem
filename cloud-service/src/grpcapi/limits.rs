@@ -28,12 +28,12 @@ use tracing::Instrument;
 impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                limits_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                limits_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::InvalidToken(_) => limits_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
+            AuthServiceError::Internal(_) => limits_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         LimitsError { error: Some(error) }
     }
@@ -42,24 +42,21 @@ impl From<AuthServiceError> for LimitsError {
 impl From<PlanLimitError> for LimitsError {
     fn from(value: PlanLimitError) -> Self {
         let error = match value {
-            PlanLimitError::ComponentIdNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec!["Component not found".to_string()],
+            PlanLimitError::AccountNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
+                errors: vec![value.to_string()],
             }),
-            PlanLimitError::ProjectIdNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec!["Project not found".to_string()],
+            PlanLimitError::ProjectNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
+                errors: vec![value.to_string()],
             }),
-            PlanLimitError::AccountIdNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec!["Account not found".to_string()],
+            PlanLimitError::Unauthorized(_) => limits_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
             }),
-            PlanLimitError::Unauthorized(error) => {
-                limits_error::Error::Unauthorized(ErrorBody { error })
-            }
-            PlanLimitError::LimitExceeded(error) => {
-                limits_error::Error::LimitExceeded(ErrorBody { error })
-            }
-            PlanLimitError::Internal(error) => {
-                limits_error::Error::InternalError(ErrorBody { error })
-            }
+            PlanLimitError::LimitExceeded(_) => limits_error::Error::LimitExceeded(ErrorBody {
+                error: value.to_string(),
+            }),
+            PlanLimitError::Internal(_) => limits_error::Error::InternalError(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         LimitsError { error: Some(error) }
     }

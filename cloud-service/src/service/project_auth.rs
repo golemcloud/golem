@@ -15,19 +15,27 @@ use crate::repo::RepoError;
 use crate::service::project_grant::{ProjectGrantError, ProjectGrantService};
 use crate::service::project_policy::{ProjectPolicyError, ProjectPolicyService};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProjectAuthorisationError {
-    Internal(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl ProjectAuthorisationError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        ProjectAuthorisationError::Internal(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn unauthorized<T: Display>(error: T) -> Self {
-        ProjectAuthorisationError::Unauthorized(error.to_string())
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
     }
 }
 
@@ -40,12 +48,18 @@ impl From<RepoError> for ProjectAuthorisationError {
 impl From<ProjectGrantError> for ProjectAuthorisationError {
     fn from(error: ProjectGrantError) -> Self {
         match error {
-            ProjectGrantError::Internal(error) => ProjectAuthorisationError::Internal(error),
+            ProjectGrantError::Internal(error) => ProjectAuthorisationError::internal(error),
             ProjectGrantError::Unauthorized(error) => {
                 ProjectAuthorisationError::Unauthorized(error)
             }
-            ProjectGrantError::ProjectIdNotFound(_) => {
-                ProjectAuthorisationError::Internal("Project not found".to_string())
+            ProjectGrantError::ProjectNotFound(_) => {
+                ProjectAuthorisationError::internal(error.to_string())
+            }
+            ProjectGrantError::ProjectPolicyNotFound(_) => {
+                ProjectAuthorisationError::internal(error.to_string())
+            }
+            ProjectGrantError::AccountNotFound(_) => {
+                ProjectAuthorisationError::internal(error.to_string())
             }
         }
     }
@@ -54,7 +68,7 @@ impl From<ProjectGrantError> for ProjectAuthorisationError {
 impl From<ProjectPolicyError> for ProjectAuthorisationError {
     fn from(error: ProjectPolicyError) -> Self {
         match error {
-            ProjectPolicyError::Internal(error) => ProjectAuthorisationError::Internal(error),
+            ProjectPolicyError::Internal(error) => ProjectAuthorisationError::internal(error),
         }
     }
 }

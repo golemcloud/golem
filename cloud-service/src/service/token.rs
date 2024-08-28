@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,22 +12,45 @@ use uuid::Uuid;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{Token, UnsafeToken};
+use crate::repo::account::AccountRepo;
 use crate::repo::token::TokenRepo;
 use crate::repo::RepoError;
 use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum TokenServiceError {
-    ArgValidation(Vec<String>),
-    UnknownTokenId(TokenId),
-    Unexpected(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    #[error("Account Not Found: {0}")]
+    AccountNotFound(AccountId),
+    #[error("Unknown token: {0}")]
+    UnknownToken(TokenId),
+    #[error("Arg Validation error: {}", .0.join(", "))]
+    ArgValidation(Vec<String>),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl TokenServiceError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
+    }
 }
 
 impl From<RepoError> for TokenServiceError {
     fn from(error: RepoError) -> Self {
         match error {
-            RepoError::Internal(_) => TokenServiceError::Unexpected("DB call failed.".to_string()),
+            RepoError::Internal(_) => TokenServiceError::internal("DB call failed.".to_string()),
         }
     }
 }
@@ -34,8 +58,10 @@ impl From<RepoError> for TokenServiceError {
 impl From<OAuth2TokenError> for TokenServiceError {
     fn from(error: OAuth2TokenError) -> Self {
         match error {
-            OAuth2TokenError::Internal(message) => TokenServiceError::Unexpected(message),
-            OAuth2TokenError::Unauthorized(message) => TokenServiceError::Unauthorized(message),
+            OAuth2TokenError::AccountNotFound(id) => TokenServiceError::AccountNotFound(id),
+            OAuth2TokenError::TokenNotFound(_) => TokenServiceError::internal(error.to_string()),
+            OAuth2TokenError::Internal(message) => TokenServiceError::internal(message),
+            OAuth2TokenError::Unauthorized(message) => TokenServiceError::unauthorized(message),
         }
     }
 }
@@ -87,16 +113,19 @@ pub trait TokenService {
 
 pub struct TokenServiceDefault {
     token_repo: Arc<dyn TokenRepo + Send + Sync>,
+    account_repo: Arc<dyn AccountRepo + Sync + Send>,
     oauth2_token_service: Arc<dyn OAuth2TokenService + Send + Sync>,
 }
 
 impl TokenServiceDefault {
     pub fn new(
         token_repo: Arc<dyn TokenRepo + Send + Sync>,
+        account_repo: Arc<dyn AccountRepo + Sync + Send>,
         oauth2_token_service: Arc<dyn OAuth2TokenService + Send + Sync>,
     ) -> Self {
         Self {
             token_repo,
+            account_repo,
             oauth2_token_service,
         }
     }
@@ -109,8 +138,8 @@ impl TokenServiceDefault {
         if auth.has_account_or_role(account_id, &Role::Admin) {
             Ok(())
         } else {
-            Err(TokenServiceError::Unauthorized(
-                "Access to another account.".to_string(),
+            Err(TokenServiceError::unauthorized(
+                "Access to another account.",
             ))
         }
     }
@@ -119,9 +148,7 @@ impl TokenServiceDefault {
         if auth.has_role(&Role::Admin) {
             Ok(())
         } else {
-            Err(TokenServiceError::Unauthorized(
-                "Admin access only.".to_string(),
-            ))
+            Err(TokenServiceError::unauthorized("Admin access only."))
         }
     }
 
@@ -187,7 +214,7 @@ impl TokenService for TokenServiceDefault {
                 self.check_authorization(&token.account_id, auth)?;
                 Ok(token)
             }
-            Ok(None) => Err(TokenServiceError::UnknownTokenId(id.clone())),
+            Ok(None) => Err(TokenServiceError::UnknownToken(id.clone())),
             Err(error) => {
                 error!("DB call failed. {}", error);
                 Err(error.into())
@@ -207,7 +234,7 @@ impl TokenService for TokenServiceDefault {
                 let data: Token = record.into();
                 Ok(UnsafeToken { data, secret })
             }
-            Ok(None) => Err(TokenServiceError::UnknownTokenId(id.clone())),
+            Ok(None) => Err(TokenServiceError::UnknownToken(id.clone())),
             Err(error) => {
                 error!("DB call failed. {}", error);
                 Err(error.into())
@@ -259,6 +286,10 @@ impl TokenService for TokenServiceDefault {
     ) -> Result<UnsafeToken, TokenServiceError> {
         self.check_authorization(account_id, auth)?;
         debug!("{} is authorised", account_id.value);
+        let account = self.account_repo.get(account_id.value.as_str()).await?;
+        if account.is_none() {
+            return Err(TokenServiceError::AccountNotFound(account_id.clone()));
+        }
         let secret = TokenSecret::new(Uuid::new_v4());
         self.create_known_secret_unsafe(account_id, expires_at, &secret, auth)
             .await
@@ -274,7 +305,7 @@ impl TokenService for TokenServiceDefault {
         self.check_authorization(account_id, auth)?;
         debug!("{} is authorised", account_id.value);
         match self.get_by_secret(secret).await? {
-            Some(token) => Err(TokenServiceError::Unexpected(format!(
+            Some(token) => Err(TokenServiceError::internal(format!(
                 "Can't create known secret for account {} - already exists for account {}",
                 account_id.value, token.account_id.value
             ))),

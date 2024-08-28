@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
@@ -8,15 +9,33 @@ use async_trait::async_trait;
 use cloud_common::model::Role;
 use tracing::error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum AccountSummaryServiceError {
-    Unexpected(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl AccountSummaryServiceError {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
+    }
 }
 
 impl From<RepoError> for AccountSummaryServiceError {
     fn from(_error: RepoError) -> Self {
-        AccountSummaryServiceError::Unexpected("DB call failed.".to_string())
+        AccountSummaryServiceError::internal("DB call failed.".to_string())
     }
 }
 
@@ -49,7 +68,7 @@ impl AccountSummaryServiceDefault {
         if auth.has_role(&Role::Admin) || auth.has_role(&Role::MarketingAdmin) {
             Ok(())
         } else {
-            Err(AccountSummaryServiceError::Unauthorized(
+            Err(AccountSummaryServiceError::unauthorized(
                 "Insufficient privilege.".to_string(),
             ))
         }

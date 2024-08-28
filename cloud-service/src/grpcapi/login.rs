@@ -26,12 +26,12 @@ use tracing::Instrument;
 impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => login_error::Error::BadRequest(ErrorsBody {
-                errors: vec![error],
+            AuthServiceError::InvalidToken(_) => login_error::Error::BadRequest(ErrorsBody {
+                errors: vec![value.to_string()],
             }),
-            AuthServiceError::Unexpected(error) => {
-                login_error::Error::Internal(ErrorBody { error })
-            }
+            AuthServiceError::Internal(_) => login_error::Error::Internal(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         LoginError { error: Some(error) }
     }
@@ -40,10 +40,12 @@ impl From<AuthServiceError> for LoginError {
 impl From<login::LoginError> for LoginError {
     fn from(value: login::LoginError) -> Self {
         let error = match value {
-            login::LoginError::External(error) => login_error::Error::External(ErrorBody { error }),
-            login::LoginError::Unexpected(error) => {
-                login_error::Error::Internal(ErrorBody { error })
-            }
+            login::LoginError::External(_) => login_error::Error::External(ErrorBody {
+                error: value.to_string(),
+            }),
+            login::LoginError::Internal(_) => login_error::Error::Internal(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         LoginError { error: Some(error) }
     }
@@ -52,9 +54,11 @@ impl From<login::LoginError> for LoginError {
 impl From<OAuth2Error> for LoginError {
     fn from(value: OAuth2Error) -> Self {
         let error = match value {
-            OAuth2Error::Unexpected(error) => login_error::Error::Internal(ErrorBody { error }),
-            OAuth2Error::InvalidSession(error) => login_error::Error::BadRequest(ErrorsBody {
-                errors: vec![error],
+            OAuth2Error::Internal(_) => login_error::Error::Internal(ErrorBody {
+                error: value.to_string(),
+            }),
+            OAuth2Error::InvalidSession(_) => login_error::Error::BadRequest(ErrorsBody {
+                errors: vec![value.to_string()],
             }),
         };
         LoginError { error: Some(error) }

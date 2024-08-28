@@ -31,12 +31,12 @@ use tracing::Instrument;
 impl From<AuthServiceError> for ProjectError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                project_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                project_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::InvalidToken(_) => project_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
+            AuthServiceError::Internal(_) => project_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         ProjectError { error: Some(error) }
     }
@@ -45,14 +45,18 @@ impl From<AuthServiceError> for ProjectError {
 impl From<project::ProjectError> for ProjectError {
     fn from(value: project::ProjectError) -> Self {
         let error = match value {
-            project::ProjectError::Internal(error) => {
-                project_error::Error::InternalError(ErrorBody { error })
+            project::ProjectError::Internal(_) => project_error::Error::InternalError(ErrorBody {
+                error: value.to_string(),
+            }),
+            project::ProjectError::Unauthorized(_) => {
+                project_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            project::ProjectError::Unauthorized(error) => {
-                project_error::Error::Unauthorized(ErrorBody { error })
-            }
-            project::ProjectError::LimitExceeded(error) => {
-                project_error::Error::LimitExceeded(ErrorBody { error })
+            project::ProjectError::LimitExceeded(_) => {
+                project_error::Error::LimitExceeded(ErrorBody {
+                    error: value.to_string(),
+                })
             }
         };
         ProjectError { error: Some(error) }
@@ -62,11 +66,15 @@ impl From<project::ProjectError> for ProjectError {
 impl From<project_auth::ProjectAuthorisationError> for ProjectError {
     fn from(value: project_auth::ProjectAuthorisationError) -> Self {
         let error = match value {
-            project_auth::ProjectAuthorisationError::Internal(error) => {
-                project_error::Error::InternalError(ErrorBody { error })
+            project_auth::ProjectAuthorisationError::Internal(_) => {
+                project_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            project_auth::ProjectAuthorisationError::Unauthorized(error) => {
-                project_error::Error::Unauthorized(ErrorBody { error })
+            project_auth::ProjectAuthorisationError::Unauthorized(_) => {
+                project_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
         };
         ProjectError { error: Some(error) }

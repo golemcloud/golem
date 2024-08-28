@@ -28,12 +28,12 @@ use tracing::Instrument;
 impl From<AuthServiceError> for TokenError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                token_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                token_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::InvalidToken(_) => token_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
+            AuthServiceError::Internal(_) => token_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         TokenError { error: Some(error) }
     }
@@ -42,19 +42,24 @@ impl From<AuthServiceError> for TokenError {
 impl From<token::TokenServiceError> for TokenError {
     fn from(value: token::TokenServiceError) -> Self {
         let error = match value {
-            token::TokenServiceError::Unauthorized(error) => {
-                token_error::Error::Unauthorized(ErrorBody { error })
-            }
-            token::TokenServiceError::Unexpected(error) => {
-                token_error::Error::InternalError(ErrorBody { error })
-            }
-            token::TokenServiceError::UnknownTokenId(_) => {
-                token_error::Error::NotFound(ErrorBody {
-                    error: "Token not found".to_string(),
+            token::TokenServiceError::Unauthorized(_) => {
+                token_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
                 })
             }
+            token::TokenServiceError::Internal(_) => token_error::Error::InternalError(ErrorBody {
+                error: value.to_string(),
+            }),
+            token::TokenServiceError::UnknownToken(_) => token_error::Error::NotFound(ErrorBody {
+                error: value.to_string(),
+            }),
             token::TokenServiceError::ArgValidation(errors) => {
                 token_error::Error::BadRequest(ErrorsBody { errors })
+            }
+            token::TokenServiceError::AccountNotFound(_) => {
+                token_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_string()],
+                })
             }
         };
         TokenError { error: Some(error) }

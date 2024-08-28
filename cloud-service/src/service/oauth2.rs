@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,15 +9,27 @@ use crate::model::{
 use crate::service::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
 use crate::service::oauth2_session::{OAuth2SessionError, OAuth2SessionService};
 
+#[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
-    Unexpected(String),
+    #[error("Invalid Session: {0}")]
     InvalidSession(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl OAuth2Error {
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
 }
 
 impl From<OAuth2GithubClientError> for OAuth2Error {
     fn from(err: OAuth2GithubClientError) -> Self {
         match err {
-            OAuth2GithubClientError::Unexpected(msg) => OAuth2Error::Unexpected(msg),
+            OAuth2GithubClientError::Unexpected(msg) => OAuth2Error::internal(msg),
         }
     }
 }
@@ -24,7 +37,7 @@ impl From<OAuth2GithubClientError> for OAuth2Error {
 impl From<OAuth2SessionError> for OAuth2Error {
     fn from(err: OAuth2SessionError) -> Self {
         match err {
-            OAuth2SessionError::Unexpected(msg) => OAuth2Error::Unexpected(msg),
+            OAuth2SessionError::Internal(msg) => OAuth2Error::internal(msg),
             OAuth2SessionError::InvalidSession(msg) => OAuth2Error::InvalidSession(msg),
         }
     }

@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -24,9 +25,19 @@ pub struct DeviceWorkflowData {
     pub interval: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum OAuth2GithubClientError {
+    #[error("Unexpected error: {0}")]
     Unexpected(String),
+}
+
+impl OAuth2GithubClientError {
+    pub fn unexpected<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unexpected(error.to_string())
+    }
 }
 
 pub struct OAuth2GithubClientDefault {
@@ -50,7 +61,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             .send()
             .await
             .map_err(|e| {
-                OAuth2GithubClientError::Unexpected(format!(
+                OAuth2GithubClientError::unexpected(format!(
                     "Failed to retrieve device code with status: {}",
                     e
                 ))
@@ -58,7 +69,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
 
         if res.status().is_success() {
             let response: DeviceCodeResponse = res.json().await.map_err(|e| {
-                OAuth2GithubClientError::Unexpected(format!("Failed to read response body: {}", e))
+                OAuth2GithubClientError::unexpected(format!("Failed to read response body: {}", e))
             })?;
 
             Ok(DeviceWorkflowData {
@@ -69,7 +80,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                 interval: Duration::from_secs(response.interval),
             })
         } else {
-            Err(OAuth2GithubClientError::Unexpected(format!(
+            Err(OAuth2GithubClientError::unexpected(format!(
                 "Failed to retrieve device code with status: {}",
                 res.status()
             )))
@@ -88,9 +99,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
         loop {
             let now = chrono::Utc::now();
             if now > expires {
-                break Err(OAuth2GithubClientError::Unexpected(
-                    "Device code expired".into(),
-                ));
+                break Err(OAuth2GithubClientError::unexpected("Device code expired"));
             }
 
             let response =
@@ -111,7 +120,7 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                             .unwrap_or(std::time::Duration::from_secs(5));
                         interval = new_interval;
                     } else {
-                        break Err(OAuth2GithubClientError::Unexpected(format!(
+                        break Err(OAuth2GithubClientError::unexpected(format!(
                             "Failed to retrieve access token: {:?}",
                             error
                         )));
@@ -143,14 +152,14 @@ async fn execute_access_token_request(
         .send()
         .await
         .map_err(|e| {
-            OAuth2GithubClientError::Unexpected(format!(
+            OAuth2GithubClientError::unexpected(format!(
                 "Github Access Token Request Failed: {}",
                 e
             ))
         })?;
 
     let body = response.text().await.map_err(|e| {
-        OAuth2GithubClientError::Unexpected(format!("Failed to extract response body: {}", e))
+        OAuth2GithubClientError::unexpected(format!("Failed to extract response body: {}", e))
     })?;
 
     match serde_json::from_str::<ErrorResponse>(&body) {
@@ -159,7 +168,7 @@ async fn execute_access_token_request(
         Err(_) => {
             let access_token_response =
                 serde_json::from_str::<AccessToken>(&body).map_err(|e| {
-                    OAuth2GithubClientError::Unexpected(format!(
+                    OAuth2GithubClientError::unexpected(format!(
                         "Failed to parse access token response: {}",
                         e
                     ))

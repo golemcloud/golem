@@ -17,21 +17,42 @@ use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::Role;
 use golem_common::model::AccountId;
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::ProjectId;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum PlanLimitError {
-    AccountIdNotFound(AccountId),
-    ProjectIdNotFound(ProjectId),
-    ComponentIdNotFound(ComponentId),
-    Internal(String),
-    Unauthorized(String),
+    #[error("Limit Exceeded: {0}")]
     LimitExceeded(String),
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Account Not Found: {0}")]
+    AccountNotFound(AccountId),
+    #[error("Project Not Found: {0}")]
+    ProjectNotFound(ProjectId),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl PlanLimitError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        PlanLimitError::Internal(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
+    }
+
+    pub fn limit_exceeded<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::LimitExceeded(error.to_string())
     }
 }
 
@@ -224,8 +245,8 @@ impl PlanLimitService for PlanLimitServiceDefault {
         self.check_authorization(account_id, auth)?;
 
         if size > 50000000 {
-            return Err(PlanLimitError::LimitExceeded(
-                "Component size limit exceeded (limit: 50MB)".into(),
+            return Err(PlanLimitError::limit_exceeded(
+                "Component size limit exceeded (limit: 50MB)",
             ));
         }
 
@@ -240,7 +261,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         };
 
         if !component_limit.add(count as i64).in_limit() {
-            return Err(PlanLimitError::LimitExceeded(format!(
+            return Err(PlanLimitError::limit_exceeded(format!(
                 "Component limit exceeded (limit: {})",
                 component_limit.limit
             )));
@@ -255,7 +276,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         };
 
         if !upload_limit.add(size).in_limit() {
-            return Err(PlanLimitError::LimitExceeded(format!(
+            return Err(PlanLimitError::limit_exceeded(format!(
                 "Upload limit exceeded for account: {} (limit: {} MB)",
                 upload_limit.account_id.value,
                 upload_limit.limit / 1000000
@@ -271,7 +292,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         };
 
         if !storage_limit.add(size).in_limit() {
-            Err(PlanLimitError::LimitExceeded(format!(
+            Err(PlanLimitError::limit_exceeded(format!(
                 "Storage limit exceeded for account: {} (limit: {} MB)",
                 storage_limit.account_id.value,
                 storage_limit.limit / 1000000
@@ -310,7 +331,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
             if check_limit.in_limit() {
                 self.account_workers_repo.update(account_id, value).await?;
             } else {
-                return Err(PlanLimitError::LimitExceeded(format!(
+                return Err(PlanLimitError::limit_exceeded(format!(
                     "Worker limit exceeded (limit: {})",
                     check_limit.limit
                 )));
@@ -344,7 +365,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
                     .update(account_id, value)
                     .await?;
             } else {
-                return Err(PlanLimitError::LimitExceeded(format!(
+                return Err(PlanLimitError::limit_exceeded(format!(
                     "Worker connection limit exceeded (limit: {})",
                     check_limit.limit
                 )));
@@ -390,10 +411,10 @@ impl PlanLimitServiceDefault {
             if let Some(plan) = self.plan_repo.get(&account.plan_id).await? {
                 Ok(plan.into())
             } else {
-                Err(PlanLimitError::AccountIdNotFound(account_id.clone()))
+                Err(PlanLimitError::AccountNotFound(account_id.clone()))
             }
         } else {
-            Err(PlanLimitError::AccountIdNotFound(account_id.clone()))
+            Err(PlanLimitError::AccountNotFound(account_id.clone()))
         }
     }
 
@@ -403,7 +424,7 @@ impl PlanLimitServiceDefault {
                 value: project.owner_account_id,
             })
         } else {
-            Err(PlanLimitError::ProjectIdNotFound(project_id.clone()))
+            Err(PlanLimitError::ProjectNotFound(project_id.clone()))
         }
     }
 
@@ -415,7 +436,7 @@ impl PlanLimitServiceDefault {
         if auth.has_account_or_role(account_id, &Role::Admin) {
             Ok(())
         } else {
-            Err(PlanLimitError::Unauthorized(
+            Err(PlanLimitError::unauthorized(
                 "Insufficient privilege.".to_string(),
             ))
         }

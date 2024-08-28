@@ -34,12 +34,14 @@ type Result<T> = std::result::Result<T, AccountSummaryError>;
 impl From<AuthServiceError> for AccountSummaryError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                AccountSummaryError::Unauthorized(Json(ErrorBody { error }))
+            AuthServiceError::InvalidToken(_) => {
+                AccountSummaryError::Unauthorized(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            AuthServiceError::Unexpected(error) => {
-                AccountSummaryError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::Internal(_) => AccountSummaryError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -47,11 +49,15 @@ impl From<AuthServiceError> for AccountSummaryError {
 impl From<AccountSummaryServiceError> for AccountSummaryError {
     fn from(value: AccountSummaryServiceError) -> Self {
         match value {
-            AccountSummaryServiceError::Unauthorized(error) => {
-                AccountSummaryError::Unauthorized(Json(ErrorBody { error }))
+            AccountSummaryServiceError::Unauthorized(_) => {
+                AccountSummaryError::Unauthorized(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            AccountSummaryServiceError::Unexpected(error) => {
-                AccountSummaryError::InternalError(Json(ErrorBody { error }))
+            AccountSummaryServiceError::Internal(_) => {
+                AccountSummaryError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
         }
     }

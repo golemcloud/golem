@@ -9,18 +9,36 @@ use tracing::info;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{OAuth2Provider, OAuth2Token};
+use crate::repo::account::AccountRepo;
 use crate::repo::oauth2_token::{OAuth2TokenRecord, OAuth2TokenRepo};
+use crate::repo::token::TokenRepo;
 use crate::repo::RepoError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum OAuth2TokenError {
-    Internal(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
+    #[error("Account Not Found: {0}")]
+    AccountNotFound(AccountId),
+    #[error("Token Not Found: {0}")]
+    TokenNotFound(TokenId),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl OAuth2TokenError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        OAuth2TokenError::Internal(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
+    }
+
+    pub fn unauthorized<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Unauthorized(error.to_string())
     }
 }
 
@@ -49,11 +67,21 @@ pub trait OAuth2TokenService {
 
 pub struct OAuth2TokenServiceDefault {
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo + Sync + Send>,
+    token_repo: Arc<dyn TokenRepo + Send + Sync>,
+    account_repo: Arc<dyn AccountRepo + Sync + Send>,
 }
 
 impl OAuth2TokenServiceDefault {
-    pub fn new(oauth2_token_repo: Arc<dyn OAuth2TokenRepo + Sync + Send>) -> Self {
-        OAuth2TokenServiceDefault { oauth2_token_repo }
+    pub fn new(
+        oauth2_token_repo: Arc<dyn OAuth2TokenRepo + Sync + Send>,
+        token_repo: Arc<dyn TokenRepo + Send + Sync>,
+        account_repo: Arc<dyn AccountRepo + Sync + Send>,
+    ) -> Self {
+        OAuth2TokenServiceDefault {
+            oauth2_token_repo,
+            token_repo,
+            account_repo,
+        }
     }
 }
 
@@ -64,6 +92,20 @@ impl OAuth2TokenService for OAuth2TokenServiceDefault {
             "Upsert token id for provider {}, external id {}, account id {}",
             token.provider, token.external_id, token.account_id
         );
+
+        let account_id = token.account_id.clone();
+        let account = self.account_repo.get(account_id.value.as_str()).await?;
+        if account.is_none() {
+            return Err(OAuth2TokenError::AccountNotFound(account_id.clone()));
+        }
+
+        if let Some(token_id) = token.token_id.clone() {
+            let token = self.token_repo.get(&token_id.0).await?;
+            if token.is_none() {
+                return Err(OAuth2TokenError::TokenNotFound(token_id.clone()));
+            }
+        }
+
         let record: OAuth2TokenRecord = token.clone().into();
 
         self.oauth2_token_repo
@@ -106,7 +148,7 @@ impl OAuth2TokenService for OAuth2TokenServiceDefault {
         for token in tokens {
             let account_id = AccountId::from(token.account_id.as_str());
             if !auth.has_account_or_role(&account_id, &Role::Admin) {
-                return Err(OAuth2TokenError::Unauthorized("Unauthorized".to_string()));
+                return Err(OAuth2TokenError::unauthorized("Unauthorized"));
             }
             self.oauth2_token_repo
                 .clean_token_id(&token.provider, &token.external_id)

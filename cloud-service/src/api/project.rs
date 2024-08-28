@@ -51,12 +51,12 @@ type Result<T> = std::result::Result<T, ProjectError>;
 impl From<AuthServiceError> for ProjectError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                ProjectError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                ProjectError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::InvalidToken(_) => ProjectError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => ProjectError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -64,15 +64,15 @@ impl From<AuthServiceError> for ProjectError {
 impl From<ProjectServiceError> for ProjectError {
     fn from(value: ProjectServiceError) -> Self {
         match value {
-            ProjectServiceError::Internal(error) => {
-                ProjectError::InternalError(Json(ErrorBody { error }))
-            }
-            ProjectServiceError::Unauthorized(error) => {
-                ProjectError::Unauthorized(Json(ErrorBody { error }))
-            }
-            ProjectServiceError::LimitExceeded(error) => {
-                ProjectError::LimitExceeded(Json(ErrorBody { error }))
-            }
+            ProjectServiceError::Internal(_) => ProjectError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            ProjectServiceError::Unauthorized(_) => ProjectError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            ProjectServiceError::LimitExceeded(_) => ProjectError::LimitExceeded(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -80,11 +80,15 @@ impl From<ProjectServiceError> for ProjectError {
 impl From<ProjectAuthorisationError> for ProjectError {
     fn from(value: ProjectAuthorisationError) -> Self {
         match value {
-            ProjectAuthorisationError::Internal(error) => {
-                ProjectError::InternalError(Json(ErrorBody { error }))
+            ProjectAuthorisationError::Internal(_) => {
+                ProjectError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            ProjectAuthorisationError::Unauthorized(error) => {
-                ProjectError::Unauthorized(Json(ErrorBody { error }))
+            ProjectAuthorisationError::Unauthorized(_) => {
+                ProjectError::Unauthorized(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
         }
     }

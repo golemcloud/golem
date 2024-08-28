@@ -45,24 +45,21 @@ type Result<T> = std::result::Result<T, LimitsError>;
 impl From<PlanLimitError> for LimitsError {
     fn from(value: PlanLimitError) -> Self {
         match value {
-            PlanLimitError::AccountIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Account not found".to_string()],
+            PlanLimitError::AccountNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_string()],
             })),
-            PlanLimitError::ComponentIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Component not found".to_string()],
+            PlanLimitError::ProjectNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_string()],
             })),
-            PlanLimitError::ProjectIdNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
-                errors: vec!["Project not found".to_string()],
+            PlanLimitError::Internal(_) => LimitsError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
             })),
-            PlanLimitError::Internal(error) => {
-                LimitsError::InternalError(Json(ErrorBody { error }))
-            }
-            PlanLimitError::Unauthorized(error) => {
-                LimitsError::Unauthorized(Json(ErrorBody { error }))
-            }
-            PlanLimitError::LimitExceeded(error) => {
-                LimitsError::LimitExceeded(Json(ErrorBody { error }))
-            }
+            PlanLimitError::Unauthorized(_) => LimitsError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            PlanLimitError::LimitExceeded(_) => LimitsError::LimitExceeded(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -70,12 +67,12 @@ impl From<PlanLimitError> for LimitsError {
 impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => {
-                LimitsError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Unexpected(error) => {
-                LimitsError::InternalError(Json(ErrorBody { error }))
-            }
+            AuthServiceError::InvalidToken(_) => LimitsError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => LimitsError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }

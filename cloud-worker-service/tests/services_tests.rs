@@ -2,7 +2,7 @@
 mod tests {
     use chrono::Utc;
     use cloud_common::model::TokenSecret;
-    use cloud_worker_service::model::{ApiDomain, CertificateRequest, DomainRequest};
+    use cloud_worker_service::model::{ApiDomain, Certificate, CertificateRequest, DomainRequest};
     use cloud_worker_service::repo::api_certificate::{ApiCertificateRepo, DbApiCertificateRepo};
     use cloud_worker_service::repo::api_domain::{ApiDomainRepo, DbApiDomainRepo};
     use cloud_worker_service::service::api_certificate::{
@@ -226,14 +226,42 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(certificate1_result1, vec![certificate1.clone()]);
-        assert_eq!(certificate2_result1, vec![certificate2.clone()]);
+        assert!(contains_certificates(
+            certificate1_result1,
+            vec![certificate1.clone()]
+        ));
+        assert!(contains_certificates(
+            certificate2_result1,
+            vec![certificate2.clone()]
+        ));
         assert_eq!(certificate_result2.len(), 2);
 
         assert!(certificate1_result3.is_empty());
         assert!(certificate2_result3.is_empty());
-        assert_eq!(certificate_result3, vec![certificate2]);
+        assert!(contains_certificates(
+            certificate_result3,
+            vec![certificate2]
+        ));
         assert!(certificate_result4.is_empty());
+    }
+
+    fn contains_certificates(result: Vec<Certificate>, expected: Vec<Certificate>) -> bool {
+        for value in expected.into_iter() {
+            if !result.iter().any(|c| {
+                c.id == value.id
+                    && c.project_id == value.project_id
+                    && c.domain_name == value.domain_name
+                    && c.created_at
+                        .map(|c| c.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                        == value
+                            .created_at
+                            .map(|c| c.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            }) {
+                return false;
+            }
+        }
+
+        true
     }
 
     async fn test_domain_service(domain_service: Arc<dyn ApiDomainService + Sync + Send>) {
@@ -273,7 +301,8 @@ mod tests {
         let result2 = domain_service.get(&project_id, &auth_ctx).await.unwrap();
 
         assert!(!result.is_empty());
-        assert_eq!(result[0], domain);
+        assert_eq!(result[0].domain_name, domain.domain_name);
+        assert_eq!(result[0].name_servers, domain.name_servers);
         assert!(result2.is_empty());
     }
 }

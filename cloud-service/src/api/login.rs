@@ -50,10 +50,12 @@ type Result<T> = std::result::Result<T, LoginError>;
 impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::InvalidToken(error) => LoginError::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
+            AuthServiceError::InvalidToken(_) => LoginError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_string()],
             })),
-            AuthServiceError::Unexpected(error) => LoginError::Internal(Json(ErrorBody { error })),
+            AuthServiceError::Internal(_) => LoginError::Internal(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -61,8 +63,12 @@ impl From<AuthServiceError> for LoginError {
 impl From<LoginServiceError> for LoginError {
     fn from(value: LoginServiceError) -> Self {
         match value {
-            LoginServiceError::Unexpected(error) => LoginError::Internal(Json(ErrorBody { error })),
-            LoginServiceError::External(error) => LoginError::External(Json(ErrorBody { error })),
+            LoginServiceError::Internal(_) => LoginError::Internal(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            LoginServiceError::External(_) => LoginError::External(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }
@@ -70,9 +76,11 @@ impl From<LoginServiceError> for LoginError {
 impl From<OAuth2Error> for LoginError {
     fn from(value: OAuth2Error) -> Self {
         match value {
-            OAuth2Error::Unexpected(error) => LoginError::Internal(Json(ErrorBody { error })),
-            OAuth2Error::InvalidSession(error) => LoginError::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
+            OAuth2Error::Internal(_) => LoginError::Internal(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            OAuth2Error::InvalidSession(_) => LoginError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_string()],
             })),
         }
     }

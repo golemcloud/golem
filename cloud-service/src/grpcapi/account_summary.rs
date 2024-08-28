@@ -21,11 +21,15 @@ use tracing::Instrument;
 impl From<AuthServiceError> for AccountSummaryError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                account_summary_error::Error::Unauthorized(ErrorBody { error })
+            AuthServiceError::InvalidToken(_) => {
+                account_summary_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            AuthServiceError::Unexpected(error) => {
-                account_summary_error::Error::Unauthorized(ErrorBody { error })
+            AuthServiceError::Internal(_) => {
+                account_summary_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
         };
         AccountSummaryError { error: Some(error) }
@@ -35,11 +39,15 @@ impl From<AuthServiceError> for AccountSummaryError {
 impl From<AccountSummaryServiceError> for AccountSummaryError {
     fn from(value: AccountSummaryServiceError) -> Self {
         let error = match value {
-            AccountSummaryServiceError::Unauthorized(error) => {
-                account_summary_error::Error::Unauthorized(ErrorBody { error })
+            AccountSummaryServiceError::Unauthorized(_) => {
+                account_summary_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            AccountSummaryServiceError::Unexpected(error) => {
-                account_summary_error::Error::InternalError(ErrorBody { error })
+            AccountSummaryServiceError::Internal(_) => {
+                account_summary_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                })
             }
         };
         AccountSummaryError { error: Some(error) }

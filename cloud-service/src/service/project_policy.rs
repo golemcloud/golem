@@ -10,14 +10,18 @@ use crate::model::ProjectPolicy;
 use crate::repo::project_policy::{ProjectPolicyRecord, ProjectPolicyRepo};
 use crate::repo::RepoError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProjectPolicyError {
-    Internal(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl ProjectPolicyError {
-    pub fn internal<T: Display>(error: T) -> Self {
-        ProjectPolicyError::Internal(error.to_string())
+    pub fn internal<M>(error: M) -> Self
+    where
+        M: Display,
+    {
+        Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 }
 

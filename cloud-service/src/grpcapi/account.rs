@@ -28,12 +28,12 @@ use tracing::Instrument;
 impl From<AuthServiceError> for AccountError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::InvalidToken(error) => {
-                account_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Unexpected(error) => {
-                account_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::InvalidToken(_) => account_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
+            AuthServiceError::Internal(_) => account_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
         };
         AccountError { error: Some(error) }
     }
@@ -42,15 +42,17 @@ impl From<AuthServiceError> for AccountError {
 impl From<account::AccountError> for AccountError {
     fn from(value: account::AccountError) -> Self {
         let error = match value {
-            account::AccountError::Unauthorized(error) => {
-                account_error::Error::Unauthorized(ErrorBody { error })
+            account::AccountError::Unauthorized(_) => {
+                account_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            account::AccountError::Unexpected(error) => {
-                account_error::Error::InternalError(ErrorBody { error })
-            }
-            account::AccountError::UnknownAccountId(_) => {
+            account::AccountError::Internal(_) => account_error::Error::InternalError(ErrorBody {
+                error: value.to_string(),
+            }),
+            account::AccountError::AccountNotFound(_) => {
                 account_error::Error::NotFound(ErrorBody {
-                    error: "Account not found".to_string(),
+                    error: value.to_string(),
                 })
             }
             account::AccountError::ArgValidation(errors) => {

@@ -76,9 +76,11 @@ impl Services {
                 repositories.account_fuel_repo.clone(),
             ));
 
-        let account_service: Arc<dyn account::AccountService + Sync + Send> = Arc::new(
-            account::AccountServiceDefault::new(repositories.account_repo, plan_service.clone()),
-        );
+        let account_service: Arc<dyn account::AccountService + Sync + Send> =
+            Arc::new(account::AccountServiceDefault::new(
+                repositories.account_repo.clone(),
+                plan_service.clone(),
+            ));
 
         let account_summary_service: Arc<dyn account_summary::AccountSummaryService + Sync + Send> =
             Arc::new(account_summary::AccountSummaryServiceDefault::new(
@@ -88,11 +90,14 @@ impl Services {
         let account_grant_service: Arc<dyn account_grant::AccountGrantService + Sync + Send> =
             Arc::new(account_grant::AccountGrantServiceDefault::new(
                 repositories.account_grant_repo,
+                repositories.account_repo.clone(),
             ));
 
         let oauth2_token_service: Arc<dyn oauth2_token::OAuth2TokenService + Sync + Send> =
             Arc::new(oauth2_token::OAuth2TokenServiceDefault::new(
                 repositories.oauth2_token_repo,
+                repositories.token_repo.clone(),
+                repositories.account_repo.clone(),
             ));
 
         let oauth2_session_service: Arc<dyn oauth2_session::OAuth2SessionService + Sync + Send> =
@@ -117,6 +122,7 @@ impl Services {
         let token_service: Arc<dyn token::TokenService + Sync + Send> =
             Arc::new(token::TokenServiceDefault::new(
                 repositories.token_repo.clone(),
+                repositories.account_repo.clone(),
                 oauth2_token_service.clone(),
             ));
 
@@ -144,6 +150,7 @@ impl Services {
                 repositories.project_repo.clone(),
                 repositories.project_grant_repo.clone(),
                 repositories.project_policy_repo.clone(),
+                repositories.account_repo.clone(),
             ));
 
         let project_auth_service: Arc<dyn project_auth::ProjectAuthorisationService + Sync + Send> =
