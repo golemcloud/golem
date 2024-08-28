@@ -9,8 +9,8 @@
     "componentize": "jco componentize -w wit -o dist/counter-ts.wasm dist/index.js"
   },
   "devDependencies": {
-    "@golemcloud/componentize-js": "0.8.3-golem.3",
-    "@golemcloud/jco": "1.2.4-golem.5",
+    "@golemcloud/componentize-js": "0.10.5-golem.3",
+    "@golemcloud/jco": "1.4.4-golem.1",
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@types/node": "^20.14.12",
     "rollup": "4.19.0",
