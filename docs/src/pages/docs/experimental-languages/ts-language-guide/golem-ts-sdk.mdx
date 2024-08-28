@@ -1,5 +1,6 @@
-import { Callout } from "nextra/components"
-import { Steps } from "nextra/components"
+import { Callout, Steps, Tabs } from "nextra/components"
+import { AllWitDeps } from "@/components/all-wit-deps"
+import { MultiPlatformCommand } from "@/components/multi-platform-command"
 
 # Setting up the Golem TypeScript SDK
 
@@ -12,14 +13,134 @@ If setting up the [Golem TypeScript SDK](https://github.com/golemcloud/golem-ts)
 
 <Steps>
 
-### Add the Golem TypeScript SDK and related tooling as a dependency
+### Create a new project
 
-The Golem TypeScript SDK currently relies on forked versions of `jco` and `componentize-js`. Our examples contains the latest dependencies that work together, but in case you want setup you project manually, use the following samples as a starting point.
+<MultiPlatformCommand
+  commands={[
+    { label: "npm", command: "npm init" },
+    { label: "pnpm", command: "pnpm init" },
+    { label: "yarn", command: "yarn init" },
+    { label: "bun", command: "bun init" },
+  ]}
+/>
 
-Example `package.json`:
+### Ensure ESM is enabled
 
-```json
+In your `package.json` file, ensure the `type` is set to `module`.
+
+```json filename="package.json" {2} copy
 {
+  "type": "module"
+}
+```
+
+### Install Dev Dependencies
+
+The Golem TypeScript SDK currently relies on forked versions of [jco](https://github.com/golemcloud/jco) and [componentize-js](https://github.com/golemcloud/componentize-js).
+
+export const deps =
+  "@golemcloud/componentize-js @golemcloud/golem-ts @golemcloud/jco @rollup/plugin-node-resolve@^15.2.3 rollup-plugin-typescript2@^0.36.0 @types/node@^20.14.2 rollup@^4.18.0 tslib@^2.6.3 typescript@^5.4.5"
+
+<MultiPlatformCommand
+  commands={[
+    { label: "npm", command: `npm install --save-dev ${deps}` },
+    { label: "pnpm", command: `pnpm add --save-dev ${deps}` },
+    { label: "yarn", command: `yarn add --dev ${deps}` },
+    { label: "bun", command: `bun add --dev ${deps}` },
+  ]}
+/>
+
+### Add Rollup Config: `rollup.config.mjs`
+
+To silence rollup warnings, add WIT imports to the `external` array.
+
+```js filename="rollup.config.mjs" {10} copy
+import typescript from "rollup-plugin-typescript2"
+import resolve from "@rollup/plugin-node-resolve"
+
+export default {
+  input: "src/main.ts",
+  output: {
+    file: "out/main.js",
+    format: "esm",
+  },
+  external: [
+    "golem:api/host@0.2.0",
+    "golem:rpc/types@0.1.0",
+    "wasi:blobstore/blobstore",
+    "wasi:blobstore/container",
+    "wasi:cli/environment@0.2.0",
+    "wasi:clocks/wall-clock@0.2.0",
+    "wasi:clocks/monotonic-clock@0.2.0",
+    "wasi:filesystem/preopens@0.2.0",
+    "wasi:filesystem/types@0.2.0",
+    "wasi:http/types@0.2.0",
+    "wasi:http/outgoing-handler@0.2.0",
+    "wasi:io/error@0.2.0",
+    "wasi:io/poll@0.2.0",
+    "wasi:io/streams@0.2.0",
+    "wasi:keyvalue/eventual-batch@0.1.0",
+    "wasi:keyvalue/eventual@0.1.0",
+    "wasi:logging/logging",
+    "wasi:random/random@0.2.0",
+    "wasi:random/insecure@0.2.0",
+    "wasi:random/insecure-seed@0.2.0",
+    "wasi:sockets/ip-name-lookup@0.2.0",
+    "wasi:sockets/instance-network@0.2.0",
+  ],
+  plugins: [resolve(), typescript()],
+}
+```
+
+### Add Typescript Config: `tsconfig.json`
+
+```json filename="tsconfig.json" copy
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "noEmit": true,
+    "lib": ["ES2020"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "checkJs": false,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true
+  },
+  "exclude": ["node_modules"],
+  "include": ["src/**/*.ts"]
+}
+```
+
+### Add `scripts` to `package.json` [#scripts]
+
+Add the following scripts to your `package.json`:
+
+```json filename="package.json" {3-6} copy
+{
+  "scripts": {
+    "stub": "jco stubgen wit -o src/generated",
+    "build": "rollup --config",
+    "componentize": "npm run stub && npm run build && jco componentize -w wit -o out/component_name.wasm out/main.js",
+    "clean": "rm -rf out src/generated"
+  }
+}
+```
+
+- `stub` - Generates the TypeScript declaration (`.d.ts`) files containing stubs for the WIT files.
+- `build` - Compiles the TypeScript code into JavaScript.
+- `componentize` - Bundles the JavaScript code into a WebAssembly module.
+- `clean` - Cleans up the project by removing the generated files.
+
+### Verify `package.json`
+
+Ensure the `scripts` and `devDependencies` sections are correct (versions may differ).
+
+```json filename="package.json"
+{
+  "type": "module",
   "scripts": {
     "stub": "jco stubgen wit -o src/generated",
     "build": "rollup --config",
@@ -27,9 +148,9 @@ Example `package.json`:
     "clean": "rm -rf out src/generated"
   },
   "devDependencies": {
-    "@golemcloud/componentize-js": "0.10.2-golem.1",
+    "@golemcloud/componentize-js": "0.10.5-golem.3",
     "@golemcloud/golem-ts": "0.2.0",
-    "@golemcloud/jco": "1.4.0-golem.1",
+    "@golemcloud/jco": "1.4.4-golem.1",
     "@rollup/plugin-node-resolve": "^15.2.3",
     "rollup-plugin-typescript2": "^0.36.0",
     "@types/node": "^20.14.2",
@@ -39,26 +160,30 @@ Example `package.json`:
 }
 ```
 
-Example `rollup.config.mjs`:
-
-```json
-import typescript from "rollup-plugin-typescript2";
-import resolve from "@rollup/plugin-node-resolve";
-
-export default {
-    input: 'src/main.ts',
-    output: {
-    file: 'out/main.js',
-    format: 'esm'
-},
-    external: ["golem:api/host@0.2.0"],
-    plugins: [resolve(), typescript()],
-};
-```
-
 ### Add all the supported WIT files into the project
 
 The project's `wit/deps` directory must contain all the WIT files from the [golem-wit](https://github.com/golemcloud/golem-wit/tree/main/wit/deps) repository.
+
+Either clone the repository and copy the `wit/deps` directory into your project, or run the following command to download the WIT files:
+
+<MultiPlatformCommand
+  commands={[
+    {
+      label: "macOS/Linux",
+      command:
+        'curl -L https://github.com/golemcloud/golem-wit/archive/refs/heads/main.zip | tar -xvf- -C . --strip-components=2 "golem-wit-main/wit/deps" && mkdir -p ./wit/deps && mv deps/* ./wit/deps/ && rm -rf deps/',
+    },
+    {
+      label: "Windows",
+      command:
+        'Invoke-WebRequest -Uri "https://github.com/golemcloud/golem-wit/archive/refs/heads/main.zip" -OutFile "main.zip"; Expand-Archive -Path "main.zip" -DestinationPath "temp" -Force; New-Item -Path ".\\wit\\deps" -ItemType Directory -Force; Move-Item -Path ".\\temp\\golem-wit-main\\wit\\deps\\*" -Destination ".\\wit\\deps" -Force; Remove-Item -Path "main.zip", "temp" -Recurse -Force',
+    },
+  ]}
+/>
+
+The resulting directory structure should look like this:
+
+<AllWitDeps />
 
 ### Importing WITs into the component's world:
 
@@ -105,5 +230,18 @@ world ts-example {
   export api;
 }
 ```
+
+### Run `stub` script
+
+This will generate Typescript declaration files in the `src/generated` directory, for all imported WIT interfaces.
+
+<MultiPlatformCommand
+  commands={[
+    { label: "npm", command: "npm run stub" },
+    { label: "pnpm", command: "pnpm run stub" },
+    { label: "yarn", command: "yarn run stub" },
+    { label: "bun", command: "bun run stub" },
+  ]}
+/>
 
 </Steps>

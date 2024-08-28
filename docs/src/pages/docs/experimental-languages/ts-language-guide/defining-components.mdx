@@ -175,20 +175,37 @@ The `WIT` specifications contains some primitive and higher level data types and
 
 The following table shows an example of each `WIT` data type and its corresponding TypeScript type:
 
-| WIT type                   | TypeScript type                                                           |
-| -------------------------- | ------------------------------------------------------------------------- |
-| `bool`                     | `boolean`                                                                 |
-| `s8`, `s16`, `s32`, `s64`  | `number`, `number`, `number`, `bigint`                                    |
-| `u8`, `u16`, `u32`, `u64`  | `number`, `number`, `number`, `bigint`                                    |
-| `f32`, `f64`               | `number`, `number`                                                        |
-| `char`                     | `string`                                                                  |
-| `string`                   | `string`                                                                  |
-| `list<string>`             | `string[]`                                                                |
-| `option<u64>`              | `? uint64`                                                                |
-| `result<s32, string>`      | `Result<number, string>` where `Result` is defined in the generated types |
-| `result<_, string>`        | `Result<void, string>`                                                    |
-| `result`                   | `Result<void, void>`                                                      |
-| `tuple<u64, string, char>` | `[bigint, string, string]`                                                |
+| WIT Type                             | Typescript Type          | Notes                                                          |
+| ------------------------------------ | ------------------------ | -------------------------------------------------------------- |
+| bool                                 | boolean                  |                                                                |
+| u8, s8, u16, s16, u32, s32, f32, f64 | number                   |                                                                |
+| u64, s64                             | bigint                   |                                                                |
+| char                                 | string                   | Represents a single Unicode character                          |
+| string                               | string                   |                                                                |
+| list\<T>                             | T[]                      | For most types                                                 |
+| list\<u8>                            | Uint8Array               | Special case for byte arrays                                   |
+| tuple\<T1, T2, ...>                  | [T1, T2, ...]            |                                                                |
+| record                               | interface                | Fields become properties                                       |
+| variant                              | union of interfaces      | Each case becomes an interface with a `tag` and optional `val` |
+| enum                                 | union of string literals |                                                                |
+| option\<T>                           | T \| null                | If T can be represented as null                                |
+| option\<T>                           | Option\<T>               | If T cannot be represented as null                             |
+| result\<T, E>                        | Result\<T, E>            |                                                                |
+| result\<\_, string>                  | Result\<void, string>    |                                                                |
+| flags                                | interface                | Each flag becomes an optional boolean property                 |
+| resource                             | class                    | Methods become class methods                                   |
+
+Note: The `Option` and `Result` types are automatically included in the generated TypeScript if they are detected in the WIT interface.
+
+They are defined as follows:
+
+```typescript
+export type Option<T> = { tag: "none" } | { tag: "some"; val: T }
+```
+
+```typescript
+export type Result<T, E> = { tag: "ok"; val: T } | { tag: "err"; val: E }
+```
 
 ### WIT records
 
@@ -226,12 +243,13 @@ interface api {
         red,
         green,
         blue,
-        rgb(u32)
+        rgb(u32),
+        hex-color(string),
     }
 }
 ```
 
-Will generate the following TypeScript tagged union:
+Will generate the following TypeScript discriminated union:
 
 ```TypeScript
 export type Color = ColorRed | ColorGreen | ColorBlue | ColorRgb;
@@ -247,6 +265,10 @@ export interface ColorBlue {
 export interface ColorRgb {
   tag: 'rgb',
   val: number,
+}
+export interface ColorHexColor {
+  tag: 'hex-color',
+  val: string,
 }
 ```
 

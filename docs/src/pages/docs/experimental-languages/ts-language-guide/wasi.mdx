@@ -4,7 +4,7 @@ import { Callout } from "nextra/components"
 
 Golem implements and exports a subset of the [WASI](https://wasi.dev) interfaces, as well as its own **runtime interfaces**.
 
-The [Golem TypeScript SDK](/docs/experimental-languages/ts-language-guide/golem-ts-sdk) provides idiomatic wrappers on a subset of these interfaces, but it is also possible to use the generated bindings directly.
+The Golem TypeScript SDK provides idiomatic wrappers on a subset of these interfaces, but it is also possible to use the generated bindings directly.
 
 ## WIT specifications
 
@@ -29,6 +29,119 @@ The following table lists all packages provided by Golem:
 | `wasi:random`     | Interface for generating random numbers                                                     |
 | `wasi:sockets`    | Interface for working with TCP and UDP sockets (currently not supporting durable execution) |
 
+## Bindings
+
+The TypeScript bindings for the WASI and Golem-specific interfaces are provided in the `golem:api/host@0.2.0` module. You can import and use these bindings in your TypeScript code.
+
 ## Additional Golem runtime APIs
 
-This section describes Golem-specific functionalities which are available through the Golem runtime API but does not have an idiomatic Go wrapper in the `golem-ts` library yet.
+This section describes Golem-specific functionalities which are available through the Golem runtime API.
+
+### Generate an idempotency key
+
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+
+It is guaranteed that this idempotency key will always be the same (per occurrence) even if the worker is restarted due to a crash.
+
+To generate an idempotency key:
+
+```typescript
+import { generateIdempotencyKey } from "golem:api/host@0.2.0"
+
+const key: Uuid = generateIdempotencyKey()
+```
+
+### Get worker metadata
+
+It is possible to query **metadata** for Golem workers. This metadata is defined by the `WorkerMetadata` interface:
+
+```typescript
+interface WorkerMetadata {
+  workerId: WorkerId
+  args: string[]
+  env: [string, string][]
+  status: WorkerStatus
+  componentVersion: bigint
+  retryCount: bigint
+}
+```
+
+There are two exported functions to query worker metadata:
+
+- `getSelfMetadata()` returns the metadata for the current worker
+- `getWorkerMetadata(workerId: WorkerId)` returns the metadata for a specific worker given by its `WorkerId`
+
+### Enumerate workers
+
+Worker enumeration is a feature of Golem available both through the public HTTP API and using the WIT interfaces.
+
+> **Warning**: Enumerating workers of a component is a slow operation and should not be used as part of the application logic.
+
+The following example demonstrates how to use the worker enumeration API:
+
+```typescript
+import {
+  ComponentId,
+  GetWorkers,
+  WorkerAnyFilter,
+  WorkerMetadata,
+  WorkerStatusFilter,
+} from "golem:api/host@0.2.0"
+
+const filter: WorkerAnyFilter = {
+  filters: [
+    {
+      filters: [
+        {
+          tag: "status",
+          val: {
+            comparator: "equal",
+            value: "idle",
+          } satisfies WorkerStatusFilter,
+        },
+      ],
+    },
+  ],
+}
+
+const componentId: ComponentId = {
+  /* ... */
+}
+const workers: WorkerMetadata[] = []
+const getter = new GetWorkers(componentId, filter, true)
+
+let batch: WorkerMetadata[] | undefined
+while ((batch = getter.getNext()) !== undefined) {
+  workers.push(...batch)
+}
+```
+
+The third parameter of the `GetWorkers` constructor enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned worker; otherwise, it uses only the last cached values.
+
+### Update a worker
+
+To trigger an update for a given worker from one component version to another, use the `updateWorker` function:
+
+```typescript
+import { updateWorker, WorkerId, ComponentVersion } from "golem:api/host@0.2.0"
+
+const workerId: WorkerId = {
+  /* ... */
+}
+
+const targetVersion: ComponentVersion = 1n
+
+updateWorker(workerId, targetVersion, "automatic")
+```
+
+To learn more about updating workers, see the updating workers page in the documentation.
+
+### The WASI Key-Value store interface
+
+Although Golem workers can store their state completely in their own memory, it is possible to use the `wasi:keyvalue` interface to store key-value pairs in a Golem managed key value storage.
+
+This can be useful if state needs to be shared between different workers or if the size of this state is too large to be stored in memory.
+
+### The WASI Blob Store interface
+
+The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the worker's memory.
