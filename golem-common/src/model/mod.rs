@@ -1901,7 +1901,7 @@ impl From<LogLevel> for golem_api_grpc::proto::golem::worker::Level {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WorkerEvent {
     StdOut {
         timestamp: Timestamp,
@@ -1916,6 +1916,16 @@ pub enum WorkerEvent {
         level: LogLevel,
         context: String,
         message: String,
+    },
+    InvocationStart {
+        timestamp: Timestamp,
+        function: String,
+        idempotency_key: IdempotencyKey,
+    },
+    InvocationFinished {
+        timestamp: Timestamp,
+        function: String,
+        idempotency_key: IdempotencyKey,
     },
     Close,
 }
@@ -1941,6 +1951,22 @@ impl WorkerEvent {
             level,
             context: context.to_string(),
             message: message.to_string(),
+        }
+    }
+
+    pub fn invocation_start(function: &str, idempotency_key: &IdempotencyKey) -> WorkerEvent {
+        WorkerEvent::InvocationStart {
+            timestamp: Timestamp::now_utc(),
+            function: function.to_string(),
+            idempotency_key: idempotency_key.clone(),
+        }
+    }
+
+    pub fn invocation_finished(function: &str, idempotency_key: &IdempotencyKey) -> WorkerEvent {
+        WorkerEvent::InvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            function: function.to_string(),
+            idempotency_key: idempotency_key.clone(),
         }
     }
 
@@ -1976,6 +2002,8 @@ impl WorkerEvent {
                 context: context.clone(),
                 message: message.clone(),
             }),
+            WorkerEvent::InvocationStart { .. } => None,
+            WorkerEvent::InvocationFinished { .. } => None,
             WorkerEvent::Close => None,
         }
     }
@@ -2005,6 +2033,20 @@ impl Display for WorkerEvent {
                 ..
             } => {
                 write!(f, "<log> {:?} {} {}", level, context, message)
+            }
+            WorkerEvent::InvocationStart {
+                function,
+                idempotency_key,
+                ..
+            } => {
+                write!(f, "<invocation-start> {} {}", function, idempotency_key)
+            }
+            WorkerEvent::InvocationFinished {
+                function,
+                idempotency_key,
+                ..
+            } => {
+                write!(f, "<invocation-finished> {} {}", function, idempotency_key)
             }
             WorkerEvent::Close => {
                 write!(f, "<close>")
@@ -2041,6 +2083,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for WorkerEvent {
                         message: event.message,
                     })
                 }
+                golem_api_grpc::proto::golem::worker::log_event::Event::InvocationStarted(
+                    event,
+                ) => Ok(WorkerEvent::InvocationStart {
+                    timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                    function: event.function,
+                    idempotency_key: event
+                        .idempotency_key
+                        .ok_or("Missing idempotency key")?
+                        .into(),
+                }),
+                golem_api_grpc::proto::golem::worker::log_event::Event::InvocationFinished(
+                    event,
+                ) => Ok(WorkerEvent::InvocationFinished {
+                    timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                    function: event.function,
+                    idempotency_key: event
+                        .idempotency_key
+                        .ok_or("Missing idempotency key")?
+                        .into(),
+                }),
             },
             None => Err("Missing event".to_string()),
         }
@@ -2089,6 +2151,32 @@ impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
                     message,
                     timestamp: Some(timestamp.into()),
                 })),
+            }),
+            WorkerEvent::InvocationStart {
+                timestamp,
+                function,
+                idempotency_key,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::InvocationStarted(
+                    golem::worker::InvocationStarted {
+                        function,
+                        idempotency_key: Some(idempotency_key.into()),
+                        timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            WorkerEvent::InvocationFinished {
+                timestamp,
+                function,
+                idempotency_key,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::InvocationFinished(
+                    golem::worker::InvocationFinished {
+                        function,
+                        idempotency_key: Some(idempotency_key.into()),
+                        timestamp: Some(timestamp.into()),
+                    },
+                )),
             }),
             WorkerEvent::Close => Err("Close event is not supported via protobuf".to_string()),
         }

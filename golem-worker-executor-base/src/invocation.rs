@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::oplog::{WorkerError, WorkerResourceId};
-use golem_common::model::{WorkerId, WorkerStatus};
+use golem_common::model::WorkerStatus;
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, type_to_analysed_type};
 use golem_wasm_rpc::Value;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
@@ -24,7 +24,7 @@ use wasmtime::{AsContextMut, StoreContextMut};
 use crate::error::GolemError;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::{InterruptKind, TrapType};
-use crate::workerctx::{FuelManagement, WorkerCtx};
+use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 
 /// Invokes a function on a worker.
 ///
@@ -46,10 +46,7 @@ pub async fn invoke_worker<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
 
-    let worker_id = store.data().worker_id().clone();
-
     let result = invoke_or_fail(
-        &worker_id,
         full_function_name.clone(),
         function_input,
         &mut store,
@@ -156,7 +153,6 @@ fn find_function<'a, Ctx: WorkerCtx>(
 
 // TODO: rename
 async fn invoke_or_fail<Ctx: WorkerCtx>(
-    worker_id: &WorkerId,
     full_function_name: String,
     mut function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
@@ -183,12 +179,12 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
         .store_worker_status(WorkerStatus::Running)
         .await;
 
-    let context = format!("{worker_id}/{full_function_name}");
     let mut extra_fuel = 0;
 
     if parsed.function().is_indexed_resource() {
         let resource_handle =
-            get_or_create_indexed_resource(&mut store, instance, &parsed, &context).await?;
+            get_or_create_indexed_resource(&mut store, instance, &parsed, &full_function_name)
+                .await?;
 
         match resource_handle {
             InvokeResult::Succeeded {
@@ -206,10 +202,10 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     }
 
     let mut call_result = match function {
-        Some(function) => invoke(&mut store, function, &function_input, &context).await,
+        Some(function) => invoke(&mut store, function, &function_input, &full_function_name).await,
         None => {
             // Special function: drop
-            drop_resource(&mut store, &parsed, &function_input, &context).await
+            drop_resource(&mut store, &parsed, &function_input, &full_function_name).await
         }
     };
     if let Ok(r) = call_result.as_mut() {
@@ -225,7 +221,7 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'a, Ctx>,
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
-    context: &str,
+    raw_function_name: &str,
 ) -> Result<InvokeResult, GolemError> {
     let resource_name =
         parsed_function_name
@@ -287,8 +283,13 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
 
             debug!("Creating new indexed resource with parameters {constructor_params:?}");
 
-            let constructor_result =
-                invoke(store, resource_constructor, &constructor_params, context).await?;
+            let constructor_result = invoke(
+                store,
+                resource_constructor,
+                &constructor_params,
+                raw_function_name,
+            )
+            .await?;
 
             if let InvokeResult::Succeeded { output, .. } = &constructor_result {
                 if let Some(Value::Handle { resource_id, .. }) = output.first() {
@@ -318,7 +319,7 @@ async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
     function_input: &[Value],
-    context: &str,
+    raw_function_name: &str,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
     let param_types = function.params(&store);
@@ -344,7 +345,7 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 
     let (results, consumed_fuel) =
-        call_exported_function(&mut store, function, params, context).await?;
+        call_exported_function(&mut store, function, params, raw_function_name).await?;
 
     for resource in resources_to_drop {
         debug!("Dropping passed owned resources {:?}", resource);
@@ -372,13 +373,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     parsed_function_name: &ParsedFunctionName,
     function_input: &[Value],
-    context: &str,
+    raw_function_name: &str,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
     let self_uri = store.data().self_uri();
     if function_input.len() != 1 {
         return Err(GolemError::ValueMismatch {
-            details: format!("unexpected parameter count for drop {context}"),
+            details: format!("unexpected parameter count for drop {raw_function_name}"),
         });
     }
 
@@ -390,13 +391,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
                 Err(GolemError::ValueMismatch {
                     details: format!(
                         "trying to drop handle for on wrong worker ({} vs {}) {}",
-                        uri.value, self_uri.value, context
+                        uri.value, self_uri.value, raw_function_name
                     ),
                 })
             }
         }
         _ => Err(GolemError::ValueMismatch {
-            details: format!("unexpected function input for drop for {context}"),
+            details: format!("unexpected function input for drop for {raw_function_name}"),
         }),
     }?;
 
@@ -406,7 +407,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     } = parsed_function_name.function()
     {
         debug!(
-            "Dropping indexed resource {resource:?} with params {resource_params:?} in {context}"
+            "Dropping indexed resource {resource:?} with params {resource_params:?} in {raw_function_name}"
         );
         store
             .data_mut()
@@ -414,7 +415,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     }
 
     if let Some(resource) = store.data_mut().get(resource_id).await {
-        debug!("Dropping resource {resource:?} in {context}");
+        debug!("Dropping resource {resource:?} in {raw_function_name}");
         store.data_mut().borrow_fuel().await?;
 
         let result = resource.resource_drop_async(&mut store).await;
@@ -434,15 +435,24 @@ async fn drop_resource<Ctx: WorkerCtx>(
     }
 }
 
-async fn call_exported_function<Ctx: FuelManagement + Send>(
+async fn call_exported_function<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
     params: Vec<Val>,
-    context: &str,
+    raw_function_name: &str,
 ) -> Result<(anyhow::Result<Vec<Val>>, i64), GolemError> {
     let mut store = store.as_context_mut();
 
     store.data_mut().borrow_fuel().await?;
+
+    let idempotency_key = store.data().get_current_idempotency_key().await;
+    if let Some(idempotency_key) = &idempotency_key {
+        store
+            .data()
+            .get_public_state()
+            .event_service()
+            .emit_invocation_start(raw_function_name, idempotency_key);
+    }
 
     let mut results: Vec<Val> = function
         .results(&store)
@@ -453,7 +463,7 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
     let result = function.call_async(&mut store, &params, &mut results).await;
     let result = if result.is_ok() {
         function.post_return_async(&mut store).await.map_err(|e| {
-            error!("Error in post_return_async for {context}: {}", e);
+            error!("Error in post_return_async for {raw_function_name}: {}", e);
             e
         })
     } else {
@@ -468,10 +478,19 @@ async fn call_exported_function<Ctx: FuelManagement + Send>(
 
     if consumed_fuel_for_call > 0 {
         debug!(
-            "Fuel consumed for call {context}: {}",
+            "Fuel consumed for call {raw_function_name}: {}",
             consumed_fuel_for_call
         );
     }
+
+    if let Some(idempotency_key) = idempotency_key {
+        store
+            .data()
+            .get_public_state()
+            .event_service()
+            .emit_invocation_finished(raw_function_name, &idempotency_key);
+    }
+
     record_invocation_consumption(consumed_fuel_for_call);
     Ok((result.map(|_| results), consumed_fuel_for_call))
 }

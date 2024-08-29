@@ -14,7 +14,7 @@
 
 use crate::common;
 use assert2::check;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -525,4 +525,98 @@ async fn wasm_rpc_bug_32_test() {
                 case_value: None,
             }])
     );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn error_message_invalid_uri() {
+    let context = common::TestContext::new();
+    let executor = common::start(&context).await.unwrap();
+
+    let registry_component_id = executor.store_component("auction_registry_composed").await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "AUCTION_COMPONENT_ID".to_string(),
+        "invalid-component-id".to_string(),
+    );
+    let registry_worker_id = executor
+        .start_worker_with(
+            &registry_component_id,
+            "auction-registry-invalid-uri",
+            vec![],
+            env,
+        )
+        .await;
+
+    let _ = executor.log_output(&registry_worker_id).await;
+
+    let expiration = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let create_auction_result = executor
+        .invoke_and_await(
+            &registry_worker_id,
+            "auction:registry/api.{create-auction}",
+            vec![
+                Value::String("test-auction".to_string()),
+                Value::String("this is a test".to_string()),
+                Value::F32(100.0),
+                Value::U64(expiration + 600),
+            ],
+        )
+        .await;
+
+    drop(executor);
+
+    check!(worker_error_message(&create_auction_result.err().unwrap())
+        .contains("Invalid URI: urn:worker:invalid-component-id"));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn error_message_non_existing_target_component() {
+    let context = common::TestContext::new();
+    let executor = common::start(&context).await.unwrap();
+
+    let registry_component_id = executor.store_component("auction_registry_composed").await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "AUCTION_COMPONENT_ID".to_string(),
+        "FB2F8E32-7B94-4699-B6EC-82BCE80FF9F2".to_string(), // valid UUID, but not a an existing component
+    );
+    let registry_worker_id = executor
+        .start_worker_with(
+            &registry_component_id,
+            "auction-registry-non-existing-target",
+            vec![],
+            env,
+        )
+        .await;
+
+    let _ = executor.log_output(&registry_worker_id).await;
+
+    let expiration = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let create_auction_result = executor
+        .invoke_and_await(
+            &registry_worker_id,
+            "auction:registry/api.{create-auction}",
+            vec![
+                Value::String("test-auction".to_string()),
+                Value::String("this is a test".to_string()),
+                Value::F32(100.0),
+                Value::U64(expiration + 600),
+            ],
+        )
+        .await;
+
+    drop(executor);
+
+    check!(worker_error_message(&create_auction_result.err().unwrap())
+        .contains("Component does not exist: FB2F8E32-7B94-4699-B6EC-82BCE80FF9F2"));
 }

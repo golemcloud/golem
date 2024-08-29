@@ -14,7 +14,7 @@
 
 use crate::metrics::events::{record_broadcast_event, record_event};
 use futures_util::{stream, StreamExt};
-use golem_common::model::{LogLevel, WorkerEvent};
+use golem_common::model::{IdempotencyKey, LogLevel, WorkerEvent};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
@@ -40,6 +40,14 @@ pub trait WorkerEventService {
 
     fn emit_log(&self, log_level: LogLevel, context: &str, message: &str) {
         self.emit_event(WorkerEvent::log(log_level, context, message))
+    }
+
+    fn emit_invocation_start(&self, function: &str, idempotency_key: &IdempotencyKey) {
+        self.emit_event(WorkerEvent::invocation_start(function, idempotency_key))
+    }
+
+    fn emit_invocation_finished(&self, function: &str, idempotency_key: &IdempotencyKey) {
+        self.emit_event(WorkerEvent::invocation_finished(function, idempotency_key))
     }
 
     fn receiver(&self) -> WorkerEventReceiver;
@@ -118,6 +126,8 @@ fn label(event: &WorkerEvent) -> &'static str {
         WorkerEvent::StdOut { .. } => "stdout",
         WorkerEvent::StdErr { .. } => "stderr",
         WorkerEvent::Log { .. } => "log",
+        WorkerEvent::InvocationStart { .. } => "invocation_start",
+        WorkerEvent::InvocationFinished { .. } => "invocation_finished",
         WorkerEvent::Close => "close",
     }
 }

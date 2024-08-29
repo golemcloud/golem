@@ -1852,6 +1852,8 @@ impl Stream for WorkerEventStream {
                 WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
                 WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
                 WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::InvocationStart { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::InvocationFinished { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
             },
             Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
                 Status::data_loss(format!("Lagged by {} events", n)),

@@ -3,12 +3,15 @@ syntax = "proto3";
 package golem.worker;
 
 import "google/protobuf/timestamp.proto";
+import "golem/worker/idempotency_key.proto";
 
 message LogEvent {
   oneof event {
     StdOutLog stdout = 1;
     StdErrLog stderr = 2;
     Log log = 3;
+    InvocationStarted invocation_started = 4;
+    InvocationFinished invocation_finished = 5;
   }
 }
 
@@ -36,4 +39,16 @@ message Log {
   string context = 2;
   string message = 3;
   google.protobuf.Timestamp timestamp = 4;
+}
+
+message InvocationStarted {
+  google.protobuf.Timestamp timestamp = 1;
+  string function = 2;
+  IdempotencyKey idempotency_key = 3;
+}
+
+message InvocationFinished {
+  google.protobuf.Timestamp timestamp = 1;
+  string function = 2;
+  IdempotencyKey idempotency_key = 3;
 }
