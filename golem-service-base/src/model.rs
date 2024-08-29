@@ -922,6 +922,26 @@ impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::v1
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Invalid account")]
+pub struct GolemErrorShardingNotReady {}
+
+impl From<golem_api_grpc::proto::golem::worker::v1::ShardingNotReady>
+    for crate::model::GolemErrorShardingNotReady
+{
+    fn from(_value: golem_api_grpc::proto::golem::worker::v1::ShardingNotReady) -> Self {
+        Self {}
+    }
+}
+
+impl From<crate::model::GolemErrorShardingNotReady>
+    for golem_api_grpc::proto::golem::worker::v1::ShardingNotReady
+{
+    fn from(_value: crate::model::GolemErrorShardingNotReady) -> Self {
+        Self {}
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
     pub params: Vec<TypeAnnotatedValue>,
@@ -1286,6 +1306,8 @@ pub enum GolemError {
     Unknown(GolemErrorUnknown),
     #[error(transparent)]
     InvalidAccount(GolemErrorInvalidAccount),
+    #[error(transparent)]
+    ShardingNotReady(GolemErrorShardingNotReady),
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for GolemError {
@@ -1364,6 +1386,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for
             }
             Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvalidAccount(err)) => {
                 Ok(GolemError::InvalidAccount(err.into()))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err)) => {
+                Ok(GolemError::ShardingNotReady(err.into()))
             }
             None => Err("Missing field: error".to_string()),
         }
@@ -1446,6 +1471,9 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
             }
             GolemError::InvalidAccount(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvalidAccount(err.into())
+            }
+            GolemError::ShardingNotReady(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err.into())
             }
         }
     }
