@@ -1576,7 +1576,9 @@ mod tests {
             .await
             .map(|v| v.get_val().unwrap());
 
-        let expected = create_none(None);
+        let expected = create_none(Some(&AnalysedType::Option(TypeOption {
+            inner: Box::new(AnalysedType::U64(TypeU64)),
+        })));
 
         assert_eq!(result, Ok(expected));
     }
@@ -1611,7 +1613,8 @@ mod tests {
             .evaluate_pure_expr(&expr)
             .await
             .map(|v| v.get_val().unwrap());
-        let expected = create_ok_result(TypeAnnotatedValue::U64(1), None).unwrap();
+        let expected =
+            create_ok_result(TypeAnnotatedValue::U64(1), Some(AnalysedType::U64(TypeU64))).unwrap();
         assert_eq!(result, Ok(expected));
     }
 
@@ -1619,16 +1622,19 @@ mod tests {
     async fn test_evaluation_with_pattern_match_with_err_construction() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr =
-            rib::from_string("${match err(\"afsal\") { ok(value) => ok(1), err(msg) => err(2) }}")
-                .unwrap();
+        let expr = rib::from_string(
+            "${match err(\"afsal\") { ok(value) => ok(\"1\"), err(msg) => err(2) }}",
+        )
+        .unwrap();
 
         let result = noop_executor
             .evaluate_pure_expr(&expr)
             .await
             .map(|v| v.get_val().unwrap());
 
-        let expected = create_error_result(TypeAnnotatedValue::U64(2), None).unwrap();
+        let expected =
+            create_error_result(TypeAnnotatedValue::U64(2), Some(AnalysedType::Str(TypeStr)))
+                .unwrap();
 
         assert_eq!(result, Ok(expected));
     }
@@ -1645,7 +1651,9 @@ mod tests {
             .await
             .map(|v| v.get_val().unwrap());
 
-        let expected = create_error_result(TypeAnnotatedValue::U64(2), None).unwrap();
+        let expected =
+            create_error_result(TypeAnnotatedValue::U64(2), Some(AnalysedType::U64(TypeU64)))
+                .unwrap();
         assert_eq!(result, Ok(expected));
     }
 
