@@ -86,7 +86,96 @@ impl InferredType {
     pub fn is_one_of(&self) -> bool {
         matches!(self, InferredType::OneOf(_))
     }
+    pub fn un_resolved(&self) -> Option<String> {
+        match self {
+            InferredType::Bool => None,
+            InferredType::S8 => None,
+            InferredType::U8 => None,
+            InferredType::S16 => None,
+            InferredType::U16 => None,
+            InferredType::S32 => None,
+            InferredType::U32 => None,
+            InferredType::S64 => None,
+            InferredType::U64 => None,
+            InferredType::F32 => None,
+            InferredType::F64 => None,
+            InferredType::Chr => None,
+            InferredType::Str => None,
+            InferredType::List(inferred_type) => inferred_type.un_resolved(),
+            InferredType::Tuple(types) => {
+                for typ in types {
+                    if let Some(unresolved) = typ.un_resolved() {
+                        return Some(unresolved);
+                    }
+                }
+                None
+            }
+            InferredType::Record(field) => {
+                for (field, typ) in field {
+                    if let Some(unresolved) = typ.un_resolved() {
+                        return Some(format!("Un-inferred type for field {} in record: {}", field, unresolved));
+                    }
+                }
+                None
+            }
+            InferredType::Flags(_) => None,
+            InferredType::Enum(_) => None,
+            InferredType::Option(inferred_type) => {
+                if let Some(unresolved) = inferred_type.un_resolved() {
+                    return Some(unresolved);
+                }
+                None
+            }
+            InferredType::Result { ok, error } => {
+                if let Some(ok) = ok {
+                    if let Some(unresolved) = ok.un_resolved() {
+                        return Some(unresolved);
+                    }
+                }
+                if let Some(error) = error {
+                    if let Some(unresolved) = error.un_resolved() {
+                        return Some(unresolved);
+                    }
+                }
+                None
+            }
+            InferredType::Variant(variant) => {
+                for (_, typ) in variant {
+                    if let Some(typ) = typ {
+                        if let Some(unresolved) = typ.un_resolved() {
+                            return Some(unresolved);
+                        }
+                    }
+                }
+                None
+            }
+            InferredType::Resource { .. } => None,
+            InferredType::OneOf(possibilities) => {
+                Some(format!("Cannot resolve {:?}", possibilities))
+            }
+            InferredType::AllOf(possibilities) => {
+                Some(format!("Cannot be all of {:?}", possibilities))
+            }
+            InferredType::Unknown => Some("Unknown".to_string()),
+            InferredType::Sequence(inferred_types) =>  {
+                for typ in inferred_types {
+                    if let Some(unresolved) = typ.un_resolved() {
+                        return Some(unresolved);
+                    }
+                }
+                None
 
+            }
+        }
+    }
+
+    pub fn unify_types_and_verify(&self) -> Result<InferredType, Vec<String>> {
+        let unified = self.unify_types()?;
+        if let Some(unresolved) = unified.un_resolved() {
+            return Err(vec![unresolved]);
+        }
+        Ok(unified)
+    }
     pub fn unify_types(&self) -> Result<InferredType, Vec<String>> {
         match self {
             // AllOf types may include AllOf Types and OneOf types within itself
