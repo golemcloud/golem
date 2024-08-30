@@ -458,7 +458,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${request.path.user-id}",
+            "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
         );
 
@@ -611,7 +611,9 @@ mod tests {
         );
 
         let expression = r#"
-           let input = if 2 < 1 then "foo" else "bar";
+           let left: u64 = 2;
+           let right: u64 = 1;
+           let input = if left < right then "foo" else "bar";
            let response = golem:it/api.{get-cart-contents}(input, input);
            response
         "#;
@@ -654,8 +656,14 @@ mod tests {
         );
 
         let expression = r#"
-          let number1 = if request.body.number < 11 then 0 else 1;
-          let number2 = if request.body.number > 11 then 0 else 1;
+          let request_number: u64 = request.body.number;
+          let userid: u64 = request.path.user-id;
+          let fall_back: u64 = 1;
+          let eleven: u64 = 11;
+          let zero: u64 = 0;
+
+          let number1 = if request_number < eleven then zero else fall_back;
+          let number2 = if request_number > eleven then zero else fall_back;
           let input1 = "foo-${number1}";
           let input2 = "bar-${number2}";
           let response = golem:it/api.{get-cart-contents}(input1, input2);
@@ -700,8 +708,14 @@ mod tests {
         );
 
         let expression = r#"
-          let condition1 = if request.body.number < 11 then request.path.user-id else 1;
-          let condition2 = if request.body.number < 5 then request.path.user-id else 1;
+          let request_number: u64 = request.body.number;
+          let userid: u64 = request.path.user-id;
+          let fall_back: u64 = 1;
+          let eleven: u64 = 11;
+          let five: u64 = 5;
+
+          let condition1 = if request_number < eleven then userid else fall_back;
+          let condition2 = if request_number < five then userid else fall_back;
           let param1 = "foo-${condition1}";
           let param2 = "bar-${condition2}";
           let response = golem:it/api.{get-cart-contents}(param1, param2);
