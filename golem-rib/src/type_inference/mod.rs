@@ -145,7 +145,7 @@ mod type_inference_tests {
         #[test]
         fn test_number_literal_type_inference() {
             let rib_expr = r#"
-          let x = 1;
+          let x: u64 = 1;
           x
 
           "#;
@@ -526,7 +526,7 @@ mod type_inference_tests {
         #[test]
         fn test_list_type_inference() {
             let rib_expr = r#"
-          let x = [1, 2, 3];
+          let x: list<u64> = [1, 2, 3];
           x
 
           "#;
@@ -1114,7 +1114,7 @@ mod type_inference_tests {
         #[test]
         fn test_option_type_inference() {
             let rib_expr = r#"
-          let x = some(1);
+          let x: option<u64> = some(1);
           x
 
           "#;

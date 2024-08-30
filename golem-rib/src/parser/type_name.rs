@@ -24,6 +24,7 @@ pub enum TypeName {
     Str,
     List(Box<TypeName>),
     Tuple(Vec<TypeName>),
+    Option(Box<TypeName>),
 }
 
 impl From<TypeName> for InferredType {
@@ -47,6 +48,9 @@ impl From<TypeName> for InferredType {
             }
             TypeName::Tuple(inner_types) => {
                 InferredType::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
+            }
+            TypeName::Option(type_name) => {
+                InferredType::Option(Box::new((type_name.deref().clone().into())))
             }
         }
     }
@@ -83,6 +87,17 @@ pub fn parse_list_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Type
         .map(|inner_type| TypeName::List(Box::new(inner_type)))
 }
 
+pub fn parse_option_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
+    string("option")
+        .skip(spaces())
+        .with(between(
+            char('<').skip(spaces()),
+            char('>').skip(spaces()),
+            parse_type_name(),
+        ))
+        .map(|inner_type| TypeName::Option(Box::new(inner_type)))
+}
+
 pub fn parse_tuple_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
     string("tuple")
         .skip(spaces())
@@ -99,6 +114,7 @@ pub fn parse_type_name_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Typ
         attempt(parse_basic_type()),
         attempt(parse_list_type()),
         attempt(parse_tuple_type()),
+        attempt(parse_option_type()),
     )))
 }
 
@@ -149,7 +165,7 @@ mod type_name_parser_tests {
     }
 
     #[test]
-    fn test_tuple_type() {
+    fn test_tuple_type_name() {
         parse_and_compare(
             "tuple<u8, u16>",
             TypeName::Tuple(vec![TypeName::U8, TypeName::U16]),
@@ -164,6 +180,15 @@ mod type_name_parser_tests {
                 TypeName::Tuple(vec![TypeName::S8, TypeName::S16]),
                 TypeName::U32,
             ]),
+        );
+    }
+
+    #[test]
+    fn test_option_type_name() {
+        parse_and_compare("option<u8>", TypeName::Option(Box::new(TypeName::U8)));
+        parse_and_compare(
+            "option<list<f32>>",
+            TypeName::Option(Box::new(TypeName::List(Box::new(TypeName::F32)))),
         );
     }
 
