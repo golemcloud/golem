@@ -14,6 +14,7 @@
 
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
+use crate::parser::type_binding::bind;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{text, type_inference, InferredType, VariableId};
@@ -27,7 +28,6 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use crate::parser::type_binding::bind;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -773,7 +773,8 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
                 let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
-                let expr_: golem_api_grpc::proto::golem::rib::Expr = *expr.expr.ok_or("Missing expr")?;
+                let expr_: golem_api_grpc::proto::golem::rib::Expr =
+                    *expr.expr.ok_or("Missing expr")?;
                 let expr = expr_.try_into()?;
                 let binded = bind(&expr, type_name.clone());
                 Expr::Let(
