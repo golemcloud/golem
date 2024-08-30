@@ -32,6 +32,7 @@ message WorkerExecutionError {
     PreviousInvocationExited previous_invocation_exited = 20;
     InvalidAccount invalid_account = 21;
     WorkerNotFound worker_not_found = 22;
+    ShardingNotReady sharding_not_ready = 23;
   }
 }
 
@@ -125,3 +126,5 @@ message UnknownError {
 message WorkerNotFound {
   WorkerId worker_id = 1;
 }
+
+message ShardingNotReady {}

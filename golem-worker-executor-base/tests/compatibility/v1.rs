@@ -76,7 +76,7 @@ fn is_deserializable<T: Encode + Decode + PartialEq + Debug>(old: &Path, new: &P
     assert_eq!(old_decoded, new_decoded);
 }
 
-fn backward_compatible<T: Encode + Decode + PartialEq + Debug + 'static>(
+pub(crate) fn backward_compatible<T: Encode + Decode + PartialEq + Debug + 'static>(
     name: impl AsRef<str>,
     mint: &mut Mint,
     value: T,
