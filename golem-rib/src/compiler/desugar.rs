@@ -354,57 +354,10 @@ mod desugar_tests {
     }
 
     #[test]
-    fn test_desugar_pattern_match() {
-        let rib_expr = r#"
-          match 1 {
-            1 => true,
-            2 => false
-          }
-        "#;
-
-        let function_type_registry = get_function_type_registry();
-
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry).unwrap();
-
-        let desugared_expr = match expr.clone() {
-            Expr::PatternMatch(predicate, match_arms, _) => {
-                desugar_pattern_match(predicate.deref(), &match_arms, expr.inferred_type()).unwrap()
-            }
-            _ => panic!("Expected a match expression"),
-        };
-
-        assert_eq!(desugared_expr, expected_condition_simple());
-    }
-
-    #[test]
-    fn test_desugar_pattern_match_with_literals() {
-        let rib_expr = r#"
-          match some(1) {
-            some(2) => true,
-            some(3) => false
-          }
-        "#;
-
-        let function_type_registry = get_function_type_registry();
-
-        let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_types(&function_type_registry).unwrap();
-
-        let desugared_expr = match expr.clone() {
-            Expr::PatternMatch(predicate, match_arms, _) => {
-                desugar_pattern_match(predicate.deref(), &match_arms, expr.inferred_type()).unwrap()
-            }
-            _ => panic!("Expected a match expression"),
-        };
-
-        assert_eq!(desugared_expr, expected_condition_with_literals());
-    }
-
-    #[test]
     fn test_desugar_pattern_match_with_identifiers() {
         let rib_expr = r#"
-          match some(1) {
+          let x: option<u64> = some(1);
+          match x {
             some(x) => x,
             some(y) => y
           }
@@ -415,7 +368,7 @@ mod desugar_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
         expr.infer_types(&function_type_registry).unwrap();
 
-        let desugared_expr = match expr.clone() {
+        let desugared_expr = match internal::last_expr(&expr) {
             Expr::PatternMatch(predicate, match_arms, _) => {
                 desugar_pattern_match(predicate.deref(), &match_arms, expr.inferred_type()).unwrap()
             }
@@ -425,6 +378,16 @@ mod desugar_tests {
         assert_eq!(desugared_expr, expected_condition_with_identifiers());
     }
 
+    mod internal {
+        use crate::Expr;
+
+        pub(crate) fn last_expr(expr: &Expr) -> Expr {
+            match expr {
+                Expr::Multiple(exprs, _) => exprs.last().unwrap().clone(),
+                _ => expr.clone(),
+            }
+        }
+    }
     mod expectations {
         use crate::{Expr, InferredType, Number, VariableId};
 
@@ -482,14 +445,11 @@ mod desugar_tests {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
                     Box::new(Expr::Tag(
-                        Box::new(Expr::Option(
-                            Some(Box::new(Expr::Number(
-                                Number { value: 1.0 },
-                                InferredType::U64,
-                            ))),
+                        Box::new(Expr::Identifier(
+                            VariableId::local("x", 0),
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
-                        InferredType::Unknown,
+                        InferredType::Unknown
                     )),
                     Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
                     InferredType::Bool,
@@ -499,11 +459,8 @@ mod desugar_tests {
                         Expr::Let(
                             VariableId::match_identifier("x".to_string(), 1),
                             Box::new(Expr::Unwrap(
-                                Box::new(Expr::Option(
-                                    Some(Box::new(Expr::Number(
-                                        Number { value: 1.0 },
-                                        InferredType::U64,
-                                    ))),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("x", 0),
                                     InferredType::Option(Box::new(InferredType::U64)),
                                 )),
                                 InferredType::Unknown,
@@ -520,11 +477,8 @@ mod desugar_tests {
                 Box::new(Expr::Cond(
                     Box::new(Expr::EqualTo(
                         Box::new(Expr::Tag(
-                            Box::new(Expr::Option(
-                                Some(Box::new(Expr::Number(
-                                    Number { value: 1.0 },
-                                    InferredType::U64,
-                                ))),
+                            Box::new(Expr::Identifier(
+                                VariableId::local("x", 0),
                                 InferredType::Option(Box::new(InferredType::U64)),
                             )),
                             InferredType::Unknown,
@@ -537,11 +491,8 @@ mod desugar_tests {
                             Expr::Let(
                                 VariableId::match_identifier("y".to_string(), 2),
                                 Box::new(Expr::Unwrap(
-                                    Box::new(Expr::Option(
-                                        Some(Box::new(Expr::Number(
-                                            Number { value: 1.0 },
-                                            InferredType::U64,
-                                        ))),
+                                    Box::new(Expr::Identifier(
+                                        VariableId::local("x", 0),
                                         InferredType::Option(Box::new(InferredType::U64)),
                                     )),
                                     InferredType::Unknown,

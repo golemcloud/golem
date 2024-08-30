@@ -1204,8 +1204,10 @@ mod internal {
 
 #[cfg(test)]
 mod test {
+    use wasm_wave::lex::Keyword::Inf;
+
     #[test]
-    fn test_flatte_one_of() {
+    fn test_flatten_one_of() {
         use super::InferredType;
         let one_of = vec![
             InferredType::U8,
@@ -1223,7 +1225,27 @@ mod test {
         ];
 
         let flattened = InferredType::flatten_one_of_list(&one_of);
-        dbg!(flattened);
-        assert!(false)
+
+        let expected = vec![
+           InferredType::U8,
+           InferredType::U16,
+           InferredType::U32,
+           InferredType::U8,
+           InferredType::U16,
+           InferredType::U32,
+           InferredType::AllOf(
+                vec![
+                    InferredType::U64,
+                    InferredType::OneOf(
+                       vec![
+                            InferredType::U64,
+                            InferredType::U8,
+                        ],
+                    ),
+                ],
+            ),
+        ];
+
+        assert_eq!(flattened, expected)
     }
 }
