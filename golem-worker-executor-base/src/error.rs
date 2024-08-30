@@ -98,6 +98,7 @@ pub enum GolemError {
     Unknown {
         details: String,
     },
+    ShardingNotReady,
 }
 
 impl GolemError {
@@ -260,6 +261,9 @@ impl Display for GolemError {
             GolemError::Unknown { details } => {
                 write!(f, "Unknown error: {details}")
             }
+            GolemError::ShardingNotReady => {
+                write!(f, "Sharding not ready")
+            }
         }
     }
 }
@@ -291,6 +295,7 @@ impl Error for GolemError {
             GolemError::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
+            GolemError::ShardingNotReady => "Sharding not ready",
         }
     }
 }
@@ -322,6 +327,7 @@ impl TraceErrorKind for GolemError {
             GolemError::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
             GolemError::Unknown { .. } => "Unknown",
+            GolemError::ShardingNotReady => "ShardingNotReady",
         }
     }
 }
@@ -576,6 +582,13 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::UnknownError { details },
                 )),
             },
+            GolemError::ShardingNotReady => golem::worker::v1::WorkerExecutionError {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ShardingNotReady(
+                        golem::worker::v1::ShardingNotReady {},
+                    ),
+                ),
+            },
         }
     }
 }
@@ -740,6 +753,9 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
                 Ok(GolemError::Unknown {
                     details: unknown_error.details,
                 })
+            }
+            Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
+                Ok(GolemError::ShardingNotReady)
             }
         }
     }

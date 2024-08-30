@@ -1,13 +1,10 @@
 {
-    "type": "module",
-    "scripts": {
-        "stub": "jco transpile wit --no-namespaced-exports --stub --name main -o src && rm src/main.js && mv src/main.d.ts src/main.ts",
-        "build": "tsc && jco componentize -w wit -o out/component.wasm out/main.js"
-    },
-    "devDependencies": {
-        "@bytecodealliance/componentize-js": "0.8.3",
-        "@bytecodealliance/jco": "1.1.1",
-        "@bytecodealliance/preview2-shim": "0.16.1",
-        "typescript": "5.4.5"
-    }
+  "type": "module",
+  "scripts": {
+    "build": "jco componentize -w wit -o out/component.wasm main.js"
+  },
+  "devDependencies": {
+    "@golemcloud/componentize-js": "0.10.5-golem.3",
+    "@golemcloud/jco": "1.4.4-golem.1"
+  }
 }

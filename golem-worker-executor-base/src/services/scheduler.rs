@@ -20,7 +20,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use tokio::task::JoinHandle;
-use tracing::{error, span, Instrument, Level};
+use tracing::{error, span, warn, Instrument, Level};
 
 use golem_common::model::{ScheduleId, ScheduledAction};
 
@@ -68,16 +68,22 @@ impl SchedulerServiceDefault {
             worker_activator,
         };
         let svc = Arc::new(svc);
-        let svc_clone = svc.clone();
-        let background_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(process_interval).await;
-                let r = svc_clone.process(Utc::now()).await;
-                if let Err(err) = r {
-                    error!("Error in scheduler background task: {}", err);
+        let background_handle = {
+            let svc = svc.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(process_interval).await;
+                    if svc.shard_service.is_ready() {
+                        let r = svc.process(Utc::now()).await;
+                        if let Err(err) = r {
+                            error!(err, "Error in scheduler background task");
+                        }
+                    } else {
+                        warn!("Skipping schedule, shard service is not ready")
+                    }
                 }
-            }
-        });
+            })
+        };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
 
         svc

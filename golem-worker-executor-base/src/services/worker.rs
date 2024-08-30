@@ -133,7 +133,7 @@ impl WorkerService for DefaultWorkerService {
             .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
         if worker_metadata.last_known_status.status == WorkerStatus::Running {
-            let shard_assignment = self.shard_service.current_assignment();
+            let shard_assignment = self.shard_service.current_assignment()?;
             let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
 
             debug!(
@@ -221,12 +221,14 @@ impl WorkerService for DefaultWorkerService {
     }
 
     async fn get_running_workers_in_shards(&self) -> Vec<WorkerMetadata> {
-        let shard_assignment = self.shard_service.current_assignment();
+        let shard_assignment = self.shard_service.opt_current_assignment();
         let mut result: Vec<WorkerMetadata> = vec![];
-        for shard_id in shard_assignment.shard_ids {
-            let key = Self::running_in_shard_key(&shard_id);
-            let mut shard_worker = self.enum_workers_at_key(&key).await;
-            result.append(&mut shard_worker);
+        if let Some(shard_assignment) = shard_assignment {
+            for shard_id in shard_assignment.shard_ids {
+                let key = Self::running_in_shard_key(&shard_id);
+                let mut shard_worker = self.enum_workers_at_key(&key).await;
+                result.append(&mut shard_worker);
+            }
         }
         result
     }
@@ -247,7 +249,10 @@ impl WorkerService for DefaultWorkerService {
                 panic!("failed to remove worker status in the KV storage: {err}")
             });
 
-        let shard_assignment = self.shard_service.current_assignment();
+        let shard_assignment = self
+            .shard_service
+            .current_assignment()
+            .expect("sharding assigment is not ready");
         let shard_id = ShardId::from_worker_id(
             &owned_worker_id.worker_id,
             shard_assignment.number_of_shards,
@@ -283,7 +288,10 @@ impl WorkerService for DefaultWorkerService {
             .await
             .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
-        let shard_assignment = self.shard_service.current_assignment();
+        let shard_assignment = self
+            .shard_service
+            .current_assignment()
+            .expect("sharding assignment is not ready");
         let shard_id = ShardId::from_worker_id(
             &owned_worker_id.worker_id,
             shard_assignment.number_of_shards,

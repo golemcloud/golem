@@ -918,6 +918,9 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::WorkerNotFound(error) => {
                     format!("Worker not found: {:?}", error.worker_id)
                 }
+                worker_execution_error::Error::ShardingNotReady(_error) => {
+                    "Sharing not ready".to_string()
+                }
             },
         },
     }
