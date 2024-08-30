@@ -467,8 +467,6 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            dbg!(expr.clone());
-
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(

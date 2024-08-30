@@ -136,7 +136,7 @@ pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
-        "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
+        "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}}"
             .to_string(),
     )
 }
