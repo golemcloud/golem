@@ -424,7 +424,7 @@ impl Expr {
         self.infer_all_identifiers().map_err(|x| vec![x])?;
         self.pull_types_up().map_err(|x| vec![x])?;
         self.infer_all_identifiers().map_err(|x| vec![x])?;
-       // dbg!(self.clone());
+        // dbg!(self.clone());
         self.unify_types()?;
 
         dbg!(self.clone());

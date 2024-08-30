@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::inferred_type::internal::sort_and_convert;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
-use crate::inferred_type::internal::sort_and_convert;
 
 // TODO; Clean up Unification
 
@@ -113,7 +113,10 @@ impl InferredType {
             InferredType::Record(field) => {
                 for (field, typ) in field {
                     if let Some(unresolved) = typ.un_resolved() {
-                        return Some(format!("Un-inferred type for field {} in record: {}", field, unresolved));
+                        return Some(format!(
+                            "Un-inferred type for field {} in record: {}",
+                            field, unresolved
+                        ));
                     }
                 }
                 None
@@ -157,14 +160,13 @@ impl InferredType {
                 Some(format!("Cannot be all of {:?}", possibilities))
             }
             InferredType::Unknown => Some("Unknown".to_string()),
-            InferredType::Sequence(inferred_types) =>  {
+            InferredType::Sequence(inferred_types) => {
                 for typ in inferred_types {
                     if let Some(unresolved) = typ.un_resolved() {
                         return Some(unresolved);
                     }
                 }
                 None
-
             }
         }
     }
@@ -341,10 +343,13 @@ impl InferredType {
             match unified_type.unify_with_alternative(&unified) {
                 Ok(t) => {
                     unified_type = t.clone();
-                },
+                }
                 Err(e) => {
                     if !unified_type.is_unknown() {
-                        unified_type = InferredType::OneOf(Self::flatten_one_of_list(&vec![unified_type.clone(), unified.clone()]));
+                        unified_type = InferredType::OneOf(Self::flatten_one_of_list(&vec![
+                            unified_type.clone(),
+                            unified.clone(),
+                        ]));
                     }
                     one_ofs.push(unified);
                 }
@@ -373,7 +378,7 @@ impl InferredType {
     fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, Vec<String>> {
         if self == &InferredType::Unknown {
             Ok(other.clone())
-        } else if other.is_unknown()|| self == other {
+        } else if other.is_unknown() || self == other {
             Ok(self.clone())
         } else {
             match (self, other) {
@@ -458,7 +463,6 @@ impl InferredType {
                     let unified_a_type = a_type.unify_types()?;
                     let combined = unified_a_type.unify_with_alternative(&unified_b_type)?;
                     Ok(InferredType::Option(Box::new(combined)))
-
                 }
 
                 (
@@ -808,11 +812,13 @@ impl InferredType {
                 }
 
                 (InferredType::AllOf(types), inferred_type) => {
-                    let x =
-                        types.iter().filter(|x| !x.is_unknown()).map(|t| t.unify_with_required(inferred_type).unwrap()).collect::<Vec<_>>();
+                    let x = types
+                        .iter()
+                        .filter(|x| !x.is_unknown())
+                        .map(|t| t.unify_with_required(inferred_type).unwrap())
+                        .collect::<Vec<_>>();
 
                     Self::unify_all_required_types(&x)
-
                 }
 
                 (inferred_type, InferredType::AllOf(types)) => {
@@ -1059,7 +1065,9 @@ impl InferredType {
 
             (InferredType::AllOf(existing_types), InferredType::AllOf(mut new_types)) => {
                 // Extend with new types only if they are not already present
-                new_types.retain(|new_type| !existing_types.contains(new_type) || !new_type.is_unknown());
+                new_types.retain(|new_type| {
+                    !existing_types.contains(new_type) || !new_type.is_unknown()
+                });
                 existing_types.retain(|x| !x.is_unknown());
                 existing_types.extend(new_types);
             }
@@ -1100,7 +1108,10 @@ impl InferredType {
             (current_type, InferredType::OneOf(mut newtypes)) => {
                 newtypes.retain(|x| !x.is_unknown());
                 if !current_type.is_unknown() {
-                    *self = InferredType::AllOf(vec![current_type.clone(), InferredType::OneOf(newtypes)]);
+                    *self = InferredType::AllOf(vec![
+                        current_type.clone(),
+                        InferredType::OneOf(newtypes),
+                    ]);
                 } else {
                     *self = InferredType::OneOf(newtypes);
                 }
@@ -1115,9 +1126,6 @@ impl InferredType {
             }
         }
     }
-
-
-
 }
 
 impl From<AnalysedType> for InferredType {
@@ -1202,9 +1210,15 @@ mod test {
             InferredType::U8,
             InferredType::U16,
             InferredType::U32,
-            InferredType::OneOf(vec![   InferredType::U8,
-                                        InferredType::U16,
-                                        InferredType::U32, InferredType::AllOf(vec![InferredType::U64, InferredType::OneOf(vec![InferredType::U64, InferredType::U8])])]),
+            InferredType::OneOf(vec![
+                InferredType::U8,
+                InferredType::U16,
+                InferredType::U32,
+                InferredType::AllOf(vec![
+                    InferredType::U64,
+                    InferredType::OneOf(vec![InferredType::U64, InferredType::U8]),
+                ]),
+            ]),
         ];
 
         let flattened = InferredType::flatten_one_of_list(&one_of);
