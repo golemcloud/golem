@@ -9,7 +9,7 @@ pub fn name_binding_local_variables(expr: &mut Expr) {
     // Start from the end
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Let(variable_id, expr, _) => {
+            Expr::Let(variable_id, _, expr, _) => {
                 let field_name = variable_id.name();
                 identifier_id_state.update_variable_id(&field_name); // Increment the variable_id
                 *variable_id = identifier_id_state.lookup(&field_name).unwrap();
@@ -78,6 +78,7 @@ mod name_binding_tests {
 
         let let_binding = Expr::Let(
             VariableId::local("x", 0),
+            None,
             Box::new(Expr::number(1f64)),
             InferredType::Unknown,
         );
@@ -117,12 +118,14 @@ mod name_binding_tests {
 
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
+            None,
             Box::new(Expr::number(1f64)),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("y", 0),
+            None,
             Box::new(Expr::number(2f64)),
             InferredType::Unknown,
         );
@@ -176,12 +179,14 @@ mod name_binding_tests {
 
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
+            None,
             Box::new(Expr::number(1f64)),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("x", 1),
+            None,
             Box::new(Expr::number(2f64)),
             InferredType::Unknown,
         );

@@ -86,9 +86,13 @@ impl<W: Write> Writer<W> {
             }
             Expr::Identifier(identifier, _) => self.write_str(identifier.name()),
 
-            Expr::Let(variable_id, expr, _) => {
+            Expr::Let(variable_id, type_name, expr, _) => {
                 self.write_str("let ")?;
                 self.write_str(variable_id.name())?;
+                if let Some(type_name) = type_name {
+                    self.write_str(": ")?;
+                    self.write_display(type_name)?;
+                };
                 self.write_str(" = ")?;
                 self.write_expr(expr)
             }

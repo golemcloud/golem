@@ -21,7 +21,7 @@ pub fn infer_all_identifiers_bottom_up(expr: &mut Expr) -> Result<(), String> {
                     identifier_lookup.update(variable_id.clone(), inferred_type.clone());
                 }
             }
-            Expr::Let(variable_id, expr, _) => {
+            Expr::Let(variable_id, _, expr, _) => {
                 if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                     if inferred_type.is_unknown() {
                         identifier_lookup.update(variable_id.clone(), expr.inferred_type())
@@ -51,7 +51,7 @@ pub fn infer_all_identifiers_top_down(expr: &mut Expr) -> Result<(), String> {
     // We start from the end and pick the identifiers type
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Let(variable_id, expr, _) => {
+            Expr::Let(variable_id, _, expr, _) => {
                 if let Some(inferred_type) = identifier_lookup.lookup(variable_id) {
                     if inferred_type.is_unknown() {
                         identifier_lookup.update(variable_id.clone(), expr.inferred_type())

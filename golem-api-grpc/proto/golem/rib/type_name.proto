@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package golem.rib;
+
+// Define the TypeName enum to represent simple types.
+enum BasicTypeName {
+    BOOL = 0;
+    S8 = 1;
+    U8 = 2;
+    S16 = 3;
+    U16 = 4;
+    S32 = 5;
+    U32 = 6;
+    S64 = 7;
+    U64 = 8;
+    F32 = 9;
+    F64 = 10;
+    CHR = 11;
+    STR = 12;
+}
+
+message TypeName {
+    oneof kind {
+        BasicTypeName basic_type = 1;
+        ListType list_type = 2;
+        TupleType tuple_type = 3;
+        OptionType option_type = 4;
+    }
+}
+
+message ListType {
+    TypeName inner_type = 1;
+}
+
+message TupleType {
+    repeated TypeName types = 1;
+}
+
+message OptionType {
+    TypeName inner_type = 1;
+}

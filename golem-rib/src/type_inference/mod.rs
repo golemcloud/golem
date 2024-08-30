@@ -51,6 +51,7 @@ mod type_inference_tests {
 
             let let_binding = Expr::Let(
                 VariableId::local("x", 0),
+                None,
                 Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)), // The number in let expression is identified to be a U64
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
@@ -92,12 +93,14 @@ mod type_inference_tests {
 
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
+                None,
                 Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)), // The number in let expression is identified to be a U64
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
 
             let let_binding2 = Expr::Let(
                 VariableId::local("y", 0),
+                None,
                 Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U32)), // The number in let expression is identified to be a U64
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
@@ -139,13 +142,14 @@ mod type_inference_tests {
         }
     }
     mod literal_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_number_literal_type_inference() {
             let rib_expr = r#"
-          let x = 1;
+          let x: u64 = 1;
           x
 
           "#;
@@ -158,6 +162,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
@@ -185,6 +190,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
@@ -197,14 +203,15 @@ mod type_inference_tests {
         }
     }
     mod comparison_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_comparison_type_inference() {
             let rib_expr = r#"
-          let x = 1;
-          let y = 2;
+          let x: u64 = 1;
+          let y: u64 = 2;
           x > y;
           x >= y;
           x < y;
@@ -220,11 +227,13 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
@@ -310,11 +319,13 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
+                        None,
                         Box::new(Expr::literal("2")),
                         InferredType::Unknown,
                     ),
@@ -352,6 +363,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::boolean(true)),
                         InferredType::Unknown,
                     ),
@@ -364,14 +376,15 @@ mod type_inference_tests {
         }
     }
     mod cond_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_cond_type_inference() {
             let rib_expr = r#"
-          let x = 1;
-          let y = 2;
+          let x: u64 = 1;
+          let y: u64 = 2;
           let res1 = "foo";
           let res2 = "bar";
           if x > y then res1 else res2
@@ -385,21 +398,25 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("res1", 0),
+                        None,
                         Box::new(Expr::literal("foo")),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("res2", 0),
+                        None,
                         Box::new(Expr::literal("bar")),
                         InferredType::Unknown,
                     ),
@@ -433,6 +450,7 @@ mod type_inference_tests {
         }
     }
     mod identifier_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
@@ -449,17 +467,17 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            dbg!(expr.clone());
-
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::literal("1")),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
+                        None,
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
                             InferredType::Str,
@@ -477,7 +495,7 @@ mod type_inference_tests {
         #[test]
         fn test_identifier_type_inference_multiple_re_assign() {
             let rib_expr = r#"
-          let x = 1;
+          let x: u64 = 1;
           let y = x;
           let z = y;
           z
@@ -492,11 +510,13 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
+                        None,
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
                             InferredType::U64,
@@ -505,6 +525,7 @@ mod type_inference_tests {
                     ),
                     Expr::Let(
                         VariableId::local("z", 0),
+                        None,
                         Box::new(Expr::Identifier(
                             VariableId::local("y", 0),
                             InferredType::U64,
@@ -520,13 +541,14 @@ mod type_inference_tests {
         }
     }
     mod list_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_list_type_inference() {
             let rib_expr = r#"
-          let x = [1, 2, 3];
+          let x: list<u64> = [1, 2, 3];
           x
 
           "#;
@@ -539,6 +561,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
                                 Expr::Number(Number { value: 1f64 }, InferredType::U64),
@@ -561,13 +584,14 @@ mod type_inference_tests {
         }
     }
     mod select_index_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_select_index_type_inference() {
             let rib_expr = r#"
-          let x = [1, 2, 3];
+          let x: list<u64> = [1, 2, 3];
           x[0]
 
           "#;
@@ -580,6 +604,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
                                 Expr::Number(Number { value: 1f64 }, InferredType::U64),
@@ -606,13 +631,15 @@ mod type_inference_tests {
         }
     }
     mod select_field_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_select_field_type_inference() {
             let rib_expr = r#"
-          let x = { foo : 1 };
+          let n: u64 = 1;
+          let x = { foo : n };
           x.foo
 
           "#;
@@ -624,11 +651,21 @@ mod type_inference_tests {
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
+                        VariableId::local("n", 0),
+                        Some(TypeName::U64),
+                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::Record(
                             vec![(
                                 "foo".to_string(),
-                                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("n", 0),
+                                    InferredType::U64,
+                                )),
                             )],
                             InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                         )),
@@ -650,13 +687,14 @@ mod type_inference_tests {
         }
     }
     mod tuple_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_tuple_type_inference() {
             let rib_expr = r#"
-          let x = (1, "2");
+          let x: tuple<u64, str> = (1, "2");
           x
 
           "#;
@@ -669,6 +707,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::Tuple(vec![TypeName::U64, TypeName::Str])),
                         Box::new(Expr::Tuple(
                             vec![
                                 Expr::Number(Number { value: 1f64 }, InferredType::U64),
@@ -690,6 +729,7 @@ mod type_inference_tests {
         }
     }
     mod variable_conflict_tests {
+        use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId,
         };
@@ -697,7 +737,7 @@ mod type_inference_tests {
         #[test]
         fn test_variable_conflict_case() {
             let expr_str = r#"
-              let y = 1;
+              let y: u64 = 1;
               let z = some(y);
 
               match z {
@@ -710,16 +750,17 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            dbg!(expr.clone());
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
                         VariableId::local("y", 0),
+                        Some(TypeName::U64),
                         Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("z", 0),
+                        None,
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Identifier(
                                 VariableId::local("y", 0),
@@ -769,6 +810,7 @@ mod type_inference_tests {
         }
     }
     mod pattern_match_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, InvocationName, MatchArm, Number,
@@ -792,12 +834,14 @@ mod type_inference_tests {
 
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
+                None,
                 Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
                 InferredType::Unknown,
             );
 
             let let_binding2 = Expr::Let(
                 VariableId::local("y", 0),
+                None,
                 Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U32)),
                 InferredType::Unknown,
             );
@@ -875,6 +919,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::Record(
                             vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
                             InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
@@ -937,6 +982,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::Record(
                             vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
                             InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
@@ -993,7 +1039,7 @@ mod type_inference_tests {
         fn test_pattern_match_with_record_with_select_index() {
             let expr_str = r#"
               let x = { foo : "bar" };
-              let y = [1, 2, 3];
+              let y: list<u64> = [1, 2, 3];
 
               match some(x) {
                 some(x) => x.foo
@@ -1012,6 +1058,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::Record(
                             vec![("foo".to_string(), Box::new(Expr::literal("bar")))],
                             InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
@@ -1020,6 +1067,7 @@ mod type_inference_tests {
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
+                        Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
                                 Expr::Number(Number { value: 1f64 }, InferredType::U64),
@@ -1108,13 +1156,14 @@ mod type_inference_tests {
         }
     }
     mod option_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_option_type_inference() {
             let rib_expr = r#"
-          let x = some(1);
+          let x: option<u64> = some(1);
           x
 
           "#;
@@ -1127,6 +1176,7 @@ mod type_inference_tests {
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
+                        Some(TypeName::Option(Box::new(TypeName::U64))),
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Number(
                                 Number { value: 1f64 },
@@ -1148,13 +1198,15 @@ mod type_inference_tests {
         }
     }
     mod record_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
 
         #[test]
         fn test_record_type_inference() {
             let rib_expr = r#"
-          let x = { foo : 1 };
+          let number: u64 = 1;
+          let x = { foo : number };
           x
 
           "#;
@@ -1166,11 +1218,21 @@ mod type_inference_tests {
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
+                        VariableId::local("number", 0),
+                        Some(TypeName::U64),
+                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
                         VariableId::local("x", 0),
+                        None,
                         Box::new(Expr::Record(
                             vec![(
                                 "foo".to_string(),
-                                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("number", 0),
+                                    InferredType::U64,
+                                )),
                             )],
                             InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                         )),
@@ -1203,12 +1265,11 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            dbg!(expr.clone());
-
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
                         VariableId::local("p", 0),
+                        None,
                         Box::new(Expr::Result(
                             Err(Box::new(Expr::literal("foo"))),
                             InferredType::Result {
@@ -1220,6 +1281,7 @@ mod type_inference_tests {
                     ),
                     Expr::Let(
                         VariableId::local("q", 0),
+                        None,
                         Box::new(Expr::Result(
                             Ok(Box::new(Expr::literal("bar"))),
                             InferredType::Result {

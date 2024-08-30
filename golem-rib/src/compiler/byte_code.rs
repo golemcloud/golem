@@ -158,7 +158,7 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
             }
-            Expr::Let(variable_id, inner_expr, _) => {
+            Expr::Let(variable_id, _, inner_expr, _) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
                 instructions.push(RibIR::AssignVar(variable_id.clone()));
             }
@@ -401,6 +401,7 @@ mod compiler_tests {
 
         let expr = Expr::Let(
             variable_id.clone(),
+            None,
             Box::new(literal),
             InferredType::Unknown,
         );

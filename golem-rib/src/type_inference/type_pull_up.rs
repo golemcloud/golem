@@ -45,6 +45,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             inferred_type.update(record_type)
         }
         Expr::Option(Some(expr), inferred_type) => {
+            expr.pull_types_up()?;
             let option_type = InferredType::Option(Box::new(expr.inferred_type()));
             inferred_type.update(option_type)
         }
@@ -73,9 +74,10 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
 
             if then_type == else_type {
                 inferred_type.update(then_type);
-            } else {
-                let cond_then_else_type = InferredType::AllOf(vec![then_type, else_type]);
-                inferred_type.update(cond_then_else_type)
+            } else if let Some(cond_then_else_type) =
+                InferredType::all_of(vec![then_type, else_type])
+            {
+                inferred_type.update(cond_then_else_type);
             }
         }
 
@@ -96,12 +98,12 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 let first_type = possible_inference_types[0].clone();
                 if possible_inference_types.iter().all(|t| t == &first_type) {
                     inferred_type.update(first_type);
-                } else {
-                    inferred_type.update(InferredType::AllOf(possible_inference_types));
+                } else if let Some(all_of) = InferredType::all_of(possible_inference_types) {
+                    inferred_type.update(all_of);
                 }
             }
         }
-        Expr::Let(_, expr, _) => expr.pull_types_up()?,
+        Expr::Let(_, _, expr, _) => expr.pull_types_up()?,
         Expr::SelectField(expr, field, inferred_type) => {
             expr.pull_types_up()?;
             let expr_type = expr.inferred_type();
