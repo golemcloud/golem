@@ -2,13 +2,13 @@ use crate::type_registry::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 
-// At this point we simply update the types to the parameter type expressions and the call expression itself.
-pub fn infer_function_types(expr: &mut Expr, function_type_registry: &FunctionTypeRegistry) {
+pub fn infer_function_types(
+    expr: &mut Expr,
+    function_type_registry: &FunctionTypeRegistry,
+) -> Result<(), String> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
-    // From the end to top
     while let Some(expr) = queue.pop_back() {
-        // call(x), let x = 1;
         match expr {
             Expr::Call(parsed_fn_name, args, inferred_type) => {
                 let key = RegistryKey::from_invocation_name(parsed_fn_name);
@@ -21,10 +21,9 @@ pub fn infer_function_types(expr: &mut Expr, function_type_registry: &FunctionTy
                         } => {
                             if parameter_types.len() == args.len() {
                                 for (arg, param_type) in args.iter_mut().zip(parameter_types) {
+                                    internal::check_function_arguments(param_type, arg)?;
                                     arg.add_infer_type_mut(param_type.clone().into());
-                                    // TODO; Probably not necessary as we push down in a separate phase.
-                                    // Tests failing, so keeping it for now.
-                                    arg.push_types_down()
+                                    arg.push_types_down()?
                                 }
                                 *inferred_type = {
                                     if return_types.len() == 1 {
@@ -35,13 +34,200 @@ pub fn infer_function_types(expr: &mut Expr, function_type_registry: &FunctionTy
                                         )
                                     }
                                 }
+                            } else {
+                                return Err(format!(
+                                    "Function {} expects {} arguments, but {} were provided",
+                                    parsed_fn_name,
+                                    parameter_types.len(),
+                                    args.len()
+                                ));
                             }
                         }
                     }
                 }
             }
-            // Continue for nested expressions
             _ => expr.visit_children_mut_bottom_up(&mut queue),
+        }
+    }
+
+    Ok(())
+}
+
+mod internal {
+    use crate::Expr;
+    use golem_wasm_ast::analysis::AnalysedType;
+
+    // A preliminary check of the arguments passed before  typ inference
+    pub(crate) fn check_function_arguments(
+        expected: &AnalysedType,
+        passed: &Expr,
+    ) -> Result<(), String> {
+        let valid_possibilities = passed.is_identifier()
+            || passed.is_select_field()
+            || passed.is_select_index()
+            || passed.is_select_field()
+            || passed.is_match_expr()
+            || passed.is_if_else();
+
+        match expected {
+            AnalysedType::U32(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected U32, but found {:?}", passed))
+                }
+            }
+
+            AnalysedType::U64(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected U64, but found {:?}", passed))
+                }
+            }
+
+            AnalysedType::Variant(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Variant, but found {:?}", passed))
+                }
+            }
+
+            AnalysedType::Result(_) => {
+                if valid_possibilities || passed.is_result() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Result, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Option(_) => {
+                if valid_possibilities || passed.is_option() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Option, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Enum(_) => {
+                if valid_possibilities {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Enum, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Flags(_) => {
+                if valid_possibilities || passed.is_flags() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Flags, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Record(_) => {
+                if valid_possibilities || passed.is_record() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Record, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Tuple(_) => {
+                if valid_possibilities || passed.is_tuple() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Tuple, but found {:?}", passed))
+                }
+            }
+            AnalysedType::List(_) => {
+                if valid_possibilities || passed.is_list() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected List, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Str(_) => {
+                if valid_possibilities || passed.is_concat() || passed.is_literal() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Str, but found {:?}", passed))
+                }
+            }
+            // TODO?
+            AnalysedType::Chr(_) => {
+                if valid_possibilities || passed.is_literal() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Chr, but found {:?}", passed))
+                }
+            }
+            AnalysedType::F64(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected F64, but found {:?}", passed))
+                }
+            }
+            AnalysedType::F32(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected F32, but found {:?}", passed))
+                }
+            }
+            AnalysedType::S64(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected S64, but found {:?}", passed))
+                }
+            }
+            AnalysedType::S32(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected S32, but found {:?}", passed))
+                }
+            }
+            AnalysedType::U16(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected U16, but found {:?}", passed))
+                }
+            }
+            AnalysedType::S16(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected S16, but found {:?}", passed))
+                }
+            }
+            AnalysedType::U8(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected U8, but found {:?}", passed))
+                }
+            }
+            AnalysedType::S8(_) => {
+                if valid_possibilities || passed.is_number() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected S8, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Bool(_) => {
+                if valid_possibilities || passed.is_boolean() || passed.is_comparison() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Bool, but found {:?}", passed))
+                }
+            }
+            AnalysedType::Handle(_) => {
+                if valid_possibilities {
+                    Ok(())
+                } else {
+                    Err(format!("Expected Handle, but found {:?}", passed))
+                }
+            }
         }
     }
 }
@@ -89,7 +275,7 @@ mod function_parameters_inference_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_function_types(&function_type_registry);
+        expr.infer_function_types(&function_type_registry).unwrap();
 
         let let_binding = Expr::let_binding("x", Expr::number(1f64));
 

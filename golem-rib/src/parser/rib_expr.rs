@@ -37,6 +37,7 @@ use super::result::result;
 use super::select_field::select_field;
 use super::select_index::select_index;
 use super::tuple::tuple;
+use crate::parser::block::block;
 use crate::parser::boolean::boolean_literal;
 use crate::parser::call::call;
 use combine::stream::easy;
@@ -73,15 +74,21 @@ pub fn rib_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         attempt(pattern_match()),
         attempt(let_binding()),
         attempt(conditional()),
-        attempt(greater_than_or_equal_to(rib_expr0(), rib_expr0())),
-        attempt(greater_than(rib_expr0(), rib_expr0())),
-        attempt(less_than_or_equal_to(rib_expr0(), rib_expr0())),
-        attempt(less_than(rib_expr0(), rib_expr0())),
-        attempt(equal_to(rib_expr0(), rib_expr0())),
-        attempt(select_field()),
-        attempt(select_index()),
+        attempt(greater_than_or_equal_to(
+            comparison_operands(),
+            comparison_operands(),
+        )),
+        attempt(greater_than(comparison_operands(), comparison_operands())),
+        attempt(less_than_or_equal_to(
+            comparison_operands(),
+            comparison_operands(),
+        )),
+        attempt(less_than(comparison_operands(), comparison_operands())),
+        attempt(equal_to(comparison_operands(), comparison_operands())),
+        selection_expr(),
         attempt(flag()),
         attempt(record()),
+        attempt(block()),
         attempt(tuple()),
         attempt(sequence()),
         attempt(literal()),
@@ -95,22 +102,24 @@ pub fn rib_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     ))
 }
 
-fn rib_expr0_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+fn selection_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+    choice((attempt(select_field()), attempt(select_index())))
+}
+
+parser! {
+    fn selection_expr['t]()(easy::Stream<&'t str>) -> Expr
+    where [
+        easy::Stream<&'t str>: Stream<Token = char>,
+    ]
+    {
+        selection_expr_()
+    }
+}
+
+fn simple_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     choice((
-        attempt(pattern_match()),
-        attempt(let_binding()),
-        attempt(conditional()),
-        attempt(select_field()),
-        attempt(select_index()),
-        attempt(flag()),
-        attempt(record()),
-        attempt(tuple()),
-        attempt(sequence()),
         attempt(literal()),
         attempt(not()),
-        attempt(option()),
-        attempt(result()),
-        attempt(call()),
         attempt(number()),
         attempt(boolean_literal()),
         attempt(identifier()),
@@ -118,12 +127,26 @@ fn rib_expr0_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
 }
 
 parser! {
-    fn rib_expr0['t]()(easy::Stream<&'t str>) -> Expr
+    fn simple_expr['t]()(easy::Stream<&'t str>) -> Expr
     where [
         easy::Stream<&'t str>: Stream<Token = char>,
     ]
     {
-        rib_expr0_()
+        simple_expr_()
+    }
+}
+
+fn comparison_operands_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+    selection_expr().or(simple_expr())
+}
+
+parser! {
+    fn comparison_operands['t]()(easy::Stream<&'t str>) -> Expr
+    where [
+        easy::Stream<&'t str>: Stream<Token = char>,
+    ]
+    {
+        comparison_operands_()
     }
 }
 

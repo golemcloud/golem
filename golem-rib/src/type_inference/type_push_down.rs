@@ -1,7 +1,7 @@
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
 
-pub fn push_types_down(expr: &mut Expr) {
+pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -18,135 +18,37 @@ pub fn push_types_down(expr: &mut Expr) {
             }
 
             Expr::SelectIndex(expr, _, inferred_type) => {
-                // If the field is not known, we update the inferred type with the field type
-
                 let field_type = inferred_type.clone();
                 let inferred_record_type = InferredType::List(Box::new(field_type));
-
-                // the type of the expr is a record type having the specific field
                 expr.add_infer_type_mut(inferred_record_type);
                 queue.push_back(expr);
             }
             Expr::Cond(cond, then, else_, inferred_type) => {
-                // If an entire if condition is inferred to be a specific type, then both branches should be of the same type
-                // If the field is not known, we update the inferred type with the field type
                 then.add_infer_type_mut(inferred_type.clone());
                 else_.add_infer_type_mut(inferred_type.clone());
 
-                // A condition expression is always a boolean type and can be tagged as a boolean
                 cond.add_infer_type_mut(InferredType::Bool);
                 queue.push_back(cond);
                 queue.push_back(then);
                 queue.push_back(else_);
             }
             Expr::Not(expr, inferred_type) => {
-                // The inferred_type should be ideally boolean type and should be pushed down as a boolean type
-                // however, at this phase, we are unsure and we propogate the inferred_type as is
                 expr.add_infer_type_mut(inferred_type.clone());
                 queue.push_back(expr);
             }
             Expr::Option(Some(expr), inferred_type) => {
-                // The inferred_type should be ideally optional type, i.e, either Unknown type. or all of multiple optional types, or one of all optional types,
-                // and otherwise we give up inferring the internal type at this phase
-                match inferred_type {
-                    InferredType::Option(ref t) => {
-                        expr.add_infer_type_mut(*t.clone());
-                    }
-                    InferredType::AllOf(types) => {
-                        let mut all_types = vec![];
-                        for typ in types {
-                            if let InferredType::Option(ref t) = typ {
-                                all_types.push(*t.clone());
-                            }
-                        }
-                        expr.add_infer_type_mut(InferredType::AllOf(all_types));
-                    }
-                    InferredType::OneOf(types) => {
-                        let mut one_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Option(ref t) = typ {
-                                one_of_types.push(*t.clone());
-                            }
-                        }
-                        expr.add_infer_type_mut(InferredType::OneOf(one_of_types));
-                    }
-                    // we can't push down the types otherwise
-                    _ => {}
-                }
+                internal::handle_option(expr, inferred_type)?;
+                queue.push_back(expr);
             }
 
             Expr::Result(Ok(expr), inferred_type) => {
-                // The inferred_type should be ideally result type, i.e, either Unknown type. or all of multiple result types, or one of all result types,
-                // and otherwise we give up inferring the internal type at this phase
-                match inferred_type {
-                    InferredType::Result { ok: Some(ok), .. } => {
-                        expr.add_infer_type_mut(*ok.clone());
-                        queue.push_back(expr);
-                    }
-                    InferredType::AllOf(types) => {
-                        let mut all_types = vec![];
-                        for typ in types {
-                            if let InferredType::Result { ok: Some(ok), .. } = typ {
-                                all_types.push(*ok.clone());
-                            }
-                        }
-                        expr.add_infer_type_mut(InferredType::AllOf(all_types));
-                        queue.push_back(expr);
-                    }
-                    InferredType::OneOf(types) => {
-                        let mut one_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Result { ok: Some(ok), .. } = typ {
-                                one_of_types.push(*ok.clone());
-                            }
-                        }
-                        expr.add_infer_type_mut(InferredType::OneOf(one_of_types));
-                        queue.push_back(expr);
-                    }
-                    // we can't push down the types otherwise
-                    _ => {}
-                }
+                internal::handle_ok(expr, inferred_type)?;
+                queue.push_back(expr);
             }
 
             Expr::Result(Err(expr), inferred_type) => {
-                // The inferred_type should be ideally result type, i.e, either Unknown type. or all of multiple result types, or one of all result types,
-                // and otherwise we give up inferring the internal type at this phase
-                match inferred_type {
-                    InferredType::Result {
-                        error: Some(error), ..
-                    } => {
-                        expr.add_infer_type_mut(*error.clone());
-                        queue.push_back(expr);
-                    }
-                    InferredType::AllOf(types) => {
-                        let mut all_types = vec![];
-                        for typ in types {
-                            if let InferredType::Result {
-                                error: Some(error), ..
-                            } = typ
-                            {
-                                all_types.push(*error.clone());
-                            }
-                        }
-                        expr.add_infer_type_mut(InferredType::AllOf(all_types));
-                        queue.push_back(expr);
-                    }
-                    InferredType::OneOf(types) => {
-                        let mut one_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Result {
-                                error: Some(error), ..
-                            } = typ
-                            {
-                                one_of_types.push(*error.clone());
-                            }
-                        }
-                        expr.add_infer_type_mut(InferredType::OneOf(one_of_types));
-                        queue.push_back(expr);
-                    }
-                    // we can't push down the types otherwise
-                    _ => {}
-                }
+                internal::handle_err(expr, inferred_type)?;
+                queue.push_back(expr);
             }
 
             // In a pattern the type of the whole pattern match is pushed to the arm resolution expressions
@@ -162,208 +64,141 @@ pub fn push_types_down(expr: &mut Expr) {
                 } in match_arms
                 {
                     let predicate_type = pred.inferred_type();
-                    internal::update_arm_pattern_type(arm_pattern, &predicate_type); // recursively push down the types as much as we can
+                    internal::update_arm_pattern_type(arm_pattern, &predicate_type)?; // recursively push down the types as much as we can
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
             }
 
             Expr::Tuple(exprs, inferred_type) => {
-                // The inferred_type should be ideally tuple type, i.e, either Unknown type. or all of multiple tuple types, or one of all tuple types,
-                // and otherwise we give up inferring the internal type at this phase
-                match inferred_type {
-                    InferredType::Tuple(types) => {
-                        for (expr, typ) in exprs.iter_mut().zip(types) {
-                            expr.add_infer_type_mut(typ.clone());
-                            queue.push_back(expr);
-                        }
-                    }
-                    InferredType::AllOf(types) => {
-                        let mut all_types = vec![];
-                        for typ in types {
-                            if let InferredType::Tuple(types) = typ {
-                                all_types.extend(types);
-                            }
-                        }
-                        for (expr, typ) in exprs.iter_mut().zip(all_types) {
-                            expr.add_infer_type_mut(typ.clone());
-                            queue.push_back(expr);
-                        }
-                    }
-                    InferredType::OneOf(types) => {
-                        let mut one_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Tuple(types) = typ {
-                                one_of_types.extend(types);
-                            }
-                        }
-                        for (expr, typ) in exprs.iter_mut().zip(one_of_types) {
-                            expr.add_infer_type_mut(typ.clone());
-                            queue.push_back(expr);
-                        }
-                    }
-                    // we can't push down the types otherwise
-                    _ => {}
-                }
+                internal::handle_tuple(exprs, inferred_type, &mut queue)?;
             }
             Expr::Sequence(expressions, inferred_type) => {
-                // The inferred_type should be ideally sequence type, i.e, either Unknown type. or all of multiple sequence types, or one of all sequence types,
-                // and otherwise we give up inferring the internal type at this phase
-                match inferred_type {
-                    InferredType::Sequence(types) => {
-                        for (expr, typ) in expressions.iter_mut().zip(types) {
-                            expr.add_infer_type_mut(typ.clone());
-                            queue.push_back(expr);
-                        }
-                    }
-                    InferredType::AllOf(types) => {
-                        let mut all_types = vec![];
-                        for typ in types {
-                            if let InferredType::Sequence(types) = typ {
-                                all_types.extend(types);
-                            }
-                        }
-                        for (expr, typ) in expressions.iter_mut().zip(all_types) {
-                            expr.add_infer_type_mut(typ.clone());
-                            queue.push_back(expr);
-                        }
-                    }
-                    InferredType::OneOf(types) => {
-                        let mut one_of_types = vec![];
-                        for typ in types {
-                            if let InferredType::Sequence(types) = typ {
-                                one_of_types.extend(types);
-                            }
-                        }
-                        for (expr, typ) in expressions.iter_mut().zip(one_of_types) {
-                            expr.add_infer_type_mut(typ.clone());
-                            queue.push_back(expr);
-                        }
-                    }
-                    // we can't push down the types otherwise
-                    _ => {}
-                }
+                internal::handle_sequence(expressions, inferred_type, &mut queue)?;
             }
 
             Expr::Record(expressions, inferred_type) => {
-                match inferred_type {
-                    InferredType::Record(types) => {
-                        for (field_name, expr) in expressions.iter_mut() {
-                            if let Some((_, typ)) =
-                                types.iter().find(|(name, _)| name == field_name)
-                            {
-                                expr.add_infer_type_mut(typ.clone());
-                            }
-                            queue.push_back(expr);
-                        }
-                    }
-
-                    InferredType::AllOf(types) => {
-                        internal::handle_all_of_push_down_for_record(
-                            types,
-                            expressions,
-                            &mut queue,
-                        );
-                    }
-
-                    InferredType::OneOf(types) => {
-                        internal::handle_one_of_push_down_for_record(
-                            types,
-                            expressions,
-                            &mut queue,
-                        );
-                    }
-                    // we can't push down the types otherwise
-                    _ => {}
-                }
+                internal::handle_record(expressions, inferred_type, &mut queue)?;
             }
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
+
+    Ok(())
 }
 
 mod internal {
-    use crate::{ArmPattern, Expr, InferredType};
-    use std::collections::{HashMap, VecDeque};
+    use crate::type_inference::precise_types::*;
+    use crate::{ArmPattern, Expr, InferredType, TypeRefinement};
+    use std::collections::VecDeque;
 
-    pub(crate) fn handle_all_of_push_down_for_record<'a>(
-        outer_inferred_types: &'a mut Vec<InferredType>,
-        inner_expressions: &'a mut [(String, Box<Expr>)],
-        push_down_queue: &mut VecDeque<&'a mut Expr>,
-    ) {
-        handle_push_down_for_record(
-            outer_inferred_types,
-            inner_expressions,
-            push_down_queue,
-            InferredType::all_of,
-        );
+    pub(crate) fn handle_option(
+        inner_expr: &mut Expr,
+        outer_inferred_type: &InferredType,
+    ) -> Result<(), String> {
+        let refined_optional_type = OptionalType::refine(outer_inferred_type)
+            .ok_or("Expected optional type".to_string())?;
+        let inner_type = refined_optional_type.inner_type();
+
+        inner_expr.add_infer_type_mut(inner_type.clone());
+        Ok(())
     }
 
-    pub(crate) fn handle_one_of_push_down_for_record<'a>(
-        outer_inferred_types: &'a mut Vec<InferredType>,
-        inner_expressions: &'a mut [(String, Box<Expr>)],
-        push_down_queue: &mut VecDeque<&'a mut Expr>,
-    ) {
-        handle_push_down_for_record(
-            outer_inferred_types,
-            inner_expressions,
-            push_down_queue,
-            InferredType::one_of,
-        );
+    pub(crate) fn handle_ok(
+        inner_expr: &mut Expr,
+        outer_inferred_type: &InferredType,
+    ) -> Result<(), String> {
+        let refined_ok_type =
+            OkType::refine(outer_inferred_type).ok_or("Expected ok type".to_string())?;
+        let inner_type = refined_ok_type.inner_type();
+
+        inner_expr.add_infer_type_mut(inner_type.clone());
+
+        Ok(())
     }
 
-    fn handle_push_down_for_record<'a, F>(
-        outer_inferred_types: &'a mut Vec<InferredType>,
-        inner_expressions: &'a mut [(String, Box<Expr>)],
+    pub(crate) fn handle_err(
+        inner_expr: &mut Expr,
+        outer_inferred_type: &InferredType,
+    ) -> Result<(), String> {
+        let refined_err_type =
+            ErrType::refine(outer_inferred_type).ok_or("Expected err type".to_string())?;
+        let inner_type = refined_err_type.inner_type();
+
+        inner_expr.add_infer_type_mut(inner_type.clone());
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_sequence<'a>(
+        inner_expressions: &'a mut [Expr],
+        outer_inferred_type: &InferredType,
         push_down_queue: &mut VecDeque<&'a mut Expr>,
-        process_inferred_type: F,
-    ) where
-        F: Fn(Vec<InferredType>) -> InferredType,
-    {
-        let mut all_of_types = vec![];
+    ) -> Result<(), String> {
+        let refined_list_type =
+            ListType::refine(outer_inferred_type).ok_or("Expected list type".to_string())?;
+        let inner_type = refined_list_type.inner_type();
 
-        for typ in outer_inferred_types {
-            if let InferredType::Record(types) = typ {
-                all_of_types.push(types);
-            }
-        }
-
-        let mut map = HashMap::new();
-
-        for vec in all_of_types {
-            for (key, value) in vec {
-                if !value.is_unknown() {
-                    map.entry(key).or_insert_with(Vec::new).push(value);
-                }
-            }
-        }
-        for (field_name, expr) in inner_expressions.iter_mut() {
-            if let Some(types) = map.get(field_name) {
-                let new_types = types.iter().map(|x| (**x).clone()).collect::<Vec<_>>();
-                expr.add_infer_type_mut(process_inferred_type(new_types));
-            }
+        for expr in inner_expressions.iter_mut() {
+            expr.add_infer_type_mut(inner_type.clone());
             push_down_queue.push_back(expr);
         }
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_tuple<'a>(
+        inner_expressions: &'a mut [Expr],
+        outer_inferred_type: &InferredType,
+        push_down_queue: &mut VecDeque<&'a mut Expr>,
+    ) -> Result<(), String> {
+        let refined_tuple_type =
+            TupleType::refine(outer_inferred_type).ok_or("Expected tuple type".to_string())?;
+        let inner_types = refined_tuple_type.inner_types();
+
+        for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
+            expr.add_infer_type_mut(typ.clone());
+            push_down_queue.push_back(expr);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_record<'a>(
+        inner_expressions: &'a mut [(String, Box<Expr>)],
+        outer_inferred_type: &InferredType,
+        push_down_queue: &mut VecDeque<&'a mut Expr>,
+    ) -> Result<(), String> {
+        let refined_record_type =
+            RecordType::refine(outer_inferred_type).ok_or("Expected record type".to_string())?;
+
+        for (field, expr) in inner_expressions {
+            let inner_type = refined_record_type.inner_type_by_field(field);
+            expr.add_infer_type_mut(inner_type.clone());
+            push_down_queue.push_back(expr);
+        }
+
+        Ok(())
     }
 
     pub(crate) fn update_arm_pattern_type(
         arm_pattern: &mut ArmPattern,
         inferred_type: &InferredType,
-    ) {
+    ) -> Result<(), String> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(inferred_type.clone());
-                expr.push_types_down()
+                expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
-                update_arm_pattern_type(pattern, inferred_type);
+                update_arm_pattern_type(pattern, inferred_type)?;
             }
             ArmPattern::Constructor(constructor_name, patterns) => match inferred_type {
                 InferredType::Option(inner_type) => {
                     if constructor_name == "some" || constructor_name == "none" {
                         for pattern in &mut *patterns {
-                            update_arm_pattern_type(pattern, inner_type);
+                            update_arm_pattern_type(pattern, inner_type)?;
                         }
                     }
                 }
@@ -371,35 +206,35 @@ mod internal {
                     if constructor_name == "ok" {
                         if let Some(ok_type) = ok {
                             for pattern in &mut *patterns {
-                                update_arm_pattern_type(pattern, ok_type);
+                                update_arm_pattern_type(pattern, ok_type)?;
                             }
                         }
                     };
                     if constructor_name == "err" {
                         if let Some(err_type) = error {
                             for pattern in &mut *patterns {
-                                update_arm_pattern_type(pattern, err_type);
+                                update_arm_pattern_type(pattern, err_type)?;
                             }
                         }
                     };
                 }
                 InferredType::Variant(variant) => {
-                    variant
+                    let opt = variant
                         .iter()
-                        .find(|(name, _optional_type)| name == constructor_name)
-                        .iter()
-                        .for_each(|(_, optional_type)| {
-                            if let Some(inner_type) = optional_type {
-                                for pattern in &mut *patterns {
-                                    update_arm_pattern_type(pattern, inner_type);
-                                }
-                            }
-                        });
+                        .find(|(name, _optional_type)| name == constructor_name);
+
+                    if let Some((_name, Some(inner_type))) = opt {
+                        for pattern in &mut *patterns {
+                            update_arm_pattern_type(pattern, inner_type)?;
+                        }
+                    }
                 }
                 _ => {}
             },
             ArmPattern::WildCard => {}
         }
+
+        Ok(())
     }
 }
 
@@ -417,18 +252,48 @@ mod type_push_down_tests {
             ]),
         );
 
-        expr.push_types_down();
+        expr.push_types_down().unwrap();
         let expected = Expr::Record(
             vec![(
                 "titles".to_string(),
                 Box::new(Expr::Identifier(
                     VariableId::global("x".to_string()),
-                    InferredType::U64,
+                    InferredType::AllOf(vec![InferredType::Unknown, InferredType::U64]),
                 )),
             )],
             InferredType::AllOf(vec![
                 InferredType::Record(vec![("titles".to_string(), InferredType::Unknown)]),
                 InferredType::Record(vec![("titles".to_string(), InferredType::U64)]),
+            ]),
+        );
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_push_down_for_sequence() {
+        let mut expr = Expr::Sequence(
+            vec![Expr::identifier("x"), Expr::identifier("y")],
+            InferredType::AllOf(vec![
+                InferredType::List(Box::new(InferredType::U32)),
+                InferredType::List(Box::new(InferredType::U64)),
+            ]),
+        );
+
+        expr.push_types_down().unwrap();
+        let expected = Expr::Sequence(
+            vec![
+                Expr::Identifier(
+                    VariableId::global("x".to_string()),
+                    InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
+                ),
+                Expr::Identifier(
+                    VariableId::global("y".to_string()),
+                    InferredType::AllOf(vec![InferredType::U32, InferredType::U64]),
+                ),
+            ],
+            InferredType::AllOf(vec![
+                InferredType::List(Box::new(InferredType::U32)),
+                InferredType::List(Box::new(InferredType::U64)),
             ]),
         );
         assert_eq!(expr, expected);

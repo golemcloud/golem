@@ -7,6 +7,22 @@ use std::fmt::Display;
 pub enum VariableId {
     Global(String),
     Local(String, Option<Id>),
+    MatchIdentifier(MatchIdentifier),
+}
+
+#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct MatchIdentifier {
+    pub name: String,
+    pub match_arm_index: usize, // Every match arm across the program is identified by a non-sharing index value. Within a match arm the identifier names cannot be reused
+}
+
+impl MatchIdentifier {
+    pub fn new(name: String, match_arm_index: usize) -> MatchIdentifier {
+        MatchIdentifier {
+            name,
+            match_arm_index,
+        }
+    }
 }
 
 impl Display for VariableId {
@@ -14,6 +30,7 @@ impl Display for VariableId {
         match self {
             VariableId::Global(name) => write!(f, "{}", name),
             VariableId::Local(name, _) => write!(f, "{}", name),
+            VariableId::MatchIdentifier(m) => write!(f, "{}", m.name),
         }
     }
 }
@@ -21,10 +38,17 @@ impl Display for VariableId {
 pub struct Id(u32);
 
 impl VariableId {
+    pub fn match_identifier(name: String, match_arm_index: usize) -> VariableId {
+        VariableId::MatchIdentifier(MatchIdentifier {
+            name,
+            match_arm_index,
+        })
+    }
     pub fn name(&self) -> String {
         match self {
             VariableId::Global(name) => name.clone(),
             VariableId::Local(name, _) => name.clone(),
+            VariableId::MatchIdentifier(m) => m.name.clone(),
         }
     }
 
@@ -32,6 +56,15 @@ impl VariableId {
         match self {
             VariableId::Global(_) => true,
             VariableId::Local(_, _) => false,
+            VariableId::MatchIdentifier { .. } => false,
+        }
+    }
+
+    pub fn is_match_binding(&self) -> bool {
+        match self {
+            VariableId::Global(_) => false,
+            VariableId::Local(_, _) => false,
+            VariableId::MatchIdentifier { .. } => true,
         }
     }
 
@@ -60,6 +93,7 @@ impl VariableId {
                 *id = new_id.clone();
                 VariableId::Local(name.to_string(), new_id)
             }
+            VariableId::MatchIdentifier(m) => VariableId::MatchIdentifier(m.clone()),
         }
     }
 }
@@ -88,6 +122,13 @@ impl From<VariableId> for ProtoVariableId {
                 variable_id: Some(
                     golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
                         golem_api_grpc::proto::golem::rib::Global { name },
+                    ),
+                ),
+            },
+            VariableId::MatchIdentifier(m) => ProtoVariableId {
+                variable_id: Some(
+                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                        golem_api_grpc::proto::golem::rib::Global { name: m.name },
                     ),
                 ),
             },

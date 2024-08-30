@@ -15,13 +15,15 @@
 use combine::error::StreamError;
 use combine::parser::char::digit;
 use combine::{
-    many1,
+    many1, optional,
     parser::char::{char as char_, letter, spaces, string},
     Parser,
 };
 
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
+use crate::parser::type_binding;
+use crate::parser::type_name::parse_type_name;
 use combine::stream::easy;
 
 pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
@@ -29,10 +31,24 @@ pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         (
             string("let").skip(spaces()),
             let_variable().skip(spaces()),
+            optional(
+                // Optionally match and parse the type annotation
+                char_(':')
+                    .skip(spaces()) // Match the colon
+                    .with(parse_type_name()) // Parse the type
+                    .skip(spaces()), // Consume any trailing spaces
+            ),
             char_('=').skip(spaces()),
             rib_expr(),
         )
-            .map(|(_, var, _, expr)| Expr::let_binding(var.as_str(), expr)),
+            .map(|(_, var, optional_type, _, expr)| {
+                let new_expr = type_binding::bind(&expr, optional_type.clone());
+                if let Some(type_name) = optional_type {
+                    Expr::let_binding_with_type(var, type_name, new_expr)
+                } else {
+                    Expr::let_binding(var.as_str(), new_expr)
+                }
+            }),
     )
 }
 
@@ -54,6 +70,8 @@ fn let_variable<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::type_name::TypeName;
+    use crate::{InferredType, VariableId};
     use combine::EasyParser;
 
     #[test]
@@ -144,6 +162,227 @@ mod tests {
                 Expr::let_binding(
                     "foo",
                     Expr::record(vec![("bar".to_string(), Expr::identifier("baz"))])
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_u8() {
+        let input = "let foo: u8 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::U8,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U8)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_u16() {
+        let input = "let foo: u16 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::U16,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U16)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_u32() {
+        let input = "let foo: u32 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::U32,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U32)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_u64() {
+        let input = "let foo: u64 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::U64,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U64)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_s8() {
+        let input = "let foo: s8 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::S8,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S8)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_s16() {
+        let input = "let foo: s16 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::S16,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S16)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_s32() {
+        let input = "let foo: s32 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::S32,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S32)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_s64() {
+        let input = "let foo: s64 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::S64,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S64)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_f32() {
+        let input = "let foo: f32 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::F32,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::F32)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_f64() {
+        let input = "let foo: f64 = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::F64,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::F64)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_chr() {
+        let input = "let foo: chr = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::Chr,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Chr)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_str() {
+        let input = "let foo: str = bar";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::Str,
+                    Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Str)
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_let_binding_with_type_name_list_u8() {
+        let input = "let foo: list<u8> = []";
+        let result = let_binding().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::let_binding_with_type(
+                    "foo",
+                    TypeName::List(Box::new(TypeName::U8)),
+                    Expr::Sequence(vec![], InferredType::List(Box::new(InferredType::U8)))
                 ),
                 ""
             ))

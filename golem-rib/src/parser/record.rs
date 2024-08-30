@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use combine::{
-    between, many1,
+    between, many1, parser,
     parser::char::{char as char_, letter, spaces},
-    sep_by1, Parser,
+    sep_by1, Parser, Stream,
 };
 
 use crate::expr::Expr;
@@ -23,7 +23,17 @@ use crate::expr::Expr;
 use super::rib_expr::rib_expr;
 use combine::stream::easy;
 
-pub fn record<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+parser! {
+    pub fn record['t]()(easy::Stream<&'t str>) -> Expr
+    where [
+        easy::Stream<&'t str>: Stream<Token = char>,
+    ]
+    {
+       record_()
+    }
+}
+
+pub fn record_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     spaces().with(
         between(
             char_('{').skip(spaces()),

@@ -557,18 +557,17 @@ fn text_api_definition_import(
 
     let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition imported with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+---------------+--------------------------------+
-            | Method | Path                         | Component URN | Worker Name                    |
-            +--------+------------------------------+---------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} |
-            +--------+------------------------------+---------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -596,18 +595,17 @@ fn text_api_definition_add(
 
     let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition created with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+---------------+--------------------------------+
-            | Method | Path                         | Component URN | Worker Name                    |
-            +--------+------------------------------+---------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} |
-            +--------+------------------------------+---------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -636,18 +634,17 @@ fn text_api_definition_update(
 
     let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition updated with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+---------------+--------------------------------+
-            | Method | Path                         | Component URN | Worker Name                    |
-            +--------+------------------------------+---------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} |
-            +--------+------------------------------+---------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -720,18 +717,17 @@ fn text_api_definition_get(
 
     let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+---------------+--------------------------------+
-            | Method | Path                         | Component URN | Worker Name                    |
-            +--------+------------------------------+---------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | worker-${{request.path.user-id}} |
-            +--------+------------------------------+---------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
