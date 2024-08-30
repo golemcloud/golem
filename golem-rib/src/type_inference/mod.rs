@@ -612,7 +612,8 @@ mod type_inference_tests {
         #[test]
         fn test_select_field_type_inference() {
             let rib_expr = r#"
-          let x = { foo : 1 };
+          let n: u64 = 1;
+          let x = { foo : n };
           x.foo
 
           "#;
@@ -624,11 +625,19 @@ mod type_inference_tests {
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
+                        VariableId::local("n", 0),
+                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
                         VariableId::local("x", 0),
                         Box::new(Expr::Record(
                             vec![(
                                 "foo".to_string(),
-                                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("n", 0),
+                                    InferredType::U64,
+                                )),
                             )],
                             InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                         )),

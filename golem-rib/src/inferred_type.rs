@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::inferred_type::internal::sort_and_convert;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
 
