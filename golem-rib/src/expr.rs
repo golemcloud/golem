@@ -771,7 +771,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
         let expr = match expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
-                let type_name = expr.type_name.map(|t| TypeName::try_from(t)).transpose()?;
+                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
                 let expr = *expr.expr.ok_or("Missing expr")?;
                 Expr::Let(
                     VariableId::global(name.as_str().to_string()),
