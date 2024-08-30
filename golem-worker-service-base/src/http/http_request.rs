@@ -762,7 +762,7 @@ mod tests {
         );
 
         let api_request = get_api_request(
-            "foo/2",
+            "foo/bar",
             None,
             &empty_headers,
             serde_json::Value::Object(request_body),
@@ -777,7 +777,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: str = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid == \"bar\" then one else zero; \"shopping-cart-${res}\"}",
             expression,
         );
 
