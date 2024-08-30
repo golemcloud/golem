@@ -1,5 +1,5 @@
 pub use byte_code::*;
-use golem_wasm_ast::analysis::{AnalysedExport};
+use golem_wasm_ast::analysis::AnalysedExport;
 pub use ir::*;
 pub use type_with_unit::*;
 
