@@ -173,6 +173,7 @@ impl InferredType {
 
     pub fn unify_types_and_verify(&self) -> Result<InferredType, Vec<String>> {
         let unified = self.unify_types()?;
+        dbg!(unified.clone());
         if let Some(unresolved) = unified.un_resolved() {
             return Err(vec![unresolved]);
         }

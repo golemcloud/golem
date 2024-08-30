@@ -204,20 +204,20 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Let(_, expr, inferred_type) => {
+            Expr::Let(_, expr, _) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(format!(
-                            "Unable to resolve the type of let binding {}",
-                            expr_str
-                        ));
-                        errors.extend(e);
-                    }
-                }
+                // let unified_inferred_type = inferred_type.unify_types_and_verify();
+                //
+                // match unified_inferred_type {
+                //     Ok(unified_type) => *inferred_type = unified_type,
+                //     Err(e) => {
+                //         errors.push(format!(
+                //             "Unable to resolve the type of let binding {}",
+                //             expr_str
+                //         ));
+                //         errors.extend(e);
+                //     }
+                // }
             }
             Expr::Literal(_, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify_types_and_verify();

@@ -203,8 +203,8 @@ mod type_inference_tests {
         #[test]
         fn test_comparison_type_inference() {
             let rib_expr = r#"
-          let x = 1;
-          let y = 2;
+          let x: u64 = 1;
+          let y: u64 = 2;
           x > y;
           x >= y;
           x < y;
@@ -370,8 +370,8 @@ mod type_inference_tests {
         #[test]
         fn test_cond_type_inference() {
             let rib_expr = r#"
-          let x = 1;
-          let y = 2;
+          let x: u64 = 1;
+          let y: u64 = 2;
           let res1 = "foo";
           let res2 = "bar";
           if x > y then res1 else res2
@@ -477,7 +477,7 @@ mod type_inference_tests {
         #[test]
         fn test_identifier_type_inference_multiple_re_assign() {
             let rib_expr = r#"
-          let x = 1;
+          let x: u64 = 1;
           let y = x;
           let z = y;
           z
