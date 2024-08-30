@@ -665,7 +665,7 @@ mod type_inference_tests {
         #[test]
         fn test_tuple_type_inference() {
             let rib_expr = r#"
-          let x = (1, "2");
+          let x: tuple<u64, str> = (1, "2");
           x
 
           "#;
