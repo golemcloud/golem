@@ -339,6 +339,7 @@ fn display_golem_error(error: GolemError) -> String {
             format!("Unknown error: {}", details)
         }
         GolemError::InvalidAccount(_) => "Invalid account".to_string(),
+        GolemError::ShardingNotReady(_) => "Sharding not ready".to_string(),
     }
 }
 

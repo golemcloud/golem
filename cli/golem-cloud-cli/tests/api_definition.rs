@@ -124,7 +124,7 @@ fn golem_def_with_response(
                     component_id: Uuid::parse_str(component_id).unwrap(),
                     version: 0,
                 },
-                worker_name: "worker-${request.path.user-id}".to_string(),
+                worker_name: "foo".to_string(),
                 idempotency_key: None,
                 response,
             },
@@ -136,7 +136,7 @@ pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
-        "${{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
+        "${let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}}"
             .to_string(),
     )
 }
@@ -164,10 +164,10 @@ pub fn make_open_api_file(
         "paths": {
             "/{user-id}/get-cart-contents": {
               "x-golem-worker-bridge": {
-                "worker-name": "worker-${request.path.user-id}",
+                "worker-name": "foo",
                 "component-id": component_id,
                 "component-version": component_version,
-                "response" : "${{headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: 200}}"
+                "response" : "${let status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}}"
               },
               "get": {
                 "summary": "Get Cart Contents",
@@ -299,7 +299,7 @@ fn api_definition_update(
     let updated = golem_def_with_response(
         &component_name,
         &component_id,
-        "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"bar\", status: 200}}"
+        "${let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"baz\", status: status}}"
             .to_string(),
     );
     let path = make_golem_file(&updated)?;
@@ -328,7 +328,7 @@ fn api_definition_update_immutable(
     let path = make_golem_file(&def)?;
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let updated = golem_def_with_response(&component_name, &component_id, "${{headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: 200}}".to_string());
+    let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string());
     let path = make_golem_file(&updated)?;
     let res = cli.run_string(&["api-definition", "update", path.to_str().unwrap()]);
 
