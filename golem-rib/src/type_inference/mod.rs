@@ -993,7 +993,7 @@ mod type_inference_tests {
         fn test_pattern_match_with_record_with_select_index() {
             let expr_str = r#"
               let x = { foo : "bar" };
-              let y = [1, 2, 3];
+              let y: list<u64> = [1, 2, 3];
 
               match some(x) {
                 some(x) => x.foo
