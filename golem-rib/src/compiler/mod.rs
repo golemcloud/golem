@@ -22,6 +22,7 @@ pub fn compile(
         .infer_types(&type_registry)
         .map_err(|e| e.join("\n"))?;
 
+    dbg!(expr_cloned.clone());
     // Inferring input is not done properly, however, worse case is run-time error asking user to pass these info
     let rib_input =
         RibInputTypeInfo::from_expr(&mut expr_cloned).unwrap_or(RibInputTypeInfo::empty());

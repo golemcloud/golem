@@ -74,8 +74,9 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             if then_type == else_type {
                 inferred_type.update(then_type);
             } else {
-                let cond_then_else_type = InferredType::AllOf(vec![then_type, else_type]);
-                inferred_type.update(cond_then_else_type)
+                if let Some(cond_then_else_type) = InferredType::all_of(vec![then_type, else_type]) {
+                    inferred_type.update(cond_then_else_type);
+                }
             }
         }
 
@@ -97,7 +98,9 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 if possible_inference_types.iter().all(|t| t == &first_type) {
                     inferred_type.update(first_type);
                 } else {
-                    inferred_type.update(InferredType::AllOf(possible_inference_types));
+                    if let Some(all_of) = InferredType::all_of(possible_inference_types) {
+                        inferred_type.update(all_of);
+                    }
                 }
             }
         }

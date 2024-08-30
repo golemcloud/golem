@@ -375,4 +375,5 @@ mod internal {
             ArmPattern::WildCard => {}
         }
     }
+
 }

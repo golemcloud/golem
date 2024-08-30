@@ -424,7 +424,10 @@ impl Expr {
         self.infer_all_identifiers().map_err(|x| vec![x])?;
         self.pull_types_up().map_err(|x| vec![x])?;
         self.infer_all_identifiers().map_err(|x| vec![x])?;
+       // dbg!(self.clone());
         self.unify_types()?;
+
+        dbg!(self.clone());
         Ok(())
     }
 
@@ -521,7 +524,9 @@ impl Expr {
                     // We are only interested in global variables
                     if variable_id.is_global() {
                         if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
-                            inferred_type.update(InferredType::AllOf(types.clone()));
+                            if let Some(all_of) = InferredType::all_of(types.clone()) {
+                                inferred_type.update(all_of);
+                            }
                         }
                     }
                 }
