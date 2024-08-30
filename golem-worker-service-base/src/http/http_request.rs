@@ -391,7 +391,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${request.path.user-id}",
+            "${let id: u64 = request.path.user-id; \"shopping-cart-${id}\"}",
             expression,
         );
 
