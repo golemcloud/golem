@@ -38,7 +38,7 @@ impl OAuth2ProviderClientError {
 
 impl From<reqwest::Error> for OAuth2ProviderClientError {
     fn from(error: reqwest::Error) -> Self {
-        OAuth2ProviderClientError::internal(error.to_string())
+        OAuth2ProviderClientError::internal(error)
     }
 }
 

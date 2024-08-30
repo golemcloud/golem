@@ -41,11 +41,7 @@ impl AccountGrantServiceError {
 
 impl From<RepoError> for AccountGrantServiceError {
     fn from(error: RepoError) -> Self {
-        match error {
-            RepoError::Internal(_) => {
-                AccountGrantServiceError::internal("DB call failed.".to_string())
-            }
-        }
+        AccountGrantServiceError::internal(error)
     }
 }
 

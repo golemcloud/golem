@@ -36,13 +36,13 @@ impl OAuth2SessionError {
 
 impl From<serde_json::Error> for OAuth2SessionError {
     fn from(error: serde_json::Error) -> Self {
-        OAuth2SessionError::internal(error.to_string())
+        OAuth2SessionError::internal(error)
     }
 }
 
 impl From<jsonwebtoken::errors::Error> for OAuth2SessionError {
     fn from(error: jsonwebtoken::errors::Error) -> Self {
-        OAuth2SessionError::internal(error.to_string())
+        OAuth2SessionError::internal(error)
     }
 }
 

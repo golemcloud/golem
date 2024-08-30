@@ -34,8 +34,8 @@ impl AccountSummaryServiceError {
 }
 
 impl From<RepoError> for AccountSummaryServiceError {
-    fn from(_error: RepoError) -> Self {
-        AccountSummaryServiceError::internal("DB call failed.".to_string())
+    fn from(error: RepoError) -> Self {
+        AccountSummaryServiceError::internal(error)
     }
 }
 

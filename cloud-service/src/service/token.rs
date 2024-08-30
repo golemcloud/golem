@@ -49,9 +49,7 @@ impl TokenServiceError {
 
 impl From<RepoError> for TokenServiceError {
     fn from(error: RepoError) -> Self {
-        match error {
-            RepoError::Internal(_) => TokenServiceError::internal("DB call failed.".to_string()),
-        }
+        TokenServiceError::internal(error)
     }
 }
 
@@ -59,9 +57,9 @@ impl From<OAuth2TokenError> for TokenServiceError {
     fn from(error: OAuth2TokenError) -> Self {
         match error {
             OAuth2TokenError::AccountNotFound(id) => TokenServiceError::AccountNotFound(id),
-            OAuth2TokenError::TokenNotFound(_) => TokenServiceError::internal(error.to_string()),
-            OAuth2TokenError::Internal(message) => TokenServiceError::internal(message),
-            OAuth2TokenError::Unauthorized(message) => TokenServiceError::unauthorized(message),
+            OAuth2TokenError::TokenNotFound(_) => TokenServiceError::internal(error),
+            OAuth2TokenError::Internal(error) => TokenServiceError::Internal(error),
+            OAuth2TokenError::Unauthorized(message) => TokenServiceError::Unauthorized(message),
         }
     }
 }

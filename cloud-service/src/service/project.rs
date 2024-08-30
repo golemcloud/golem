@@ -56,7 +56,7 @@ impl From<RepoError> for ProjectError {
 impl From<ProjectAuthorisationError> for ProjectError {
     fn from(error: ProjectAuthorisationError) -> Self {
         match error {
-            ProjectAuthorisationError::Internal(error) => ProjectError::internal(error),
+            ProjectAuthorisationError::Internal(error) => ProjectError::Internal(error),
             ProjectAuthorisationError::Unauthorized(error) => ProjectError::unauthorized(error),
         }
     }
@@ -65,10 +65,10 @@ impl From<ProjectAuthorisationError> for ProjectError {
 impl From<PlanLimitError> for ProjectError {
     fn from(error: PlanLimitError) -> Self {
         match error {
-            PlanLimitError::Unauthorized(error) => ProjectError::unauthorized(error),
-            PlanLimitError::Internal(error) => ProjectError::internal(error),
-            PlanLimitError::AccountNotFound(_) => ProjectError::internal(error.to_string()),
-            PlanLimitError::ProjectNotFound(_) => ProjectError::internal(error.to_string()),
+            PlanLimitError::Unauthorized(error) => ProjectError::Unauthorized(error),
+            PlanLimitError::Internal(error) => ProjectError::Internal(error),
+            PlanLimitError::AccountNotFound(_) => ProjectError::internal(error),
+            PlanLimitError::ProjectNotFound(_) => ProjectError::internal(error),
             PlanLimitError::LimitExceeded(error) => ProjectError::limit_exceeded(error),
         }
     }

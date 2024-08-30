@@ -48,19 +48,15 @@ impl From<RepoError> for ProjectAuthorisationError {
 impl From<ProjectGrantError> for ProjectAuthorisationError {
     fn from(error: ProjectGrantError) -> Self {
         match error {
-            ProjectGrantError::Internal(error) => ProjectAuthorisationError::internal(error),
+            ProjectGrantError::Internal(error) => ProjectAuthorisationError::Internal(error),
             ProjectGrantError::Unauthorized(error) => {
                 ProjectAuthorisationError::Unauthorized(error)
             }
-            ProjectGrantError::ProjectNotFound(_) => {
-                ProjectAuthorisationError::internal(error.to_string())
-            }
+            ProjectGrantError::ProjectNotFound(_) => ProjectAuthorisationError::internal(error),
             ProjectGrantError::ProjectPolicyNotFound(_) => {
-                ProjectAuthorisationError::internal(error.to_string())
+                ProjectAuthorisationError::internal(error)
             }
-            ProjectGrantError::AccountNotFound(_) => {
-                ProjectAuthorisationError::internal(error.to_string())
-            }
+            ProjectGrantError::AccountNotFound(_) => ProjectAuthorisationError::internal(error),
         }
     }
 }
@@ -68,7 +64,7 @@ impl From<ProjectGrantError> for ProjectAuthorisationError {
 impl From<ProjectPolicyError> for ProjectAuthorisationError {
     fn from(error: ProjectPolicyError) -> Self {
         match error {
-            ProjectPolicyError::Internal(error) => ProjectAuthorisationError::internal(error),
+            ProjectPolicyError::Internal(error) => ProjectAuthorisationError::Internal(error),
         }
     }
 }

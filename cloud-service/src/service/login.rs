@@ -44,7 +44,7 @@ impl LoginError {
 impl From<OAuth2ProviderClientError> for LoginError {
     fn from(err: OAuth2ProviderClientError) -> Self {
         match err {
-            OAuth2ProviderClientError::Internal(msg) => LoginError::internal(msg),
+            OAuth2ProviderClientError::Internal(error) => LoginError::Internal(error),
             OAuth2ProviderClientError::External(msg) => LoginError::external(msg),
         }
     }
@@ -53,10 +53,10 @@ impl From<OAuth2ProviderClientError> for LoginError {
 impl From<OAuth2TokenError> for LoginError {
     fn from(err: OAuth2TokenError) -> Self {
         match err {
-            OAuth2TokenError::Internal(msg) => LoginError::internal(msg),
-            OAuth2TokenError::Unauthorized(_) => LoginError::internal(err.to_string()),
-            OAuth2TokenError::AccountNotFound(_) => LoginError::internal(err.to_string()),
-            OAuth2TokenError::TokenNotFound(_) => LoginError::internal(err.to_string()),
+            OAuth2TokenError::Internal(error) => LoginError::Internal(error),
+            OAuth2TokenError::Unauthorized(_) => LoginError::internal(err),
+            OAuth2TokenError::AccountNotFound(_) => LoginError::internal(err),
+            OAuth2TokenError::TokenNotFound(_) => LoginError::internal(err),
         }
     }
 }
@@ -64,11 +64,11 @@ impl From<OAuth2TokenError> for LoginError {
 impl From<TokenServiceError> for LoginError {
     fn from(err: TokenServiceError) -> Self {
         match err {
-            TokenServiceError::ArgValidation(_) => LoginError::internal(err.to_string()),
-            TokenServiceError::UnknownToken(_) => LoginError::internal(err.to_string()),
-            TokenServiceError::AccountNotFound(_) => LoginError::internal(err.to_string()),
-            TokenServiceError::Internal(message) => LoginError::internal(message),
-            TokenServiceError::Unauthorized(_) => LoginError::internal(err.to_string()),
+            TokenServiceError::ArgValidation(_) => LoginError::internal(err),
+            TokenServiceError::UnknownToken(_) => LoginError::internal(err),
+            TokenServiceError::AccountNotFound(_) => LoginError::internal(err),
+            TokenServiceError::Internal(error) => LoginError::Internal(error),
+            TokenServiceError::Unauthorized(_) => LoginError::internal(err),
         }
     }
 }
@@ -76,10 +76,10 @@ impl From<TokenServiceError> for LoginError {
 impl From<AccountError> for LoginError {
     fn from(account_error: AccountError) -> Self {
         match account_error {
-            AccountError::AccountNotFound(_) => LoginError::internal(account_error.to_string()),
-            AccountError::ArgValidation(_) => LoginError::internal(account_error.to_string()),
-            AccountError::Internal(message) => LoginError::internal(message),
-            AccountError::Unauthorized(_) => LoginError::internal(account_error.to_string()),
+            AccountError::AccountNotFound(_) => LoginError::internal(account_error),
+            AccountError::ArgValidation(_) => LoginError::internal(account_error),
+            AccountError::Internal(error) => LoginError::Internal(error),
+            AccountError::Unauthorized(_) => LoginError::internal(account_error),
         }
     }
 }

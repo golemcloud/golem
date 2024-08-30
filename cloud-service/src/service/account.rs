@@ -42,14 +42,16 @@ impl AccountError {
 }
 
 impl From<RepoError> for AccountError {
-    fn from(_error: RepoError) -> Self {
-        AccountError::internal("DB call failed.".to_string())
+    fn from(error: RepoError) -> Self {
+        AccountError::internal(error)
     }
 }
 
 impl From<PlanError> for AccountError {
-    fn from(_error: PlanError) -> Self {
-        AccountError::internal("Get plan failed.".to_string())
+    fn from(error: PlanError) -> Self {
+        match error {
+            PlanError::Internal(error) => AccountError::Internal(error),
+        }
     }
 }
 

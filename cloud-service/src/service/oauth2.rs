@@ -37,7 +37,7 @@ impl From<OAuth2GithubClientError> for OAuth2Error {
 impl From<OAuth2SessionError> for OAuth2Error {
     fn from(err: OAuth2SessionError) -> Self {
         match err {
-            OAuth2SessionError::Internal(msg) => OAuth2Error::internal(msg),
+            OAuth2SessionError::Internal(error) => OAuth2Error::Internal(error),
             OAuth2SessionError::InvalidSession(msg) => OAuth2Error::InvalidSession(msg),
         }
     }

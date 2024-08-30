@@ -1,8 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
-
     use cloud_common::model::Role;
     use cloud_common::model::{
         PlanId, ProjectActions, ProjectAuthorisedActions, ProjectGrantId, ProjectPolicyId, TokenId,
@@ -23,6 +20,9 @@ mod tests {
     use golem_common::model::ProjectId;
     use golem_service_base::config::DbConfig;
     use golem_service_base::db;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+    use std::vec;
     use testcontainers_modules::postgres::Postgres;
     use testcontainers_modules::testcontainers::clients::Cli;
     use testcontainers_modules::testcontainers::{Container, RunnableImage};
@@ -204,12 +204,13 @@ mod tests {
 
     async fn create_project_policy(
         id: &ProjectPolicyId,
+        project_actions: ProjectActions,
         project_policy_service: Arc<dyn ProjectPolicyService + Sync + Send>,
     ) -> ProjectPolicy {
         let policy = ProjectPolicy {
             id: id.clone(),
             name: "policy_name".to_string(),
-            project_actions: ProjectActions::all(),
+            project_actions,
         };
 
         let create_result = project_policy_service.create(&policy).await;
@@ -263,7 +264,6 @@ mod tests {
         let account_id2 = AccountId::from("2");
 
         let auth = create_auth(&account_id, Role::all());
-        let auth2 = create_auth(&account_id2, Role::all());
 
         let account = create_account(&account_id, services.account_service.clone()).await;
         let account2 = create_account(&account_id2, services.account_service.clone()).await;
@@ -362,6 +362,7 @@ mod tests {
 
         let project_policy = create_project_policy(
             &ProjectPolicyId::new_v4(),
+            ProjectActions::all(),
             services.project_policy_service.clone(),
         )
         .await;
@@ -385,9 +386,12 @@ mod tests {
         )
         .await;
 
+        let auth = create_auth(&account_id, vec![]);
+        let auth2 = create_auth(&account_id2, vec![]);
+
         let project_grant_by_id = services
             .project_grant_service
-            .get(&project_id, &project_grant.id, &auth2)
+            .get(&project_id, &project_grant.id, &auth)
             .await
             .unwrap();
 
@@ -395,7 +399,7 @@ mod tests {
 
         let project_grant_by_project = services
             .project_grant_service
-            .get_by_project(&project_id, &auth2)
+            .get_by_project(&project_id, &auth)
             .await
             .unwrap();
 
@@ -431,9 +435,6 @@ mod tests {
 
         assert!(project_actions == all_project_actions);
 
-        let auth = create_auth(&account.id, Role::all());
-        let auth2 = create_auth(&account2.id, Role::all());
-
         let project_actions = services.project_auth_service.get_all(&auth).await.unwrap();
 
         let all_project_actions = HashMap::from([
@@ -457,6 +458,8 @@ mod tests {
             services.project_service.clone(),
         )
         .await;
+
+        let auth = create_auth(&account.id, Role::all());
 
         let account_summaries = services
             .account_summary_service

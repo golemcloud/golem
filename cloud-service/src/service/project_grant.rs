@@ -250,18 +250,32 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<Vec<ProjectGrant>, ProjectGrantError> {
         info!("Getting project grants for project {}", project_id);
-        let result = self
-            .project_grant_repo
-            .get_by_project(&project_id.0)
-            .await?;
-        let project_grants = self
-            .get_permitted_grants(
-                result.iter().map(|p| p.clone().into()).collect(),
-                &ProjectAction::ViewProjectGrants,
-                auth,
-            )
-            .await?;
-        Ok(project_grants)
+
+        let project = self.project_repo.get(&project_id.0).await?;
+
+        if let Some(project) = project {
+            let result = self
+                .project_grant_repo
+                .get_by_project(&project_id.0)
+                .await?;
+
+            let project_grants = result.iter().map(|p| p.clone().into()).collect();
+
+            if auth.has_account_or_role(
+                &AccountId::from(project.owner_account_id.as_str()),
+                &Role::Admin,
+            ) {
+                Ok(project_grants)
+            } else {
+                let project_grants = self
+                    .get_permitted_grants(project_grants, &ProjectAction::ViewProjectGrants, auth)
+                    .await?;
+
+                Ok(project_grants)
+            }
+        } else {
+            Err(ProjectGrantError::ProjectNotFound(project_id.clone()))
+        }
     }
 
     async fn get_by_account(
@@ -285,23 +299,37 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
         auth: &AccountAuthorisation,
     ) -> Result<Option<ProjectGrant>, ProjectGrantError> {
         info!("Getting project {} grant {}", project_id, project_grant_id);
-        let project_grant = self.project_grant_repo.get(&project_grant_id.0).await?;
-        if let Some(project_grant) = project_grant {
-            let project_grant: ProjectGrant = project_grant.into();
-            if project_grant.data.grantor_project_id == *project_id {
-                let project_grants = self
-                    .get_permitted_grants(
-                        vec![project_grant.clone()],
-                        &ProjectAction::ViewProjectGrants,
-                        auth,
-                    )
-                    .await?;
+        let project = self.project_repo.get(&project_id.0).await?;
 
-                return Ok(project_grants.first().cloned());
+        if let Some(project) = project {
+            let project_grant = self.project_grant_repo.get(&project_grant_id.0).await?;
+            if let Some(project_grant) = project_grant {
+                let project_grant: ProjectGrant = project_grant.into();
+                if project_grant.data.grantor_project_id == *project_id {
+                    let maybe_project_grant = if auth.has_account_or_role(
+                        &AccountId::from(project.owner_account_id.as_str()),
+                        &Role::Admin,
+                    ) {
+                        Some(project_grant)
+                    } else {
+                        let project_grants = self
+                            .get_permitted_grants(
+                                vec![project_grant.clone()],
+                                &ProjectAction::ViewProjectGrants,
+                                auth,
+                            )
+                            .await?;
+
+                        project_grants.first().cloned()
+                    };
+
+                    return Ok(maybe_project_grant);
+                }
             }
+            Ok(None)
+        } else {
+            Err(ProjectGrantError::ProjectNotFound(project_id.clone()))
         }
-
-        Ok(None)
     }
 
     async fn delete(

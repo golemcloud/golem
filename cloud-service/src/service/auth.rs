@@ -36,12 +36,12 @@ impl AuthServiceError {
 impl From<TokenServiceError> for AuthServiceError {
     fn from(error: TokenServiceError) -> Self {
         match error {
-            TokenServiceError::ArgValidation(_) => AuthServiceError::internal(error.to_string()),
+            TokenServiceError::ArgValidation(_) => AuthServiceError::internal(error),
             TokenServiceError::UnknownToken(id) => {
                 AuthServiceError::invalid_token(format!("Invalid token id: {}", id))
             }
-            TokenServiceError::AccountNotFound(_) => AuthServiceError::internal(error.to_string()),
-            TokenServiceError::Internal(message) => AuthServiceError::internal(message),
+            TokenServiceError::AccountNotFound(_) => AuthServiceError::internal(error),
+            TokenServiceError::Internal(error) => AuthServiceError::Internal(error),
             TokenServiceError::Unauthorized(message) => {
                 AuthServiceError::internal(format!("Failed access with Admin account: {}", message))
             }
@@ -52,13 +52,9 @@ impl From<TokenServiceError> for AuthServiceError {
 impl From<AccountGrantServiceError> for AuthServiceError {
     fn from(error: AccountGrantServiceError) -> Self {
         match error {
-            AccountGrantServiceError::ArgValidation(_) => {
-                AuthServiceError::internal(error.to_string())
-            }
-            AccountGrantServiceError::AccountNotFound(_) => {
-                AuthServiceError::internal(error.to_string())
-            }
-            AccountGrantServiceError::Internal(message) => AuthServiceError::internal(message),
+            AccountGrantServiceError::ArgValidation(_) => AuthServiceError::internal(error),
+            AccountGrantServiceError::AccountNotFound(_) => AuthServiceError::internal(error),
+            AccountGrantServiceError::Internal(error) => AuthServiceError::Internal(error),
             AccountGrantServiceError::Unauthorized(message) => {
                 AuthServiceError::internal(format!("Failed access with Admin account: {}", message))
             }
