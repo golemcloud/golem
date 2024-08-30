@@ -933,6 +933,9 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 worker_execution_error::Error::WorkerNotFound(err) => {
                     format!("Worker Not Found: Worker ID = {:?}", err.worker_id)
                 }
+                worker_execution_error::Error::ShardingNotReady(_) => {
+                    "Sharding Not Ready".to_string()
+                }
             };
             tonic::Status::internal(message)
         }
