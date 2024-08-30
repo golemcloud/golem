@@ -53,16 +53,15 @@ impl RibInputValueResolver for RequestDetails {
         match request_type_info {
             Some(request_type) => {
                 let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
-                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?
+                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
+
                 let mut rib_input_map = HashMap::new();
                 rib_input_map.insert("request".to_string(), input);
                 Ok(RibInputValue {
                     value: rib_input_map,
                 })
             }
-            None => {
-                Ok(RibInputValue::empty())
-            }
+            None => Ok(RibInputValue::empty()),
         }
     }
 }
