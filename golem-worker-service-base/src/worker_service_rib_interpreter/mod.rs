@@ -435,10 +435,12 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
+        // TODO; result2 should be automatically inferred
         let expr_str = r#"${
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
-              match result {  some(value) => "personal-id", none =>  request.body.id }
+              let result2: str = request.body.id;
+              match result {  some(value) => "personal-id", none => result2 }
             }"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
@@ -600,7 +602,7 @@ mod tests {
         );
 
         let expr =
-            rib::from_string(r#"${if request.headers.authorisation == "admin" then 200 else 401}"#)
+            rib::from_string(r#"${let input: str = request.headers.authorisation; let x: u64 = 200; let y: u64 = 401; if input == "admin" then x else y}"#)
                 .unwrap();
         let expected_evaluated_result = TypeAnnotatedValue::U64("200".parse().unwrap());
         let result = noop_executor
@@ -653,7 +655,10 @@ mod tests {
         let expr_str = r#"${
               let x = request;
               let result = foo(x);
-              if request.headers.authorisation == "admin" then 200 else 401
+              let success: u64 = 200;
+              let failure: u64 = 401;
+              let auth = request.headers.authorisation;
+              if auth == "admin" then success else failure
             }"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
@@ -1318,7 +1323,7 @@ mod tests {
         )])
         .unwrap();
 
-        let worker_response = create_ok_result(worker_response_inner, None).unwrap();
+        let worker_response = create_ok_result(worker_response_inner, Some(AnalysedType::Str(TypeStr))).unwrap();
 
         let return_type = AnalysedType::try_from(&worker_response).unwrap();
 
@@ -1331,11 +1336,13 @@ mod tests {
 
         let metadata = get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
+        // TODO; inlining request.path.id all over should work too
         let expr1 = rib::from_string(
             r#"${
               let x = request;
               let foo_result = foo(x);
-              if request.path.id == "foo" then "bar" else match foo_result { ok(value) => request.path.id, err(msg) => "empty" }
+              let txt = request.path.id;
+              if txt == "foo" then "bar" else match foo_result { ok(value) => txt, err(msg) => "empty" }
              }"#,
         )
             .unwrap();
@@ -1349,11 +1356,13 @@ mod tests {
             )
             .await;
 
+        // TODO; inlining request.path.id all over should work too
         let expr2 = rib::from_string(
             r#"${
               let x = request;
               let foo_result = foo(x);
-              if request.path.id == "bar" then "foo" else match foo_result { ok(foo) => foo.id, err(msg) => "empty" }
+              let txt = request.path.id;
+              if txt == "bar" then "foo" else match foo_result { ok(foo) => foo.id, err(msg) => "empty" }
           }"#,
 
         ).unwrap();
@@ -1405,7 +1414,7 @@ mod tests {
 
         let record_value = create_singleton_record("id", &field_value).unwrap();
 
-        let worker_response = create_ok_result(record_value.clone(), None).unwrap();
+        let worker_response = create_ok_result(record_value.clone(), Some(AnalysedType::Str(TypeStr))).unwrap();
 
         // Output from worker
         let return_type = AnalysedType::try_from(&worker_response).unwrap();
@@ -1413,7 +1422,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str = r#"${let result = foo(1); match result {  ok(value) => "personal-id", err(msg) => "not found" }}"#;
+        let expr_str = r#"${let n1: u64 = 1; let result = foo(n1); match result {  ok(value) => "personal-id", err(msg) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1440,7 +1449,7 @@ mod tests {
 
         let record_value = create_singleton_record("id", &field_value).unwrap();
 
-        let worker_response = create_ok_result(record_value.clone(), None).unwrap();
+        let worker_response = create_ok_result(record_value.clone(), Some(AnalysedType::Str(TypeStr))).unwrap();
 
         // Output from worker
         let return_type = AnalysedType::try_from(&worker_response).unwrap();
@@ -1481,7 +1490,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.id, err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.id, err(_) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1519,7 +1528,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.ids[0], err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result { ok(value) => value.ids[0], err(_) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1549,7 +1558,7 @@ mod tests {
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
         let expr_str =
-            r#"${let result = foo(1); match result { ok(x) => some(1), err(msg) => none }}"#;
+            r#"${let n: u64 = 1; let result = foo(1); match result { ok(x) => some(n), err(_) => none }}"#;
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
             .evaluate_with_worker_response(
@@ -1570,7 +1579,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr =
-            rib::from_string(r#"${match ok(1) { ok(value) => none, err(_) => some(1) }}"#).unwrap();
+            rib::from_string(r#"${let x:u64 = 1; match ok(x) { ok(value) => none, err(_) => some(x) }}"#).unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
             .await
@@ -1588,7 +1597,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr =
-            rib::from_string("${match err(1) { ok(value) => none, err(msg) => some(some(1)) }}")
+            rib::from_string("${let x: u64 = 1; match err(x) { ok(_) => none, err(x) => some(some(x)) }}")
                 .unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
@@ -1607,7 +1616,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr =
-            rib::from_string("${match ok(\"afsal\") { ok(value) => ok(1), err(msg) => err(2) }}")
+            rib::from_string("${let left: u64 = 1; let right: u64 = 2; match ok(\"afsal\") { ok(value) => ok(left), err(_) => err(right) }}")
                 .unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
@@ -1623,7 +1632,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr = rib::from_string(
-            "${match err(\"afsal\") { ok(value) => ok(\"1\"), err(msg) => err(2) }}",
+            "${let err_n: u64 = 2; match err(\"afsal\") { ok(_) => ok(\"1\"), err(msg) => err(err_n) }}",
         )
         .unwrap();
 
@@ -1644,7 +1653,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr =
-            rib::from_string("${match err(10) { ok(_) => ok(1), err(_) => err(2) }}").unwrap();
+            rib::from_string("${let x: u64 = 10; let lef: u64 = 1; let rig: u64 = 2; match err(x) { ok(_) => ok(lef), err(_) => err(rig) }}").unwrap();
 
         let result = noop_executor
             .evaluate_pure_expr(&expr)
@@ -1959,7 +1968,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_ok_record() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string("${{a : ok(1)}}").unwrap();
+        let expr = rib::from_string("${let x: u64 = 1; {a : ok(x)}}").unwrap();
 
         let result = noop_executor.evaluate_pure_expr(&expr).await;
 
@@ -1974,7 +1983,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_err_record() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string("${{a : err(1)}}").unwrap();
+        let expr = rib::from_string("${let n: u64 = 1; {a : err(n)}}").unwrap();
 
         let result = noop_executor.evaluate_pure_expr(&expr).await;
 
@@ -1991,7 +2000,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_simple_list() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string("${[1,2,3]}").unwrap();
+        let expr = rib::from_string("${let x: list<u64> = [1,2,3]; x}").unwrap();
 
         let result = noop_executor.evaluate_pure_expr(&expr).await;
 
@@ -2011,7 +2020,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_simple_tuple() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string("${(some(1),2,3)}").unwrap();
+        let expr = rib::from_string("${let x: tuple<option<u64>, u64, u64> = (some(1),2,3); x}").unwrap();
 
         let result = noop_executor.evaluate_pure_expr(&expr).await;
 
@@ -2046,7 +2055,7 @@ mod tests {
     async fn test_evaluation_with_wave_like_syntax_result_list() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string("${[ok(1),ok(2)]}").unwrap();
+        let expr = rib::from_string("${let x: u64 = 1; let y: u64 = 2; [ok(x),ok(y)]}").unwrap();
 
         let result = noop_executor.evaluate_pure_expr(&expr).await;
 
@@ -2066,8 +2075,10 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let program = r"
-            let x = { a : 1 };
-            let y = { b : 2 };
+            let n1: u64 = 1;
+            let n2: u64 = 2;
+            let x = { a : n1 };
+            let y = { b : n2 };
             let z = x.a > y.b;
             z
           ";

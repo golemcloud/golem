@@ -719,7 +719,6 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            dbg!(expr.clone());
             let expected = Expr::Multiple(
                 vec![
                     Expr::Let(
@@ -1220,8 +1219,6 @@ mod type_inference_tests {
             let function_type_registry = internal::get_function_type_registry();
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
-
-            dbg!(expr.clone());
 
             let expected = Expr::Multiple(
                 vec![

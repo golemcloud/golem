@@ -45,6 +45,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             inferred_type.update(record_type)
         }
         Expr::Option(Some(expr), inferred_type) => {
+            expr.pull_types_up()?;
             let option_type = InferredType::Option(Box::new(expr.inferred_type()));
             inferred_type.update(option_type)
         }

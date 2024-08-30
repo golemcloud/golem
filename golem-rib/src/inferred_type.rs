@@ -185,7 +185,6 @@ impl InferredType {
 
     pub fn unify_types_and_verify(&self) -> Result<InferredType, Vec<String>> {
         let unified = self.unify_types()?;
-        dbg!(unified.clone());
         if let Some(unresolved) = unified.un_resolved() {
             return Err(vec![unresolved]);
         }
@@ -605,7 +604,6 @@ impl InferredType {
                     if a == b {
                         Ok(a.clone())
                     } else {
-                        dbg!("here?");
                         Err(vec![format!(
                             "Types do not match. Inferred to be both {:?} and {:?}",
                             a, b
