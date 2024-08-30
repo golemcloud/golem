@@ -6,6 +6,9 @@ use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
 use combine::{attempt, between, easy, sep_by, Parser, Stream};
 use std::ops::Deref;
+use golem_api_grpc::proto::golem::rib::{BasicTypeName, TypeName as ProtoTypeName};
+use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
+use golem_api_grpc::proto::golem::rib::type_name::Kind::BasicType;
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
@@ -25,6 +28,64 @@ pub enum TypeName {
     List(Box<TypeName>),
     Tuple(Vec<TypeName>),
     Option(Box<TypeName>),
+}
+
+impl From<TypeName> for ProtoTypeName {
+    fn from(value: TypeName) -> Self {
+       let inner = match value {
+            TypeName::Bool => InnerTypeName::BasicType(BasicTypeName::Bool as i32),
+            TypeName::S8 => InnerTypeName::BasicType(BasicTypeName::S8 as i32),
+            TypeName::U8 => InnerTypeName::BasicType(BasicTypeName::U8 as i32),
+            TypeName::S16 => InnerTypeName::BasicType(BasicTypeName::S16 as i32),
+            TypeName::U16 => InnerTypeName::BasicType(BasicTypeName::U16 as i32),
+            TypeName::S32 => InnerTypeName::BasicType(BasicTypeName::S32 as i32),
+            TypeName::U32 => InnerTypeName::BasicType(BasicTypeName::U32 as i32),
+            TypeName::S64 => InnerTypeName::BasicType(BasicTypeName::S64 as i32),
+            TypeName::U64 => InnerTypeName::BasicType(BasicTypeName::U64 as i32),
+            TypeName::F32 => InnerTypeName::BasicType(BasicTypeName::F32 as i32),
+            TypeName::F64 => InnerTypeName::BasicType(BasicTypeName::F64 as i32),
+            TypeName::Chr => InnerTypeName::BasicType(BasicTypeName::Chr as i32),
+            TypeName::Str => InnerTypeName::BasicType(BasicTypeName::Str as i32),
+            TypeName::List(inner_type) => InnerTypeName::ListType(Box::new(inner_type.deref().clone().into())),
+            TypeName::Tuple(inner_types) => InnerTypeName::TupleType(inner_types.into_iter().map(|t| t.into()).collect()),
+            TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(type_name.deref().clone().into())),
+        };
+
+        ProtoTypeName {
+            kind: Some(inner),
+        }
+    }
+}
+
+impl TryFrom<ProtoTypeName> for TypeName {
+    type Error = String;
+
+    fn try_from(value: ProtoTypeName) -> Result<Self, Self::Error> {
+        match value.kind {
+            Some(inner) => match inner {
+                InnerTypeName::BasicType(value) => match BasicTypeName::try_from(value) {
+                   Ok(BasicTypeName::Bool) => Ok(TypeName::Bool),
+                   Ok(BasicTypeName::S8) => Ok(TypeName::S8),
+                   Ok(BasicTypeName::U8) => Ok(TypeName::U8),
+                   Ok(BasicTypeName::S16) => Ok(TypeName::S16),
+                   Ok(BasicTypeName::U16) => Ok(TypeName::U16),
+                   Ok(BasicTypeName::S32) => Ok(TypeName::S32),
+                   Ok(BasicTypeName::U32) => Ok(TypeName::U32),
+                   Ok(BasicTypeName::S64) => Ok(TypeName::S64),
+                   Ok(BasicTypeName::U64) => Ok(TypeName::U64),
+                   Ok(BasicTypeName::F32) => Ok(TypeName::F32),
+                   Ok(BasicTypeName::F64) => Ok(TypeName::F64),
+                   Ok(BasicTypeName::Chr) => Ok(TypeName::Chr),
+                   Ok(BasicTypeName::Str) => Ok(TypeName::Str),
+                    _ => Err(format!("Unknown basic type: {:?}", value)),
+                },
+                InnerTypeName::ListType(inner_type) => Ok(TypeName::List(Box::new(inner_type.into()))),
+                InnerTypeName::TupleType(inner_types) => Ok(TypeName::Tuple(inner_types.types.into_iter().map(|t| t.try_into().unwrap()).collect())),
+                InnerTypeName::OptionType(type_name) => Ok(TypeName::Option(Box::new(type_name.inner_type.try_into().unwrap()))),
+            },
+            None => Err("No type kind provided".to_string()),
+        }
+    }
 }
 
 impl From<TypeName> for InferredType {

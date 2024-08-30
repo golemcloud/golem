@@ -19,4 +19,4 @@ mod select_index;
 mod sequence;
 mod tuple;
 pub(crate) mod type_binding;
-mod type_name;
+pub(crate) mod type_name;

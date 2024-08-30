@@ -26,15 +26,16 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
+use crate::parser::type_name::TypeName;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
-    Let(VariableId, Box<Expr>, InferredType),
+    Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, InferredType),
     SelectIndex(Box<Expr>, usize, InferredType),
     Sequence(Vec<Expr>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
-    Tuple(Vec<Expr>, InferredType),
+    Tuple(Vec<Expr>, InferredType)  ,
     Literal(String, InferredType),
     Number(Number, InferredType),
     Flags(Vec<String>, InferredType),
@@ -271,6 +272,7 @@ impl Expr {
     pub fn let_binding(name: impl AsRef<str>, expr: Expr) -> Self {
         Expr::Let(
             VariableId::global(name.as_ref().to_string()),
+            None,
             Box::new(expr),
             InferredType::Unknown,
         )
@@ -375,7 +377,7 @@ impl Expr {
 
     pub fn inferred_type(&self) -> InferredType {
         match self {
-            Expr::Let(_, _, inferred_type)
+            Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, inferred_type)
             | Expr::SelectIndex(_, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
@@ -550,7 +552,7 @@ impl Expr {
     pub fn add_infer_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier(_, inferred_type)
-            | Expr::Let(_, _, inferred_type)
+            | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, inferred_type)
             | Expr::SelectIndex(_, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
@@ -590,7 +592,7 @@ impl Expr {
     pub fn override_type_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier(_, inferred_type)
-            | Expr::Let(_, _, inferred_type)
+            | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, inferred_type)
             | Expr::SelectIndex(_, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
@@ -760,8 +762,14 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
         let expr = match expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
+                let type_name = expr.type_name.map(|t| t.try_into()?);
                 let expr = *expr.expr.ok_or("Missing expr")?;
-                Expr::let_binding(name.as_str(), expr.try_into()?)
+                Expr::Let(
+                    VariableId::global(name.as_str().to_string()),
+                    type_name,
+                    Box::new(expr.try_into()?),
+                    InferredType::Unknown,
+                )
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
                 let expr = expr.expr.ok_or("Missing expr")?;
@@ -928,10 +936,11 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     fn from(value: Expr) -> Self {
         let expr = match value {
-            Expr::Let(variable_id, expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Let(
+            Expr::Let(variable_id, type_name,  expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Let(
                 Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
                     name: variable_id.name().to_string(),
                     expr: Some(Box::new((*expr).into())),
+                    type_name: type_name.map(|t| t.into()),
                 }),
             ),
             Expr::SelectField(expr, field, _) => {

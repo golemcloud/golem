@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.rib;
 
 import "golem/rib/function_name.proto";
+import "golem/rib/type_name.proto";
 
 message Expr {
   oneof expr {
@@ -36,6 +37,7 @@ message Expr {
 message LetExpr {
   string name = 1;
   Expr expr = 2;
+  optional TypeName type_name = 3;
 }
 
 message SelectFieldExpr {
