@@ -1,5 +1,4 @@
 use crate::worker_binding::{RequestDetails, WorkerDetail};
-use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::RibInputTypeInfo;

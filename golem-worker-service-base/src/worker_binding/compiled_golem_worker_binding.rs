@@ -1,7 +1,7 @@
 use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeU64};
+use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 
