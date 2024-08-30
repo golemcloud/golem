@@ -14,7 +14,7 @@ pub(crate) fn bind(expr: &Expr, type_name: Option<TypeName>) -> Expr {
 pub(crate) fn override_type(expr: &mut Expr, new_type: InferredType) {
     match expr {
         Expr::Identifier(_, inferred_type)
-        | Expr::Let(_, _, inferred_type)
+        | Expr::Let(_, _, _, inferred_type)
         | Expr::SelectField(_, _, inferred_type)
         | Expr::SelectIndex(_, _, inferred_type)
         | Expr::Sequence(_, inferred_type)

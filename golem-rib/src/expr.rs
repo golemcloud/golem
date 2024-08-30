@@ -14,6 +14,7 @@
 
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
+use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{text, type_inference, InferredType, VariableId};
 use bincode::{Decode, Encode};
@@ -26,7 +27,6 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
-use crate::parser::type_name::TypeName;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
@@ -35,7 +35,7 @@ pub enum Expr {
     SelectIndex(Box<Expr>, usize, InferredType),
     Sequence(Vec<Expr>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
-    Tuple(Vec<Expr>, InferredType)  ,
+    Tuple(Vec<Expr>, InferredType),
     Literal(String, InferredType),
     Number(Number, InferredType),
     Flags(Vec<String>, InferredType),
@@ -273,6 +273,15 @@ impl Expr {
         Expr::Let(
             VariableId::global(name.as_ref().to_string()),
             None,
+            Box::new(expr),
+            InferredType::Unknown,
+        )
+    }
+
+    pub fn let_binding_with_type(name: impl AsRef<str>, type_name: TypeName, expr: Expr) -> Self {
+        Expr::Let(
+            VariableId::global(name.as_ref().to_string()),
+            Some(type_name),
             Box::new(expr),
             InferredType::Unknown,
         )
@@ -762,7 +771,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
         let expr = match expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
-                let type_name = expr.type_name.map(|t| t.try_into()?);
+                let type_name = expr.type_name.map(|t| TypeName::try_from(t)).transpose()?;
                 let expr = *expr.expr.ok_or("Missing expr")?;
                 Expr::Let(
                     VariableId::global(name.as_str().to_string()),
@@ -936,13 +945,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     fn from(value: Expr) -> Self {
         let expr = match value {
-            Expr::Let(variable_id, type_name,  expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Let(
-                Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
-                    name: variable_id.name().to_string(),
-                    expr: Some(Box::new((*expr).into())),
-                    type_name: type_name.map(|t| t.into()),
-                }),
-            ),
+            Expr::Let(variable_id, type_name, expr, _) => {
+                golem_api_grpc::proto::golem::rib::expr::Expr::Let(Box::new(
+                    golem_api_grpc::proto::golem::rib::LetExpr {
+                        name: variable_id.name().to_string(),
+                        expr: Some(Box::new((*expr).into())),
+                        type_name: type_name.map(|t| t.into()),
+                    },
+                ))
+            }
             Expr::SelectField(expr, field, _) => {
                 golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(Box::new(
                     golem_api_grpc::proto::golem::rib::SelectFieldExpr {

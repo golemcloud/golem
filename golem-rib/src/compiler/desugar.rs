@@ -190,6 +190,7 @@ mod internal {
             Expr::Identifier(identifier, inferred_type) => {
                 let assign_var = Expr::Let(
                     identifier.clone(),
+                    None,
                     Box::new(pred_expr.clone()),
                     inferred_type.clone(),
                 );
@@ -302,6 +303,7 @@ mod internal {
     ) -> Option<IfElseBranch> {
         let binding = Expr::Let(
             VariableId::global(name.to_string()),
+            None,
             Box::new(pred_expr.clone()),
             pred_expr.inferred_type(),
         );
@@ -404,6 +406,7 @@ mod desugar_tests {
                     vec![
                         Expr::Let(
                             VariableId::match_identifier("x".to_string(), 1),
+                            None,
                             Box::new(Expr::Unwrap(
                                 Box::new(Expr::Identifier(
                                     VariableId::local("x", 0),
@@ -436,6 +439,7 @@ mod desugar_tests {
                         vec![
                             Expr::Let(
                                 VariableId::match_identifier("y".to_string(), 2),
+                                None,
                                 Box::new(Expr::Unwrap(
                                     Box::new(Expr::Identifier(
                                         VariableId::local("x", 0),

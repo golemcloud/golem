@@ -42,8 +42,12 @@ pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             rib_expr(),
         )
             .map(|(_, var, optional_type, _, expr)| {
-                let new_expr = type_binding::bind(&expr, optional_type);
-                Expr::let_binding(var.as_str(), new_expr)
+                let new_expr = type_binding::bind(&expr, optional_type.clone());
+                if let Some(type_name) = optional_type {
+                    Expr::let_binding_with_type(var, type_name, new_expr)
+                } else {
+                    Expr::let_binding(var.as_str(), new_expr)
+                }
             }),
     )
 }
@@ -66,6 +70,7 @@ fn let_variable<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::type_name::TypeName;
     use crate::{InferredType, VariableId};
     use combine::EasyParser;
 
@@ -170,8 +175,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::U8,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U8)
                 ),
                 ""
@@ -186,8 +192,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::U16,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U16)
                 ),
                 ""
@@ -202,8 +209,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::U32,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U32)
                 ),
                 ""
@@ -218,8 +226,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::U64,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::U64)
                 ),
                 ""
@@ -234,8 +243,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::S8,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S8)
                 ),
                 ""
@@ -250,8 +260,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::S16,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S16)
                 ),
                 ""
@@ -266,8 +277,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::S32,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S32)
                 ),
                 ""
@@ -282,8 +294,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::S64,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::S64)
                 ),
                 ""
@@ -298,8 +311,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::F32,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::F32)
                 ),
                 ""
@@ -314,8 +328,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::F64,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::F64)
                 ),
                 ""
@@ -330,8 +345,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::Chr,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Chr)
                 ),
                 ""
@@ -346,8 +362,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::Str,
                     Expr::Identifier(VariableId::global("bar".to_string()), InferredType::Str)
                 ),
                 ""
@@ -362,8 +379,9 @@ mod tests {
         assert_eq!(
             result,
             Ok((
-                Expr::let_binding(
+                Expr::let_binding_with_type(
                     "foo",
+                    TypeName::List(Box::new(TypeName::U8)),
                     Expr::Sequence(vec![], InferredType::List(Box::new(InferredType::U8)))
                 ),
                 ""

@@ -51,7 +51,7 @@ mod internal {
                         index = latest
                     }
                 }
-                Expr::Let(variable_id, expr, _) => {
+                Expr::Let(variable_id, _, expr, _) => {
                     queue.push_front(expr);
                     shadowed_let_binding.push(variable_id.name());
                 }

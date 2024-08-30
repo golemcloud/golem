@@ -103,7 +103,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 }
             }
         }
-        Expr::Let(_, expr, _) => expr.pull_types_up()?,
+        Expr::Let(_, _, expr, _) => expr.pull_types_up()?,
         Expr::SelectField(expr, field, inferred_type) => {
             expr.pull_types_up()?;
             let expr_type = expr.inferred_type();

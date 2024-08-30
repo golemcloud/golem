@@ -5,10 +5,12 @@ use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
 use combine::{attempt, between, easy, sep_by, Parser, Stream};
-use std::ops::Deref;
-use golem_api_grpc::proto::golem::rib::{BasicTypeName, TypeName as ProtoTypeName};
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-use golem_api_grpc::proto::golem::rib::type_name::Kind::BasicType;
+use golem_api_grpc::proto::golem::rib::{
+    BasicTypeName, ListType, OptionType, TupleType, TypeName as ProtoTypeName,
+};
+use std::fmt::Display;
+use std::ops::Deref;
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
@@ -30,9 +32,41 @@ pub enum TypeName {
     Option(Box<TypeName>),
 }
 
+impl Display for TypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeName::Bool => write!(f, "bool"),
+            TypeName::S8 => write!(f, "s8"),
+            TypeName::U8 => write!(f, "u8"),
+            TypeName::S16 => write!(f, "s16"),
+            TypeName::U16 => write!(f, "u16"),
+            TypeName::S32 => write!(f, "s32"),
+            TypeName::U32 => write!(f, "u32"),
+            TypeName::S64 => write!(f, "s64"),
+            TypeName::U64 => write!(f, "u64"),
+            TypeName::F32 => write!(f, "f32"),
+            TypeName::F64 => write!(f, "f64"),
+            TypeName::Chr => write!(f, "chr"),
+            TypeName::Str => write!(f, "str"),
+            TypeName::List(inner_type) => write!(f, "list<{}>", inner_type),
+            TypeName::Tuple(inner_types) => {
+                write!(f, "tuple<")?;
+                for (i, inner_type) in inner_types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", inner_type)?;
+                }
+                write!(f, ">")
+            }
+            TypeName::Option(inner_type) => write!(f, "option<{}>", inner_type),
+        }
+    }
+}
+
 impl From<TypeName> for ProtoTypeName {
     fn from(value: TypeName) -> Self {
-       let inner = match value {
+        let inner = match value {
             TypeName::Bool => InnerTypeName::BasicType(BasicTypeName::Bool as i32),
             TypeName::S8 => InnerTypeName::BasicType(BasicTypeName::S8 as i32),
             TypeName::U8 => InnerTypeName::BasicType(BasicTypeName::U8 as i32),
@@ -46,14 +80,18 @@ impl From<TypeName> for ProtoTypeName {
             TypeName::F64 => InnerTypeName::BasicType(BasicTypeName::F64 as i32),
             TypeName::Chr => InnerTypeName::BasicType(BasicTypeName::Chr as i32),
             TypeName::Str => InnerTypeName::BasicType(BasicTypeName::Str as i32),
-            TypeName::List(inner_type) => InnerTypeName::ListType(Box::new(inner_type.deref().clone().into())),
-            TypeName::Tuple(inner_types) => InnerTypeName::TupleType(inner_types.into_iter().map(|t| t.into()).collect()),
-            TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(type_name.deref().clone().into())),
+            TypeName::List(inner_type) => InnerTypeName::ListType(Box::new(ListType {
+                inner_type: Some(Box::new(inner_type.deref().clone().into())),
+            })),
+            TypeName::Tuple(inner_types) => InnerTypeName::TupleType(TupleType {
+                types: inner_types.into_iter().map(|t| t.into()).collect(),
+            }),
+            TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(OptionType {
+                inner_type: Some(Box::new(type_name.deref().clone().into())),
+            })),
         };
 
-        ProtoTypeName {
-            kind: Some(inner),
-        }
+        ProtoTypeName { kind: Some(inner) }
     }
 }
 
@@ -64,24 +102,43 @@ impl TryFrom<ProtoTypeName> for TypeName {
         match value.kind {
             Some(inner) => match inner {
                 InnerTypeName::BasicType(value) => match BasicTypeName::try_from(value) {
-                   Ok(BasicTypeName::Bool) => Ok(TypeName::Bool),
-                   Ok(BasicTypeName::S8) => Ok(TypeName::S8),
-                   Ok(BasicTypeName::U8) => Ok(TypeName::U8),
-                   Ok(BasicTypeName::S16) => Ok(TypeName::S16),
-                   Ok(BasicTypeName::U16) => Ok(TypeName::U16),
-                   Ok(BasicTypeName::S32) => Ok(TypeName::S32),
-                   Ok(BasicTypeName::U32) => Ok(TypeName::U32),
-                   Ok(BasicTypeName::S64) => Ok(TypeName::S64),
-                   Ok(BasicTypeName::U64) => Ok(TypeName::U64),
-                   Ok(BasicTypeName::F32) => Ok(TypeName::F32),
-                   Ok(BasicTypeName::F64) => Ok(TypeName::F64),
-                   Ok(BasicTypeName::Chr) => Ok(TypeName::Chr),
-                   Ok(BasicTypeName::Str) => Ok(TypeName::Str),
+                    Ok(BasicTypeName::Bool) => Ok(TypeName::Bool),
+                    Ok(BasicTypeName::S8) => Ok(TypeName::S8),
+                    Ok(BasicTypeName::U8) => Ok(TypeName::U8),
+                    Ok(BasicTypeName::S16) => Ok(TypeName::S16),
+                    Ok(BasicTypeName::U16) => Ok(TypeName::U16),
+                    Ok(BasicTypeName::S32) => Ok(TypeName::S32),
+                    Ok(BasicTypeName::U32) => Ok(TypeName::U32),
+                    Ok(BasicTypeName::S64) => Ok(TypeName::S64),
+                    Ok(BasicTypeName::U64) => Ok(TypeName::U64),
+                    Ok(BasicTypeName::F32) => Ok(TypeName::F32),
+                    Ok(BasicTypeName::F64) => Ok(TypeName::F64),
+                    Ok(BasicTypeName::Chr) => Ok(TypeName::Chr),
+                    Ok(BasicTypeName::Str) => Ok(TypeName::Str),
                     _ => Err(format!("Unknown basic type: {:?}", value)),
                 },
-                InnerTypeName::ListType(inner_type) => Ok(TypeName::List(Box::new(inner_type.into()))),
-                InnerTypeName::TupleType(inner_types) => Ok(TypeName::Tuple(inner_types.types.into_iter().map(|t| t.try_into().unwrap()).collect())),
-                InnerTypeName::OptionType(type_name) => Ok(TypeName::Option(Box::new(type_name.inner_type.try_into().unwrap()))),
+                InnerTypeName::ListType(inner_type) => {
+                    let proto_list_type = inner_type
+                        .inner_type
+                        .ok_or("No inner type for list provided")?;
+                    let list_type = proto_list_type.deref().clone().try_into()?;
+                    Ok(TypeName::List(Box::new(list_type)))
+                }
+                InnerTypeName::TupleType(inner_types) => {
+                    let tuple_type = inner_types
+                        .types
+                        .into_iter()
+                        .map(|t| t.try_into())
+                        .collect::<Result<Vec<TypeName>, String>>()?;
+                    Ok(TypeName::Tuple(tuple_type))
+                }
+                InnerTypeName::OptionType(type_name) => {
+                    let proto_option_type = type_name
+                        .inner_type
+                        .ok_or("No inner type for option provided")?;
+                    let option_type = proto_option_type.deref().clone().try_into()?;
+                    Ok(TypeName::Option(Box::new(option_type)))
+                }
             },
             None => Err("No type kind provided".to_string()),
         }

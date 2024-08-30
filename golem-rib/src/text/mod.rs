@@ -845,7 +845,9 @@ mod simple_values_test {
 #[cfg(test)]
 mod let_tests {
     use crate::expr::Expr;
+    use crate::parser::type_name::TypeName;
     use crate::text::{from_string, to_string};
+    use crate::{InferredType, Number, VariableId};
 
     #[test]
     fn test_round_trip_read_write_let() {
@@ -855,6 +857,182 @@ mod let_tests {
         ]);
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str = "${let x = \"hello\";\nlet y = \"bar\"}".to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_str() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::Str),
+                Box::new(Expr::literal("hello")),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::Str),
+                Box::new(Expr::literal("bar")),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${let x: str = \"hello\";\nlet y: str = \"bar\"}".to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_u8() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::U8),
+                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U8)),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::U8),
+                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U8)),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${let x: u8 = 1;\nlet y: u8 = 2}".to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_u16() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::U16),
+                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U16)),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::U16),
+                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U16)),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${let x: u16 = 1;\nlet y: u16 = 2}".to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_u32() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::U32),
+                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U32)),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::U32),
+                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U32)),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str = "${let x: u32 = 1;\nlet y: u32 = 2}".to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_option() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::Option(Box::new(TypeName::Str))),
+                Box::new(Expr::Option(
+                    Some(Box::new(Expr::literal("foo"))),
+                    InferredType::Option(Box::new(InferredType::Str)),
+                )),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::Option(Box::new(TypeName::Str))),
+                Box::new(Expr::Option(
+                    Some(Box::new(Expr::literal("bar"))),
+                    InferredType::Option(Box::new(InferredType::Str)),
+                )),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${let x: option<str> = some(\"foo\");\nlet y: option<str> = some(\"bar\")}"
+                .to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_list() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::List(Box::new(TypeName::Str))),
+                Box::new(Expr::Sequence(
+                    vec![Expr::literal("foo")],
+                    InferredType::List(Box::new(InferredType::Str)),
+                )),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::List(Box::new(TypeName::Str))),
+                Box::new(Expr::Sequence(
+                    vec![Expr::literal("bar")],
+                    InferredType::List(Box::new(InferredType::Str)),
+                )),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${let x: list<str> = [\"foo\"];\nlet y: list<str> = [\"bar\"]}".to_string();
+        let output_expr = from_string(expr_str.as_str()).unwrap();
+        assert_eq!((expr_str, input_expr), (expected_str, output_expr));
+    }
+
+    #[test]
+    fn test_round_trip_read_write_let_with_type_binding_tuple() {
+        let input_expr = Expr::multiple(vec![
+            Expr::Let(
+                VariableId::global("x".to_string()),
+                Some(TypeName::Tuple(vec![TypeName::Str])),
+                Box::new(Expr::Tuple(
+                    vec![Expr::literal("foo")],
+                    InferredType::Tuple(vec![InferredType::Str]),
+                )),
+                InferredType::Unknown,
+            ),
+            Expr::Let(
+                VariableId::global("y".to_string()),
+                Some(TypeName::Tuple(vec![TypeName::Str])),
+                Box::new(Expr::Tuple(
+                    vec![Expr::literal("bar")],
+                    InferredType::Tuple(vec![InferredType::Str]),
+                )),
+                InferredType::Unknown,
+            ),
+        ]);
+        let expr_str = to_string(&input_expr).unwrap();
+        let expected_str =
+            "${let x: tuple<str> = (\"foo\");\nlet y: tuple<str> = (\"bar\")}".to_string();
         let output_expr = from_string(expr_str.as_str()).unwrap();
         assert_eq!((expr_str, input_expr), (expected_str, output_expr));
     }

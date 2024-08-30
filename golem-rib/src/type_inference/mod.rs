@@ -142,9 +142,9 @@ mod type_inference_tests {
         }
     }
     mod literal_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_number_literal_type_inference() {
@@ -203,9 +203,9 @@ mod type_inference_tests {
         }
     }
     mod comparison_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_comparison_type_inference() {
@@ -376,9 +376,9 @@ mod type_inference_tests {
         }
     }
     mod cond_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_cond_type_inference() {
@@ -450,9 +450,9 @@ mod type_inference_tests {
         }
     }
     mod identifier_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_identifier_type_inference() {
@@ -543,9 +543,9 @@ mod type_inference_tests {
         }
     }
     mod list_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_list_type_inference() {
@@ -586,9 +586,9 @@ mod type_inference_tests {
         }
     }
     mod select_index_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_select_index_type_inference() {
@@ -633,9 +633,9 @@ mod type_inference_tests {
         }
     }
     mod select_field_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_select_field_type_inference() {
@@ -689,9 +689,9 @@ mod type_inference_tests {
         }
     }
     mod tuple_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_tuple_type_inference() {
@@ -731,10 +731,10 @@ mod type_inference_tests {
         }
     }
     mod variable_conflict_tests {
+        use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId,
         };
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_variable_conflict_case() {
@@ -812,12 +812,12 @@ mod type_inference_tests {
         }
     }
     mod pattern_match_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, InvocationName, MatchArm, Number,
             ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
         };
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_simple_pattern_match_type_inference() {
@@ -1158,9 +1158,9 @@ mod type_inference_tests {
         }
     }
     mod option_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_option_type_inference() {
@@ -1200,9 +1200,9 @@ mod type_inference_tests {
         }
     }
     mod record_tests {
+        use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
-        use crate::parser::type_name::TypeName;
 
         #[test]
         fn test_record_type_inference() {
