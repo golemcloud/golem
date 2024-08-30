@@ -296,6 +296,7 @@ pub enum ResponseMapResult {
         shard_id: ShardId,
         shard_ids: HashSet<ShardId>,
     },
+    ShardingNotReady,
     Other(WorkerServiceError),
 }
 
@@ -309,6 +310,7 @@ impl From<GolemError> for ResponseMapResult {
                 shard_id,
                 shard_ids,
             },
+            GolemError::ShardingNotReady(_) => ResponseMapResult::ShardingNotReady,
             other => ResponseMapResult::Other(other.into()),
         }
     }
@@ -380,6 +382,9 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                                 Ok(Some(result))
                             }
                             Err(error @ ResponseMapResult::InvalidShardId { .. }) => {
+                                retry.retry(self, &error, &pod).await
+                            }
+                            Err(error @ ResponseMapResult::ShardingNotReady) => {
                                 retry.retry(self, &error, &pod).await
                             }
                             Err(ResponseMapResult::Other(error)) => {
