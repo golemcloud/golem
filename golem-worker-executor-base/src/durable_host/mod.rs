@@ -59,7 +59,7 @@ use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
-use wasmtime::AsContextMut;
+use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Stdout, WasiCtx, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
@@ -379,7 +379,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     // If persistence is off, we always emit events
                     {
                         // Emit the event and write a special oplog entry
-                        self.public_state.event_service.emit_event(event.clone());
+                        self.public_state
+                            .event_service
+                            .emit_event(event.clone(), true);
                         self.state.oplog.add(entry).await;
                     } else if !self
                         .state
@@ -388,11 +390,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await
                     {
                         // haven't seen this log before
-                        self.public_state.event_service.emit_event(event.clone());
+                        self.public_state
+                            .event_service
+                            .emit_event(event.clone(), true);
                         self.state.oplog.add(entry).await;
                     } else {
-                        // we have persisted emitting this log before, so we don't do it again but
+                        // we have persisted emitting this log before, so we mark it as non-live and
                         // remove the entry from the seen log set.
+                        // note that we still call emit_event because we need replayed log events for
+                        // improved error reporting in case of invocation failures
+                        self.public_state
+                            .event_service
+                            .emit_event(event.clone(), false);
                         self.state
                             .replay_state
                             .remove_seen_log(*level, context, message)
@@ -464,9 +473,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     Err(error) => Some(format!(
                                         "Manual update failed to load snapshot: {error}"
                                     )),
-                                    Ok(InvokeResult::Failed { error, .. }) => Some(format!(
-                                        "Manual update failed to load snapshot: {error}"
-                                    )),
+                                    Ok(InvokeResult::Failed { error, .. }) => {
+                                        let stderr = store
+                                            .as_context()
+                                            .data()
+                                            .get_public_state()
+                                            .event_service()
+                                            .get_last_invocation_errors();
+                                        let error = error.to_string(&stderr);
+                                        Some(format!(
+                                            "Manual update failed to load snapshot: {error}"
+                                        ))
+                                    }
                                     Ok(InvokeResult::Succeeded { output, .. }) => {
                                         if output.len() == 1 {
                                             match &output[0] {
@@ -1209,9 +1227,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     ))
                                                 }
                                                 TrapType::Error(error) => {
+                                                    let stderr = store
+                                                        .as_context()
+                                                        .data()
+                                                        .get_public_state()
+                                                        .event_service()
+                                                        .get_last_invocation_errors();
                                                     break Err(GolemError::runtime(
-                                                        error.to_string(),
-                                                    ))
+                                                        error.to_string(&stderr),
+                                                    ));
                                                 }
                                             }
                                         }
@@ -1283,9 +1307,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .unwrap_or(default_retry_config),
                 &last_error,
             );
-            if let Some(last_error) = last_error {
-                debug!("Recovery decision after {last_error}: {decision:?}");
-            }
+
+            // TODO
+            // if let Some(last_error) = last_error {
+            //     debug!("Recovery decision after {last_error}: {decision:?}");
+            // }
 
             match decision {
                 RetryDecision::Immediate | RetryDecision::ReacquirePermits => {
@@ -1338,6 +1364,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                             LastError {
                                 error: first_error.unwrap(),
                                 retry_count,
+                                stderr: "ERROR LOGS".to_string() // TODO
                             }
                         );
                     }
@@ -1349,14 +1376,22 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         continue;
                     } else {
                         match first_error {
-                            Some(error) => break Some(LastError { error, retry_count }),
+                            Some(error) => break Some(LastError {
+                                error,
+                                retry_count,
+                                stderr: "ERROR LOGS".to_string() // TODO
+                                }),
                             None => break None
                         }
                     }
                 }
                 _ => {
                     match first_error {
-                        Some(error) => break Some(LastError { error, retry_count }),
+                        Some(error) => break Some(LastError {
+                            error,
+                            retry_count,
+                            stderr: "ERROR LOGS".to_string() // TODO
+                        }),
                         None => break None
                     }
                 }

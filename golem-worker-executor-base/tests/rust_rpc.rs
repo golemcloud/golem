@@ -618,5 +618,5 @@ async fn error_message_non_existing_target_component() {
     drop(executor);
 
     check!(worker_error_message(&create_auction_result.err().unwrap())
-        .contains("Component does not exist: FB2F8E32-7B94-4699-B6EC-82BCE80FF9F2"));
+        .contains("Could not find any component with the given id"));
 }

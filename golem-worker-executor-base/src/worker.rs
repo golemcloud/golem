@@ -33,7 +33,7 @@ use crate::services::{
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
     HasWorkerService, UsesAllDeps,
 };
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
 use golem_common::model::exports;
@@ -602,14 +602,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .concat();
         let mut map = self.invocation_results.write().unwrap();
         for key in keys_to_fail {
+            let stderr = self.event_service.get_last_invocation_errors();
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
-                    result: Err(trap_type.clone()),
+                    result: Err(FailedInvocationResult {
+                        trap_type: trap_type.clone(),
+                        stderr: stderr.clone(),
+                    }),
                     oplog_idx: oplog_index,
                 },
             );
-            let golem_error = trap_type.as_golem_error();
+            let golem_error = trap_type.as_golem_error(&stderr);
             if let Some(golem_error) = golem_error {
                 self.events().publish(Event::InvocationCompleted {
                     worker_id: self.owned_worker_id.worker_id(),
@@ -786,19 +790,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     result: Ok(values), ..
                 } => LookupResult::Complete(Ok(values)),
                 InvocationResult::Cached {
-                    result: Err(TrapType::Interrupt(InterruptKind::Interrupt)),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt),
+                            ..
+                        }),
                     ..
                 } => LookupResult::Interrupted,
                 InvocationResult::Cached {
-                    result: Err(TrapType::Interrupt(_)),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Interrupt(_),
+                            ..
+                        }),
                     ..
                 } => LookupResult::Pending,
                 InvocationResult::Cached {
-                    result: Err(TrapType::Error(error)),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Error(error),
+                            stderr,
+                        }),
                     ..
-                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string()))),
+                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))), // TODO
                 InvocationResult::Cached {
-                    result: Err(TrapType::Exit),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Exit,
+                            ..
+                        }),
                     ..
                 } => LookupResult::Complete(Err(GolemError::runtime("Process exited"))),
                 InvocationResult::Lazy { .. } => {
@@ -1549,6 +1569,8 @@ impl RunningWorker {
                                                     false
                                                 },
                                             Ok(InvokeResult::Failed { error, .. }) => {
+                                                let stderr = store.data().get_public_state().event_service().get_last_invocation_errors();
+                                                let error = error.to_string(&stderr);
                                                 Self::fail_update(
                                                     target_version,
                                                     format!("failed to get a snapshot for manual update: {error}"),
@@ -1673,9 +1695,15 @@ impl RunningWorker {
 }
 
 #[derive(Debug, Clone)]
+struct FailedInvocationResult {
+    pub trap_type: TrapType,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<TypeAnnotatedValue, TrapType>,
+        result: Result<TypeAnnotatedValue, FailedInvocationResult>,
         oplog_idx: OplogIndex,
     },
     Lazy {
@@ -1702,9 +1730,12 @@ impl InvocationResult {
 
                     Ok(values)
                 }
-                OplogEntry::Error { error, .. } => Err(TrapType::Error(error)),
-                OplogEntry::Interrupted { .. } => Err(TrapType::Interrupt(InterruptKind::Interrupt)),
-                OplogEntry::Exited { .. } => Err(TrapType::Exit),
+                OplogEntry::Error { error, .. } => {
+                    // TODO: need to look back oplog entries and collect stderr
+                    Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr: "ERROR LOGS".to_string() })
+                },
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string()}),
+                OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string()}),
                 _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {oplog:?}")
             };
 

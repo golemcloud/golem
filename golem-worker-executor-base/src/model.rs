@@ -220,7 +220,9 @@ impl TrapType {
                             Some(GolemError::InvalidRequest { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
-                            _ => TrapType::Error(WorkerError::Unknown(format!("{:?}", error))),
+                            _ => {
+                                TrapType::Error(WorkerError::Unknown(format!("POCOK {:#?}", error)))
+                            }
                         },
                     },
                 },
@@ -228,14 +230,14 @@ impl TrapType {
         }
     }
 
-    pub fn as_golem_error(&self) -> Option<GolemError> {
+    pub fn as_golem_error(&self, error_logs: &str) -> Option<GolemError> {
         match self {
             TrapType::Interrupt(InterruptKind::Interrupt) => {
                 Some(GolemError::runtime("Interrupted via the Golem API"))
             }
             TrapType::Error(error) => match error {
                 WorkerError::InvalidRequest(msg) => Some(GolemError::invalid_request(msg.clone())),
-                _ => Some(GolemError::runtime(error.to_string())),
+                _ => Some(GolemError::runtime(error.to_string(error_logs))),
             },
             TrapType::Exit => Some(GolemError::runtime("Process exited")),
             _ => None,
@@ -250,12 +252,18 @@ impl TrapType {
 #[derive(Clone, Debug)]
 pub struct LastError {
     pub error: WorkerError,
+    pub stderr: String,
     pub retry_count: u64,
 }
 
 impl Display for LastError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}, retried {} times", self.error, self.retry_count)
+        write!(
+            f,
+            "{}, retried {} times",
+            self.error.to_string(&self.stderr),
+            self.retry_count
+        )
     }
 }
 
