@@ -318,10 +318,7 @@ mod internal {
 
 #[cfg(test)]
 mod desugar_tests {
-    use crate::compiler::desugar::desugar_tests::expectations::{
-        expected_condition_simple, expected_condition_with_identifiers,
-        expected_condition_with_literals,
-    };
+    use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::Expr;
     use golem_wasm_ast::analysis::{
@@ -389,58 +386,7 @@ mod desugar_tests {
         }
     }
     mod expectations {
-        use crate::{Expr, InferredType, Number, VariableId};
-
-        pub(crate) fn expected_condition_simple() -> Expr {
-            Expr::cond(
-                Expr::equal_to(
-                    Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                    Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                ),
-                Expr::boolean(true),
-                Expr::cond(
-                    Expr::equal_to(
-                        Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                        Expr::Number(Number { value: 2f64 }, InferredType::U64),
-                    ),
-                    Expr::boolean(false),
-                    Expr::Throw("No match found".to_string(), InferredType::Unknown),
-                )
-                .add_infer_type(InferredType::Bool),
-            )
-            .add_infer_type(InferredType::Bool)
-        }
-        pub(crate) fn expected_condition_with_literals() -> Expr {
-            Expr::cond(
-                Expr::equal_to(
-                    Expr::Unwrap(
-                        Box::new(Expr::option(Some(Expr::Number(
-                            Number { value: 1f64 },
-                            InferredType::U64,
-                        )))),
-                        InferredType::Unknown,
-                    ),
-                    Expr::Number(Number { value: 2f64 }, InferredType::U64),
-                ),
-                Expr::boolean(true),
-                Expr::cond(
-                    Expr::equal_to(
-                        Expr::Unwrap(
-                            Box::new(Expr::option(Some(Expr::Number(
-                                Number { value: 1f64 },
-                                InferredType::U64,
-                            )))),
-                            InferredType::Unknown,
-                        ),
-                        Expr::Number(Number { value: 3f64 }, InferredType::U64),
-                    ),
-                    Expr::boolean(false),
-                    Expr::Throw("No match found".to_string(), InferredType::Unknown),
-                )
-                .add_infer_type(InferredType::Bool),
-            )
-            .add_infer_type(InferredType::Bool)
-        }
+        use crate::{Expr, InferredType, VariableId};
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::Cond(
                 Box::new(Expr::EqualTo(

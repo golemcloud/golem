@@ -343,10 +343,6 @@ impl InferredType {
         one_of_types
     }
 
-    fn all_numbers(types: &[InferredType]) -> bool {
-        types.iter().all(|t| t.is_number())
-    }
-
     fn unify_all_alternative_types(types: &Vec<InferredType>) -> Result<InferredType, Vec<String>> {
         let mut unified_type = InferredType::Unknown;
 
@@ -357,7 +353,7 @@ impl InferredType {
                 Ok(t) => {
                     unified_type = t.clone();
                 }
-                Err(e) => {
+                Err(_) => {
                     if !unified_type.is_unknown() {
                         unified_type = InferredType::OneOf(Self::flatten_one_of_list(&vec![
                             unified_type.clone(),
@@ -1098,12 +1094,8 @@ impl InferredType {
                 if new_types.contains(current_type) || current_type.is_unknown() {
                     *current_type = InferredType::AllOf(new_types);
                 } else {
-                    if current_type.is_unknown() {
-                        *current_type = InferredType::AllOf(new_types);
-                    } else {
-                        new_types.push(current_type.clone());
-                        *current_type = InferredType::AllOf(new_types);
-                    }
+                    new_types.push(current_type.clone());
+                    *current_type = InferredType::AllOf(new_types);
                 }
             }
 
@@ -1216,8 +1208,6 @@ mod internal {
 
 #[cfg(test)]
 mod test {
-    use wasm_wave::lex::Keyword::Inf;
-
     #[test]
     fn test_flatten_one_of() {
         use super::InferredType;

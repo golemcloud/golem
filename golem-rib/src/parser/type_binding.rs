@@ -1,4 +1,3 @@
-
 use crate::parser::type_name::TypeName;
 use crate::{Expr, InferredType};
 
