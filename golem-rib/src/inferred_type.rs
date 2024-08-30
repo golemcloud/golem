@@ -130,16 +130,29 @@ impl InferredType {
                 None
             }
             InferredType::Result { ok, error } => {
-                if let Some(ok) = ok {
-                    if let Some(unresolved) = ok.un_resolved() {
-                        return Some(unresolved);
+                // Check unresolved status for `ok` and `error`
+                let unresolved_ok = ok.clone().and_then(|o| o.un_resolved());
+                let unresolved_error = error.clone().and_then(|e| e.un_resolved());
+
+                // If `ok` is unresolved
+                if unresolved_ok.is_some() {
+                    if error.is_some() && unresolved_error.is_none() {
+                        // If `error` is known, return `None`
+                        return None;
                     }
+                    return unresolved_ok;
                 }
-                if let Some(error) = error {
-                    if let Some(unresolved) = error.un_resolved() {
-                        return Some(unresolved);
+
+                // If `error` is unresolved
+                if unresolved_error.is_some() {
+                    if ok.is_some() && ok.as_ref().unwrap().un_resolved().is_none() {
+                        // If `ok` is known, return `None`
+                        return None;
                     }
+                    return unresolved_error;
                 }
+
+                // Both `ok` and `error` are resolved or not present
                 None
             }
             InferredType::Variant(variant) => {
