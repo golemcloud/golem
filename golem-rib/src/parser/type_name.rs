@@ -5,7 +5,6 @@ use combine::parser::choice::choice;
 use combine::{attempt, between, easy, Parser, sep_by, Stream};
 use combine::{parser};
 
-// TODO; Support more
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
     Bool,
@@ -26,7 +25,7 @@ pub enum TypeName {
 }
 
 pub fn parse_basic_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
-    choice((
+   spaces().with(choice((
         attempt(string("bool").map(|_| TypeName::Bool)),
         attempt(string("s8").map(|_| TypeName::S8)),
         attempt(string("u8").map(|_| TypeName::U8)),
@@ -40,7 +39,7 @@ pub fn parse_basic_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Typ
         attempt(string("f64").map(|_| TypeName::F64)),
         attempt(string("chr").map(|_| TypeName::Chr)),
         attempt(string("str").map(|_| TypeName::Str)),
-    ))
+    ))).skip(spaces())
 }
 
 pub fn parse_list_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
@@ -111,7 +110,7 @@ mod type_name_parser_tests {
     }
 
     #[test]
-    fn test_list_type() {
+    fn test_list_type_name() {
         parse_and_compare("list<u8>", TypeName::List(Box::new(TypeName::U8)));
         parse_and_compare("list<list<f32>>", TypeName::List(Box::new(TypeName::List(Box::new(TypeName::F32)))));
     }
