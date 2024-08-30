@@ -422,7 +422,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${request.path.user-id}",
+            "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
         );
 
@@ -496,7 +496,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
-            "shopping-cart-${request.path.user-id}",
+            "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
         );
 
@@ -575,7 +575,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
         );
 
@@ -763,7 +763,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
         );
 
@@ -815,14 +815,6 @@ mod tests {
           response
         "#;
 
-        // r#"${
-        //     let userid: u64 = request.path.user-id;
-        //     let max: u64 = 100;
-        //     let zero: u64 = 0;
-        //     let one: u64 = 1;
-        //     let res = if userid>max then zero else one;
-        //     "shopping-cart-${res}"
-
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
@@ -863,7 +855,7 @@ mod tests {
 
             let api_specification: HttpApiDefinition = get_api_spec(
                 definition_path,
-                "shopping-cart-${request.path.cart-id}",
+                "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
                 expression,
             );
 
