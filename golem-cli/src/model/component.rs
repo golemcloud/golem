@@ -169,7 +169,7 @@ pub fn show_exported_function(prefix: &str, f: &AnalysedFunction) -> String {
         let name = &f.name;
 
         DisplayNamedFunc {
-            name: format!("{prefix}{{{name}}}"),
+            name: format!("{prefix}{name}"),
             func: analysed_function_client_to_model(f),
         }
         .to_string()
@@ -192,11 +192,11 @@ fn custom_show_exported_function(prefix: &str, f: &AnalysedFunction) -> String {
     let res_str = results.join(", ");
 
     if results.is_empty() {
-        format!("{prefix}{{{name}}}({params})")
+        format!("{prefix}{name}({params})")
     } else if results.len() == 1 {
-        format!("{prefix}{{{name}}}({params}) -> {res_str}")
+        format!("{prefix}{name}({params}) -> {res_str}")
     } else {
-        format!("{prefix}{{{name}}}({params}) -> ({res_str})")
+        format!("{prefix}{name}({params}) -> ({res_str})")
     }
 }
 
