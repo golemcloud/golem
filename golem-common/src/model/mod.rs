@@ -1901,7 +1901,7 @@ impl From<LogLevel> for golem_api_grpc::proto::golem::worker::Level {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WorkerEvent {
     StdOut {
         timestamp: Timestamp,
