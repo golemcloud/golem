@@ -536,7 +536,7 @@ mod tests {
 
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if request.body.age>100 then 0 else 1}",
+            "${let n: u64 = 100; let age: u64 = request.body.age; let zero: u64 = 0; let one: u64 = 1; let res = if age > n then zero else one; \"shopping-cart-${res}\"}",
             expression,
         );
 
@@ -815,9 +815,17 @@ mod tests {
           response
         "#;
 
+        // r#"${
+        //     let userid: u64 = request.path.user-id;
+        //     let max: u64 = 100;
+        //     let zero: u64 = 0;
+        //     let one: u64 = 1;
+        //     let res = if userid>max then zero else one;
+        //     "shopping-cart-${res}"
+
         let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
         );
 
@@ -896,7 +904,7 @@ mod tests {
 
             let api_specification: HttpApiDefinition = get_api_spec(
                 "getcartcontent/{cart-id}",
-                "shopping-cart-${request.path.cart-id}",
+                "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
                 expression,
             );
 
