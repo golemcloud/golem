@@ -567,7 +567,7 @@ mod type_inference_tests {
         #[test]
         fn test_select_index_type_inference() {
             let rib_expr = r#"
-          let x = [1, 2, 3];
+          let x: list<u64> = [1, 2, 3];
           x[0]
 
           "#;
@@ -706,7 +706,7 @@ mod type_inference_tests {
         #[test]
         fn test_variable_conflict_case() {
             let expr_str = r#"
-              let y = 1;
+              let y: u64 = 1;
               let z = some(y);
 
               match z {
