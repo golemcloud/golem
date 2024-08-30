@@ -22,9 +22,9 @@ use combine::{
 
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
+use crate::parser::type_binding;
 use crate::parser::type_name::parse_type_name;
 use combine::stream::easy;
-use crate::parser::type_binding;
 
 pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     spaces().with(

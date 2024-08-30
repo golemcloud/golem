@@ -18,5 +18,5 @@ mod select_field;
 mod select_index;
 mod sequence;
 mod tuple;
-mod type_name;
 pub(crate) mod type_binding;
+mod type_name;

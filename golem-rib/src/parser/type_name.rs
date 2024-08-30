@@ -44,13 +44,13 @@ impl From<TypeName> for InferredType {
             TypeName::Chr => InferredType::Chr,
             TypeName::Str => InferredType::Str,
             TypeName::List(inner_type) => {
-                InferredType::List(Box::new((inner_type.deref().clone().into())))
+                InferredType::Option(Box::new((type_name.deref().clone().into())))
             }
             TypeName::Tuple(inner_types) => {
                 InferredType::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
             }
             TypeName::Option(type_name) => {
-                InferredType::Option(Box::new((type_name.deref().clone().into())))
+                InferredType::Option(Box::new(type_name.deref().clone().into()))
             }
         }
     }

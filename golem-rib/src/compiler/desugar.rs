@@ -449,7 +449,7 @@ mod desugar_tests {
                             VariableId::local("x", 0),
                             InferredType::Option(Box::new(InferredType::U64)),
                         )),
-                        InferredType::Unknown
+                        InferredType::Unknown,
                     )),
                     Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
                     InferredType::Bool,

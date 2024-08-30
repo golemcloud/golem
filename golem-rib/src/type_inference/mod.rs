@@ -1185,7 +1185,10 @@ mod type_inference_tests {
                         Box::new(Expr::Record(
                             vec![(
                                 "foo".to_string(),
-                                Box::new(Expr::Identifier( VariableId::local("number", 0), InferredType::U64)),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("number", 0),
+                                    InferredType::U64,
+                                )),
                             )],
                             InferredType::Record(vec![("foo".to_string(), InferredType::U64)]),
                         )),

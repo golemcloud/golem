@@ -1239,23 +1239,16 @@ mod test {
         let flattened = InferredType::flatten_one_of_list(&one_of);
 
         let expected = vec![
-           InferredType::U8,
-           InferredType::U16,
-           InferredType::U32,
-           InferredType::U8,
-           InferredType::U16,
-           InferredType::U32,
-           InferredType::AllOf(
-                vec![
-                    InferredType::U64,
-                    InferredType::OneOf(
-                       vec![
-                            InferredType::U64,
-                            InferredType::U8,
-                        ],
-                    ),
-                ],
-            ),
+            InferredType::U8,
+            InferredType::U16,
+            InferredType::U32,
+            InferredType::U8,
+            InferredType::U16,
+            InferredType::U32,
+            InferredType::AllOf(vec![
+                InferredType::U64,
+                InferredType::OneOf(vec![InferredType::U64, InferredType::U8]),
+            ]),
         ];
 
         assert_eq!(flattened, expected)
