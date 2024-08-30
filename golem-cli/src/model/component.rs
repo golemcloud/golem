@@ -291,7 +291,7 @@ mod tests {
         };
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{n}() -> &handle<1>")
+        assert_eq!(repr, "n() -> &handle<1>")
     }
 
     #[test]
@@ -304,7 +304,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{abc}()")
+        assert_eq!(repr, "abc()")
     }
 
     #[test]
@@ -323,7 +323,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{abc}(n: handle<1>)")
+        assert_eq!(repr, "abc(n: handle<1>)")
     }
 
     #[test]
@@ -339,7 +339,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{abc}() -> bool")
+        assert_eq!(repr, "abc() -> bool")
     }
 
     #[test]
@@ -358,7 +358,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{abc}() -> handle<1>")
+        assert_eq!(repr, "abc() -> handle<1>")
     }
 
     #[test]
@@ -389,7 +389,7 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{abc}(n1: bool, n2: bool) -> (bool, bool)")
+        assert_eq!(repr, "abc(n1: bool, n2: bool) -> (bool, bool)")
     }
 
     #[test]
@@ -423,12 +423,12 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "{abc}(n1: bool, n2: handle<1>) -> (bool, bool)")
+        assert_eq!(repr, "abc(n1: bool, n2: handle<1>) -> (bool, bool)")
     }
 
     fn ensure_same_export(typ: AnalysedType, expected: &str) {
-        let expected_wave = format!("{{wn}}() -> {expected}");
-        let expected_custom = format!("{{cn}}() -> tuple<handle<1>, {expected}>");
+        let expected_wave = format!("wn() -> {expected}");
+        let expected_custom = format!("cn() -> tuple<handle<1>, {expected}>");
 
         let wave_f = AnalysedFunction {
             name: "wn".to_string(),
