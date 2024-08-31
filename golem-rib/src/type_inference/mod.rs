@@ -903,6 +903,89 @@ mod type_inference_tests {
         }
 
         #[test]
+        fn test_pattern_match_with_option() {
+            let expr_str = r#"
+              let x: u64 = 1;
+              let y: u64 = 2;
+              match some(x) {
+                some(x) => some(some(x)),
+                none => some(some(y))
+              }
+            "#;
+
+            let mut expr = Expr::from_text(expr_str).unwrap();
+
+            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+
+            let expected = Expr::Multiple(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        Some(TypeName::U64),
+                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("y", 0),
+                        Some(TypeName::U64),
+                        Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U64)),
+                        InferredType::Unknown,
+                    ),
+                    Expr::PatternMatch(
+                        Box::new(Expr::Option(
+                            Some(Box::new(Expr::Identifier(
+                                VariableId::local("x", 0),
+                                InferredType::U64,
+                            ))),
+                            InferredType::Option(Box::new(InferredType::U64)),
+                        )),
+                        vec![
+                            MatchArm::new(
+                                ArmPattern::Literal(Box::new(Expr::Option(
+                                    Some(Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("x".to_string(), 1),
+                                        InferredType::U64,
+                                    ))),
+                                    InferredType::Option(Box::new(InferredType::U64)),
+                                ))),
+                                Expr::Option(
+                                    Some(Box::new(Expr::Option(
+                                        Some(Box::new(Expr::Identifier(
+                                            VariableId::match_identifier("x".to_string(), 1),
+                                            InferredType::U64,
+                                        ))),
+                                        InferredType::Option(Box::new(InferredType::U64)),
+                                    ))),
+                                    InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))),
+                                ),
+                            )),
+                            MatchArm::new(
+                                ArmPattern::Literal(Box::new(Expr::Option(
+                                    None,
+                                    InferredType::Option(Box::new(InferredType::U64)),
+                                ))),
+                                Expr::Option(
+                                    Some(Box::new(Expr::Option(
+                                        Some(Box::new(Expr::Identifier(
+                                            VariableId::local("y", 0),
+                                            InferredType::U64,
+                                        ))),
+                                    InferredType::Option(Box::new(InferredType::U64))),
+                                )),  InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))))),
+                            ),
+                        ],
+                        InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))),
+                    ),
+                ],
+                InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))),
+            );
+
+            dbg!(expr.clone());
+
+            assert_eq!(expr, expected)
+        }
+
+        #[test]
         fn test_pattern_match_with_record() {
             let expr_str = r#"
               let x = { foo : "bar" };
