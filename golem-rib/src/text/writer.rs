@@ -149,7 +149,7 @@ impl<W: Write> Writer<W> {
                     self.write_display(type_name)?;
                 }
                 Ok(())
-            },
+            }
             Expr::Flags(flags, _) => {
                 self.write_display("{")?;
                 for (idx, flag) in flags.iter().enumerate() {

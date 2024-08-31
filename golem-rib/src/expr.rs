@@ -906,7 +906,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
                 let type_name = number.type_name.map(TypeName::try_from).transpose()?;
                 if let Some(type_name) = type_name {
-                    bind(&Expr::number_with_type_name(number.float, type_name.clone()), Some(type_name))
+                    bind(
+                        &Expr::number_with_type_name(number.float, type_name.clone()),
+                        Some(type_name),
+                    )
                 } else {
                     Expr::number(number.float)
                 }
@@ -1026,12 +1029,14 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Literal(value, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
                 golem_api_grpc::proto::golem::rib::LiteralExpr { value },
             ),
-            Expr::Number(number, type_name, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Number(
-                golem_api_grpc::proto::golem::rib::NumberExpr {
-                    float: number.value,
-                    type_name: type_name.map(|t| t.into()),
-                },
-            ),
+            Expr::Number(number, type_name, _) => {
+                golem_api_grpc::proto::golem::rib::expr::Expr::Number(
+                    golem_api_grpc::proto::golem::rib::NumberExpr {
+                        float: number.value,
+                        type_name: type_name.map(|t| t.into()),
+                    },
+                )
+            }
             Expr::Flags(values, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
                 golem_api_grpc::proto::golem::rib::FlagsExpr { values },
             ),

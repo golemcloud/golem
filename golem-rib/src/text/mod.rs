@@ -889,13 +889,13 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U8),
-                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U8)),
+                Box::new(Expr::Number(Number { value: 1f64 }, None, InferredType::U8)),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U8),
-                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U8)),
+                Box::new(Expr::Number(Number { value: 2f64 }, None, InferredType::U8)),
                 InferredType::Unknown,
             ),
         ]);
@@ -911,13 +911,21 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U16),
-                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U16)),
+                Box::new(Expr::Number(
+                    Number { value: 1f64 },
+                    None,
+                    InferredType::U16,
+                )),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U16),
-                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U16)),
+                Box::new(Expr::Number(
+                    Number { value: 2f64 },
+                    None,
+                    InferredType::U16,
+                )),
                 InferredType::Unknown,
             ),
         ]);
@@ -933,13 +941,21 @@ mod let_tests {
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U32),
-                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U32)),
+                Box::new(Expr::Number(
+                    Number { value: 1f64 },
+                    None,
+                    InferredType::U32,
+                )),
                 InferredType::Unknown,
             ),
             Expr::Let(
                 VariableId::global("y".to_string()),
                 Some(TypeName::U32),
-                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U32)),
+                Box::new(Expr::Number(
+                    Number { value: 2f64 },
+                    None,
+                    InferredType::U32,
+                )),
                 InferredType::Unknown,
             ),
         ]);

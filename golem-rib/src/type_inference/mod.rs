@@ -52,7 +52,11 @@ mod type_inference_tests {
             let let_binding = Expr::Let(
                 VariableId::local("x", 0),
                 None,
-                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)), // The number in let expression is identified to be a U64
+                Box::new(Expr::Number(
+                    Number { value: 1f64 },
+                    None,
+                    InferredType::U64,
+                )), // The number in let expression is identified to be a U64
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
 
@@ -94,14 +98,22 @@ mod type_inference_tests {
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
                 None,
-                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)), // The number in let expression is identified to be a U64
+                Box::new(Expr::Number(
+                    Number { value: 1f64 },
+                    None,
+                    InferredType::U64,
+                )), // The number in let expression is identified to be a U64
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
 
             let let_binding2 = Expr::Let(
                 VariableId::local("y", 0),
                 None,
-                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U32)), // The number in let expression is identified to be a U64
+                Box::new(Expr::Number(
+                    Number { value: 2f64 },
+                    None,
+                    InferredType::U32,
+                )), // The number in let expression is identified to be a U64
                 InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
             );
 
@@ -163,7 +175,11 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Identifier(VariableId::local("x", 0), InferredType::U64),
@@ -228,13 +244,21 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 2f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::GreaterThan(
@@ -399,13 +423,21 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 2f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
@@ -511,7 +543,11 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
@@ -564,9 +600,9 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                                Expr::Number(Number { value: 2f64 }, InferredType::U64),
-                                Expr::Number(Number { value: 3f64 }, InferredType::U64),
+                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
+                                Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
+                                Expr::Number(Number { value: 3f64 }, None, InferredType::U64),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -607,9 +643,9 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                                Expr::Number(Number { value: 2f64 }, InferredType::U64),
-                                Expr::Number(Number { value: 3f64 }, InferredType::U64),
+                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
+                                Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
+                                Expr::Number(Number { value: 3f64 }, None, InferredType::U64),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -653,7 +689,11 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("n", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
@@ -710,7 +750,7 @@ mod type_inference_tests {
                         Some(TypeName::Tuple(vec![TypeName::U64, TypeName::Str])),
                         Box::new(Expr::Tuple(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, InferredType::U64),
+                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
                                 Expr::literal("2"),
                             ],
                             InferredType::Tuple(vec![InferredType::U64, InferredType::Str]),
@@ -755,7 +795,11 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
@@ -835,14 +879,22 @@ mod type_inference_tests {
             let let_binding1 = Expr::Let(
                 VariableId::local("x", 0),
                 None,
-                Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                Box::new(Expr::Number(
+                    Number { value: 1f64 },
+                    None,
+                    InferredType::U64,
+                )),
                 InferredType::Unknown,
             );
 
             let let_binding2 = Expr::Let(
                 VariableId::local("y", 0),
                 None,
-                Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U32)),
+                Box::new(Expr::Number(
+                    Number { value: 2f64 },
+                    None,
+                    InferredType::U32,
+                )),
                 InferredType::Unknown,
             );
 
@@ -855,6 +907,7 @@ mod type_inference_tests {
                     MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::Number(
                             Number { value: 1f64 },
+                            None,
                             InferredType::U64,
                         ))),
                         Expr::Call(
@@ -874,6 +927,7 @@ mod type_inference_tests {
                     MatchArm::new(
                         ArmPattern::Literal(Box::new(Expr::Number(
                             Number { value: 2f64 },
+                            None,
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
@@ -945,13 +999,21 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("x", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
                         VariableId::local("y", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 2f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 2f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::PatternMatch(
@@ -1182,9 +1244,9 @@ mod type_inference_tests {
                         Some(TypeName::List(Box::new(TypeName::U64))),
                         Box::new(Expr::Sequence(
                             vec![
-                                Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                                Expr::Number(Number { value: 2f64 }, InferredType::U64),
-                                Expr::Number(Number { value: 3f64 }, InferredType::U64),
+                                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
+                                Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
+                                Expr::Number(Number { value: 3f64 }, None, InferredType::U64),
                             ],
                             InferredType::List(Box::new(InferredType::U64)),
                         )),
@@ -1292,6 +1354,7 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Number(
                                 Number { value: 1f64 },
+                                None,
                                 InferredType::U64,
                             ))),
                             InferredType::Option(Box::new(InferredType::U64)),
@@ -1330,6 +1393,7 @@ mod type_inference_tests {
                         Box::new(Expr::Option(
                             Some(Box::new(Expr::Number(
                                 Number { value: 1f64 },
+                                None,
                                 InferredType::U64,
                             ))),
                             InferredType::Option(Box::new(InferredType::U64)),
@@ -1386,7 +1450,11 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("number", 0),
                         Some(TypeName::U64),
-                        Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                        Box::new(Expr::Number(
+                            Number { value: 1f64 },
+                            None,
+                            InferredType::U64,
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Let(
