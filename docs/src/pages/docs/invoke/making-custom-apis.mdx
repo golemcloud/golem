@@ -22,24 +22,28 @@ Exports:
 
 The following API definition exposes the `get-cart-contents` function as a custom http endpoint.
 
+
 ```json
 {
   "id": "my-shopping-cart-v1",
   "draft": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "routes": [
     {
       "method": "Get",
       "path": "/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
-        "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker-${request.path.user-id}",
-        "response": "${let result = golem:it/api.{get-cart-contents}(); {status: 200, body: result}}"
+        "componentId": {
+          "componentId": "94b657f6-238f-4737-9fc3-2b25ff2f60da",
+          "version": 0
+        },
+        "workerName": "${let user: u64 = request.body.user-id; \"my-worker-${user}\" }",
+        "response": "${let result = golem:it/api.{get-cart-contents}(); {status: 200u64, body: result}}"
       }
     }
   ]
-}
+ }
 ```
 
 The API definition's fields have the following meaning:
@@ -65,19 +69,22 @@ Let's break down the binding object.
 | `response`    | The `response` field here is a Rib expression (therefore wrapped in a code block) that allows you to call any worker function and manipulates its output.                                                                                                                                                                                                                                        |
 
 Note that anything wrapped in this block is an `Rib Expression` which gets evaluated at runtime and in this case, it gets evaluated to actual user-id which is then concatenated with the text "my-worker-". If you pass complex Rib expressions to be concatenated with a worker-id (for example: It is evaluated to a WASM record) then you will get a response back saying invalid worker-name.
-
+If your worker name is a constant, you can avoid interpolations `${}` and directly write the worker name as a text.
 See the [Rib reference](rib) for the full reference of the binding language.
 
 In this example, the following Rib expression defines the request:
 
 ```
 let result = golem:it/api.{get-cart-contents}();
-{status: 200, body: result}
+{status: 200u64, body: result}
 
 ```
 
-The first line is about calling the worker-function and assigning its reuslt to the variable `result`. The last line is WASM record where you are mapping to the response. Here body is `result` itself.
-That means, we are not manipulating the result returned by the function, and simply forward it as response body. Status is 200. There are various possibilities here to manipulate the data using Rib
+The first line is about calling the worker-function and assigning its reuslt to the variable `result`. The last line is a WASM record where you are mapping to the response. Here body is `result` itself.
+That means, we are not manipulating the result returned by the function, and simply forward it as response body. Status is 200u64. `u64` is the type of the number
+as Rib is typed and it needs to the full type of the WASM record. `200u64` is equivalent to `let x: u64 = 200; x;` in Rib.
+
+There are various possibilities here to manipulate the data using Rib
 language, such as selecting only a particular field from the result of the function invocation. Say for example, the result is a WASM `result` which can be `ok` or `err`. In this case you
 can have a complex Rib expression as below
 
@@ -85,8 +92,8 @@ can have a complex Rib expression as below
 let result = golem:it/api.{get-cart-contents}();
 
 let response_status = match result {
-  ok(_) => 200,
-  err(_) => 400
+  ok(_) => 200u32,
+  err(_) => 400u32
 };
 
 let response_body = match result {
@@ -214,8 +221,8 @@ Here is a more complex example of an API definition that gives you more idea on 
       "binding": {
         "type": "wit-worker",
         "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker-${request.path.user-id}",
-        "response": "${let result = golem:it/api.{get-cart-contents}(); {status: 200, body: result}}"
+        "workerName": "my-worker",
+        "response": "${let result = golem:it/api.{get-cart-contents}(); {status: 200u64, body: result}}"
       }
     },
     {
@@ -224,8 +231,8 @@ Here is a more complex example of an API definition that gives you more idea on 
       "binding": {
         "type": "wit-worker",
         "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker-${request.path.user-id}",
-        "response": "${golem:it/api.{initialize-cart}(request.path.user-id); {status: 200, body: []}}"
+        "workerName": "my-worker",
+        "response": "let empty: list<u16> = []; ${golem:it/api.{initialize-cart}(request.path.user-id); {status: 200u64, body: empty}}"
       }
     },
     {
@@ -234,8 +241,8 @@ Here is a more complex example of an API definition that gives you more idea on 
       "binding": {
         "type": "wit-worker",
         "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker-${request.path.user-id}",
-        "response": "${golem:it/api.{add-item}({product-id: request.body.product-id, name: request.body.name, price: request.body.price, quantity: request.body.quantity}); {status: 200, body: []}}"
+        "workerName": "my-worker",
+        "response": "${let quantity: f64 = request.body.quantity; let product_id: u64 = request.body.product-id; let name: str = request.body.name; let price: f64 = request.body.price; golem:it/api.{add-item}({product-id: product_id, name: name, price: price, quantity: quantity}); {status: 200u64, body: \"success\"}}"
       }
     },
     {
@@ -244,8 +251,8 @@ Here is a more complex example of an API definition that gives you more idea on 
       "binding": {
         "type": "wit-worker",
         "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker-${request.path.user-id}",
-        "response": "${let result = golem:it/api.{checkout}(); {status: 200, body: match result { success(resp) => resp.order-id, error(msg) => msg }}}"
+        "workerName": "my-worker",
+        "response": "${let result = golem:it/api.{checkout}(); {status: 200u64, body: match result { success(resp) => resp.order-id, error(msg) => msg }}}"
       }
     }
   ]
@@ -253,17 +260,39 @@ Here is a more complex example of an API definition that gives you more idea on 
 ```
 
 This example exposes multiple functions of the shopping-cart component through a custom HTTP API.
-Most of them are self explanatory, but worth pointing out a few details.
+Some of these examples include longer Rib scripts under `response` field. While this is not user friendly,
+with golem cloud console exposing an editor, you can write in a far more better way. Improvements in this space are in progress.
+
+Note that each line in Rib code block is separated by `;` and the last line in the Rib script is the return value which shouldn't have `;`.
+
+Most of the above examples are self explanatory, but worth pointing out a few details.
 
 The examples show how you can pass parameters to the function. This is more or less same as many programming languages - a comma separated list of arguments.
-The most interesting example out of these endpoints is the `checkout` endpoint.
+
+```
+
+golem:it/api.{initialize-cart}(request.path.user-id)
+
+```
+
+Here Rib compiler knows the requirement of initialize-cart function and infers that request.path.user-id should be U64.
+This is a hint, that Rib is aware of the types in the code. In places where it find hard to infer these typs, you may face
+some compile time error (when uploading API definition), and the best solution is to be explicit about types. For example
+
+```
+let user_id: u64 = request.path.user-id;
+golem:it/api.{initialize-cart}(user_id)
+
+```
+
+The most interesting example out of all the endpoints is the `checkout` endpoint.
 
 Here the response mapping in Rib is this:
 
 ```
 let result = golem:it/api.{checkout}();
 
-{status: 200, body: match result { success(resp) => resp.order-id, error(msg) => msg }}
+{status: 200u64, body: match result { success(resp) => resp.order-id, error(msg) => msg }}
 
 ```
 
@@ -271,7 +300,7 @@ This can also be written as the following for more readability:
 
 ```
 let result = golem:it/api.{checkout}();
-let status = 200;
+let status: u64 = 200;
 let body =  match result { success(resp) => resp.order-id, error(msg) => msg };
 {status: status, body: body}
 
@@ -291,8 +320,8 @@ In the above example, we have an endpoint to add products into the cart.
   "binding": {
     "type": "wit-worker",
     "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-    "workerName": "my-worker-${request.path.user-id}",
-    "response": "${golem:it/api.{add-item}({product-id: request.body.product-id, name: request.body.name, price: request.body.price, quantity: request.body.quantity}); {status: 200, body: []}}"
+    "workerName": "${let user_id: u64 = request.path.user-id; \"my-worker-${user_id}\"",
+    "response": "${let product_id: u64 = request.body.product-id; golem:it/api.{add-item}({product-id: product_id}); let empty_body: list<u16> = []; {status: 200u64, body: empty_body}}"
   }
 }
 ```
@@ -353,9 +382,9 @@ The main advantage of this feature is the re-usability of the same endpoint defi
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
-        "worker-name": "worker-${request.path.user-id}",
+        "worker-name": "my-worker",
         "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response": "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200 } }"
+        "response": "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200u64 } }"
       },
       "get": {
         "summary": "Get Cart Contents",
@@ -458,7 +487,7 @@ you will need to give the machine IP address to reach the Worker Gateway URL.
       "x-golem-worker-bridge": {
         "worker-name": "worker-${request.path.user-id}",
         "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response": "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200 } }"
+        "response": "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200u64 } }"
       },
       "get": {
         "summary": "Get Cart Contents",
