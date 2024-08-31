@@ -1,5 +1,4 @@
 use crate::worker_binding::{RequestDetails, WorkerDetail};
-use golem_service_base::type_inference::infer_analysed_type;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::RibInputTypeInfo;
@@ -50,25 +49,19 @@ impl RibInputValueResolver for RequestDetails {
 
         let rib_input_with_request_content = &self.as_json();
 
-        let request_type_annotated_value = match request_type_info {
+        match request_type_info {
             Some(request_type) => {
-                TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
-                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?
+                let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
+                        .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
+
+                let mut rib_input_map = HashMap::new();
+                rib_input_map.insert("request".to_string(), input);
+                Ok(RibInputValue {
+                    value: rib_input_map,
+                })
             }
-            None => {
-                let analysed_type = infer_analysed_type(rib_input_with_request_content);
-
-                TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, &analysed_type)
-                    .map_err(|err| RibInputTypeMismatch(format!("Internal Error: Input request has been inferred  to {:?} but failed to get converted to a valid input. {}", analysed_type, err.join(", "))))?
-            }
-        };
-
-        let mut rib_input_map = HashMap::new();
-        rib_input_map.insert("request".to_string(), request_type_annotated_value);
-
-        Ok(RibInputValue {
-            value: rib_input_map,
-        })
+            None => Ok(RibInputValue::empty()),
+        }
     }
 }
 
