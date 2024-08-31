@@ -1423,7 +1423,7 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str = r#"${let n1: u64 = 1; let result = foo(n1); match result {  ok(value) => "personal-id", err(msg) => "not found" }}"#;
+        let expr_str = r#"${let result = foo(1); match result {  ok(value) => "personal-id", err(msg) => "not found" }}"#;
 
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
@@ -1559,7 +1559,8 @@ mod tests {
         let component_metadata =
             get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
 
-        let expr_str = r#"${let n: u64 = 1; let result = foo(1); match result { ok(x) => some(n), err(_) => none }}"#;
+        let expr_str =
+            r#"${let result = foo(1); match result { ok(x) => some(1u64), err(_) => none }}"#;
         let expr1 = rib::from_string(expr_str).unwrap();
         let value1 = noop_executor
             .evaluate_with_worker_response(
@@ -1579,10 +1580,9 @@ mod tests {
     async fn test_evaluation_with_pattern_match_with_none_construction() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr = rib::from_string(
-            r#"${let x:u64 = 1; match ok(x) { ok(value) => none, err(_) => some(x) }}"#,
-        )
-        .unwrap();
+        let expr =
+            rib::from_string(r#"${match ok(1u64) { ok(value) => none, err(_) => some(1u64) }}"#)
+                .unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
             .await
@@ -1595,35 +1595,14 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 
-    // TODO: Nested construction should succeed
-    #[ignore]
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_with_nested_construction() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let expr = rib::from_string(
-            "${let x: u64 = 1; match err(x) { ok(_) => none, err(x) => some(some(x)) }}",
-        )
-        .unwrap();
-        let result = noop_executor
-            .evaluate_pure_expr(&expr)
-            .await
-            .map(|v| v.get_val().unwrap());
-
-        let inner_number = TypeAnnotatedValue::U64(1);
-        let inner_some = create_option(inner_number.clone()).unwrap();
-        let outer_some = create_option(inner_some).unwrap();
-
-        assert_eq!(result, Ok(outer_some));
-    }
-
     #[tokio::test]
     async fn test_evaluation_with_pattern_match_with_ok_construction() {
         let noop_executor = DefaultEvaluator::noop();
 
-        let expr =
-            rib::from_string("${let left: u64 = 1; let right: u64 = 2; match ok(\"afsal\") { ok(value) => ok(left), err(_) => err(right) }}")
-                .unwrap();
+        let expr = rib::from_string(
+            "${match ok(\"afsal\") { ok(value) => ok(1u64), err(_) => err(2u64) }}",
+        )
+        .unwrap();
         let result = noop_executor
             .evaluate_pure_expr(&expr)
             .await

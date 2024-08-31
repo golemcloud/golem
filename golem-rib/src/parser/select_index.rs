@@ -69,7 +69,7 @@ mod internal {
 
     pub(crate) fn pos_num<'t>() -> impl Parser<easy::Stream<&'t str>, Output = usize> {
         number().and_then(|s: Expr| match s {
-            Expr::Number(number, _) => {
+            Expr::Number(number, _, _) => {
                 if number.value < 0.0 {
                     Err(easy::Error::message_static_message(
                         "Cannot use a negative number to index",

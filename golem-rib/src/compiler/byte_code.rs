@@ -98,7 +98,7 @@ mod internal {
                 let type_annotated_value = TypeAnnotatedValue::Str(str.clone());
                 instructions.push(RibIR::PushLit(type_annotated_value));
             }
-            Expr::Number(num, inferred_type) => {
+            Expr::Number(num, _, inferred_type) => {
                 let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
 
                 let type_annotated_value = num.to_val(&analysed_type).ok_or(format!(
@@ -422,8 +422,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_equal_to() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, InferredType::U32);
+        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
+        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::equal_to(number_f32, number_u32);
 
@@ -447,8 +447,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 2f64 }, InferredType::U32);
+        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
+        let number_u32 = Expr::Number(Number { value: 2f64 }, None, InferredType::U32);
 
         let expr = Expr::greater_than(number_f32, number_u32);
 
@@ -472,8 +472,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, InferredType::U32);
+        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
+        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::less_than(number_f32, number_u32);
 
@@ -497,8 +497,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_greater_than_or_equal_to() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, InferredType::U32);
+        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
+        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
 
@@ -522,8 +522,8 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_less_than_or_equal_to() {
-        let number_f32 = Expr::Number(Number { value: 1f64 }, InferredType::F32);
-        let number_u32 = Expr::Number(Number { value: 1f64 }, InferredType::U32);
+        let number_f32 = Expr::Number(Number { value: 1f64 }, None, InferredType::F32);
+        let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
 

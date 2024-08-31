@@ -118,7 +118,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             inferred_type.update(list_type);
         }
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}
@@ -259,8 +259,8 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_sequence() {
         let mut expr = Expr::Sequence(
             vec![
-                Expr::Number(Number { value: 1f64 }, InferredType::U64),
-                Expr::Number(Number { value: 1f64 }, InferredType::U32),
+                Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
+                Expr::Number(Number { value: 1f64 }, None, InferredType::U32),
             ],
             InferredType::Unknown,
         );
@@ -275,7 +275,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tuple() {
         let mut expr = Expr::tuple(vec![
             Expr::literal("foo"),
-            Expr::Number(Number { value: 1f64 }, InferredType::U64),
+            Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
         ]);
         expr.pull_types_up().unwrap();
         assert_eq!(
@@ -290,11 +290,19 @@ mod type_pull_up_tests {
             vec![
                 (
                     "foo".to_string(),
-                    Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                    Box::new(Expr::Number(
+                        Number { value: 1f64 },
+                        None,
+                        InferredType::U64,
+                    )),
                 ),
                 (
                     "bar".to_string(),
-                    Box::new(Expr::Number(Number { value: 1f64 }, InferredType::U64)),
+                    Box::new(Expr::Number(
+                        Number { value: 1f64 },
+                        None,
+                        InferredType::U64,
+                    )),
                 ),
             ],
             InferredType::Record(vec![
@@ -400,20 +408,24 @@ mod type_pull_up_tests {
                 crate::MatchArm {
                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Number(
                         Number { value: 1f64 },
+                        None,
                         InferredType::U64,
                     ))),
                     arm_resolution_expr: Box::new(Expr::Number(
                         Number { value: 1f64 },
+                        None,
                         InferredType::U64,
                     )),
                 },
                 crate::MatchArm {
                     arm_pattern: ArmPattern::Literal(Box::new(Expr::Number(
                         Number { value: 2f64 },
+                        None,
                         InferredType::U64,
                     ))),
                     arm_resolution_expr: Box::new(Expr::Number(
                         Number { value: 2f64 },
+                        None,
                         InferredType::U64,
                     )),
                 },
