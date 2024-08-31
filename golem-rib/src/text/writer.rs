@@ -143,7 +143,13 @@ impl<W: Write> Writer<W> {
                 }
                 self.write_display(")")
             }
-            Expr::Number(number, _) => self.write_display(number.value),
+            Expr::Number(number, type_name, _) => {
+                self.write_display(number.value)?;
+                if let Some(type_name) = type_name {
+                    self.write_display(type_name)?;
+                }
+                Ok(())
+            },
             Expr::Flags(flags, _) => {
                 self.write_display("{")?;
                 for (idx, flag) in flags.iter().enumerate() {

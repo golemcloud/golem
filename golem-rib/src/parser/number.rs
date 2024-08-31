@@ -33,7 +33,12 @@ pub fn number<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
                 let primitive = s.into_iter().collect::<String>();
 
                 if let Ok(f64) = primitive.parse::<f64>() {
-                    Ok(type_binding::bind(&Expr::number(f64), typ_name))
+                    if let Some(typ_name) = typ_name {
+                        Ok(type_binding::bind(&Expr::number_with_type_name(f64, typ_name.clone()), Some(typ_name)))
+                    } else {
+                        Ok(Expr::number(f64))
+                    }
+
                 } else {
                     Err(easy::Error::message_static_message(
                         "Unable to parse number",
@@ -73,10 +78,10 @@ mod tests {
     }
 
     #[test]
-    fn test_number_with_binding_positiv() {
+    fn test_number_with_binding_positive() {
         let input = "123u32";
         let result = number().easy_parse(input);
-        let expected = Expr::Number(Number { value: 123f64 }, InferredType::U32);
+        let expected = Expr::Number(Number { value: 123f64 }, Some(TypeName::U32), InferredType::U32);
         assert_eq!(result, Ok((expected, "")));
     }
 
@@ -84,7 +89,7 @@ mod tests {
     fn test_number_with_binding_negative() {
         let input = "-123s64";
         let result = number().easy_parse(input);
-        let expected = Expr::Number(Number { value: -123f64 }, InferredType::S64);
+        let expected = Expr::Number(Number { value: -123f64 }, Some(TypeName::S64), InferredType::S64);
         assert_eq!(result, Ok((expected, "")));
     }
 
@@ -92,7 +97,7 @@ mod tests {
     fn test_number_with_binding_float() {
         let input = "-123.0f64";
         let result = number().easy_parse(input);
-        let expected = Expr::Number(Number { value: -123.0f64 }, InferredType::F64);
+        let expected = Expr::Number(Number { value: -123.0f64 }, Some(TypeName::F64), InferredType::F64);
         assert_eq!(result, Ok((expected, "")));
     }
 }

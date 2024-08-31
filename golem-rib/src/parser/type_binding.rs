@@ -21,7 +21,7 @@ pub(crate) fn override_type(expr: &mut Expr, new_type: InferredType) {
         | Expr::Record(_, inferred_type)
         | Expr::Tuple(_, inferred_type)
         | Expr::Literal(_, inferred_type)
-        | Expr::Number(_, inferred_type)
+        | Expr::Number(_, _, inferred_type)
         | Expr::Flags(_, inferred_type)
         | Expr::Boolean(_, inferred_type)
         | Expr::Concat(_, inferred_type)

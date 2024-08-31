@@ -118,7 +118,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             inferred_type.update(list_type);
         }
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}

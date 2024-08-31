@@ -38,7 +38,7 @@ pub enum Expr {
     Record(Vec<(String, Box<Expr>)>, InferredType),
     Tuple(Vec<Expr>, InferredType),
     Literal(String, InferredType),
-    Number(Number, InferredType),
+    Number(Number, Option<TypeName>, InferredType),
     Flags(Vec<String>, InferredType),
     Identifier(VariableId, InferredType),
     Boolean(bool, InferredType),
@@ -120,7 +120,7 @@ impl Expr {
     }
 
     pub fn is_number(&self) -> bool {
-        matches!(self, Expr::Number(_, _))
+        matches!(self, Expr::Number(_, _, _))
     }
 
     pub fn is_record(&self) -> bool {
@@ -394,7 +394,7 @@ impl Expr {
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, inferred_type)
+            | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
             | Expr::Identifier(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
@@ -569,7 +569,7 @@ impl Expr {
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, inferred_type)
+            | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
@@ -609,7 +609,7 @@ impl Expr {
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, inferred_type)
+            | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
@@ -747,6 +747,27 @@ impl Expr {
     pub fn number(f64: f64) -> Expr {
         Expr::Number(
             Number { value: f64 },
+            None,
+            InferredType::OneOf(vec![
+                InferredType::U64,
+                InferredType::U32,
+                InferredType::U8,
+                InferredType::U16,
+                InferredType::S64,
+                InferredType::S32,
+                InferredType::S8,
+                InferredType::S16,
+                InferredType::F64,
+                InferredType::F32,
+            ]),
+        )
+    }
+
+    // TODO; introduced to minimise the number of changes in tests.
+    pub fn number_with_type_name(f64: f64, type_name: TypeName) -> Expr {
+        Expr::Number(
+            Number { value: f64 },
+            Some(type_name),
             InferredType::OneOf(vec![
                 InferredType::U64,
                 InferredType::U32,
@@ -883,7 +904,12 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 golem_api_grpc::proto::golem::rib::BooleanExpr { value },
             ) => Expr::boolean(value),
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
-                Expr::number(number.float)
+                let type_name = number.type_name.map(TypeName::try_from).transpose()?;
+                if let Some(type_name) = type_name {
+                    bind(&Expr::number_with_type_name(number.float, type_name.clone()), Some(type_name))
+                } else {
+                    Expr::number(number.float)
+                }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
                 let expr = *expr;
@@ -1000,9 +1026,10 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Literal(value, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
                 golem_api_grpc::proto::golem::rib::LiteralExpr { value },
             ),
-            Expr::Number(number, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Number(
+            Expr::Number(number, type_name, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Number(
                 golem_api_grpc::proto::golem::rib::NumberExpr {
                     float: number.value,
+                    type_name: type_name.map(|t| t.into()),
                 },
             ),
             Expr::Flags(values, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Flags(

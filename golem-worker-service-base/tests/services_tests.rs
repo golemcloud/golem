@@ -229,7 +229,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/1/foo/{user-id}",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
         );
@@ -237,7 +237,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/2/foo/{user-id}",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             true,
         );
@@ -249,7 +249,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/3/foo/{user-id}?{id}",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
         );
@@ -257,7 +257,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/4/foo/{user-id}",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
         );
@@ -523,7 +523,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get1",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
         );
@@ -531,7 +531,7 @@ mod tests {
             &def1v1.id.0,
             "0.0.1",
             "/api/get1/1",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
         );
@@ -539,7 +539,7 @@ mod tests {
             &def1v1.id.0,
             "0.0.2",
             "/api/get1/2",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
         );
@@ -548,7 +548,7 @@ mod tests {
             &def1v1.id.0,
             "0.0.2",
             "/api/get1/22",
-            "${let userid: u64 = request.path.user; let hun: u64 = 100; let zero: u64 = 0; let one: u64 = 1; let res = if userid>hun then zero else one; \"shopping-cart-${res}\"}",
+            "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
         );

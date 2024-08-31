@@ -9,7 +9,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
         let expr_str = &mut expr.to_string();
 
         match expr {
-            Expr::Number(_, inferred_type) => {
+            Expr::Number(_, _, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify_types_and_verify();
 
                 match unified_inferred_type {

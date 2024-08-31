@@ -53,7 +53,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Call(_, expressions, _) => queue.extend(expressions.iter_mut()),
         Expr::Unwrap(expr, _) => queue.push_back(&mut *expr), // not yet needed
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}
@@ -113,7 +113,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Call(_, expressions, _) => queue.extend(expressions.iter()),
         Expr::Unwrap(expr, _) => queue.push_back(expr),
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}
@@ -198,7 +198,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         }
         Expr::Unwrap(expr, _) => queue.push_front(&mut *expr),
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}

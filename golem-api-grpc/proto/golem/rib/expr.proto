@@ -73,6 +73,7 @@ message LiteralExpr {
 
 message NumberExpr {
   double float = 1;
+  optional TypeName type_name = 3;
 }
 
 message FlagsExpr {
