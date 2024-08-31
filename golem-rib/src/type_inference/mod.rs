@@ -1196,6 +1196,54 @@ mod type_inference_tests {
 
             assert_eq!(expr, expected);
         }
+
+        #[test]
+        fn test_optional_nested_type_inference() {
+            let rib_expr = r#"
+          let x: option<u64> = some(1);
+          let y = some(x);
+          y
+
+          "#;
+
+            let function_type_registry = internal::get_function_type_registry();
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            expr.infer_types(&function_type_registry).unwrap();
+
+            let expected = Expr::Multiple(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        Some(TypeName::Option(Box::new(TypeName::U64))),
+                        Box::new(Expr::Option(
+                            Some(Box::new(Expr::Number(
+                                Number { value: 1f64 },
+                                InferredType::U64,
+                            ))),
+                            InferredType::Option(Box::new(InferredType::U64)),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("y", 0),
+                        None,
+                        Box::new(Expr::Option(
+                            Some(Box::new(Expr::Identifier(
+                                VariableId::local("x", 0),
+                                InferredType::Option(Box::new(InferredType::U64)),
+                            ))),
+                            InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))),
+                        ))),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Identifier(
+                        VariableId::local("y", 0),
+                        InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))),
+                    ))],
+                InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))));
+
+            assert_eq!(expr, expected);
+        }
     }
     mod record_tests {
         use crate::parser::type_name::TypeName;
