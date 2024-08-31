@@ -175,23 +175,22 @@ impl From<TypeName> for InferredType {
 }
 
 pub fn parse_basic_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
-    spaces()
-        .with(choice((
-            attempt(string("bool").map(|_| TypeName::Bool)),
-            attempt(string("s8").map(|_| TypeName::S8)),
-            attempt(string("u8").map(|_| TypeName::U8)),
-            attempt(string("s16").map(|_| TypeName::S16)),
-            attempt(string("u16").map(|_| TypeName::U16)),
-            attempt(string("s32").map(|_| TypeName::S32)),
-            attempt(string("u32").map(|_| TypeName::U32)),
-            attempt(string("s64").map(|_| TypeName::S64)),
-            attempt(string("u64").map(|_| TypeName::U64)),
-            attempt(string("f32").map(|_| TypeName::F32)),
-            attempt(string("f64").map(|_| TypeName::F64)),
-            attempt(string("chr").map(|_| TypeName::Chr)),
-            attempt(string("str").map(|_| TypeName::Str)),
-        )))
-        .skip(spaces())
+    choice((
+        attempt(string("bool").map(|_| TypeName::Bool)),
+        attempt(string("s8").map(|_| TypeName::S8)),
+        attempt(string("u8").map(|_| TypeName::U8)),
+        attempt(string("s16").map(|_| TypeName::S16)),
+        attempt(string("u16").map(|_| TypeName::U16)),
+        attempt(string("s32").map(|_| TypeName::S32)),
+        attempt(string("u32").map(|_| TypeName::U32)),
+        attempt(string("s64").map(|_| TypeName::S64)),
+        attempt(string("u64").map(|_| TypeName::U64)),
+        attempt(string("f32").map(|_| TypeName::F32)),
+        attempt(string("f64").map(|_| TypeName::F64)),
+        attempt(string("chr").map(|_| TypeName::Chr)),
+        attempt(string("str").map(|_| TypeName::Str)),
+    ))
+    .skip(spaces())
 }
 
 pub fn parse_list_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {

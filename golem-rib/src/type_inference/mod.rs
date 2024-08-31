@@ -1011,8 +1011,6 @@ mod type_inference_tests {
                 InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))),
             );
 
-            dbg!(expr.clone());
-
             assert_eq!(expr, expected)
         }
 
