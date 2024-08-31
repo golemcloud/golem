@@ -1596,28 +1596,6 @@ mod tests {
         assert_eq!(result, Ok(expected));
     }
 
-    // TODO: Nested construction should succeed
-    #[ignore]
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_with_nested_construction() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let expr = rib::from_string(
-            "${let x: u64 = 1; match err(x) { ok(_) => none, err(x) => some(some(x)) }}",
-        )
-        .unwrap();
-        let result = noop_executor
-            .evaluate_pure_expr(&expr)
-            .await
-            .map(|v| v.get_val().unwrap());
-
-        let inner_number = TypeAnnotatedValue::U64(1);
-        let inner_some = create_option(inner_number.clone()).unwrap();
-        let outer_some = create_option(inner_some).unwrap();
-
-        assert_eq!(result, Ok(outer_some));
-    }
-
     #[tokio::test]
     async fn test_evaluation_with_pattern_match_with_ok_construction() {
         let noop_executor = DefaultEvaluator::noop();

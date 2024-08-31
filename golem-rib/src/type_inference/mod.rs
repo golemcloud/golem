@@ -902,6 +902,29 @@ mod type_inference_tests {
             assert_eq!(expr, expected);
         }
 
+        // TODO; none is un-inferred, probably due to unable-to-do-anything
+        // for pull up and push down phases
+        #[test]
+        fn test_pattern_match_with_result() {
+            let rib_expr = r#"
+              let x: u64 = 1;
+
+              let fallback: option<option<u64>> = none;
+
+              match err(x) {
+                err(_) => fallback,
+                ok(_) => some(some(x))
+              }
+            "#;
+
+            let function_type_registry = internal::get_function_type_registry();
+
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+
+            let result = expr.infer_types(&function_type_registry);
+            assert!(result.is_ok());
+        }
+
         #[test]
         fn test_pattern_match_with_option() {
             let expr_str = r#"
@@ -956,9 +979,11 @@ mod type_inference_tests {
                                         ))),
                                         InferredType::Option(Box::new(InferredType::U64)),
                                     ))),
-                                    InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))),
+                                    InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                        InferredType::U64,
+                                    )))),
                                 ),
-                            )),
+                            ),
                             MatchArm::new(
                                 ArmPattern::Literal(Box::new(Expr::Option(
                                     None,
@@ -970,11 +995,17 @@ mod type_inference_tests {
                                             VariableId::local("y", 0),
                                             InferredType::U64,
                                         ))),
-                                    InferredType::Option(Box::new(InferredType::U64))),
-                                )),  InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))))),
+                                        InferredType::Option(Box::new(InferredType::U64)),
+                                    ))),
+                                    InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                        InferredType::U64,
+                                    )))),
+                                ),
                             ),
                         ],
-                        InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))),
+                        InferredType::Option(Box::new(InferredType::Option(Box::new(
+                            InferredType::U64,
+                        )))),
                     ),
                 ],
                 InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))),
@@ -1315,15 +1346,21 @@ mod type_inference_tests {
                                 VariableId::local("x", 0),
                                 InferredType::Option(Box::new(InferredType::U64)),
                             ))),
-                            InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))),
-                        ))),
+                            InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                InferredType::U64,
+                            )))),
+                        )),
                         InferredType::Unknown,
                     ),
                     Expr::Identifier(
                         VariableId::local("y", 0),
-                        InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64))),
-                    ))],
-                InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))));
+                        InferredType::Option(Box::new(InferredType::Option(Box::new(
+                            InferredType::U64,
+                        )))),
+                    ),
+                ],
+                InferredType::Option(Box::new(InferredType::Option(Box::new(InferredType::U64)))),
+            );
 
             assert_eq!(expr, expected);
         }
