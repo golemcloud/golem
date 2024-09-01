@@ -1,4 +1,5 @@
 mod binary_comparison;
+mod block;
 mod boolean;
 pub(crate) mod call;
 mod cond;
@@ -17,3 +18,5 @@ mod select_field;
 mod select_index;
 mod sequence;
 mod tuple;
+pub(crate) mod type_binding;
+pub(crate) mod type_name;

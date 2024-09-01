@@ -3539,9 +3539,9 @@ dependencies = [
  "humantime-serde",
  "lazy_static 1.5.0",
  "mappable-rc",
- "opentelemetry 0.23.0",
- "opentelemetry-prometheus",
- "opentelemetry_sdk",
+ "opentelemetry 0.24.0",
+ "opentelemetry-prometheus 0.17.0",
+ "opentelemetry_sdk 0.24.1",
  "poem",
  "poem-openapi",
  "prometheus",
@@ -3991,9 +3991,9 @@ dependencies = [
  "lazy_static 1.5.0",
  "nom 7.1.3",
  "openapiv3",
- "opentelemetry 0.23.0",
- "opentelemetry-prometheus",
- "opentelemetry_sdk",
+ "opentelemetry 0.24.0",
+ "opentelemetry-prometheus 0.17.0",
+ "opentelemetry_sdk 0.24.1",
  "poem",
  "poem-openapi",
  "prometheus",
@@ -4044,9 +4044,9 @@ dependencies = [
  "lazy_static 1.5.0",
  "nom 7.1.3",
  "openapiv3",
- "opentelemetry 0.23.0",
- "opentelemetry-prometheus",
- "opentelemetry_sdk",
+ "opentelemetry 0.24.0",
+ "opentelemetry-prometheus 0.17.0",
+ "opentelemetry_sdk 0.24.1",
  "poem",
  "poem-openapi",
  "prometheus",
@@ -5887,7 +5887,20 @@ checksum = "5e1a24eafe47b693cb938f8505f240dc26c71db60df9aca376b4f857e9653ec7"
 dependencies = [
  "once_cell",
  "opentelemetry 0.23.0",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.23.0",
+ "prometheus",
+ "protobuf",
+]
+
+[[package]]
+name = "opentelemetry-prometheus"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4191ce34aa274621861a7a9d68dbcf618d5b6c66b10081631b61fd81fbc015"
+dependencies = [
+ "once_cell",
+ "opentelemetry 0.24.0",
+ "opentelemetry_sdk 0.24.1",
  "prometheus",
  "protobuf",
 ]
@@ -5913,8 +5926,25 @@ dependencies = [
  "once_cell",
  "opentelemetry 0.23.0",
  "ordered-float 4.2.2",
+ "thiserror",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "692eac490ec80f24a17828d49b40b60f5aeaccdfe6a503f939713afd22bc28df"
+dependencies = [
+ "async-trait",
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "glob",
+ "once_cell",
+ "opentelemetry 0.24.0",
  "percent-encoding",
  "rand",
+ "serde_json",
  "thiserror",
 ]
 
@@ -6406,7 +6436,7 @@ dependencies = [
  "nix 0.29.0",
  "opentelemetry 0.24.0",
  "opentelemetry-http",
- "opentelemetry-prometheus",
+ "opentelemetry-prometheus 0.16.0",
  "opentelemetry-semantic-conventions",
  "parking_lot",
  "percent-encoding",

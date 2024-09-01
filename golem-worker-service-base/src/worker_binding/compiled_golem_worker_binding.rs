@@ -1,7 +1,7 @@
 use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeU64};
+use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 
@@ -55,8 +55,7 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let worker_name_compiled =
-            rib::compile_pure(worker_name, exports, Some(AnalysedType::U64(TypeU64)))?;
+        let worker_name_compiled = rib::compile(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -78,8 +77,7 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let idempotency_key_compiled =
-            rib::compile_pure(idempotency_key, exports, Some(AnalysedType::U64(TypeU64)))?;
+        let idempotency_key_compiled = rib::compile(idempotency_key, exports)?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),

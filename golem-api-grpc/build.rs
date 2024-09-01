@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile(
             &[
                 "proto/golem/rib/function_name.proto",
+                "proto/golem/rib/type_name.proto",
                 "proto/golem/rib/expr.proto",
                 "proto/golem/rib/rib_input.proto",
                 "proto/golem/rib/ir.proto",

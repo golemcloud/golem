@@ -5,7 +5,7 @@ use std::ops::Deref;
 // Visits each children of the expression and push them to the back of the queue
 pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
-        Expr::Let(_, expr, _) => queue.push_back(&mut *expr),
+        Expr::Let(_, _, expr, _) => queue.push_back(&mut *expr),
         Expr::SelectField(expr, _, _) => queue.push_back(&mut *expr),
         Expr::SelectIndex(expr, _, _) => queue.push_back(&mut *expr),
         Expr::Sequence(exprs, _) => queue.extend(exprs.iter_mut()),
@@ -53,7 +53,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Call(_, expressions, _) => queue.extend(expressions.iter_mut()),
         Expr::Unwrap(expr, _) => queue.push_back(&mut *expr), // not yet needed
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}
@@ -65,7 +65,7 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
 
 pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Expr>) {
     match expr {
-        Expr::Let(_, expr, _) => queue.push_back(expr),
+        Expr::Let(_, _, expr, _) => queue.push_back(expr),
         Expr::SelectField(expr, _, _) => queue.push_back(expr),
         Expr::SelectIndex(expr, _, _) => queue.push_back(expr),
         Expr::Sequence(exprs, _) => queue.extend(exprs.iter()),
@@ -113,7 +113,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Call(_, expressions, _) => queue.extend(expressions.iter()),
         Expr::Unwrap(expr, _) => queue.push_back(expr),
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}
@@ -125,7 +125,7 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
 
 pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<&'a mut Expr>) {
     match expr {
-        Expr::Let(_, expr, _) => queue.push_front(&mut *expr),
+        Expr::Let(_, _, expr, _) => queue.push_front(&mut *expr),
         Expr::SelectField(expr, _, _) => queue.push_front(&mut *expr),
         Expr::SelectIndex(expr, _, _) => queue.push_front(&mut *expr),
         Expr::Sequence(exprs, _) => {
@@ -198,7 +198,7 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         }
         Expr::Unwrap(expr, _) => queue.push_front(&mut *expr),
         Expr::Literal(_, _) => {}
-        Expr::Number(_, _) => {}
+        Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
         Expr::Identifier(_, _) => {}
         Expr::Boolean(_, _) => {}

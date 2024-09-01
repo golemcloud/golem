@@ -1,7 +1,7 @@
 use crate::Expr;
 use std::collections::VecDeque;
 
-pub fn name_binding(expr: &mut Expr) {
+pub fn name_binding_local_variables(expr: &mut Expr) {
     let mut identifier_id_state = internal::IdentifierVariableIdState::new();
     let mut queue = VecDeque::new();
     queue.push_front(expr);
@@ -9,14 +9,14 @@ pub fn name_binding(expr: &mut Expr) {
     // Start from the end
     while let Some(expr) = queue.pop_front() {
         match expr {
-            Expr::Let(variable_id, expr, _) => {
+            Expr::Let(variable_id, _, expr, _) => {
                 let field_name = variable_id.name();
                 identifier_id_state.update_variable_id(&field_name); // Increment the variable_id
                 *variable_id = identifier_id_state.lookup(&field_name).unwrap();
-                expr.visit_children_mut_top_down(&mut queue);
+                queue.push_front(expr);
             }
 
-            Expr::Identifier(variable_id, _) => {
+            Expr::Identifier(variable_id, _) if !variable_id.is_match_binding() => {
                 let field_name = variable_id.name();
                 if let Some(latest_variable_id) = identifier_id_state.lookup(&field_name) {
                     // If there existed a let statement, this ensures global is changed to local
@@ -74,10 +74,11 @@ mod name_binding_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         // Bind x in let with the x in foo
-        expr.name_binding();
+        expr.name_binding_local_variables();
 
         let let_binding = Expr::Let(
             VariableId::local("x", 0),
+            None,
             Box::new(Expr::number(1f64)),
             InferredType::Unknown,
         );
@@ -113,16 +114,18 @@ mod name_binding_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         // Bind x in let with the x in foo
-        expr.name_binding();
+        expr.name_binding_local_variables();
 
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
+            None,
             Box::new(Expr::number(1f64)),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("y", 0),
+            None,
             Box::new(Expr::number(2f64)),
             InferredType::Unknown,
         );
@@ -172,16 +175,18 @@ mod name_binding_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         // Bind x in let with the x in foo
-        expr.name_binding();
+        expr.name_binding_local_variables();
 
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
+            None,
             Box::new(Expr::number(1f64)),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("x", 1),
+            None,
             Box::new(Expr::number(2f64)),
             InferredType::Unknown,
         );

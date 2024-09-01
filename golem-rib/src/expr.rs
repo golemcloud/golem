@@ -14,6 +14,8 @@
 
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
+use crate::parser::type_binding::bind;
+use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{text, type_inference, InferredType, VariableId};
 use bincode::{Decode, Encode};
@@ -29,14 +31,14 @@ use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Expr {
-    Let(VariableId, Box<Expr>, InferredType),
+    Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, InferredType),
     SelectIndex(Box<Expr>, usize, InferredType),
     Sequence(Vec<Expr>, InferredType),
     Record(Vec<(String, Box<Expr>)>, InferredType),
     Tuple(Vec<Expr>, InferredType),
     Literal(String, InferredType),
-    Number(Number, InferredType),
+    Number(Number, Option<TypeName>, InferredType),
     Flags(Vec<String>, InferredType),
     Identifier(VariableId, InferredType),
     Boolean(bool, InferredType),
@@ -113,6 +115,81 @@ impl From<InvocationName> for golem_api_grpc::proto::golem::rib::InvocationName 
 }
 
 impl Expr {
+    pub fn is_literal(&self) -> bool {
+        matches!(self, Expr::Literal(_, _))
+    }
+
+    pub fn is_number(&self) -> bool {
+        matches!(self, Expr::Number(_, _, _))
+    }
+
+    pub fn is_record(&self) -> bool {
+        matches!(self, Expr::Record(_, _))
+    }
+
+    pub fn is_result(&self) -> bool {
+        matches!(self, Expr::Result(_, _))
+    }
+
+    pub fn is_option(&self) -> bool {
+        matches!(self, Expr::Option(_, _))
+    }
+
+    pub fn is_tuple(&self) -> bool {
+        matches!(self, Expr::Tuple(_, _))
+    }
+
+    pub fn is_list(&self) -> bool {
+        matches!(self, Expr::Sequence(_, _))
+    }
+
+    pub fn is_flags(&self) -> bool {
+        matches!(self, Expr::Flags(_, _))
+    }
+
+    pub fn is_identifier(&self) -> bool {
+        matches!(self, Expr::Identifier(_, _))
+    }
+
+    pub fn is_select_field(&self) -> bool {
+        matches!(self, Expr::SelectField(_, _, _))
+    }
+
+    pub fn is_if_else(&self) -> bool {
+        matches!(self, Expr::Cond(_, _, _, _))
+    }
+
+    pub fn is_match_expr(&self) -> bool {
+        matches!(self, Expr::PatternMatch(_, _, _))
+    }
+
+    pub fn is_select_index(&self) -> bool {
+        matches!(self, Expr::SelectIndex(_, _, _))
+    }
+
+    pub fn is_boolean(&self) -> bool {
+        matches!(self, Expr::Boolean(_, _))
+    }
+
+    pub fn is_comparison(&self) -> bool {
+        matches!(
+            self,
+            Expr::GreaterThan(_, _, _)
+                | Expr::GreaterThanOrEqualTo(_, _, _)
+                | Expr::LessThanOrEqualTo(_, _, _)
+                | Expr::EqualTo(_, _, _)
+                | Expr::LessThan(_, _, _)
+        )
+    }
+
+    pub fn is_concat(&self) -> bool {
+        matches!(self, Expr::Concat(_, _))
+    }
+
+    pub fn is_multiple(&self) -> bool {
+        matches!(self, Expr::Multiple(_, _))
+    }
+
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
         match self {
             Expr::Option(Some(expr), _) => Some(("some".to_string(), Some(expr.deref().clone()))),
@@ -196,6 +273,16 @@ impl Expr {
     pub fn let_binding(name: impl AsRef<str>, expr: Expr) -> Self {
         Expr::Let(
             VariableId::global(name.as_ref().to_string()),
+            None,
+            Box::new(expr),
+            InferredType::Unknown,
+        )
+    }
+
+    pub fn let_binding_with_type(name: impl AsRef<str>, type_name: TypeName, expr: Expr) -> Self {
+        Expr::Let(
+            VariableId::global(name.as_ref().to_string()),
+            Some(type_name),
             Box::new(expr),
             InferredType::Unknown,
         )
@@ -279,7 +366,14 @@ impl Expr {
     }
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
-        Expr::Tuple(expressions, InferredType::Unknown)
+        let inferred_type = InferredType::Tuple(
+            expressions
+                .iter()
+                .map(|expr| expr.inferred_type())
+                .collect(),
+        );
+
+        Expr::Tuple(expressions, inferred_type)
     }
 
     pub fn sequence(expressions: Vec<Expr>) -> Self {
@@ -293,14 +387,14 @@ impl Expr {
 
     pub fn inferred_type(&self) -> InferredType {
         match self {
-            Expr::Let(_, _, inferred_type)
+            Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, inferred_type)
             | Expr::SelectIndex(_, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, inferred_type)
+            | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
             | Expr::Identifier(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
@@ -327,33 +421,44 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
-        self.name_binding();
-        self.infer_function_types(function_type_registry);
+        self.name_binding_pattern_match_variables();
+        self.name_binding_local_variables();
+        self.infer_function_types(function_type_registry)
+            .map_err(|x| vec![x])?;
         self.infer_variants(function_type_registry);
-        self.infer_all_identifiers();
-        self.push_types_down();
-        self.infer_all_identifiers();
-        self.pull_types_up();
-        self.infer_all_identifiers();
+        self.infer_all_identifiers().map_err(|x| vec![x])?;
+        self.push_types_down().map_err(|x| vec![x])?;
+        self.infer_all_identifiers().map_err(|x| vec![x])?;
+        self.pull_types_up().map_err(|x| vec![x])?;
+        self.infer_all_identifiers().map_err(|x| vec![x])?;
         self.infer_input_type();
-        self.pull_types_up();
-        self.infer_all_identifiers();
-        self.unify_types()
+        self.push_types_down().map_err(|x| vec![x])?;
+        self.infer_all_identifiers().map_err(|x| vec![x])?;
+        self.pull_types_up().map_err(|x| vec![x])?;
+        self.infer_all_identifiers().map_err(|x| vec![x])?;
+        self.unify_types()?;
+        Ok(())
     }
 
+    pub fn name_binding_pattern_match_variables(&mut self) {
+        type_inference::name_binding_pattern_matches(self);
+    }
     // We make sure the let bindings name are properly
     // bound to the named identifiers.
-    pub fn name_binding(&mut self) {
-        type_inference::name_binding(self);
+    pub fn name_binding_local_variables(&mut self) {
+        type_inference::name_binding_local_variables(self);
     }
 
     // At this point we simply update the types to the parameter type expressions and the call expression itself.
-    pub fn infer_function_types(&mut self, function_type_registry: &FunctionTypeRegistry) {
-        type_inference::infer_function_types(self, function_type_registry);
+    pub fn infer_function_types(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), String> {
+        type_inference::infer_function_types(self, function_type_registry)
     }
 
-    pub fn push_types_down(&mut self) {
-        type_inference::push_types_down(self);
+    pub fn push_types_down(&mut self) -> Result<(), String> {
+        type_inference::push_types_down(self)
     }
 
     /// This function is potentially called multiple times after each phase of type inference.
@@ -381,13 +486,15 @@ impl Expr {
     /// To make Rib more user-friendly to developers, during type unification phase, we pick `F64` if the types are inferred to be
     /// just `OneOf(U64, U32, F64, other-number-types)`. This flexibility hardly gets applied if we have a strong expectation to the variables, which is
     /// originated only from call expressions.
-    pub fn infer_all_identifiers(&mut self) {
-        type_inference::infer_all_identifiers_bottom_up(self); //
-        type_inference::infer_all_identifiers_top_down(self);
+    pub fn infer_all_identifiers(&mut self) -> Result<(), String> {
+        type_inference::infer_all_identifiers_bottom_up(self)?;
+        type_inference::infer_all_identifiers_top_down(self)?;
+        type_inference::infer_match_binding_variables(self);
+        Ok(())
     }
 
-    pub fn pull_types_up(&mut self) {
-        type_inference::pull_types_up(self);
+    pub fn pull_types_up(&mut self) -> Result<(), String> {
+        type_inference::pull_types_up(self)
     }
 
     pub fn collect_all_global_variables_type(&mut self) -> HashMap<String, Vec<InferredType>> {
@@ -413,6 +520,8 @@ impl Expr {
         all_types_of_global_variables
     }
 
+    // Unlike inferring all identifirs, inputs don't have an associated let binding,
+    // and yet we need to propagate this type info all over
     pub fn infer_input_type(&mut self) {
         let global_variables_dictionary = self.collect_all_global_variables_type();
         // Updating the collected types in all positions of input
@@ -424,7 +533,9 @@ impl Expr {
                     // We are only interested in global variables
                     if variable_id.is_global() {
                         if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
-                            inferred_type.update(InferredType::AllOf(types.clone()));
+                            if let Some(all_of) = InferredType::all_of(types.clone()) {
+                                inferred_type.update(all_of);
+                            }
                         }
                     }
                 }
@@ -451,14 +562,14 @@ impl Expr {
     pub fn add_infer_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier(_, inferred_type)
-            | Expr::Let(_, _, inferred_type)
+            | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, inferred_type)
             | Expr::SelectIndex(_, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, inferred_type)
+            | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
@@ -491,14 +602,14 @@ impl Expr {
     pub fn override_type_type_mut(&mut self, new_inferred_type: InferredType) {
         match self {
             Expr::Identifier(_, inferred_type)
-            | Expr::Let(_, _, inferred_type)
+            | Expr::Let(_, _, _, inferred_type)
             | Expr::SelectField(_, _, inferred_type)
             | Expr::SelectIndex(_, _, inferred_type)
             | Expr::Sequence(_, inferred_type)
             | Expr::Record(_, inferred_type)
             | Expr::Tuple(_, inferred_type)
             | Expr::Literal(_, inferred_type)
-            | Expr::Number(_, inferred_type)
+            | Expr::Number(_, _, inferred_type)
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
@@ -636,6 +747,27 @@ impl Expr {
     pub fn number(f64: f64) -> Expr {
         Expr::Number(
             Number { value: f64 },
+            None,
+            InferredType::OneOf(vec![
+                InferredType::U64,
+                InferredType::U32,
+                InferredType::U8,
+                InferredType::U16,
+                InferredType::S64,
+                InferredType::S32,
+                InferredType::S8,
+                InferredType::S16,
+                InferredType::F64,
+                InferredType::F32,
+            ]),
+        )
+    }
+
+    // TODO; introduced to minimise the number of changes in tests.
+    pub fn number_with_type_name(f64: f64, type_name: TypeName) -> Expr {
+        Expr::Number(
+            Number { value: f64 },
+            Some(type_name),
             InferredType::OneOf(vec![
                 InferredType::U64,
                 InferredType::U32,
@@ -661,8 +793,17 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
         let expr = match expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Let(expr) => {
                 let name = expr.name;
-                let expr = *expr.expr.ok_or("Missing expr")?;
-                Expr::let_binding(name.as_str(), expr.try_into()?)
+                let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
+                let expr_: golem_api_grpc::proto::golem::rib::Expr =
+                    *expr.expr.ok_or("Missing expr")?;
+                let expr = expr_.try_into()?;
+                let binded = bind(&expr, type_name.clone());
+                Expr::Let(
+                    VariableId::global(name.as_str().to_string()),
+                    type_name,
+                    Box::new(binded),
+                    InferredType::Unknown,
+                )
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
                 let expr = expr.expr.ok_or("Missing expr")?;
@@ -763,7 +904,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 golem_api_grpc::proto::golem::rib::BooleanExpr { value },
             ) => Expr::boolean(value),
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
-                Expr::number(number.float)
+                let type_name = number.type_name.map(TypeName::try_from).transpose()?;
+                if let Some(type_name) = type_name {
+                    bind(
+                        &Expr::number_with_type_name(number.float, type_name.clone()),
+                        Some(type_name),
+                    )
+                } else {
+                    Expr::number(number.float)
+                }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
                 let expr = *expr;
@@ -829,12 +978,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     fn from(value: Expr) -> Self {
         let expr = match value {
-            Expr::Let(variable_id, expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Let(
-                Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
-                    name: variable_id.name().to_string(),
-                    expr: Some(Box::new((*expr).into())),
-                }),
-            ),
+            Expr::Let(variable_id, type_name, expr, _) => {
+                golem_api_grpc::proto::golem::rib::expr::Expr::Let(Box::new(
+                    golem_api_grpc::proto::golem::rib::LetExpr {
+                        name: variable_id.name().to_string(),
+                        expr: Some(Box::new((*expr).into())),
+                        type_name: type_name.map(|t| t.into()),
+                    },
+                ))
+            }
             Expr::SelectField(expr, field, _) => {
                 golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(Box::new(
                     golem_api_grpc::proto::golem::rib::SelectFieldExpr {
@@ -877,11 +1029,14 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Literal(value, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
                 golem_api_grpc::proto::golem::rib::LiteralExpr { value },
             ),
-            Expr::Number(number, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Number(
-                golem_api_grpc::proto::golem::rib::NumberExpr {
-                    float: number.value,
-                },
-            ),
+            Expr::Number(number, type_name, _) => {
+                golem_api_grpc::proto::golem::rib::expr::Expr::Number(
+                    golem_api_grpc::proto::golem::rib::NumberExpr {
+                        float: number.value,
+                        type_name: type_name.map(|t| t.into()),
+                    },
+                )
+            }
             Expr::Flags(values, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
                 golem_api_grpc::proto::golem::rib::FlagsExpr { values },
             ),
