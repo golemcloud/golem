@@ -242,7 +242,7 @@ Here is a more complex example of an API definition that gives you more idea on 
         "type": "wit-worker",
         "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
         "workerName": "my-worker",
-        "response": "${let quantity: f64 = request.body.quantity; let product_id: u64 = request.body.product-id; let name: str = request.body.name; let price: f64 = request.body.price; golem:it/api.{add-item}({product-id: product_id, name: name, price: price, quantity: quantity}); {status: 200u64, body: \"success\"}}"
+        "response": "${let quantity: f64 = request.body.quantity; let product_id: u64 = request.body.product-id; let name: str = request.body.name; let price: f64 = request.body.price; let input = {product-id: product_id, name: name, price: price, quantity: quantity}; golem:it/api.{add-item}(input); {status: 200u64, body: \"success\"}}"
       }
     },
     {
