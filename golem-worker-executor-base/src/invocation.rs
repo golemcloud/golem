@@ -506,7 +506,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
             .data()
             .get_public_state()
             .event_service()
-            .emit_invocation_finished(raw_function_name, &idempotency_key, is_live); // TODO: reevaluate is_live
+            .emit_invocation_finished(raw_function_name, &idempotency_key, is_live);
+        // TODO: reevaluate is_live
     }
 
     record_invocation_consumption(consumed_fuel_for_call);

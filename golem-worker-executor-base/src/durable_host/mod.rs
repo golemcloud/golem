@@ -44,8 +44,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    IndexedResourceKey, OplogEntry, OplogIndex, UpdateDescription, WorkerError, WorkerResourceId,
-    WrappedFunctionType,
+    IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
+    WorkerResourceId, WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -1337,7 +1337,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 }
 
-async fn last_error_and_retry_count<T: HasOplogService>(
+async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
 ) -> Option<LastError> {
@@ -1364,7 +1364,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                             LastError {
                                 error: first_error.unwrap(),
                                 retry_count,
-                                stderr: "ERROR LOGS".to_string() // TODO
+                                stderr: recover_stderr_logs(this, owned_worker_id, idx).await
                             }
                         );
                     }
@@ -1379,7 +1379,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                             Some(error) => break Some(LastError {
                                 error,
                                 retry_count,
-                                stderr: "ERROR LOGS".to_string() // TODO
+                                stderr: recover_stderr_logs(this, owned_worker_id, idx).await
                                 }),
                             None => break None
                         }
@@ -1390,7 +1390,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         Some(error) => break Some(LastError {
                             error,
                             retry_count,
-                            stderr: "ERROR LOGS".to_string() // TODO
+                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await
                         }),
                         None => break None
                     }
@@ -1399,6 +1399,46 @@ async fn last_error_and_retry_count<T: HasOplogService>(
         };
         result
     }
+}
+
+/// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
+/// number of entries, and at most until the first invocation start entry.
+pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
+    this: &T,
+    owned_worker_id: &OwnedWorkerId,
+    last_oplog_idx: OplogIndex,
+) -> String {
+    let max_count = this.config().limits.event_history_size;
+    let mut idx = last_oplog_idx;
+    let mut stderr_entries = Vec::new();
+    loop {
+        // TODO: this could be read in batches to speed up the process
+        let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+        match oplog_entry.first_key_value() {
+            Some((
+                _,
+                OplogEntry::Log {
+                    level: LogLevel::Stderr,
+                    message,
+                    ..
+                },
+            )) => {
+                stderr_entries.push(message.clone());
+                if stderr_entries.len() >= max_count {
+                    break;
+                }
+            }
+            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            _ => continue,
+        }
+        if idx > OplogIndex::INITIAL {
+            idx = idx.previous();
+        } else {
+            break;
+        }
+    }
+    stderr_entries.reverse();
+    stderr_entries.join("\n")
 }
 
 /// Indicates which step of the http request handling is responsible for closing an open

@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use crate::durable_host::recover_stderr_logs;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
@@ -784,7 +785,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let maybe_result = self.invocation_results.read().unwrap().get(key).cloned();
         if let Some(mut result) = maybe_result {
-            result.cache(self.oplog.clone()).await;
+            result.cache(&self.owned_worker_id, self).await;
             match result {
                 InvocationResult::Cached {
                     result: Ok(values), ..
@@ -1718,25 +1719,29 @@ impl InvocationResult {
         }
     }
 
-    pub async fn cache(&mut self, oplog: Arc<dyn Oplog + Send + Sync>) {
+    pub async fn cache<T: HasOplog + HasOplogService + HasConfig>(
+        &mut self,
+        owned_worker_id: &OwnedWorkerId,
+        services: &T,
+    ) {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
-            let entry = oplog.read(oplog_idx).await;
+            let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
                     let values: TypeAnnotatedValue =
-                        oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+                        services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
 
                     Ok(values)
                 }
                 OplogEntry::Error { error, .. } => {
-                    // TODO: need to look back oplog entries and collect stderr
-                    Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr: "ERROR LOGS".to_string() })
+                    let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
+                    Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr })
                 },
                 OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string()}),
                 OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string()}),
-                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {oplog:?}")
+                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_worker_id:?}")
             };
 
             *self = Self::Cached { result, oplog_idx }
