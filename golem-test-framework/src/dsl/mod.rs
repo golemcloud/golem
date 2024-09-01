@@ -794,7 +794,9 @@ pub fn log_event_to_string(event: &LogEvent) -> String {
         Some(log_event::Event::Stdout(stdout)) => stdout.message.clone(),
         Some(log_event::Event::Stderr(stderr)) => stderr.message.clone(),
         Some(log_event::Event::Log(log)) => log.message.clone(),
-        _ => std::panic!("Unexpected event type"),
+        Some(log_event::Event::InvocationFinished(_)) => "".to_string(),
+        Some(log_event::Event::InvocationStarted(_)) => "".to_string(),
+        None => std::panic!("Unexpected event type"),
     }
 }
 
