@@ -461,7 +461,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,
-                                    true,
                                 )
                                 .await;
                                 store
@@ -604,6 +603,14 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.state.get_current_idempotency_key()
+    }
+
+    fn is_live(&self) -> bool {
+        self.state.is_live()
+    }
+
+    fn is_replay(&self) -> bool {
+        self.state.is_replay()
     }
 }
 
@@ -1119,7 +1126,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             function_input.clone(),
                             store,
                             instance,
-                            false, // we know it was not live before, because cont=true
                         )
                         .instrument(span)
                         .await;
@@ -1308,10 +1314,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 &last_error,
             );
 
-            // TODO
-            // if let Some(last_error) = last_error {
-            //     debug!("Recovery decision after {last_error}: {decision:?}");
-            // }
+            if let Some(last_error) = last_error {
+                debug!("Recovery decision after {last_error}: {decision:?}");
+            }
 
             match decision {
                 RetryDecision::Immediate | RetryDecision::ReacquirePermits => {

@@ -813,7 +813,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             stderr,
                         }),
                     ..
-                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))), // TODO
+                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))),
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
@@ -1378,7 +1378,6 @@ impl RunningWorker {
                                             function_input.clone(),
                                             store,
                                             &instance,
-                                            true, // We are always in live mode at this point
                                         )
                                         .await;
 
@@ -1529,7 +1528,6 @@ impl RunningWorker {
                                             vec![],
                                             store,
                                             &instance,
-                                            true,
                                         )
                                             .await;
                                         store.data_mut().end_call_snapshotting_function();

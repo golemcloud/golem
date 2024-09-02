@@ -342,7 +342,7 @@ impl From<anyhow::Error> for GolemError {
     fn from(error: anyhow::Error) -> Self {
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => GolemError::Interrupted { kind: kind.clone() },
-            None => GolemError::runtime(format!("KACSA {error:#?}")),
+            None => GolemError::runtime(format!("{error:#?}")),
         }
     }
 }

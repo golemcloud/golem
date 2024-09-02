@@ -35,23 +35,21 @@ use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 /// - `function_input`: the input parameters for the function
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
-/// - `was_live_before`: whether the worker was live before the invocation, or this invocation is part of a recovery
 // TODO: rename - this just adds outcome metrics recording?
 pub async fn invoke_worker<Ctx: WorkerCtx>(
     full_function_name: String,
     function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    was_live_before: bool,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
+    let was_live_before = store.data().is_live();
 
     let result = invoke_or_fail(
         full_function_name.clone(),
         function_input,
         &mut store,
         instance,
-        was_live_before,
     )
     .await;
 
@@ -157,7 +155,6 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     mut function_input: Vec<Value>,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    was_live_before: bool,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
 
@@ -166,7 +163,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
 
     let function = find_function(&mut store, instance, &parsed)?;
 
-    if was_live_before {
+    if store.data().is_live() {
         store
             .data_mut()
             .on_exported_function_invoked(&full_function_name, &function_input)
@@ -182,14 +179,9 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     let mut extra_fuel = 0;
 
     if parsed.function().is_indexed_resource() {
-        let resource_handle = get_or_create_indexed_resource(
-            &mut store,
-            instance,
-            &parsed,
-            &full_function_name,
-            was_live_before,
-        )
-        .await?;
+        let resource_handle =
+            get_or_create_indexed_resource(&mut store, instance, &parsed, &full_function_name)
+                .await?;
 
         match resource_handle {
             InvokeResult::Succeeded {
@@ -207,16 +199,7 @@ async fn invoke_or_fail<Ctx: WorkerCtx>(
     }
 
     let mut call_result = match function {
-        Some(function) => {
-            invoke(
-                &mut store,
-                function,
-                &function_input,
-                &full_function_name,
-                was_live_before,
-            )
-            .await
-        }
+        Some(function) => invoke(&mut store, function, &function_input, &full_function_name).await,
         None => {
             // Special function: drop
             drop_resource(&mut store, &parsed, &function_input, &full_function_name).await
@@ -236,7 +219,6 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
     raw_function_name: &str,
-    is_live: bool,
 ) -> Result<InvokeResult, GolemError> {
     let resource_name =
         parsed_function_name
@@ -303,7 +285,6 @@ async fn get_or_create_indexed_resource<'a, Ctx: WorkerCtx>(
                 resource_constructor,
                 &constructor_params,
                 raw_function_name,
-                is_live,
             )
             .await?;
 
@@ -336,7 +317,6 @@ async fn invoke<Ctx: WorkerCtx>(
     function: Func,
     function_input: &[Value],
     raw_function_name: &str,
-    is_live: bool,
 ) -> Result<InvokeResult, GolemError> {
     let mut store = store.as_context_mut();
     let param_types = function.params(&store);
@@ -362,7 +342,7 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 
     let (results, consumed_fuel) =
-        call_exported_function(&mut store, function, params, raw_function_name, is_live).await?;
+        call_exported_function(&mut store, function, params, raw_function_name).await?;
 
     for resource in resources_to_drop {
         debug!("Dropping passed owned resources {:?}", resource);
@@ -457,7 +437,6 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     function: Func,
     params: Vec<Val>,
     raw_function_name: &str,
-    is_live: bool,
 ) -> Result<(anyhow::Result<Vec<Val>>, i64), GolemError> {
     let mut store = store.as_context_mut();
 
@@ -469,7 +448,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
             .data()
             .get_public_state()
             .event_service()
-            .emit_invocation_start(raw_function_name, idempotency_key, is_live);
+            .emit_invocation_start(raw_function_name, idempotency_key, store.data().is_live());
     }
 
     let mut results: Vec<Val> = function
@@ -506,8 +485,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
             .data()
             .get_public_state()
             .event_service()
-            .emit_invocation_finished(raw_function_name, &idempotency_key, is_live);
-        // TODO: reevaluate is_live
+            .emit_invocation_finished(raw_function_name, &idempotency_key, store.data().is_live());
     }
 
     record_invocation_consumption(consumed_fuel_for_call);

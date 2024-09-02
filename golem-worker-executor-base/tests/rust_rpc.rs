@@ -18,6 +18,7 @@ use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::time::SystemTime;
+use tracing::debug;
 
 #[tokio::test]
 #[tracing::instrument]
@@ -570,6 +571,10 @@ async fn error_message_invalid_uri() {
 
     drop(executor);
 
+    debug!(
+        "Error message: {}",
+        worker_error_message(&create_auction_result.clone().err().unwrap())
+    );
     check!(worker_error_message(&create_auction_result.err().unwrap())
         .contains("Invalid URI: urn:worker:invalid-component-id"));
 }
