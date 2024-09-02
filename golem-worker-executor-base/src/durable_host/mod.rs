@@ -1429,7 +1429,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                 }
             }
             Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
-            _ => continue,
+            _ => {}
         }
         if idx > OplogIndex::INITIAL {
             idx = idx.previous();

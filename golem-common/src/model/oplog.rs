@@ -682,22 +682,10 @@ impl WorkerError {
             "".to_string()
         };
         match self {
-            WorkerError::Unknown(message) => format!("WE UNKNOWN {message}{error_logs}"),
-            WorkerError::InvalidRequest(message) => format!("WE IR {message}{error_logs}"),
+            WorkerError::Unknown(message) => format!("{message}{error_logs}"),
+            WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
             WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
             WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
         }
     }
 }
-
-//
-// impl Display for WorkerError {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             WorkerError::Unknown(message) => write!(f, "WE UNKNOWN {}", message),
-//             WorkerError::InvalidRequest(message) => write!(f, "WE IR {}", message),
-//             WorkerError::StackOverflow => write!(f, "Stack overflow"),
-//             WorkerError::OutOfMemory => write!(f, "Out of memory"),
-//         }
-//     }
-// }

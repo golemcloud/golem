@@ -220,9 +220,7 @@ impl TrapType {
                             Some(GolemError::InvalidRequest { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))
                             }
-                            _ => {
-                                TrapType::Error(WorkerError::Unknown(format!("POCOK {:#?}", error)))
-                            }
+                            _ => TrapType::Error(WorkerError::Unknown(format!("{}", error))),
                         },
                     },
                 },
