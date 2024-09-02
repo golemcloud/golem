@@ -25,7 +25,7 @@ impl RibInterpreterResult {
                     let result = internal::compare_typed_value(&left, &right, compare)?;
                     Ok(RibInterpreterResult::Val(result))
                 }
-                _ => Err("Unsupported type to compare".to_string()),
+                _ => Err("Values are not literals and cannot be compared".to_string()),
             }
         }
     }
@@ -89,7 +89,9 @@ impl RibInterpreterResult {
 
 mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::TypedVariant;
 
     pub(crate) fn compare_typed_value<F>(
         left: &TypeAnnotatedValue,
@@ -99,12 +101,52 @@ mod internal {
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
-        match (left.get_literal(), right.get_literal()) {
-            (Some(left), Some(right)) => {
-                let result = compare(left, right);
-                Ok(TypeAnnotatedValue::Bool(result))
+        if let (Some(left_lit), Some(right_lit)) = (left.get_literal(), right.get_literal()) {
+            Ok(TypeAnnotatedValue::Bool(compare(left_lit, right_lit)))
+        } else if let (TypeAnnotatedValue::Variant(left), TypeAnnotatedValue::Variant(right)) =
+            (left, right)
+        {
+            compare_variants(left.as_ref(), right.as_ref(), compare)
+        } else {
+            Err(unsupported_type_error(left, right))
+        }
+    }
+
+    fn compare_variants<F>(
+        left: &TypedVariant,
+        right: &TypedVariant,
+        compare: F,
+    ) -> Result<TypeAnnotatedValue, String>
+    where
+        F: Fn(LiteralValue, LiteralValue) -> bool,
+    {
+        if left.case_name == right.case_name {
+            match (
+                left.case_value.clone().and_then(|x| x.type_annotated_value),
+                right
+                    .case_value
+                    .clone()
+                    .and_then(|x| x.type_annotated_value),
+            ) {
+                (Some(left_val), Some(right_val)) => {
+                    compare_typed_value(&left_val, &right_val, compare)
+                }
+                _ => Ok(TypeAnnotatedValue::Bool(true)),
             }
-            _ => Err("Unsupported type to compare".to_string()),
+        } else {
+            Ok(TypeAnnotatedValue::Bool(false))
+        }
+    }
+
+    fn unsupported_type_error(left: &TypeAnnotatedValue, right: &TypeAnnotatedValue) -> String {
+        let left = AnalysedType::try_from(left);
+        let right = AnalysedType::try_from(right);
+
+        match (left, right) {
+            (Ok(left), Ok(right)) => {
+                format!("Unsupported type to compare {:?}, {:?}", left, right)
+            }
+            _ => "Unsupported type to compare. Un-identified types".to_string(),
         }
     }
 }

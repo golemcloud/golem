@@ -1866,76 +1866,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_evaluation_with_pattern_match_variant_nested_with_none() {
+    async fn test_evaluation_with_pattern_match_variant_construction_and_pattern_match() {
         let noop_executor = DefaultEvaluator::noop();
 
+        // Input request
+        let request_input = get_request_details(
+            r#"
+                    {
+                           "user-id": "afsal"
+                    }"#,
+            &HeaderMap::new(),
+        );
+
+        let request_body_type =
+            get_analysed_type_record(vec![("user-id".to_string(), AnalysedType::Str(TypeStr))]);
+
+        let request_type =
+            get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
+
+        // Worker Response
         let worker_response = TypeAnnotatedValue::Variant(Box::new(TypedVariant {
-            case_name: "Foo".to_string(),
+            case_name: "register".to_string(),
             case_value: Some(Box::new(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(test_utils::create_none(Some(&AnalysedType::Record(
-                    TypeRecord {
-                        fields: vec![NameTypePair {
-                            name: "id".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }],
-                    },
-                )))),
+                type_annotated_value: Some(TypeAnnotatedValue::Str("adam".to_string())),
             })),
             typ: Some(TypeVariant {
                 cases: vec![
                     NameOptionTypePair {
-                        name: "Foo".to_string(),
-                        typ: Some(
-                            (&AnalysedType::Option(TypeOption {
-                                inner: Box::new(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            }))
-                                .into(),
-                        ),
+                        name: "register".to_string(),
+                        typ: Some((&AnalysedType::Str(TypeStr)).into()),
                     },
                     NameOptionTypePair {
-                        name: "Bar".to_string(),
-                        typ: Some(
-                            (&AnalysedType::Option(TypeOption {
-                                inner: Box::new(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            }))
-                                .into(),
-                        ),
+                        name: "follow".to_string(),
+                        typ: Some((&AnalysedType::Str(TypeStr)).into()),
+                    },
+                    NameOptionTypePair {
+                        name: "noop".to_string(),
+                        typ: None,
                     },
                 ],
             }),
         }));
 
-        let variant_analysed_type = AnalysedType::try_from(&worker_response).unwrap();
+        let variant_type = AnalysedType::try_from(&worker_response).unwrap();
 
-        let json = worker_response.to_json_value();
-
-        let request_input = get_request_details(&json.to_json_string(), &HeaderMap::new());
-
-        let request_body_type = variant_analysed_type.clone();
-
-        let request_type =
-            get_analysed_type_record(vec![("body".to_string(), request_body_type.clone())]);
-
+        // A component metadata that has process function which takes a variant input and returns a variant output
         let component_metadata = get_analysed_exports(
-            "foo",
-            vec![request_type.clone()],
-            variant_analysed_type.clone(),
+            "process",
+            vec![
+                variant_type.clone(),
+                variant_type.clone(),
+                variant_type.clone(),
+                AnalysedType::Str(TypeStr),
+            ],
+            variant_type.clone(),
         );
 
         let expr = rib::from_string(
-            r#"${let x = foo(request); match x { Foo(none) => "not found",  Foo(some(value)) => value.id }}"#,
+            r#"${
+              let user: str = request.body.user-id;
+              let action1 = register(user);
+              let action2 = follow("michael");
+              let action3 = noop;
+              let result = process(action1, action2, action3, user);
+
+              let x = match result {
+                follow(user) => "follow ${user}",
+                register(user) => "register ${user}",
+                noop => "noop"
+              };
+
+               let y = match action2 {
+                follow(user) => "follow ${user}",
+                register(user) => "register ${user}",
+                noop => "noop"
+              };
+
+               let z = match noop {
+                follow(user) => "follow ${user}",
+                register(user) => "register ${user}",
+                noop => "noop"
+              };
+
+              { x: x, y: y, z: z }
+
+            }"#,
         )
         .unwrap();
+
+        // worker executor returning a variant
         let result = noop_executor
             .evaluate_with_worker_response(
                 &expr,
@@ -1945,7 +1964,18 @@ mod tests {
             )
             .await;
 
-        let expected = TypeAnnotatedValue::Str("not found".to_string());
+        let expected = create_record(vec![
+            (
+                "x".to_string(),
+                TypeAnnotatedValue::Str("register adam".to_string()),
+            ),
+            (
+                "y".to_string(),
+                TypeAnnotatedValue::Str("follow michael".to_string()),
+            ),
+            ("z".to_string(), TypeAnnotatedValue::Str("noop".to_string())),
+        ])
+        .unwrap();
 
         assert_eq!(result, Ok(expected));
     }

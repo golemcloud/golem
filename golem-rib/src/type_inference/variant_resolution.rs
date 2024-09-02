@@ -71,7 +71,6 @@ mod internal {
         queue.push_back(expr);
 
         while let Some(expr) = queue.pop_back() {
-            // call(x)
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
                     // Retrieve the possible no-arg variant from the registry
@@ -81,18 +80,31 @@ mod internal {
                     {
                         no_arg_variants.push(variable_id.name());
                         inferred_type.update(analysed_type.clone().into());
-                    } else if let Some(RegistryValue::Function { return_types, .. }) =
+                    }
+                }
+
+                Expr::Call(
+                    InvocationName::Function(parsed_function_name),
+                    exprs,
+                    inferred_type,
+                ) => {
+                    let key = RegistryKey::VariantName(parsed_function_name.to_string());
+                    if let Some(RegistryValue::Function { return_types, .. }) =
                         function_type_registry.types.get(&key)
                     {
-                        variant_with_args.push(variable_id.name());
+                        variant_with_args.push(parsed_function_name.to_string());
 
                         // TODO; return type is only 1 in reality for variants - we can make this typed
                         if let Some(variant_type) = return_types.first() {
                             inferred_type.update(variant_type.clone().into());
                         }
                     }
+
+                    for expr in exprs {
+                        queue.push_back(expr);
+                    }
                 }
-                // Continue for nested expressions
+
                 _ => expr.visit_children_mut_bottom_up(&mut queue),
             }
         }
@@ -103,6 +115,7 @@ mod internal {
         }
     }
 
+    #[derive(Debug, Clone)]
     pub(crate) struct VariantInfo {
         no_arg_variants: Vec<String>,
         variants_with_args: Vec<String>,
