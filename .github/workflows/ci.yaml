@@ -568,3 +568,18 @@ jobs:
         if: matrix.os == 'windows-latest'
       - run: gh release upload -R golemcloud/golem --clobber ${{ github.ref_name }} target/${{ matrix.rust-target }}/release/golem-cli-${{ matrix.rust-target }}
         if: matrix.os != 'windows-latest'
+
+  publish-slack-notification:
+    if: "startsWith(github.ref, 'refs/tags/v')"
+    needs: [ publish ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_COLOR: ${{ needs.publish.result }}
+          SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
+          SLACK_TITLE: "Release Notification"
+          SLACK_MESSAGE: "Publish result: `${{ needs.publish.result }}`"
+          SLACK_USERNAME: CI
+          SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
