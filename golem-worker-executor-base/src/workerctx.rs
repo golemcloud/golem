@@ -191,6 +191,12 @@ pub trait InvocationManagement {
 
     /// Gets the invocation key associated with the current invocation of the worker.
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
+
+    /// Returns whether we are in live mode where we are executing new calls.
+    fn is_live(&self) -> bool;
+
+    /// Returns whether we are in replay mode where we are replaying old calls.
+    fn is_replay(&self) -> bool;
 }
 
 /// The status management interface of a worker context is responsible for querying and storing

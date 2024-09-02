@@ -44,8 +44,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
-    IndexedResourceKey, OplogEntry, OplogIndex, UpdateDescription, WorkerError, WorkerResourceId,
-    WrappedFunctionType,
+    IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
+    WorkerResourceId, WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -59,7 +59,7 @@ use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
-use wasmtime::AsContextMut;
+use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Stdout, WasiCtx, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
@@ -379,7 +379,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     // If persistence is off, we always emit events
                     {
                         // Emit the event and write a special oplog entry
-                        self.public_state.event_service.emit_event(event.clone());
+                        self.public_state
+                            .event_service
+                            .emit_event(event.clone(), true);
                         self.state.oplog.add(entry).await;
                     } else if !self
                         .state
@@ -388,11 +390,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await
                     {
                         // haven't seen this log before
-                        self.public_state.event_service.emit_event(event.clone());
+                        self.public_state
+                            .event_service
+                            .emit_event(event.clone(), true);
                         self.state.oplog.add(entry).await;
                     } else {
-                        // we have persisted emitting this log before, so we don't do it again but
+                        // we have persisted emitting this log before, so we mark it as non-live and
                         // remove the entry from the seen log set.
+                        // note that we still call emit_event because we need replayed log events for
+                        // improved error reporting in case of invocation failures
+                        self.public_state
+                            .event_service
+                            .emit_event(event.clone(), false);
                         self.state
                             .replay_state
                             .remove_seen_log(*level, context, message)
@@ -452,7 +461,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,
-                                    true,
                                 )
                                 .await;
                                 store
@@ -464,9 +472,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     Err(error) => Some(format!(
                                         "Manual update failed to load snapshot: {error}"
                                     )),
-                                    Ok(InvokeResult::Failed { error, .. }) => Some(format!(
-                                        "Manual update failed to load snapshot: {error}"
-                                    )),
+                                    Ok(InvokeResult::Failed { error, .. }) => {
+                                        let stderr = store
+                                            .as_context()
+                                            .data()
+                                            .get_public_state()
+                                            .event_service()
+                                            .get_last_invocation_errors();
+                                        let error = error.to_string(&stderr);
+                                        Some(format!(
+                                            "Manual update failed to load snapshot: {error}"
+                                        ))
+                                    }
                                     Ok(InvokeResult::Succeeded { output, .. }) => {
                                         if output.len() == 1 {
                                             match &output[0] {
@@ -586,6 +603,14 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
 
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.state.get_current_idempotency_key()
+    }
+
+    fn is_live(&self) -> bool {
+        self.state.is_live()
+    }
+
+    fn is_replay(&self) -> bool {
+        self.state.is_replay()
     }
 }
 
@@ -1101,7 +1126,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             function_input.clone(),
                             store,
                             instance,
-                            false, // we know it was not live before, because cont=true
                         )
                         .instrument(span)
                         .await;
@@ -1209,9 +1233,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                     ))
                                                 }
                                                 TrapType::Error(error) => {
+                                                    let stderr = store
+                                                        .as_context()
+                                                        .data()
+                                                        .get_public_state()
+                                                        .event_service()
+                                                        .get_last_invocation_errors();
                                                     break Err(GolemError::runtime(
-                                                        error.to_string(),
-                                                    ))
+                                                        error.to_string(&stderr),
+                                                    ));
                                                 }
                                             }
                                         }
@@ -1283,6 +1313,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .unwrap_or(default_retry_config),
                 &last_error,
             );
+
             if let Some(last_error) = last_error {
                 debug!("Recovery decision after {last_error}: {decision:?}");
             }
@@ -1311,7 +1342,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 }
 
-async fn last_error_and_retry_count<T: HasOplogService>(
+async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
 ) -> Option<LastError> {
@@ -1338,6 +1369,7 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                             LastError {
                                 error: first_error.unwrap(),
                                 retry_count,
+                                stderr: recover_stderr_logs(this, owned_worker_id, idx).await
                             }
                         );
                     }
@@ -1349,14 +1381,22 @@ async fn last_error_and_retry_count<T: HasOplogService>(
                         continue;
                     } else {
                         match first_error {
-                            Some(error) => break Some(LastError { error, retry_count }),
+                            Some(error) => break Some(LastError {
+                                error,
+                                retry_count,
+                                stderr: recover_stderr_logs(this, owned_worker_id, idx).await
+                                }),
                             None => break None
                         }
                     }
                 }
                 _ => {
                     match first_error {
-                        Some(error) => break Some(LastError { error, retry_count }),
+                        Some(error) => break Some(LastError {
+                            error,
+                            retry_count,
+                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await
+                        }),
                         None => break None
                     }
                 }
@@ -1364,6 +1404,46 @@ async fn last_error_and_retry_count<T: HasOplogService>(
         };
         result
     }
+}
+
+/// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
+/// number of entries, and at most until the first invocation start entry.
+pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
+    this: &T,
+    owned_worker_id: &OwnedWorkerId,
+    last_oplog_idx: OplogIndex,
+) -> String {
+    let max_count = this.config().limits.event_history_size;
+    let mut idx = last_oplog_idx;
+    let mut stderr_entries = Vec::new();
+    loop {
+        // TODO: this could be read in batches to speed up the process
+        let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+        match oplog_entry.first_key_value() {
+            Some((
+                _,
+                OplogEntry::Log {
+                    level: LogLevel::Stderr,
+                    message,
+                    ..
+                },
+            )) => {
+                stderr_entries.push(message.clone());
+                if stderr_entries.len() >= max_count {
+                    break;
+                }
+            }
+            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            _ => {}
+        }
+        if idx > OplogIndex::INITIAL {
+            idx = idx.previous();
+        } else {
+            break;
+        }
+    }
+    stderr_entries.reverse();
+    stderr_entries.join("\n")
 }
 
 /// Indicates which step of the http request handling is responsible for closing an open

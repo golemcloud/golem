@@ -90,14 +90,14 @@ async fn tinygo_example() {
 
     assert!(events.len() >= 4);
 
-    let first_line = log_event_to_string(&events[0]);
-    let second_line = log_event_to_string(&events[1]);
+    let first_line = log_event_to_string(&events[1]);
+    let second_line = log_event_to_string(&events[2]);
     let parts: Vec<_> = second_line.split(' ').collect();
     let last_part = parts.last().unwrap().trim();
     let now = chrono::Local::now();
     let year = now.year();
-    let third_line = log_event_to_string(&events[2]);
-    let fourth_line = log_event_to_string(&events[3]);
+    let third_line = log_event_to_string(&events[3]);
+    let fourth_line = log_event_to_string(&events[4]);
 
     check!(first_line == "Hello Go-lem\n".to_string());
     check!(second_line.starts_with(&format!("test {year}")));
@@ -246,7 +246,7 @@ async fn java_example_1() {
 
     drop(executor);
 
-    let first_line = log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[1]);
 
     check!(first_line == "Hello world, input is Hello Golem!\n".to_string());
     check!(result == vec![Value::U32("Hello Golem!".len() as u32)]);
@@ -402,7 +402,7 @@ async fn javascript_example_1() {
         "Invalid wasi Time"
     );
 
-    let first_line = log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[1]);
     let parts = first_line.split(' ').collect::<Vec<_>>();
 
     check!(parts[0] == "Hello");
@@ -500,7 +500,7 @@ async fn c_example_1() {
 
     drop(executor);
 
-    let first_line = log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[1]);
 
     check!(first_line == "Hello World!\n".to_string());
     check!(result == vec![Value::S32(100)]);
@@ -532,7 +532,7 @@ async fn c_example_2() {
 
     drop(executor);
 
-    let first_line = log_event_to_string(&events[0]);
+    let first_line = log_event_to_string(&events[1]);
     let now = chrono::Local::now();
     let year = now.year();
 

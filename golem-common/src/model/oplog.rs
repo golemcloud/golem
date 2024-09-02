@@ -674,13 +674,18 @@ pub enum WorkerError {
     OutOfMemory,
 }
 
-impl Display for WorkerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl WorkerError {
+    pub fn to_string(&self, error_logs: &str) -> String {
+        let error_logs = if !error_logs.is_empty() {
+            format!("\n\n{}", error_logs)
+        } else {
+            "".to_string()
+        };
         match self {
-            WorkerError::Unknown(message) => write!(f, "{}", message),
-            WorkerError::InvalidRequest(message) => write!(f, "{}", message),
-            WorkerError::StackOverflow => write!(f, "Stack overflow"),
-            WorkerError::OutOfMemory => write!(f, "Out of memory"),
+            WorkerError::Unknown(message) => format!("{message}{error_logs}"),
+            WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
+            WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
+            WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
         }
     }
 }

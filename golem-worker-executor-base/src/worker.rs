@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use crate::durable_host::recover_stderr_logs;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
@@ -33,7 +34,7 @@ use crate::services::{
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
     HasWorkerService, UsesAllDeps,
 };
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
 use golem_common::model::exports;
@@ -602,14 +603,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .concat();
         let mut map = self.invocation_results.write().unwrap();
         for key in keys_to_fail {
+            let stderr = self.event_service.get_last_invocation_errors();
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
-                    result: Err(trap_type.clone()),
+                    result: Err(FailedInvocationResult {
+                        trap_type: trap_type.clone(),
+                        stderr: stderr.clone(),
+                    }),
                     oplog_idx: oplog_index,
                 },
             );
-            let golem_error = trap_type.as_golem_error();
+            let golem_error = trap_type.as_golem_error(&stderr);
             if let Some(golem_error) = golem_error {
                 self.events().publish(Event::InvocationCompleted {
                     worker_id: self.owned_worker_id.worker_id(),
@@ -780,25 +785,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let maybe_result = self.invocation_results.read().unwrap().get(key).cloned();
         if let Some(mut result) = maybe_result {
-            result.cache(self.oplog.clone()).await;
+            result.cache(&self.owned_worker_id, self).await;
             match result {
                 InvocationResult::Cached {
                     result: Ok(values), ..
                 } => LookupResult::Complete(Ok(values)),
                 InvocationResult::Cached {
-                    result: Err(TrapType::Interrupt(InterruptKind::Interrupt)),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt),
+                            ..
+                        }),
                     ..
                 } => LookupResult::Interrupted,
                 InvocationResult::Cached {
-                    result: Err(TrapType::Interrupt(_)),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Interrupt(_),
+                            ..
+                        }),
                     ..
                 } => LookupResult::Pending,
                 InvocationResult::Cached {
-                    result: Err(TrapType::Error(error)),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Error(error),
+                            stderr,
+                        }),
                     ..
-                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string()))),
+                } => LookupResult::Complete(Err(GolemError::runtime(error.to_string(&stderr)))),
                 InvocationResult::Cached {
-                    result: Err(TrapType::Exit),
+                    result:
+                        Err(FailedInvocationResult {
+                            trap_type: TrapType::Exit,
+                            ..
+                        }),
                     ..
                 } => LookupResult::Complete(Err(GolemError::runtime("Process exited"))),
                 InvocationResult::Lazy { .. } => {
@@ -1357,7 +1378,6 @@ impl RunningWorker {
                                             function_input.clone(),
                                             store,
                                             &instance,
-                                            true, // We are always in live mode at this point
                                         )
                                         .await;
 
@@ -1508,7 +1528,6 @@ impl RunningWorker {
                                             vec![],
                                             store,
                                             &instance,
-                                            true,
                                         )
                                             .await;
                                         store.data_mut().end_call_snapshotting_function();
@@ -1549,6 +1568,8 @@ impl RunningWorker {
                                                     false
                                                 },
                                             Ok(InvokeResult::Failed { error, .. }) => {
+                                                let stderr = store.data().get_public_state().event_service().get_last_invocation_errors();
+                                                let error = error.to_string(&stderr);
                                                 Self::fail_update(
                                                     target_version,
                                                     format!("failed to get a snapshot for manual update: {error}"),
@@ -1673,9 +1694,15 @@ impl RunningWorker {
 }
 
 #[derive(Debug, Clone)]
+struct FailedInvocationResult {
+    pub trap_type: TrapType,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<TypeAnnotatedValue, TrapType>,
+        result: Result<TypeAnnotatedValue, FailedInvocationResult>,
         oplog_idx: OplogIndex,
     },
     Lazy {
@@ -1690,22 +1717,29 @@ impl InvocationResult {
         }
     }
 
-    pub async fn cache(&mut self, oplog: Arc<dyn Oplog + Send + Sync>) {
+    pub async fn cache<T: HasOplog + HasOplogService + HasConfig>(
+        &mut self,
+        owned_worker_id: &OwnedWorkerId,
+        services: &T,
+    ) {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
-            let entry = oplog.read(oplog_idx).await;
+            let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
                 OplogEntry::ExportedFunctionCompleted { .. } => {
                     let values: TypeAnnotatedValue =
-                        oplog.get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+                        services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
 
                     Ok(values)
                 }
-                OplogEntry::Error { error, .. } => Err(TrapType::Error(error)),
-                OplogEntry::Interrupted { .. } => Err(TrapType::Interrupt(InterruptKind::Interrupt)),
-                OplogEntry::Exited { .. } => Err(TrapType::Exit),
-                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {oplog:?}")
+                OplogEntry::Error { error, .. } => {
+                    let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
+                    Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr })
+                },
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string()}),
+                OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string()}),
+                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_worker_id:?}")
             };
 
             *self = Self::Cached { result, oplog_idx }

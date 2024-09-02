@@ -197,7 +197,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ctx::get_last_error_and_retry_count(self, owned_worker_id).await;
                 if let Some(last_error) = error_and_retry_count {
                     Err(GolemError::PreviousInvocationFailed {
-                        details: format!("{}", last_error.error),
+                        details: last_error.error.to_string(&last_error.stderr),
                     })
                 } else {
                     Err(GolemError::PreviousInvocationFailed {
@@ -212,7 +212,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 debug!("Last error and retry count: {:?}", error_and_retry_count);
                 if let Some(last_error) = error_and_retry_count {
                     Err(GolemError::PreviousInvocationFailed {
-                        details: format!("{}", last_error.error),
+                        details: last_error.error.to_string(&last_error.stderr),
                     })
                 } else {
                     Ok(worker_status)
@@ -1089,7 +1089,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             pending_invocation_count: latest_status.pending_invocations.len() as u64,
             updates,
             created_at: Some(metadata.created_at.into()),
-            last_error: last_error_and_retry_count.map(|last_error| last_error.error.to_string()),
+            last_error: last_error_and_retry_count
+                .map(|last_error| last_error.error.to_string(&last_error.stderr)),
             component_size: metadata.last_known_status.component_size,
             total_linear_memory_size: metadata.last_known_status.total_linear_memory_size,
             owned_resources,
@@ -1852,6 +1853,12 @@ impl Stream for WorkerEventStream {
                 WorkerEvent::StdOut { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
                 WorkerEvent::StdErr { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
                 WorkerEvent::Log { .. } => Poll::Ready(Some(Ok(event.try_into().unwrap()))),
+                WorkerEvent::InvocationStart { .. } => {
+                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
+                }
+                WorkerEvent::InvocationFinished { .. } => {
+                    Poll::Ready(Some(Ok(event.try_into().unwrap())))
+                }
             },
             Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => Poll::Ready(Some(Err(
                 Status::data_loss(format!("Lagged by {} events", n)),
