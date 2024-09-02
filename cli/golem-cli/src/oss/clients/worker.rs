@@ -404,6 +404,8 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                                     output.emit_log(timestamp, level, context, message);
                                 }
                                 WorkerEvent::Close => {}
+                                WorkerEvent::InvocationStart { .. } => {}
+                                WorkerEvent::InvocationFinished { .. } => {}
                             },
                         }
                     }
