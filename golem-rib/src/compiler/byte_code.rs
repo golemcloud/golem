@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
 use crate::{Expr, InstructionId};
@@ -70,10 +84,11 @@ impl From<RibByteCode> for ProtoRibByteCode {
 
 mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
-    use crate::{AnalysedTypeWithUnit, Expr, InferredType, InstructionId, InvocationName, RibIR};
+    use crate::{AnalysedTypeWithUnit, Expr, InferredType, InstructionId, RibIR};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
+    use crate::call_type::CallType;
     use golem_wasm_rpc::protobuf::TypedFlags;
     use std::ops::Deref;
 
@@ -221,7 +236,7 @@ mod internal {
                 }
 
                 match invocation_name {
-                    InvocationName::Function(parsed_function_name) => {
+                    CallType::Function(parsed_function_name) => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
@@ -238,7 +253,7 @@ mod internal {
                         ));
                     }
 
-                    InvocationName::VariantConstructor(variant_name) => {
+                    CallType::VariantConstructor(variant_name) => {
                         instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
                             convert_to_analysed_type_for(expr, inferred_type)?,

@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::{Expr, InferredType};
 
 // TODO; This is recursion because we bumped into Rust borrowing issues with the following logic,
@@ -22,7 +36,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 types.push(expr.inferred_type());
             }
             let tuple_type = InferredType::Tuple(types);
-            inferred_type.update(tuple_type)
+            *inferred_type = inferred_type.merge(tuple_type)
         }
         Expr::Sequence(exprs, inferred_type) => {
             let mut types = vec![];
@@ -32,7 +46,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             }
             if let Some(new_inferred_type) = types.first() {
                 let sequence_type = InferredType::List(Box::new(new_inferred_type.clone()));
-                inferred_type.update(sequence_type)
+                *inferred_type = inferred_type.merge(sequence_type)
             }
         }
         Expr::Record(exprs, inferred_type) => {
@@ -42,12 +56,12 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 types.push((field_name.clone(), expr.inferred_type()));
             }
             let record_type = InferredType::Record(types);
-            inferred_type.update(record_type)
+            *inferred_type = inferred_type.merge(record_type);
         }
         Expr::Option(Some(expr), inferred_type) => {
             expr.pull_types_up()?;
             let option_type = InferredType::Option(Box::new(expr.inferred_type()));
-            inferred_type.update(option_type)
+            *inferred_type = inferred_type.merge(option_type)
         }
         Expr::Result(Ok(expr), inferred_type) => {
             expr.pull_types_up()?;
@@ -55,7 +69,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 ok: Some(Box::new(expr.inferred_type())),
                 error: None,
             };
-            inferred_type.update(result_type)
+            *inferred_type = inferred_type.merge(result_type)
         }
         Expr::Result(Err(expr), inferred_type) => {
             expr.pull_types_up()?;
@@ -63,7 +77,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 ok: None,
                 error: Some(Box::new(expr.inferred_type())),
             };
-            inferred_type.update(result_type)
+            *inferred_type = inferred_type.merge(result_type)
         }
 
         Expr::Cond(_, then_, else_, inferred_type) => {
@@ -73,11 +87,11 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             let else_type = else_.inferred_type();
 
             if then_type == else_type {
-                inferred_type.update(then_type);
+                *inferred_type = inferred_type.merge(then_type);
             } else if let Some(cond_then_else_type) =
                 InferredType::all_of(vec![then_type, else_type])
             {
-                inferred_type.update(cond_then_else_type);
+                *inferred_type = inferred_type.merge(cond_then_else_type);
             }
         }
 
@@ -97,9 +111,9 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             if !possible_inference_types.is_empty() {
                 let first_type = possible_inference_types[0].clone();
                 if possible_inference_types.iter().all(|t| t == &first_type) {
-                    inferred_type.update(first_type);
+                    *inferred_type = inferred_type.merge(first_type);
                 } else if let Some(all_of) = InferredType::all_of(possible_inference_types) {
-                    inferred_type.update(all_of);
+                    *inferred_type = inferred_type.merge(all_of);
                 }
             }
         }
@@ -108,14 +122,14 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             expr.pull_types_up()?;
             let expr_type = expr.inferred_type();
             let field_type = internal::get_inferred_type_of_selected_field(field, &expr_type)?;
-            inferred_type.update(field_type);
+            *inferred_type = inferred_type.merge(field_type);
         }
 
         Expr::SelectIndex(expr, index, inferred_type) => {
             expr.pull_types_up()?;
             let expr_type = expr.inferred_type();
             let list_type = internal::get_inferred_type_of_selected_index(*index, &expr_type)?;
-            inferred_type.update(list_type);
+            *inferred_type = inferred_type.merge(list_type);
         }
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
@@ -133,7 +147,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 expr.pull_types_up()?;
 
                 if index == length - 1 {
-                    inferred_type.update(expr.inferred_type());
+                    *inferred_type = inferred_type.merge(expr.inferred_type());
                 }
             }
         }
@@ -173,8 +187,9 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
-    use crate::type_inference::precise_types::{ListType, RecordType};
-    use crate::{ArmPattern, InferredType, TypeRefinement};
+    use crate::type_refinement::precise_types::{ListType, RecordType};
+    use crate::type_refinement::TypeRefinement;
+    use crate::{ArmPattern, InferredType};
 
     pub(crate) fn get_inferred_type_of_selected_field(
         select_field: &str,
@@ -316,12 +331,12 @@ mod type_pull_up_tests {
             expr.inferred_type(),
             InferredType::AllOf(vec![
                 InferredType::Record(vec![
-                    ("foo".to_string(), InferredType::Unknown),
-                    ("bar".to_string(), InferredType::Unknown)
-                ]),
-                InferredType::Record(vec![
                     ("foo".to_string(), InferredType::U64),
                     ("bar".to_string(), InferredType::U64)
+                ]),
+                InferredType::Record(vec![
+                    ("foo".to_string(), InferredType::Unknown),
+                    ("bar".to_string(), InferredType::Unknown)
                 ])
             ])
         );

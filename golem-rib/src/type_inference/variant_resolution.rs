@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::type_inference::variant_resolution::internal::get_variants_info;
 use crate::{Expr, FunctionTypeRegistry};
 
@@ -9,7 +23,8 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 }
 
 mod internal {
-    use crate::{Expr, FunctionTypeRegistry, InvocationName, RegistryKey, RegistryValue};
+    use crate::call_type::CallType;
+    use crate::{Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
     use std::collections::VecDeque;
 
     pub(crate) fn convert_function_calls_to_variant_calls(
@@ -22,10 +37,10 @@ mod internal {
 
         while let Some(expr) = queue.pop_back() {
             match expr {
-                Expr::Call(InvocationName::Function(parsed_function_name), args, inferred_type) => {
+                Expr::Call(CallType::Function(parsed_function_name), args, inferred_type) => {
                     if variants.contains(&parsed_function_name.to_string()) {
                         *expr = Expr::Call(
-                            InvocationName::VariantConstructor(parsed_function_name.to_string()),
+                            CallType::VariantConstructor(parsed_function_name.to_string()),
                             args.clone(),
                             inferred_type.clone(),
                         );
@@ -50,7 +65,7 @@ mod internal {
                 Expr::Identifier(variable_id, inferred_type) => {
                     if variants.contains(&variable_id.name()) {
                         *expr = Expr::Call(
-                            InvocationName::VariantConstructor(variable_id.name()),
+                            CallType::VariantConstructor(variable_id.name()),
                             vec![],
                             inferred_type.clone(),
                         );
@@ -79,15 +94,11 @@ mod internal {
                         function_type_registry.types.get(&key)
                     {
                         no_arg_variants.push(variable_id.name());
-                        inferred_type.update(analysed_type.clone().into());
+                        *inferred_type = inferred_type.merge(analysed_type.clone().into());
                     }
                 }
 
-                Expr::Call(
-                    InvocationName::Function(parsed_function_name),
-                    exprs,
-                    inferred_type,
-                ) => {
+                Expr::Call(CallType::Function(parsed_function_name), exprs, inferred_type) => {
                     let key = RegistryKey::VariantName(parsed_function_name.to_string());
                     if let Some(RegistryValue::Function { return_types, .. }) =
                         function_type_registry.types.get(&key)
@@ -96,7 +107,7 @@ mod internal {
 
                         // TODO; return type is only 1 in reality for variants - we can make this typed
                         if let Some(variant_type) = return_types.first() {
-                            inferred_type.update(variant_type.clone().into());
+                            *inferred_type = inferred_type.merge(variant_type.clone().into());
                         }
                     }
 
