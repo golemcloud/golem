@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::service::api_definition::ApiDefinitionService;
-use crate::service::api_domain::RegisterDomainRoute;
-use crate::service::auth::{CloudAuthCtx, CloudNamespace};
+use crate::service::auth::CloudAuthCtx;
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
@@ -14,8 +13,7 @@ use golem_worker_service_base::api_definition::http::{
     get_api_definition, HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest,
     JsonOpenApiDefinition,
 };
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString, ApiVersion};
-use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
+use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -23,22 +21,12 @@ use tracing::{error, Instrument};
 
 pub struct ApiDefinitionApi {
     definition_service: Arc<dyn ApiDefinitionService + Sync + Send>,
-    deployment_service: Arc<dyn ApiDeploymentService<CloudNamespace> + Sync + Send>,
-    domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl ApiDefinitionApi {
-    pub fn new(
-        definition_service: Arc<dyn ApiDefinitionService + Sync + Send>,
-        deployment_service: Arc<dyn ApiDeploymentService<CloudNamespace> + Sync + Send>,
-        domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
-    ) -> Self {
-        Self {
-            definition_service,
-            deployment_service,
-            domain_route,
-        }
+    pub fn new(definition_service: Arc<dyn ApiDefinitionService + Sync + Send>) -> Self {
+        Self { definition_service }
     }
 
     /// Upload an OpenAPI definition
@@ -306,44 +294,17 @@ impl ApiDefinitionApi {
             let project_id = project_id.0;
             let api_definition_id = id.0;
             let version = version.0;
-
             let auth_ctx = CloudAuthCtx::new(token);
-
-            let (value, namespace) = self
+            let (deleted, _) = self
                 .definition_service
-                .get(&project_id, &api_definition_id, &version, &auth_ctx)
+                .delete(&project_id, &api_definition_id, &version, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 
-            match value {
-                Some(_) => {
-                    let deployments = self
-                        .deployment_service
-                        .get_by_id(&namespace, &api_definition_id)
-                        .instrument(record.span.clone())
-                        .await?;
-
-                    for deployment in deployments {
-                        self.domain_route
-                            .unregister(&deployment.site.host, deployment.site.subdomain.as_deref())
-                            .instrument(record.span.clone())
-                            .await
-                            .map_err(ApiEndpointError::from)?;
-
-                        self.deployment_service
-                            .delete(&namespace, &ApiSiteString(deployment.site.to_string()))
-                            .instrument(record.span.clone())
-                            .await?;
-                    }
-
-                    self.definition_service
-                        .delete(&project_id, &api_definition_id, &version, &auth_ctx)
-                        .instrument(record.span.clone())
-                        .await?;
-
-                    Ok(Json("API definition deleted".to_string()))
-                }
-                None => Err(ApiEndpointError::not_found("API definition not found")),
+            if deleted.is_some() {
+                Ok(Json("API definition deleted".to_string()))
+            } else {
+                Ok(Json("API definition not found".to_string()))
             }
         };
         record.result(response)

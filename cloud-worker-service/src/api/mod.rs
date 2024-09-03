@@ -39,11 +39,7 @@ pub fn make_open_api_service(
                 services.component_service.clone(),
                 services.worker_service.clone(),
             ),
-            ApiDefinitionApi::new(
-                services.definition_service.clone(),
-                services.deployment_service.clone(),
-                services.domain_route.clone(),
-            ),
+            ApiDefinitionApi::new(services.definition_service.clone()),
             ApiDeploymentApi::new(
                 services.deployment_service,
                 services.auth_service.clone(),
