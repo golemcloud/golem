@@ -670,6 +670,8 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
                                     output.emit_log(timestamp, level, context, message);
                                 }
                                 WorkerEvent::Close => {}
+                                WorkerEvent::InvocationStart { .. } => {}
+                                WorkerEvent::InvocationFinished { .. } => {}
                             },
                         }
                     }
