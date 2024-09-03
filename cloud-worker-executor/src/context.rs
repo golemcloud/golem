@@ -140,6 +140,14 @@ impl InvocationManagement for Context {
     async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
         self.durable_ctx.get_current_idempotency_key().await
     }
+
+    fn is_live(&self) -> bool {
+        self.durable_ctx.is_live()
+    }
+
+    fn is_replay(&self) -> bool {
+        self.durable_ctx.is_replay()
+    }
 }
 
 #[async_trait]

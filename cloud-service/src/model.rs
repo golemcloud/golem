@@ -772,42 +772,6 @@ impl TryFrom<i32> for LogLevel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum LogEvent {
-    StdOut(String),
-    StdErr(String),
-    Log {
-        level: LogLevel,
-        context: String,
-        message: String,
-    },
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for LogEvent {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::LogEvent,
-    ) -> Result<Self, Self::Error> {
-        match value.event {
-            Some(golem_api_grpc::proto::golem::worker::log_event::Event::Stdout(event)) => {
-                Ok(LogEvent::StdOut(event.message))
-            }
-            Some(golem_api_grpc::proto::golem::worker::log_event::Event::Stderr(event)) => {
-                Ok(LogEvent::StdErr(event.message))
-            }
-            Some(golem_api_grpc::proto::golem::worker::log_event::Event::Log(event)) => {
-                Ok(LogEvent::Log {
-                    level: event.level.try_into()?,
-                    context: event.context,
-                    message: event.message,
-                })
-            }
-            None => Err("Missing field: event".to_string()),
-        }
-    }
-}
-
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
 )]
