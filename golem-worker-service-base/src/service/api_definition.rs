@@ -61,14 +61,22 @@ pub enum ApiDefinitionError<E> {
     #[error("API definition deployed: {0}")]
     ApiDefinitionDeployed(String),
     #[error("Internal error: {0}")]
-    InternalError(String),
+    InternalError(#[from] anyhow::Error),
+}
+
+impl<T> ApiDefinitionError<T> {
+    fn internal<E, C>(error: E, context: C) -> Self
+    where
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
+    {
+        ApiDefinitionError::InternalError(anyhow::Error::msg(error).context(context))
+    }
 }
 
 impl<E> From<RepoError> for ApiDefinitionError<E> {
     fn from(error: RepoError) -> Self {
-        match error {
-            RepoError::Internal(e) => ApiDefinitionError::InternalError(e.clone()),
-        }
+        ApiDefinitionError::internal(error, "Repository error")
     }
 }
 
@@ -258,7 +266,7 @@ where
             compiled_http_api_definition.clone(),
             created_at,
         )
-        .map_err(|_| ApiDefinitionError::InternalError("Failed to convert record".to_string()))?;
+        .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
 
         self.definition_repo.create(&record).await?;
 
@@ -311,7 +319,7 @@ where
             compiled_http_api_definition.clone(),
             created_at,
         )
-        .map_err(|_| ApiDefinitionError::InternalError("Failed to convert record".to_string()))?;
+        .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
 
         self.definition_repo.update(&record).await?;
 
@@ -333,9 +341,9 @@ where
 
         match value {
             Some(v) => {
-                let definition = v.try_into().map_err(|_| {
-                    ApiDefinitionError::InternalError("Failed to convert record".to_string())
-                })?;
+                let definition = v
+                    .try_into()
+                    .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
                 Ok(Some(definition))
             }
             None => Ok(None),
@@ -388,9 +396,7 @@ where
             .iter()
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
-            .map_err(|_| {
-                ApiDefinitionError::InternalError("Failed to convert record".to_string())
-            })?;
+            .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
 
         Ok(values)
     }
@@ -412,9 +418,7 @@ where
             .iter()
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
-            .map_err(|_| {
-                ApiDefinitionError::InternalError("Failed to convert record".to_string())
-            })?;
+            .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
 
         Ok(values)
     }
@@ -495,5 +499,21 @@ where
         _auth_ctx: &AuthCtx,
     ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::repo::RepoError;
+    use crate::service::api_definition::ApiDefinitionError;
+
+    #[test]
+    pub fn test_repo_error_to_service_error() {
+        let repo_err = RepoError::Internal("some sql error".to_string());
+        let service_err: ApiDefinitionError<String> = repo_err.into();
+        assert_eq!(
+            service_err.to_string(),
+            "Internal error: Repository error".to_string()
+        );
     }
 }
