@@ -10,8 +10,8 @@ use prometheus::Registry;
 use tokio::select;
 use tracing::error;
 
+use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_service_base::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service::api;
 use golem_worker_service::api::make_open_api_service;

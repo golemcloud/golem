@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::config::DbConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_service_base::config::{ComponentStoreConfig, DbConfig};
+use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::db;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;

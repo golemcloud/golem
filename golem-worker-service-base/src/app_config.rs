@@ -7,8 +7,8 @@ use url::Url;
 use uuid::Uuid;
 
 use golem_common::config::{ConfigExample, HasConfigExamples, RetryConfig};
+use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::tracing::TracingConfig;
-use golem_service_base::config::{DbConfig, DbSqliteConfig};
 use golem_service_base::routing_table::RoutingTableConfig;
 
 // The base configuration for the worker service
