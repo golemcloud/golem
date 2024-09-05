@@ -426,7 +426,9 @@ impl Tool {
             }
             Tool::Clang => cmd_version(dir, "clang", vec!["--version"], &version_regex),
             Tool::ComponentizeJs => npm_package_version(dir, "@golemcloud/componentize-js"),
-            Tool::ComponentizePy => Err("TODO".to_string()),
+            Tool::ComponentizePy => {
+                cmd_version(dir, "componentize-py", vec!["--version"], &version_regex)
+            }
             Tool::Go => cmd_version(dir, "go", vec!["version"], &version_regex),
             Tool::GolemSdkGo => go_mod_version(dir, "github.com/golemcloud/golem-go"),
             Tool::GolemSdkRust => Err("TODO".to_string()),
