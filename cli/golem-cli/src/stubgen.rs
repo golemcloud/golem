@@ -16,24 +16,17 @@ use crate::model::{GolemError, GolemResult};
 use golem_wasm_rpc_stubgen::Command;
 
 pub async fn handle_stubgen(command: Command) -> Result<GolemResult, GolemError> {
-    match command {
-        Command::Generate(args) => golem_wasm_rpc_stubgen::generate(args)
-            .map_err(|err| GolemError(format!("{err}")))
-            .map(|_| GolemResult::Str("Done".to_string())),
-        Command::Build(args) => golem_wasm_rpc_stubgen::build(args)
-            .await
-            .map_err(|err| GolemError(format!("{err}")))
-            .map(|_| GolemResult::Str("Done".to_string())),
-        Command::AddStubDependency(args) => golem_wasm_rpc_stubgen::add_stub_dependency(args)
-            .map_err(|err| GolemError(format!("{err}")))
-            .map(|_| GolemResult::Str("Done".to_string())),
-        Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args)
-            .map_err(|err| GolemError(format!("{err}")))
-            .map(|_| GolemResult::Str("Done".to_string())),
+    let result = match command {
+        Command::Generate(args) => golem_wasm_rpc_stubgen::generate(args),
+        Command::Build(args) => golem_wasm_rpc_stubgen::build(args).await,
+        Command::AddStubDependency(args) => golem_wasm_rpc_stubgen::add_stub_dependency(args),
+        Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args),
         Command::InitializeWorkspace(args) => {
             golem_wasm_rpc_stubgen::initialize_workspace(args, "golem-cli", &["stubgen"])
-                .map_err(|err| GolemError(format!("{err}")))
-                .map(|_| GolemResult::Str("Done".to_string()))
         }
-    }
+    };
+
+    result
+        .map_err(|err| GolemError(format!("{err:#}")))
+        .map(|_| GolemResult::Str("Done".to_string()))
 }
