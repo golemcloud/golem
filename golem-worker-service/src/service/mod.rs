@@ -40,7 +40,7 @@ use golem_worker_service_base::service::api_deployment::{
 use std::sync::Arc;
 use std::time::Duration;
 
-use golem_service_base::config::DbConfig;
+use golem_common::config::DbConfig;
 use golem_service_base::db;
 
 #[derive(Clone)]

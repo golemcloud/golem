@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::auth::DefaultNamespace;
-    use golem_service_base::config::{ComponentStoreLocalConfig, DbPostgresConfig, DbSqliteConfig};
+    use golem_service_base::config::ComponentStoreLocalConfig;
     use golem_service_base::db;
 
     use golem_common::model::ComponentId;
