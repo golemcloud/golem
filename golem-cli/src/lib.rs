@@ -19,6 +19,7 @@ pub mod cloud;
 pub mod command;
 pub mod config;
 pub mod connect_output;
+pub mod diagnose;
 pub mod examples;
 pub mod factory;
 pub mod init;

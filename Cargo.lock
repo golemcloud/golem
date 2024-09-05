@@ -3428,6 +3428,7 @@ dependencies = [
  "url",
  "uuid",
  "version-compare",
+ "walkdir",
  "wasm-wave",
 ]
 

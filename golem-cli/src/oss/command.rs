@@ -91,6 +91,10 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
     },
+
+    /// Diagnose required tooling
+    #[command()]
+    Diagnose {},
 }
 
 #[derive(Parser, Debug)]
