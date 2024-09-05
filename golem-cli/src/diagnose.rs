@@ -20,7 +20,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use version_compare::Version;
+use version_compare::{CompOp, Version};
 use walkdir::DirEntry;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
@@ -136,6 +136,22 @@ impl Langugage {
         }
     }
 
+    pub fn language_guide_setup_url(&self) -> Vec<&str> {
+        match self {
+            Langugage::CCcp => vec!["https://learn.golem.cloud/docs/ccpp-language-guide/setup"],
+            Langugage::Go => vec!["https://learn.golem.cloud/docs/go-language-guide/setup"],
+            Langugage::JsTs => vec![
+                "https://learn.golem.cloud/docs/experimental-languages/js-language-guide/setup",
+                "https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/setup",
+            ],
+            Langugage::Python => vec!["https://learn.golem.cloud/docs/python-language-guide/setup"],
+            Langugage::Rust => vec!["https://learn.golem.cloud/docs/rust-language-guide/setup"],
+            Langugage::Zig => vec![
+                "https://learn.golem.cloud/docs/experimental-languages/zig-language-guide/setup",
+            ],
+        }
+    }
+
     pub fn tools_with_rpc(&self) -> Vec<Tool> {
         let mut tools = self.tools();
         tools.append(&mut Self::common_rpc_tools());
@@ -175,6 +191,26 @@ impl VersionRequirement {
                 Version::from(version).expect("Failed to parse minimum version")
             }
             TodoVersion => Version::from("0.0.0.0").expect("TODO version"),
+        }
+    }
+}
+
+enum VersionRelation {
+    OkEqual,
+    OkNewer,
+    KoNewer,
+    KoOlder,
+    Missing,
+}
+
+impl Display for VersionRelation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VersionRelation::OkEqual => f.write_str("equal:   ok"),
+            VersionRelation::OkNewer => f.write_str("newer:   ok"),
+            VersionRelation::KoNewer => f.write_str("newer:   !!"),
+            VersionRelation::KoOlder => f.write_str("older:   !!"),
+            VersionRelation::Missing => f.write_str("missing: !!"),
         }
     }
 }
@@ -297,7 +333,7 @@ impl Tool {
             },
             Tool::RustTargetWasm32Wasi => ToolMetadata {
                 short_name: "rust target wasm32-wasi",
-                description: "Target for building WebAssembly components",
+                description: "Rust target for building WebAssembly components",
                 version_requirement: TodoVersion,
             },
             Tool::TinyGo => ToolMetadata {
@@ -380,34 +416,34 @@ impl Tool {
     }
 
     pub fn get_version(&self, dir: &Path) -> Result<String, String> {
-        let common_version = Regex::new(r"[^0-9]*([0-9]+\.[0-9]+(\.[0-9]+)?).*")
+        let version_regex = Regex::new(r"[^0-9]*([0-9]+\.[0-9]+(\.[0-9]+)?).*")
             .expect("Failed to compile common version regex");
 
         match self {
-            Tool::Cargo => cmd_version(dir, "cargo", vec!["version"], &common_version),
+            Tool::Cargo => cmd_version(dir, "cargo", vec!["version"], &version_regex),
             Tool::CargoComponent => {
-                cmd_version(dir, "cargo-component", vec!["--version"], &common_version)
+                cmd_version(dir, "cargo-component", vec!["--version"], &version_regex)
             }
-            Tool::Clang => cmd_version(dir, "clang", vec!["--version"], &common_version),
+            Tool::Clang => cmd_version(dir, "clang", vec!["--version"], &version_regex),
             Tool::ComponentizeJs => npm_package_version(dir, "@golemcloud/componentize-js"),
             Tool::ComponentizePy => Err("TODO".to_string()),
-            Tool::Go => cmd_version(dir, "go", vec!["version"], &common_version),
+            Tool::Go => cmd_version(dir, "go", vec!["version"], &version_regex),
             Tool::GolemSdkGo => go_mod_version(dir, "github.com/golemcloud/golem-go"),
             Tool::GolemSdkRust => Err("TODO".to_string()),
             Tool::GolemSdkTypeScript => npm_package_version(dir, "@golemcloud/golem-ts"),
             Tool::Jco => npm_package_version(dir, "@golemcloud/jco"),
-            Tool::Node => cmd_version(dir, "node", vec!["--version"], &common_version),
-            Tool::Npm => cmd_version(dir, "npm", vec!["--version"], &common_version),
-            Tool::Pip => cmd_version(dir, "pip", vec!["--version"], &common_version),
-            Tool::Python => cmd_version(dir, "python", vec!["--version"], &common_version),
-            Tool::Rustc => cmd_version(dir, "rustc", vec!["--version"], &common_version),
-            Tool::Rustup => cmd_version(dir, "rustup", vec!["--version"], &common_version),
+            Tool::Node => cmd_version(dir, "node", vec!["--version"], &version_regex),
+            Tool::Npm => cmd_version(dir, "npm", vec!["--version"], &version_regex),
+            Tool::Pip => cmd_version(dir, "pip", vec!["--version"], &version_regex),
+            Tool::Python => cmd_version(dir, "python", vec!["--version"], &version_regex),
+            Tool::Rustc => cmd_version(dir, "rustc", vec!["--version"], &version_regex),
+            Tool::Rustup => cmd_version(dir, "rustup", vec!["--version"], &version_regex),
             Tool::RustTargetWasm32Wasi => Err("TODO".to_string()),
-            Tool::TinyGo => cmd_version(dir, "tinygo", vec!["version"], &common_version),
+            Tool::TinyGo => cmd_version(dir, "tinygo", vec!["version"], &version_regex),
             Tool::WasiSdk => Err("TODO".to_string()),
-            Tool::WasmTools => cmd_version(dir, "wasm-tools", vec!["--version"], &common_version),
-            Tool::WitBindgen => cmd_version(dir, "wit-bindgen", vec!["--version"], &common_version),
-            Tool::Zig => cmd_version(dir, "zig", vec!["version"], &common_version),
+            Tool::WasmTools => cmd_version(dir, "wasm-tools", vec!["--version"], &version_regex),
+            Tool::WitBindgen => cmd_version(dir, "wit-bindgen", vec!["--version"], &version_regex),
+            Tool::Zig => cmd_version(dir, "zig", vec!["version"], &version_regex),
         }
     }
 }
@@ -417,9 +453,14 @@ pub fn diagnose() {
         Some(detected_language) => {
             println!("{}", detected_language.reason);
             println!(
-                "Detected language: {} (to explicitly specify the language use the --language flag)\n",
+                "Detected language: {} (to explicitly specify the language use the --language flag)",
                 detected_language.language,
             );
+            println!("Online language setup guide(s):");
+            for url in detected_language.language.language_guide_setup_url() {
+                println!("  {url}");
+            }
+            println!();
 
             let all_tools: Vec<_> =
                 Tool::with_all_dependencies(detected_language.language.tools_with_rpc())
@@ -454,7 +495,7 @@ pub fn diagnose() {
             }
             println!();
 
-            println!("Tool versions:");
+            println!("Installed tool versions:");
             for (_, metadata, version) in &all_tools {
                 let required_version = metadata.version_requirement.to_parsed_version();
 
@@ -465,15 +506,21 @@ pub fn diagnose() {
                 };
 
                 let comp_op = version.as_ref().ok().map(|v| v.compare(&required_version));
+                let version_relation = match (&comp_op, &metadata.version_requirement) {
+                    (Some(CompOp::Eq), _) => VersionRelation::OkEqual,
+                    (Some(CompOp::Gt), MinimumVersion(_)) => VersionRelation::OkNewer,
+                    (Some(CompOp::Lt), _) => VersionRelation::KoOlder,
+                    (Some(CompOp::Gt), ExactVersion(_)) => VersionRelation::KoNewer,
+                    _ => VersionRelation::Missing,
+                };
 
                 println!(
-                    "  {: <name_padding$} {} {: <version_padding$}{}",
+                    "  {: <name_padding$} [{}] {: <version_padding$}{}",
                     format!("{}:", metadata.short_name),
-                    if version.is_ok() { "[ok]" } else { "[!!]" },
+                    version_relation,
                     match version {
                         Ok(version) => version.to_string(),
-                        Err(error) =>
-                            format!("{: <version_padding$} not found ({})", "", error).to_string(),
+                        Err(error) => format!("{: <version_padding$} ({})", "", error).to_string(),
                     },
                     comp_op
                         .map(|c| format!(" ({}{})", c.sign(), required_version))
