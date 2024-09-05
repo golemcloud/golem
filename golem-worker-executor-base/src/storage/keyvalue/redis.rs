@@ -15,10 +15,10 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use fred::types::SetOptions;
-use std::collections::HashMap;
-
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::RedisPool;
+use std::collections::HashMap;
+use tracing::debug;
 
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 
@@ -114,18 +114,28 @@ impl KeyValueStorage for RedisKeyValueStorage {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         match Self::use_hash(&namespace) {
-            Some(ns) => self
-                .redis
-                .with(svc_name, api_name)
-                .hsetnx(ns, key, value)
-                .await
-                .map_err(|redis_err| redis_err.to_string()),
-            None => self
-                .redis
-                .with(svc_name, api_name)
-                .set(key, value, None, Some(SetOptions::NX), false)
-                .await
-                .map_err(|redis_err| redis_err.to_string()),
+            Some(ns) => {
+                let result: bool = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .hsetnx(ns, key, value)
+                    .await
+                    .map_err(|redis_err| redis_err.to_string())?;
+
+                debug!("set_if_not_exists hsetnx result: {:?}", result);
+                Ok(result)
+            }
+            None => {
+                let result: Option<String> = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .set(key, value, None, Some(SetOptions::NX), false)
+                    .await
+                    .map_err(|redis_err| redis_err.to_string())?;
+
+                debug!("set_if_not_exists result: {:?}", result);
+                Ok(result == Some("OK".to_string()))
+            }
         }
     }
 
@@ -272,7 +282,12 @@ impl KeyValueStorage for RedisKeyValueStorage {
                 .hkeys(ns)
                 .await
                 .map_err(|redis_err| redis_err.to_string()),
-            None => Err("Not supported".to_string()),
+            None => self
+                .redis
+                .with(svc_name, api_name)
+                .keys("*".to_string())
+                .await
+                .map_err(|redis_err| redis_err.to_string()),
         }
     }
 
