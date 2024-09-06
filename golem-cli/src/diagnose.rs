@@ -444,7 +444,9 @@ impl Tool {
                 description: "Rust compiler",
                 version_requirement: MinimumVersion("1.80.1"),
                 instructions: indoc! {"
-                    See the rustup step above (https://www.rust-lang.org/learn/get-started)
+                    See the rustup step above (https://www.rust-lang.org/learn/get-started),
+                    then install latest stable rust:
+                        rustup install stable && rustup default stable
                 "},
             },
             Tool::Rustup => ToolMetadata {
