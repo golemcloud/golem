@@ -281,6 +281,8 @@ impl Tool {
 
                     For more information see:
                         https://github.com/bytecodealliance/cargo-component
+
+                    Check PATH for $HOME/.cargo/bin
                 "},
             },
             Tool::ComponentizeJs => ToolMetadata {
@@ -415,6 +417,8 @@ impl Tool {
 
                     For macos and linux:
                         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+                    Check PATH for $HOME/.cargo/bin
                 "},
             },
             Tool::RustTargetWasm32Wasi => ToolMetadata {
