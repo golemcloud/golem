@@ -436,7 +436,7 @@ impl Routing {
         loop {
             let mut child = Command::new("minikube")
                 .arg("service")
-                .arg(&format!("--namespace={}", namespace.0))
+                .arg(format!("--namespace={}", namespace.0))
                 .arg("--url")
                 .arg(service_name)
                 .stdout(Stdio::piped())
