@@ -35,6 +35,8 @@ pub use bindings::golem::api::host::PersistenceLevel;
 
 pub use transaction::*;
 
+pub use golem_rust_macro::*;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
