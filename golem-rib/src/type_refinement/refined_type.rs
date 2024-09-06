@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ExtractInnerType, ExtractInnerTypes, GetInferredTypeByField, InferredType};
+use crate::type_refinement::{ExtractInnerType, ExtractInnerTypes, GetInferredTypeByField};
+use crate::InferredType;
 use std::vec::IntoIter;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -165,7 +166,8 @@ impl<A> RefinedType<A> {
 }
 
 mod internal {
-    use crate::{HeterogeneousCollectionType, InferredType};
+    use crate::type_refinement::HeterogeneousCollectionType;
+    use crate::InferredType;
 
     // Combine takes a list of heterogeneous collection types, zips them by their positions,
     // and produces a single heterogeneous collection type.

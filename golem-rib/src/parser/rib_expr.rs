@@ -37,9 +37,9 @@ use super::result::result;
 use super::select_field::select_field;
 use super::select_index::select_index;
 use super::tuple::tuple;
-use crate::parser::block::block;
 use crate::parser::boolean::boolean_literal;
 use crate::parser::call::call;
+use crate::parser::multi_line_code_block::multi_line_block;
 use combine::stream::easy;
 
 // Parse a full Rib Program.
@@ -88,7 +88,7 @@ pub fn rib_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
         selection_expr(),
         attempt(flag()),
         attempt(record()),
-        attempt(block()),
+        attempt(multi_line_block()),
         attempt(tuple()),
         attempt(sequence()),
         attempt(literal()),
