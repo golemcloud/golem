@@ -353,15 +353,13 @@ impl Tool {
                 short_name: "jco",
                 description: "Toolchain for working with WebAssembly Components in JavaScript",
                 version_requirement: MinimumVersion("1.4.4-golem.1"),
-                instructions: {
-                    "
+                instructions: indoc! {"
                     npm install --save-dev @golemcloud/jco
 
                     For more information see:
                         JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
                         TypeScript: https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/golem-ts-sdk
-                "
-                },
+                "},
             },
             Tool::Node => ToolMetadata {
                 short_name: "node",
