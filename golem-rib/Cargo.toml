@@ -24,8 +24,3 @@ tokio = {workspace = true}
 [lib]
 name = "rib"
 path = "src/lib.rs"
-
-[[bin]]
-name = "rib"
-path = "src/main.rs"
-
