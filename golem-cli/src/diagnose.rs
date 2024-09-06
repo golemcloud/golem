@@ -289,7 +289,8 @@ impl Tool {
                     "Tool for converting JavaScript applications to WebAssembly components",
                 version_requirement: MinimumVersion("0.10.5-golem.3"),
                 instructions: indoc! {"
-                    npm install --save-dev @golemcloud/componentize-js
+                    Add latest componentize-js as dependency:
+                        npm install --save-dev @golemcloud/componentize-js
 
                     For more information see:
                         JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
@@ -342,7 +343,8 @@ impl Tool {
                 description: "Golem SDK for JavaScript and TypeScript",
                 version_requirement: MinimumVersion("0.2.0"),
                 instructions: indoc! {"
-                    npm install --save-dev @golemcloud/golem-ts
+                    Add latest golem-ts as dependency:
+                        npm install --save-dev @golemcloud/golem-ts
 
                     For more information see:
                         JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
@@ -354,7 +356,8 @@ impl Tool {
                 description: "Toolchain for working with WebAssembly Components in JavaScript",
                 version_requirement: MinimumVersion("1.4.4-golem.1"),
                 instructions: indoc! {"
-                    npm install --save-dev @golemcloud/jco
+                    Add latest jco as dependency:
+                        npm install --save-dev @golemcloud/jco
 
                     For more information see:
                         JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
