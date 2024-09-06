@@ -34,10 +34,6 @@ pub static DEPS: EnvBasedTestDependencies = {
     let deps = EnvBasedTestDependencies::blocking_new_from_worker_executor_cluster_size(3);
 
     deps.redis_monitor().assert_valid();
-    println!(
-        "Started a cluster of {} worker executors",
-        deps.worker_executor_cluster().size()
-    );
 
     deps
 };
