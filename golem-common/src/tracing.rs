@@ -399,9 +399,7 @@ where
         })
     });
 
-    if config.dtor_friendly {
-        println!("Tracing initialized, config: {:?}", config);
-    } else {
+    if !config.dtor_friendly {
         info!(
             // NOTE: intentionally logged as string and not as structured
             tracing_config = serde_json::to_string(&config).expect("cannot serialize log config"),
