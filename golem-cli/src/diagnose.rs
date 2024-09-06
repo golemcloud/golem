@@ -14,6 +14,7 @@
 
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
 
+use golem_examples::model::GuestLanguage;
 use indoc::indoc;
 use regex::Regex;
 use std::cmp::max;
@@ -25,8 +26,20 @@ use std::process::Command;
 use version_compare::{CompOp, Version};
 use walkdir::DirEntry;
 
+pub mod cli {
+    use clap::Parser;
+    use golem_examples::model::GuestLanguage;
+
+    #[derive(Parser, Debug)]
+    #[command()]
+    pub struct Command {
+        #[arg(short, long, alias = "lang")]
+        pub language: Option<GuestLanguage>,
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
-enum Langugage {
+enum Language {
     CCcp,
     Go,
     JsTs,
@@ -35,35 +48,60 @@ enum Langugage {
     Zig,
 }
 
-struct DetectedLanguage {
-    language: Langugage,
+struct SelectedLanguage {
+    language: Language,
     project_dir: PathBuf,
-    reason: String,
+    detected_by_reason: Option<String>,
 }
 
-impl Langugage {
-    pub fn detect() -> Option<DetectedLanguage> {
-        let ordered_language_project_hint_files: Vec<(&str, Langugage)> = vec![
-            ("build.zig", Langugage::Zig),
-            ("Cargo.toml", Langugage::Rust),
-            ("go.mod", Langugage::Go),
-            ("package.json", Langugage::JsTs),
-            ("Makefile", Langugage::CCcp),
-            ("main.py", Langugage::Python),
+impl SelectedLanguage {
+    pub fn from_flag(guest_language: GuestLanguage) -> Option<SelectedLanguage> {
+        let language = match guest_language {
+            GuestLanguage::Rust => Some(Language::Rust),
+            GuestLanguage::Go => Some(Language::Go),
+            GuestLanguage::C => Some(Language::CCcp),
+            GuestLanguage::Zig => Some(Language::Zig),
+            GuestLanguage::JavaScript => Some(Language::JsTs),
+            GuestLanguage::TypeScript => Some(Language::JsTs),
+            GuestLanguage::CSharp => None,
+            GuestLanguage::Swift => None,
+            GuestLanguage::Grain => None,
+            GuestLanguage::Python => Some(Language::Python),
+            GuestLanguage::Scala2 => None,
+        };
+
+        language.map(|language| SelectedLanguage {
+            language,
+            project_dir: PathBuf::from("."),
+            detected_by_reason: None,
+        })
+    }
+
+    pub fn from_env() -> Option<SelectedLanguage> {
+        let ordered_language_project_hint_files: Vec<(&str, Language)> = vec![
+            ("build.zig", Language::Zig),
+            ("Cargo.toml", Language::Rust),
+            ("go.mod", Language::Go),
+            ("package.json", Language::JsTs),
+            ("Makefile", Language::CCcp),
+            ("main.py", Language::Python),
         ];
 
-        let detect_in_dir = |dir: &Path| -> Option<DetectedLanguage> {
+        let detect_in_dir = |dir: &Path| -> Option<SelectedLanguage> {
             ordered_language_project_hint_files
                 .iter()
                 .find_map(|(file, language)| {
                     let path = dir.join(Path::new(file));
-                    path.exists().then_some(DetectedLanguage {
+                    path.exists().then_some(SelectedLanguage {
                         language: *language,
                         project_dir: path
                             .parent()
                             .expect("Failed to get parent for project file")
                             .to_path_buf(),
-                        reason: format!("Detected project file: {}", path.to_string_lossy()),
+                        detected_by_reason: Some(format!(
+                            "Detected project file: {}",
+                            path.to_string_lossy()
+                        )),
                     })
                 })
         };
@@ -111,43 +149,45 @@ impl Langugage {
             }
         }
     }
+}
 
+impl Language {
     pub fn tools(&self) -> Vec<Tool> {
         match self {
-            Langugage::CCcp => vec![Tool::WasiSdk, Tool::WitBindgen, Tool::WasmTools],
-            Langugage::Go => vec![
+            Language::CCcp => vec![Tool::WasiSdk, Tool::WitBindgen, Tool::WasmTools],
+            Language::Go => vec![
                 Tool::TinyGo,
                 Tool::WitBindgen,
                 Tool::WasmTools,
                 Tool::GolemSdkGo,
             ],
-            Langugage::JsTs => vec![
+            Language::JsTs => vec![
                 Tool::Npm,
                 Tool::Jco,
                 Tool::ComponentizeJs,
                 Tool::GolemSdkTypeScript,
             ],
-            Langugage::Python => vec![Tool::ComponentizePy],
-            Langugage::Rust => vec![
+            Language::Python => vec![Tool::ComponentizePy],
+            Language::Rust => vec![
                 Tool::RustTargetWasm32Wasi,
                 Tool::CargoComponent,
                 Tool::GolemSdkRust,
             ],
-            Langugage::Zig => vec![Tool::Zig, Tool::WitBindgen, Tool::WasmTools],
+            Language::Zig => vec![Tool::Zig, Tool::WitBindgen, Tool::WasmTools],
         }
     }
 
     pub fn language_guide_setup_url(&self) -> Vec<&str> {
         match self {
-            Langugage::CCcp => vec!["https://learn.golem.cloud/docs/ccpp-language-guide/setup"],
-            Langugage::Go => vec!["https://learn.golem.cloud/docs/go-language-guide/setup"],
-            Langugage::JsTs => vec![
+            Language::CCcp => vec!["https://learn.golem.cloud/docs/ccpp-language-guide/setup"],
+            Language::Go => vec!["https://learn.golem.cloud/docs/go-language-guide/setup"],
+            Language::JsTs => vec![
                 "https://learn.golem.cloud/docs/experimental-languages/js-language-guide/setup",
                 "https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/setup",
             ],
-            Langugage::Python => vec!["https://learn.golem.cloud/docs/python-language-guide/setup"],
-            Langugage::Rust => vec!["https://learn.golem.cloud/docs/rust-language-guide/setup"],
-            Langugage::Zig => vec![
+            Language::Python => vec!["https://learn.golem.cloud/docs/python-language-guide/setup"],
+            Language::Rust => vec!["https://learn.golem.cloud/docs/rust-language-guide/setup"],
+            Language::Zig => vec![
                 "https://learn.golem.cloud/docs/experimental-languages/zig-language-guide/setup",
             ],
         }
@@ -164,15 +204,15 @@ impl Langugage {
     }
 }
 
-impl Display for Langugage {
+impl Display for Language {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Langugage::CCcp => f.write_str("C or C++"),
-            Langugage::Go => f.write_str("Go"),
-            Langugage::JsTs => f.write_str("JavaScript or TypeScript"),
-            Langugage::Python => f.write_str("Python"),
-            Langugage::Rust => f.write_str("Rust"),
-            Langugage::Zig => f.write_str("Zig"),
+            Language::CCcp => f.write_str("C or C++"),
+            Language::Go => f.write_str("Go"),
+            Language::JsTs => f.write_str("JavaScript or TypeScript"),
+            Language::Python => f.write_str("Python"),
+            Language::Rust => f.write_str("Rust"),
+            Language::Zig => f.write_str("Zig"),
         }
     }
 }
@@ -653,94 +693,129 @@ impl DetectedTool {
     }
 }
 
-pub fn diagnose() {
-    match Langugage::detect() {
-        Some(detected_language) => {
-            println!("{}", detected_language.reason);
-            println!(
-                "Detected language: {} (to explicitly specify the language use the --language flag)",
-                detected_language.language,
-            );
+pub fn diagnose(command: cli::Command) {
+    let selected_language = match &command.language {
+        Some(language) => SelectedLanguage::from_flag(language.clone()),
+        None => SelectedLanguage::from_env(),
+    };
+
+    match &selected_language {
+        Some(selected_language) => {
+            match &selected_language.detected_by_reason {
+                Some(reason) => {
+                    println!("{}", reason);
+                    println!(
+                        "Detected language: {} (to explicitly specify the language use the --language flag)",
+                        selected_language.language,
+                    );
+                }
+                None => {
+                    println!(
+                        "Explicitly selected language: {}",
+                        selected_language.language
+                    )
+                }
+            }
             println!("Online language setup guide(s):");
-            for url in detected_language.language.language_guide_setup_url() {
+            for url in selected_language.language.language_guide_setup_url() {
                 println!("  {url}");
             }
             println!();
 
-            let all_tools: Vec<_> =
-                Tool::with_all_dependencies(detected_language.language.tools_with_rpc())
+            diagnose_tools(
+                Tool::with_all_dependencies(selected_language.language.tools_with_rpc())
                     .iter()
-                    .map(|t| DetectedTool::new(&detected_language.project_dir, *t))
-                    .collect();
-
-            let (name_padding, version_padding) = {
-                let mut name_padding = 0;
-                let mut version_padding = 0;
-                for tool in &all_tools {
-                    name_padding = max(name_padding, tool.metadata.short_name.len());
-                    version_padding = max(
-                        version_padding,
-                        tool.version.as_ref().map(|v| v.len()).unwrap_or(0),
-                    );
-                }
-                (name_padding + 1, version_padding + 1)
-            };
-
-            println!("Recommended tooling:");
-            for tool in &all_tools {
-                println!(
-                    "  {: <width$} {}",
-                    format!("{}:", tool.metadata.short_name),
-                    tool.metadata.description,
-                    width = name_padding,
-                );
-            }
-            println!();
-
-            println!("Installed tool versions:");
-            for tool in &all_tools {
-                println!(
-                    "  {: <name_padding$} [{}] {: <version_padding$}{}",
-                    format!("{}:", tool.metadata.short_name),
-                    tool.version_relation,
-                    tool.version.clone().unwrap_or_else(|| "".to_string()),
-                    tool.details,
-                );
-            }
-            println!();
-
-            let non_ok_tools: Vec<_> = all_tools
-                .into_iter()
-                .filter(|t| !t.version_relation.is_ok())
-                .collect();
-
-            if non_ok_tools.is_empty() {
-                println!("All tools are ok.")
-            } else {
-                println!("Recommended steps:");
-                for tool in &non_ok_tools {
-                    println!();
-                    println!(
-                        "  {}: {}",
-                        tool.metadata.short_name, tool.metadata.description
-                    );
-                    println!(
-                        "    Problem: [{}] {}",
-                        tool.version_relation,
-                        tool.version
-                            .clone()
-                            .unwrap_or_else(|| tool.details.to_string()),
-                    );
-                    println!();
-                    println!("    Instructions:");
-                    for line in tool.metadata.instructions.lines() {
-                        println!("      {}", line);
-                    }
-                }
-            }
+                    .map(|t| DetectedTool::new(&selected_language.project_dir, *t))
+                    .collect(),
+            );
         }
-        None => {
-            println!("No language detected, use the --language flag to explicitly specify one");
+        None => match &command.language {
+            Some(language) => {
+                println!(
+                    "The selected language ({}) has no language specific diagnostics currently.\n",
+                    language
+                );
+                println!("Running diagnostics for common Worker to Worker RPC tooling.\n");
+
+                let dir = PathBuf::from(".");
+                diagnose_tools(
+                    Tool::with_all_dependencies(Language::common_rpc_tools())
+                        .iter()
+                        .map(|t| DetectedTool::new(&dir, *t))
+                        .collect(),
+                );
+            }
+            None => {
+                println!("No language detected, use the --language flag to explicitly specify one");
+            }
+        },
+    }
+}
+
+fn diagnose_tools(all_tools: Vec<DetectedTool>) {
+    let (name_padding, version_padding) = {
+        let mut name_padding = 0;
+        let mut version_padding = 0;
+        for tool in &all_tools {
+            name_padding = max(name_padding, tool.metadata.short_name.len());
+            version_padding = max(
+                version_padding,
+                tool.version.as_ref().map(|v| v.len()).unwrap_or(0),
+            );
+        }
+        (name_padding + 1, version_padding + 1)
+    };
+
+    println!("Recommended tooling:");
+    for tool in &all_tools {
+        println!(
+            "  {: <width$} {}",
+            format!("{}:", tool.metadata.short_name),
+            tool.metadata.description,
+            width = name_padding,
+        );
+    }
+    println!();
+
+    println!("Installed tool versions:");
+    for tool in &all_tools {
+        println!(
+            "  {: <name_padding$} [{}] {: <version_padding$}{}",
+            format!("{}:", tool.metadata.short_name),
+            tool.version_relation,
+            tool.version.clone().unwrap_or_else(|| "".to_string()),
+            tool.details,
+        );
+    }
+    println!();
+
+    let non_ok_tools: Vec<_> = all_tools
+        .into_iter()
+        .filter(|t| !t.version_relation.is_ok())
+        .collect();
+
+    if non_ok_tools.is_empty() {
+        println!("All tools are ok.")
+    } else {
+        println!("Recommended steps:");
+        for tool in &non_ok_tools {
+            println!();
+            println!(
+                "  {}: {}",
+                tool.metadata.short_name, tool.metadata.description
+            );
+            println!(
+                "    Problem: [{}] {}",
+                tool.version_relation,
+                tool.version
+                    .clone()
+                    .unwrap_or_else(|| tool.details.to_string()),
+            );
+            println!();
+            println!("    Instructions:");
+            for line in tool.metadata.instructions.lines() {
+                println!("      {}", line);
+            }
         }
     }
 }

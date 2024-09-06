@@ -142,8 +142,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             print_completion.print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
-        OssCommand::Diagnose {} => {
-            diagnose();
+        OssCommand::Diagnose { command } => {
+            diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
     };
