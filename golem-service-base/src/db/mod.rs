@@ -62,8 +62,7 @@ pub async fn postgres_migrate(config: &DbPostgresConfig, path: &str) -> Result<(
         "DB migration: postgresql://{}:{}/{}?currentSchema={}, path: {}",
         config.host, config.port, config.database, schema, path
     );
-    let conn_options = create_postgres_options(config);
-    let mut conn = PgConnection::connect_with(&conn_options).await?;
+    let mut conn = PgConnection::connect_with(&create_postgres_options(config)).await?;
     let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", schema);
     conn.execute(sqlx::query(&sql)).await?;
     let sql = format!("SET SCHEMA '{}';", schema);
