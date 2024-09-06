@@ -14,6 +14,7 @@
 
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
 
+use indoc::indoc;
 use regex::Regex;
 use std::cmp::max;
 use std::collections::HashSet;
@@ -202,6 +203,19 @@ enum VersionRelation {
     Error,
 }
 
+impl VersionRelation {
+    fn is_ok(&self) -> bool {
+        match self {
+            VersionRelation::OkEqual => true,
+            VersionRelation::OkNewer => true,
+            VersionRelation::KoNotEqual => false,
+            VersionRelation::KoNewer => false,
+            VersionRelation::KoOlder => false,
+            VersionRelation::Error => false,
+        }
+    }
+}
+
 impl Display for VersionRelation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -219,6 +233,7 @@ struct ToolMetadata {
     pub short_name: &'static str,
     pub description: &'static str,
     pub version_requirement: VersionRequirement,
+    pub instructions: &'static str,
 }
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
@@ -253,108 +268,214 @@ impl Tool {
                 short_name: "cargo",
                 description: "Rust package manager",
                 version_requirement: MinimumVersion("1.80.1"),
+                instructions:
+                    "See the rustup step above (https://www.rust-lang.org/learn/get-started)",
             },
             Tool::CargoComponent => ToolMetadata {
                 short_name: "cargo-component",
                 description: "Cargo subcommand for building WebAssembly components",
                 version_requirement: ExactVersion("0.13.2"),
+                instructions: indoc! {"
+                    Install the following specific version of cargo-component:
+                        cargo install --force --locked cargo-component@0.13.2
+
+                    For more information see:
+                        https://github.com/bytecodealliance/cargo-component
+                "},
             },
             Tool::ComponentizeJs => ToolMetadata {
                 short_name: "componentize-js",
                 description:
                     "Tool for converting JavaScript applications to WebAssembly components",
                 version_requirement: MinimumVersion("0.10.5-golem.3"),
+                instructions: indoc! {"
+                    npm install --save-dev @golemcloud/componentize-js
+
+                    For more information see:
+                        JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
+                        TypeScript: https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/golem-ts-sdk
+                "},
             },
             Tool::ComponentizePy => ToolMetadata {
                 short_name: "componentize-py",
                 description: "Tool for converting Python applications to WebAssembly components",
                 version_requirement: ExactVersion("0.13.5"),
+                instructions: indoc! {"
+                    Install the following specific version:
+                        pip install componentize-py==0.13.5
+
+                    For more information see:
+                        https://github.com/bytecodealliance/componentize-py
+                "},
             },
             Tool::Go => ToolMetadata {
                 short_name: "go",
                 description: "Go language tooling",
                 version_requirement: MinimumVersion("1.20.0"),
+                instructions: indoc! {"
+                    Install the latest stable go tooling: https://go.dev/doc/install
+                "},
             },
             Tool::GolemSdkGo => ToolMetadata {
                 short_name: "golem-go",
                 description: "Golem SDK for Go",
                 version_requirement: MinimumVersion("0.7.0"),
+                instructions: indoc! {"
+                    Add latest golem-go as dependency:
+                        go get github.com/golemcloud/golem-go
+
+                    For more information see:
+                        https://learn.golem.cloud/docs/go-language-guide/golem-go-sdk
+                "},
             },
             Tool::GolemSdkRust => ToolMetadata {
                 short_name: "golem-rust",
                 description: "Golem SDK for Rust",
                 version_requirement: MinimumVersion("1.0.0"),
+                instructions: indoc! {"
+                    Add latest golem-rust as dependency:
+                        cargo add golem-rust
+                "},
             },
             Tool::GolemSdkTypeScript => ToolMetadata {
                 short_name: "golem-ts",
                 description: "Golem SDK for JavaScript and TypeScript",
                 version_requirement: MinimumVersion("0.2.0"),
+                instructions: indoc! {"
+                    npm install --save-dev @golemcloud/golem-ts
+
+                    For more information see:
+                        JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
+                        TypeScript: https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/golem-ts-sdk
+                "},
             },
             Tool::Jco => ToolMetadata {
                 short_name: "jco",
                 description: "Toolchain for working with WebAssembly Components in JavaScript",
                 version_requirement: MinimumVersion("1.4.4-golem.1"),
+                instructions: {
+                    "
+                    npm install --save-dev @golemcloud/jco
+
+                    For more information see:
+                        JavaScript: https://learn.golem.cloud/docs/experimental-languages/js-language-guide/golem-js-sdk
+                        TypeScript: https://learn.golem.cloud/docs/experimental-languages/ts-language-guide/golem-ts-sdk
+                "
+                },
             },
             Tool::Node => ToolMetadata {
                 short_name: "node",
                 description: "JavaScript runtime",
                 version_requirement: MinimumVersion("20.17.0"),
+                instructions: indoc! {"
+                    Install latest stable node and npm:
+                        https://docs.npmjs.com/downloading-and-installing-node-js-and-npm
+                "},
             },
             Tool::Npm => ToolMetadata {
                 short_name: "npm",
                 description: "Node package manager",
                 version_requirement: MinimumVersion("10.8.2"),
+                instructions: indoc! {"
+                    See node above (https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
+                "},
             },
             Tool::Pip => ToolMetadata {
                 short_name: "pip",
                 description: "Python package installer",
                 version_requirement: MinimumVersion("24.0"),
+                instructions: indoc! {"
+                    Install latest pip: https://pip.pypa.io/en/stable/installation/
+                "},
             },
             Tool::Python => ToolMetadata {
                 short_name: "python",
                 description: "Python interpreter",
                 version_requirement: MinimumVersion("3.10"),
+                instructions: indoc! {"
+                    Install python: https://www.python.org/
+                "},
             },
             Tool::Rustc => ToolMetadata {
                 short_name: "rustc",
                 description: "Rust compiler",
                 version_requirement: MinimumVersion("1.80.1"),
+                instructions: indoc! {"
+                    See the rustup step above (https://www.rust-lang.org/learn/get-started)
+                "},
             },
             Tool::Rustup => ToolMetadata {
                 short_name: "rustup",
                 description: "Rust toolchain installer",
                 version_requirement: MinimumVersion("1.27.1"),
+                instructions: indoc! {"
+                    Install rust tooling with rustup:
+                        https://www.rust-lang.org/learn/get-started
+
+                    For macos and linux:
+                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+                "},
             },
             Tool::RustTargetWasm32Wasi => ToolMetadata {
                 short_name: "rust target wasm32-wasi",
                 description: "Rust target for building WebAssembly components",
                 version_requirement: ExactByNameVersion("wasm32-wasi"),
+                instructions: indoc! {"
+                    Install WebAssembly target for rust:
+                        rustup target add wasm32-wasi
+                "},
             },
             Tool::TinyGo => ToolMetadata {
                 short_name: "tinygo",
                 description: "Go compiler for WebAssembly (and embedded systems)",
                 version_requirement: MinimumVersion("0.33"),
+                instructions: indoc! {"
+                    Install latest TinyGo:
+                        https://tinygo.org/getting-started/install/
+
+                    For macos use:
+                        brew tap tinygo-org/tools
+                        brew install tinygo
+                "},
             },
             Tool::WasiSdk => ToolMetadata {
                 short_name: "wasi-sdk",
                 description: "WebAssembly toolchain for C and C++",
                 // NOTE: Version is not detectable currently, from 24.0 it will be stored in a version file
                 version_requirement: ExactByNameVersion("WASI_SDK set"),
+                instructions: indoc! {"
+                    Install WASI SDK 23.0:
+                        https://github.com/WebAssembly/wasi-sdk
+
+                    Don't forget to export the WASI_SDK environment variable!
+                "},
             },
             Tool::WasmTools => ToolMetadata {
                 short_name: "wasm-tools",
                 description: "Tools for manipulation of WebAssembly modules",
                 version_requirement: ExactVersion("1.210.0"),
+                instructions: indoc! {"
+                    Install the following specific version of wasm-tools:
+                        cargo install --force --locked  wasm-tools@1.210.0
+                "},
             },
             Tool::WitBindgen => ToolMetadata {
                 short_name: "wit-bindgen",
                 description: "Guest language bindings generator for WIT",
                 version_requirement: ExactVersion("0.26.0"),
+                instructions: indoc! {"
+                    Install the following specific version of wit-bindgen:
+                        cargo install --force --locked wit-bindgen-cli@0.26.0
+                "},
             },
             Tool::Zig => ToolMetadata {
                 short_name: "zig",
                 description: "Zig language tooling",
                 version_requirement: MinimumVersion("0.13.0"),
+                instructions: indoc! {"
+                    Install latest version of Zig:
+                        https://ziglang.org/learn/getting-started/#installing-zig
+                "},
             },
         }
     }
@@ -446,7 +567,6 @@ impl Tool {
 }
 
 struct DetectedTool {
-    tool: Tool,
     metadata: ToolMetadata,
     version: Option<String>,
     version_relation: VersionRelation,
@@ -512,7 +632,6 @@ impl DetectedTool {
                 };
 
                 Self {
-                    tool,
                     metadata: tool.metadata(),
                     version: version.ok(),
                     version_relation: relation,
@@ -520,7 +639,6 @@ impl DetectedTool {
                 }
             }
             Err(details) => Self {
-                tool,
                 metadata: tool.metadata(),
                 version: None,
                 version_relation: VersionRelation::Error,
@@ -583,6 +701,37 @@ pub fn diagnose() {
                     tool.version.clone().unwrap_or_else(|| "".to_string()),
                     tool.details,
                 );
+            }
+            println!();
+
+            let non_ok_tools: Vec<_> = all_tools
+                .into_iter()
+                .filter(|t| !t.version_relation.is_ok())
+                .collect();
+
+            if non_ok_tools.is_empty() {
+                println!("All tools are ok.")
+            } else {
+                println!("Recommended steps:");
+                for tool in &non_ok_tools {
+                    println!();
+                    println!(
+                        "  {}: {}",
+                        tool.metadata.short_name, tool.metadata.description
+                    );
+                    println!(
+                        "    Problem: [{}] {}",
+                        tool.version_relation,
+                        tool.version
+                            .clone()
+                            .unwrap_or_else(|| tool.details.to_string()),
+                    );
+                    println!();
+                    println!("    Instructions:");
+                    for line in tool.metadata.instructions.lines() {
+                        println!("      {}", line);
+                    }
+                }
             }
         }
         None => {
