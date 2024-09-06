@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::call_type::CallType;
 use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
-use crate::parser::type_binding::bind;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{text, type_inference, InferredType, VariableId};
@@ -24,7 +24,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -54,67 +54,105 @@ pub enum Expr {
     PatternMatch(Box<Expr>, Vec<MatchArm>, InferredType),
     Option(Option<Box<Expr>>, InferredType),
     Result(Result<Box<Expr>, Box<Expr>>, InferredType),
-    Call(InvocationName, Vec<Expr>, InferredType),
-    // Syntax for this (parsing) is yet to be supported
-    Unwrap(Box<Expr>, InferredType), // option.unwrap, result.unwrap, etc
+    Call(CallType, Vec<Expr>, InferredType),
+    Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     Tag(Box<Expr>, InferredType),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub enum InvocationName {
-    Function(ParsedFunctionName),
-    VariantConstructor(String),
-}
-
-impl Display for InvocationName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InvocationName::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
-            InvocationName::VariantConstructor(name) => write!(f, "{}", name),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::rib::InvocationName> for InvocationName {
-    type Error = String;
-    fn try_from(
-        value: golem_api_grpc::proto::golem::rib::InvocationName,
-    ) -> Result<Self, Self::Error> {
-        let invocation = value.name.ok_or("Missing name of invocation")?;
-        match invocation {
-            golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => Ok(
-                InvocationName::Function(ParsedFunctionName::try_from(name)?),
-            ),
-            golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(name) => {
-                Ok(InvocationName::VariantConstructor(name))
-            }
-        }
-    }
-}
-
-impl From<InvocationName> for golem_api_grpc::proto::golem::rib::InvocationName {
-    fn from(value: InvocationName) -> Self {
-        match value {
-            InvocationName::Function(parsed_name) => {
-                golem_api_grpc::proto::golem::rib::InvocationName {
-                    name: Some(golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(
-                        parsed_name.into(),
-                    )),
-                }
-            }
-            InvocationName::VariantConstructor(name) => {
-                golem_api_grpc::proto::golem::rib::InvocationName {
-                    name: Some(golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
-                        name,
-                    )),
-                }
-            }
-        }
-    }
-}
-
 impl Expr {
+    /// Parse a text directly as Rib expression
+    /// Example of a Rib expression:
+    ///
+    /// ```rib
+    ///   let result = worker.response;
+    ///   let error_message = "invalid response from worker";
+    ///
+    ///   match result {
+    ///     some(record) => record,
+    ///     none => "Error: ${error_message}"
+    ///   }
+    /// ```
+    ///
+    /// Rib supports conditional calls, function calls, pattern-matching,
+    /// string interpolation (see error_message above) etc.
+    ///
+    pub fn from_text(input: &str) -> Result<Expr, String> {
+        rib_program()
+            .easy_parse(input.as_ref())
+            .map_err(|err| err.to_string())
+            .and_then(|(expr, remaining)| {
+                if remaining.is_empty() {
+                    Ok(expr)
+                } else {
+                    Err(format!("Failed to parse: {}", remaining))
+                }
+            })
+    }
+
+    /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`
+    /// This is mainly to keep the backward compatibility where Golem Cloud console passes a Rib Expression always wrapped in `${..}`
+    ///
+    /// Explanation:
+    /// Usually `Expr::from_text` is all that you need which takes a plain text and try to parse it as an Expr.
+    /// `from_interpolated_str` can be used when you want to be strict - only if text is wrapped in `${..}`, it should
+    /// be considered as a Rib expression.
+    ///
+    /// Example 1:
+    ///
+    /// ```rib
+    ///   ${
+    ///     let result = worker.response;
+    ///     let error_message = "invalid response from worker";
+    ///
+    ///     match result {
+    ///       some(record) => record,
+    ///       none => "Error: ${error_message}"
+    ///     }
+    ///   }
+    /// ```
+    /// You can see the entire text is wrapped in `${..}` to specify that it's containing
+    /// a Rib expression and anything outside is considered as a literal string.
+    ///
+    /// The advantage of using `from_interpolated_str` is Rib the behaviour is consistent that only those texts
+    //  within `${..}` are considered as Rib expressions all the time.
+    ///
+    /// Example 2:
+    ///
+    /// ```rib
+    ///  worker-id-${request.user_id}
+    /// ```
+    /// ```rib
+    ///   ${"worker-id-${request.user_id}"}
+    /// ```
+    /// ```rib
+    ///   ${request.user_id}
+    /// ```
+    /// ```rib
+    ///   foo-${"worker-id-${request.user_id}"}
+    /// ```
+    /// etc.
+    ///
+    /// The first one will be parsed as `Expr::Concat(Expr::Literal("worker-id-"), Expr::SelectField(Expr::Identifier("request"), "user_id"))`.
+    ///
+    /// The following will work too.
+    /// In the below example, the entire if condition is a Rib expression  (because it is wrapped in ${..}) and
+    /// the else condition is resolved to  a literal where part of it is a Rib expression itself (user.id).
+    ///
+    /// ```rib
+    ///   ${if foo > 1 then bar else "baz-${user.id}"}
+    /// ```
+    /// If you need the following to be considered as Rib program (without interpolation), use `Expr::from_text` instead.
+    ///
+    /// ```rib
+    ///   if foo > 1 then bar else "baz-${user.id}"
+    /// ```
+    ///
+    pub fn from_interpolated_str(input: &str) -> Result<Expr, String> {
+        let input = format!("\"{}\"", input);
+        Self::from_text(input.as_str())
+    }
+
     pub fn is_literal(&self) -> bool {
         matches!(self, Expr::Literal(_, _))
     }
@@ -208,7 +246,7 @@ impl Expr {
 
     pub fn call(parsed_fn_name: ParsedFunctionName, args: Vec<Expr>) -> Self {
         Expr::Call(
-            InvocationName::Function(parsed_fn_name),
+            CallType::Function(parsed_fn_name),
             args,
             InferredType::Unknown,
         )
@@ -377,11 +415,12 @@ impl Expr {
     }
 
     pub fn sequence(expressions: Vec<Expr>) -> Self {
-        let inferred_type = if expressions.is_empty() {
-            InferredType::Unknown
-        } else {
-            InferredType::List(Box::new(expressions.first().unwrap().inferred_type()))
-        };
+        let inferred_type = InferredType::List(Box::new(
+            expressions
+                .first()
+                .map_or(InferredType::Unknown, |x| x.inferred_type()),
+        ));
+
         Expr::Sequence(expressions, inferred_type)
     }
 
@@ -421,22 +460,26 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
+        self.bind_types();
         self.name_binding_pattern_match_variables();
         self.name_binding_local_variables();
         self.infer_function_types(function_type_registry)
             .map_err(|x| vec![x])?;
         self.infer_variants(function_type_registry);
-        self.infer_all_identifiers().map_err(|x| vec![x])?;
-        self.push_types_down().map_err(|x| vec![x])?;
-        self.infer_all_identifiers().map_err(|x| vec![x])?;
-        self.pull_types_up().map_err(|x| vec![x])?;
-        self.infer_all_identifiers().map_err(|x| vec![x])?;
-        self.infer_input_type();
-        self.push_types_down().map_err(|x| vec![x])?;
-        self.infer_all_identifiers().map_err(|x| vec![x])?;
-        self.pull_types_up().map_err(|x| vec![x])?;
-        self.infer_all_identifiers().map_err(|x| vec![x])?;
+        type_inference::type_inference_fix_point(Self::inference_scan, self)
+            .map_err(|x| vec![x])?;
         self.unify_types()?;
+        Ok(())
+    }
+
+    // An inference scan is a single cycle of to-and-fro scanning of Rib expression
+    // to infer the types
+    pub fn inference_scan(&mut self) -> Result<(), String> {
+        self.infer_all_identifiers()?;
+        self.push_types_down()?;
+        self.infer_all_identifiers()?;
+        self.pull_types_up()?;
+        self.infer_global_inputs();
         Ok(())
     }
 
@@ -461,90 +504,22 @@ impl Expr {
         type_inference::push_types_down(self)
     }
 
-    /// This function is potentially called multiple times after each phase of type inference.
-    /// It handles situations where Rib tries to be flexible in the absence of Golem’s worker invocation call,
-    /// which is the origin of types. At this point, the function tries to gather as much type information as possible
-    /// by revisiting and refining type data before unification.
-    ///
-    /// Example:
-    /// ```rib
-    /// match some(1) {
-    ///     some(x) => x,
-    ///     some(y) => y,
-    /// }
-    /// ```
-    /// In this example, the type of the entire pattern match is unknown to begin with. This is mainly because
-    /// we are not passing this to a call function, nor assigning to a variable, which is then passed to a call function.
-    /// In short, the original expression's type remains unknown even after function_type_inference phase.
-    /// At this point `1` in some(1) can be any one of U64, U32 (all types that represent numbers)
-    /// At type push down phase, this possibility of U64, U32 is pushed down to x and y in the LHS of match arms.
-    /// `x` and `y` on the RHS of match arms are still unknown after the push down, since the original expression type is still unknown.
-    /// There-fore, we call `infer_all_identifiers`, which makes sure the variables with the right variable's ID share it's type info
-    /// with each other. Now x and y on the RHS of match-arms have a type-info, which says it can be any of number types.
-    /// In the next phase of type-pull-up, this information in the children is propagated back up to the tree such that original expression
-    /// result now has a type-info, which says it can be any of the number types.
-    /// To make Rib more user-friendly to developers, during type unification phase, we pick `F64` if the types are inferred to be
-    /// just `OneOf(U64, U32, F64, other-number-types)`. This flexibility hardly gets applied if we have a strong expectation to the variables, which is
-    /// originated only from call expressions.
     pub fn infer_all_identifiers(&mut self) -> Result<(), String> {
-        type_inference::infer_all_identifiers_bottom_up(self)?;
-        type_inference::infer_all_identifiers_top_down(self)?;
-        type_inference::infer_match_binding_variables(self);
-        Ok(())
+        type_inference::infer_all_identifiers(self)
     }
 
     pub fn pull_types_up(&mut self) -> Result<(), String> {
         type_inference::pull_types_up(self)
     }
 
-    pub fn collect_all_global_variables_type(&mut self) -> HashMap<String, Vec<InferredType>> {
-        let mut queue = VecDeque::new();
-        queue.push_back(self);
-
-        let mut all_types_of_global_variables = HashMap::new();
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
-                    // We are only interested in global variables
-                    if variable_id.is_global() {
-                        all_types_of_global_variables
-                            .entry(variable_id.name().clone())
-                            .or_insert(Vec::new())
-                            .push(inferred_type.clone());
-                    }
-                }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
-            }
-        }
-
-        all_types_of_global_variables
+    pub fn infer_global_inputs(&mut self) {
+        type_inference::infer_global_inputs(self);
     }
 
-    // Unlike inferring all identifirs, inputs don't have an associated let binding,
-    // and yet we need to propagate this type info all over
-    pub fn infer_input_type(&mut self) {
-        let global_variables_dictionary = self.collect_all_global_variables_type();
-        // Updating the collected types in all positions of input
-        let mut queue = VecDeque::new();
-        queue.push_back(self);
-        while let Some(expr) = queue.pop_back() {
-            match expr {
-                Expr::Identifier(variable_id, inferred_type) => {
-                    // We are only interested in global variables
-                    if variable_id.is_global() {
-                        if let Some(types) = global_variables_dictionary.get(&variable_id.name()) {
-                            if let Some(all_of) = InferredType::all_of(types.clone()) {
-                                inferred_type.update(all_of);
-                            }
-                        }
-                    }
-                }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
-            }
-        }
+    pub fn bind_types(&mut self) {
+        type_inference::bind_type(self);
     }
 
-    // Doesn't need to be mutable
     pub fn type_check(&self) -> Result<(), Vec<String>> {
         type_inference::type_check(self)
     }
@@ -589,7 +564,7 @@ impl Expr {
             | Expr::Tag(_, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
-                    inferred_type.update(new_inferred_type);
+                    *inferred_type = inferred_type.merge(new_inferred_type);
                 }
             }
         }
@@ -651,99 +626,6 @@ impl Expr {
         type_inference::visit_children_bottom_up_mut(self, queue);
     }
 
-    /// Parse a text directly as Rib expression
-    /// Example of a Rib expression:
-    ///
-    /// ```rib
-    ///   let result = worker.response;
-    ///   let error_message = "invalid response from worker";
-    ///
-    ///   match result {
-    ///     some(record) => record,
-    ///     none => "Error: ${error_message}"
-    ///   }
-    /// ```
-    ///
-    /// Rib supports conditional calls, function calls, pattern-matching,
-    /// string interpolation (see error_message above) etc.
-    ///
-    pub fn from_text(input: &str) -> Result<Expr, String> {
-        rib_program()
-            .easy_parse(input.as_ref())
-            .map_err(|err| err.to_string())
-            .and_then(|(expr, remaining)| {
-                if remaining.is_empty() {
-                    Ok(expr)
-                } else {
-                    Err(format!("Failed to parse: {}", remaining))
-                }
-            })
-    }
-
-    /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`
-    /// This is mainly to keep the backward compatibility where Golem Cloud console passes a Rib Expression always wrapped in `${..}`
-    ///
-    /// Explanation:
-    /// Usually `Expr::from_text` is all that you need which takes a plain text and try to parse it as an Expr.
-    /// `from_interpolated_str` can be used when you want to be strict - only if text is wrapped in `${..}`, it should
-    /// be considered as a Rib expression.
-    ///
-    /// Example 1:
-    ///
-    /// ```rib
-    ///   ${
-    ///     let result = worker.response;
-    ///     let error_message = "invalid response from worker";
-    ///
-    ///     match result {
-    ///       some(record) => record,
-    ///       none => "Error: ${error_message}"
-    ///     }
-    ///   }
-    /// ```
-    /// You can see the entire text is wrapped in `${..}` to specify that it's containing
-    /// a Rib expression and anything outside is considered as a literal string.
-    ///
-    /// The advantage of using `from_interpolated_str` is Rib the behaviour is consistent that only those texts
-    //  within `${..}` are considered as Rib expressions all the time.
-    ///
-    /// Example 2:
-    ///
-    /// ```rib
-    ///  worker-id-${request.user_id}
-    /// ```
-    /// ```rib
-    ///   ${"worker-id-${request.user_id}"}
-    /// ```
-    /// ```rib
-    ///   ${request.user_id}
-    /// ```
-    /// ```rib
-    ///   foo-${"worker-id-${request.user_id}"}
-    /// ```
-    /// etc.
-    ///
-    /// The first one will be parsed as `Expr::Concat(Expr::Literal("worker-id-"), Expr::SelectField(Expr::Identifier("request"), "user_id"))`.
-    ///
-    /// The following will work too.
-    /// In the below example, the entire if condition is a Rib expression  (because it is wrapped in ${..}) and
-    /// the else condition is resolved to  a literal where part of it is a Rib expression itself (user.id).
-    ///
-    /// ```rib
-    ///   ${if foo > 1 then bar else "baz-${user.id}"}
-    /// ```
-    /// If you need the following to be considered as Rib program (without interpolation), use `Expr::from_text` instead.
-    ///
-    /// ```rib
-    ///   if foo > 1 then bar else "baz-${user.id}"
-    /// ```
-    ///
-    pub fn from_interpolated_str(input: &str) -> Result<Expr, String> {
-        let input = format!("\"{}\"", input);
-        Self::from_text(input.as_str())
-    }
-
-    // Probably good idea to make it just Unknown
     pub fn number(f64: f64) -> Expr {
         Expr::Number(
             Number { value: f64 },
@@ -784,6 +666,141 @@ impl Expr {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct Number {
+    pub value: f64, // Change to bigdecimal
+}
+
+impl Number {
+    pub fn to_val(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
+        match analysed_type {
+            AnalysedType::F64(_) => Some(TypeAnnotatedValue::F64(self.value)),
+            AnalysedType::U64(_) => Some(TypeAnnotatedValue::U64(self.value as u64)),
+            AnalysedType::F32(_) => Some(TypeAnnotatedValue::F32(self.value as f32)),
+            AnalysedType::U32(_) => Some(TypeAnnotatedValue::U32(self.value as u32)),
+            AnalysedType::S32(_) => Some(TypeAnnotatedValue::S32(self.value as i32)),
+            AnalysedType::S64(_) => Some(TypeAnnotatedValue::S64(self.value as i64)),
+            AnalysedType::U8(_) => Some(TypeAnnotatedValue::U8(self.value as u32)),
+            AnalysedType::S8(_) => Some(TypeAnnotatedValue::S8(self.value as i32)),
+            AnalysedType::U16(_) => Some(TypeAnnotatedValue::U16(self.value as u32)),
+            AnalysedType::S16(_) => Some(TypeAnnotatedValue::S16(self.value as i32)),
+            _ => None,
+        }
+    }
+}
+
+impl Display for Number {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct MatchArm {
+    pub arm_pattern: ArmPattern,
+    pub arm_resolution_expr: Box<Expr>,
+}
+
+impl MatchArm {
+    pub fn new(arm_pattern: ArmPattern, arm_resolution: Expr) -> MatchArm {
+        MatchArm {
+            arm_pattern,
+            arm_resolution_expr: Box::new(arm_resolution),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum ArmPattern {
+    WildCard,
+    As(String, Box<ArmPattern>),
+    Constructor(String, Vec<ArmPattern>),
+    Literal(Box<Expr>),
+}
+
+impl ArmPattern {
+    pub fn get_expr_literals_mut(&mut self) -> Vec<&mut Box<Expr>> {
+        match self {
+            ArmPattern::Literal(expr) => vec![expr],
+            ArmPattern::As(_, pattern) => pattern.get_expr_literals_mut(),
+            ArmPattern::Constructor(_, patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
+            ArmPattern::WildCard => vec![],
+        }
+    }
+
+    pub fn get_expr_literals(&self) -> Vec<&Expr> {
+        match self {
+            ArmPattern::Literal(expr) => vec![expr.as_ref()],
+            ArmPattern::As(_, pattern) => pattern.get_expr_literals(),
+            ArmPattern::Constructor(_, patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals());
+                }
+                result
+            }
+            ArmPattern::WildCard => vec![],
+        }
+    }
+    // Helper to construct ok(v). Cannot be used if there is nested constructors such as ok(some(v)))
+    pub fn ok(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Result(
+            Ok(Box::new(Expr::Identifier(
+                VariableId::global(binding_variable.to_string()),
+                InferredType::Unknown,
+            ))),
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::Unknown)),
+                error: Some(Box::new(InferredType::Unknown)),
+            },
+        )))
+    }
+
+    // Helper to construct err(v). Cannot be used if there is nested constructors such as err(some(v)))
+    pub fn err(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Result(
+            Err(Box::new(Expr::Identifier(
+                VariableId::global(binding_variable.to_string()),
+                InferredType::Unknown,
+            ))),
+            InferredType::Result {
+                ok: Some(Box::new(InferredType::Unknown)),
+                error: Some(Box::new(InferredType::Unknown)),
+            },
+        )))
+    }
+
+    // Helper to construct some(v). Cannot be used if there is nested constructors such as some(ok(v)))
+    pub fn some(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Option(
+            Some(Box::new(Expr::Identifier(
+                VariableId::local_with_no_id(binding_variable),
+                InferredType::Unknown,
+            ))),
+            InferredType::Unknown,
+        )))
+    }
+
+    pub fn none() -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Option(None, InferredType::Unknown)))
+    }
+
+    pub fn identifier(binding_variable: &str) -> ArmPattern {
+        ArmPattern::Literal(Box::new(Expr::Identifier(
+            VariableId::global(binding_variable.to_string()),
+            InferredType::Unknown,
+        )))
+    }
+    pub fn custom_constructor(name: &str, args: Vec<ArmPattern>) -> ArmPattern {
+        ArmPattern::Constructor(name.to_string(), args)
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
     type Error = String;
 
@@ -796,14 +813,12 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let type_name = expr.type_name.map(TypeName::try_from).transpose()?;
                 let expr_: golem_api_grpc::proto::golem::rib::Expr =
                     *expr.expr.ok_or("Missing expr")?;
-                let expr = expr_.try_into()?;
-                let binded = bind(&expr, type_name.clone());
-                Expr::Let(
-                    VariableId::global(name.as_str().to_string()),
-                    type_name,
-                    Box::new(binded),
-                    InferredType::Unknown,
-                )
+                let expr: Expr = expr_.try_into()?;
+                if let Some(type_name) = type_name {
+                    Expr::let_binding_with_type(name, type_name, expr)
+                } else {
+                    Expr::let_binding(name, expr)
+                }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
                 let expr = expr.expr.ok_or("Missing expr")?;
@@ -906,10 +921,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
                 let type_name = number.type_name.map(TypeName::try_from).transpose()?;
                 if let Some(type_name) = type_name {
-                    bind(
-                        &Expr::number_with_type_name(number.float, type_name.clone()),
-                        Some(type_name),
-                    )
+                    Expr::number_with_type_name(number.float, type_name.clone())
                 } else {
                     Expr::number(number.float)
                 }
@@ -1162,166 +1174,6 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub struct Number {
-    pub value: f64, // Change to bigdecimal
-}
-
-impl Number {
-    pub fn to_val(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
-        match analysed_type {
-            AnalysedType::F64(_) => Some(TypeAnnotatedValue::F64(self.value)),
-            AnalysedType::U64(_) => Some(TypeAnnotatedValue::U64(self.value as u64)),
-            AnalysedType::F32(_) => Some(TypeAnnotatedValue::F32(self.value as f32)),
-            AnalysedType::U32(_) => Some(TypeAnnotatedValue::U32(self.value as u32)),
-            AnalysedType::S32(_) => Some(TypeAnnotatedValue::S32(self.value as i32)),
-            AnalysedType::S64(_) => Some(TypeAnnotatedValue::S64(self.value as i64)),
-            AnalysedType::U8(_) => Some(TypeAnnotatedValue::U8(self.value as u32)),
-            AnalysedType::S8(_) => Some(TypeAnnotatedValue::S8(self.value as i32)),
-            AnalysedType::U16(_) => Some(TypeAnnotatedValue::U16(self.value as u32)),
-            AnalysedType::S16(_) => Some(TypeAnnotatedValue::S16(self.value as i32)),
-            _ => None,
-        }
-    }
-}
-
-impl Display for Number {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub struct MatchArm {
-    pub arm_pattern: ArmPattern,
-    pub arm_resolution_expr: Box<Expr>,
-}
-
-impl MatchArm {
-    pub fn new(arm_pattern: ArmPattern, arm_resolution: Expr) -> MatchArm {
-        MatchArm {
-            arm_pattern,
-            arm_resolution_expr: Box::new(arm_resolution),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::rib::MatchArm> for MatchArm {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::rib::MatchArm) -> Result<Self, Self::Error> {
-        let pattern = value.pattern.ok_or("Missing pattern")?;
-        let expr = value.expr.ok_or("Missing expr")?;
-        Ok(MatchArm::new(pattern.try_into()?, expr.try_into()?))
-    }
-}
-
-impl From<MatchArm> for golem_api_grpc::proto::golem::rib::MatchArm {
-    fn from(value: MatchArm) -> Self {
-        let MatchArm {
-            arm_pattern,
-            arm_resolution_expr,
-        } = value;
-        golem_api_grpc::proto::golem::rib::MatchArm {
-            pattern: Some(arm_pattern.into()),
-            expr: Some((*arm_resolution_expr).into()),
-        }
-    }
-}
-
-// Ex: Some(x)
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
-pub enum ArmPattern {
-    WildCard,
-    As(String, Box<ArmPattern>),
-    Constructor(String, Vec<ArmPattern>),
-    Literal(Box<Expr>),
-}
-
-impl ArmPattern {
-    pub fn get_expr_literals_mut(&mut self) -> Vec<&mut Box<Expr>> {
-        match self {
-            ArmPattern::Literal(expr) => vec![expr],
-            ArmPattern::As(_, pattern) => pattern.get_expr_literals_mut(),
-            ArmPattern::Constructor(_, patterns) => {
-                let mut result = vec![];
-                for pattern in patterns {
-                    result.extend(pattern.get_expr_literals_mut());
-                }
-                result
-            }
-            ArmPattern::WildCard => vec![],
-        }
-    }
-
-    pub fn get_expr_literals(&self) -> Vec<&Expr> {
-        match self {
-            ArmPattern::Literal(expr) => vec![expr.as_ref()],
-            ArmPattern::As(_, pattern) => pattern.get_expr_literals(),
-            ArmPattern::Constructor(_, patterns) => {
-                let mut result = vec![];
-                for pattern in patterns {
-                    result.extend(pattern.get_expr_literals());
-                }
-                result
-            }
-            ArmPattern::WildCard => vec![],
-        }
-    }
-    // Helper to construct ok(v). Cannot be used if there is nested constructors such as ok(some(v)))
-    pub fn ok(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Result(
-            Ok(Box::new(Expr::Identifier(
-                VariableId::global(binding_variable.to_string()),
-                InferredType::Unknown,
-            ))),
-            InferredType::Result {
-                ok: Some(Box::new(InferredType::Unknown)),
-                error: Some(Box::new(InferredType::Unknown)),
-            },
-        )))
-    }
-
-    // Helper to construct err(v). Cannot be used if there is nested constructors such as err(some(v)))
-    pub fn err(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Result(
-            Err(Box::new(Expr::Identifier(
-                VariableId::global(binding_variable.to_string()),
-                InferredType::Unknown,
-            ))),
-            InferredType::Result {
-                ok: Some(Box::new(InferredType::Unknown)),
-                error: Some(Box::new(InferredType::Unknown)),
-            },
-        )))
-    }
-
-    // Helper to construct some(v). Cannot be used if there is nested constructors such as some(ok(v)))
-    pub fn some(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(
-            Some(Box::new(Expr::Identifier(
-                VariableId::local_with_no_id(binding_variable),
-                InferredType::Unknown,
-            ))),
-            InferredType::Unknown,
-        )))
-    }
-
-    pub fn none() -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Option(None, InferredType::Unknown)))
-    }
-
-    pub fn identifier(binding_variable: &str) -> ArmPattern {
-        ArmPattern::Literal(Box::new(Expr::Identifier(
-            VariableId::global(binding_variable.to_string()),
-            InferredType::Unknown,
-        )))
-    }
-    pub fn custom_constructor(name: &str, args: Vec<ArmPattern>) -> ArmPattern {
-        ArmPattern::Constructor(name.to_string(), args)
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::rib::ArmPattern> for ArmPattern {
     type Error = String;
 
@@ -1397,6 +1249,29 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                     ),
                 ),
             },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::rib::MatchArm> for MatchArm {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::rib::MatchArm) -> Result<Self, Self::Error> {
+        let pattern = value.pattern.ok_or("Missing pattern")?;
+        let expr = value.expr.ok_or("Missing expr")?;
+        Ok(MatchArm::new(pattern.try_into()?, expr.try_into()?))
+    }
+}
+
+impl From<MatchArm> for golem_api_grpc::proto::golem::rib::MatchArm {
+    fn from(value: MatchArm) -> Self {
+        let MatchArm {
+            arm_pattern,
+            arm_resolution_expr,
+        } = value;
+        golem_api_grpc::proto::golem::rib::MatchArm {
+            pattern: Some(arm_pattern.into()),
+            expr: Some((*arm_resolution_expr).into()),
         }
     }
 }

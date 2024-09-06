@@ -1,10 +1,26 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 pub use expr_visitor::*;
 pub use function_type_inference::*;
+pub use global_input_inference::*;
 pub use identifier_inference::*;
+pub use inference_fix_point::*;
 pub use name_binding::*;
 pub use pattern_match_binding::*;
-pub use refine::*;
 pub use rib_input_type::*;
+pub(crate) use type_binding::*;
 pub use type_check::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
@@ -17,7 +33,6 @@ mod function_type_inference;
 mod identifier_inference;
 mod name_binding;
 mod pattern_match_binding;
-mod refine;
 mod rib_input_type;
 mod type_check;
 mod type_pull_up;
@@ -26,14 +41,19 @@ mod type_reset;
 mod type_unification;
 mod variant_resolution;
 
+mod global_input_inference;
+mod inference_fix_point;
+mod type_binding;
+
 #[cfg(test)]
 mod type_inference_tests {
 
     mod let_binding_tests {
+        use crate::call_type::CallType;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{
-            Expr, InferredType, InvocationName, Number, ParsedFunctionName,
-            ParsedFunctionReference, ParsedFunctionSite, VariableId,
+            Expr, InferredType, Number, ParsedFunctionName, ParsedFunctionReference,
+            ParsedFunctionSite, VariableId,
         };
 
         #[test]
@@ -61,7 +81,7 @@ mod type_inference_tests {
             );
 
             let call_expr = Expr::Call(
-                InvocationName::Function(ParsedFunctionName {
+                CallType::Function(ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
@@ -102,8 +122,8 @@ mod type_inference_tests {
                     Number { value: 1f64 },
                     None,
                     InferredType::U64,
-                )), // The number in let expression is identified to be a U64
-                InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
+                )),
+                InferredType::Unknown,
             );
 
             let let_binding2 = Expr::Let(
@@ -113,12 +133,12 @@ mod type_inference_tests {
                     Number { value: 2f64 },
                     None,
                     InferredType::U32,
-                )), // The number in let expression is identified to be a U64
-                InferredType::Unknown, // Type of a let expression can be unit, we are not updating this part
+                )),
+                InferredType::Unknown,
             );
 
             let call_expr1 = Expr::Call(
-                InvocationName::Function(ParsedFunctionName {
+                CallType::Function(ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "foo".to_string(),
@@ -126,13 +146,13 @@ mod type_inference_tests {
                 }),
                 vec![Expr::Identifier(
                     VariableId::local("x", 0),
-                    InferredType::U64, // Variable identified to be a U64
+                    InferredType::U64,
                 )],
                 InferredType::Sequence(vec![]),
             );
 
             let call_expr2 = Expr::Call(
-                InvocationName::Function(ParsedFunctionName {
+                CallType::Function(ParsedFunctionName {
                     site: ParsedFunctionSite::Global,
                     function: ParsedFunctionReference::Function {
                         function: "baz".to_string(),
@@ -140,7 +160,7 @@ mod type_inference_tests {
                 }),
                 vec![Expr::Identifier(
                     VariableId::local("y", 0),
-                    InferredType::U32, // Variable identified to be a U64
+                    InferredType::U32,
                 )],
                 InferredType::Sequence(vec![]),
             );
@@ -854,10 +874,11 @@ mod type_inference_tests {
         }
     }
     mod pattern_match_tests {
+        use crate::call_type::CallType;
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{
-            ArmPattern, Expr, FunctionTypeRegistry, InferredType, InvocationName, MatchArm, Number,
+            ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
             ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
         };
 
@@ -911,7 +932,7 @@ mod type_inference_tests {
                             InferredType::U64,
                         ))),
                         Expr::Call(
-                            InvocationName::Function(ParsedFunctionName {
+                            CallType::Function(ParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: ParsedFunctionReference::Function {
                                     function: "foo".to_string(),
@@ -931,7 +952,7 @@ mod type_inference_tests {
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
-                            InvocationName::Function(ParsedFunctionName {
+                            CallType::Function(ParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
                                 function: ParsedFunctionReference::Function {
                                     function: "baz".to_string(),
@@ -956,17 +977,13 @@ mod type_inference_tests {
             assert_eq!(expr, expected);
         }
 
-        // TODO; none is un-inferred, probably due to unable-to-do-anything
-        // for pull up and push down phases
         #[test]
         fn test_pattern_match_with_result() {
             let rib_expr = r#"
               let x: u64 = 1;
 
-              let fallback: option<option<u64>> = none;
-
               match err(x) {
-                err(_) => fallback,
+                err(_) => none,
                 ok(_) => some(some(x))
               }
             "#;
@@ -1428,9 +1445,11 @@ mod type_inference_tests {
         }
     }
     mod record_tests {
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
-        use crate::{Expr, InferredType, Number, VariableId};
+        use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
+        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr};
 
         #[test]
         fn test_record_type_inference() {
@@ -1482,7 +1501,142 @@ mod type_inference_tests {
 
             assert_eq!(expr, expected);
         }
+
+        #[test]
+        fn test_record_type_inference_identifier() {
+            let rib_expr = r#"
+          let x: u64 = if true then 1u64 else 20u64;
+          let y = {
+             let z = {x: x};
+             z
+          };
+          y
+          "#;
+
+            let function_type_registry = internal::get_function_type_registry();
+            let mut expr = Expr::from_text(rib_expr).unwrap();
+            expr.infer_types(&function_type_registry).unwrap();
+
+            let expected = Expr::Multiple(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        Some(TypeName::U64),
+                        Box::new(Expr::Cond(
+                            Box::new(Expr::boolean(true)),
+                            Box::new(Expr::Number(
+                                Number { value: 1f64 },
+                                Some(TypeName::U64),
+                                InferredType::U64,
+                            )),
+                            Box::new(Expr::Number(
+                                Number { value: 20f64 },
+                                Some(TypeName::U64),
+                                InferredType::U64,
+                            )),
+                            InferredType::U64,
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("y", 0),
+                        None,
+                        Box::new(Expr::Multiple(
+                            vec![
+                                Expr::Let(
+                                    VariableId::local("z", 0),
+                                    None,
+                                    Box::new(Expr::Record(
+                                        vec![(
+                                            "x".to_string(),
+                                            Box::new(Expr::Identifier(
+                                                VariableId::local("x", 0),
+                                                InferredType::U64,
+                                            )),
+                                        )],
+                                        InferredType::Record(vec![(
+                                            "x".to_string(),
+                                            InferredType::U64,
+                                        )]),
+                                    )),
+                                    InferredType::Unknown,
+                                ),
+                                Expr::Identifier(
+                                    VariableId::local("z", 0),
+                                    InferredType::Record(vec![(
+                                        "x".to_string(),
+                                        InferredType::U64,
+                                    )]),
+                                ),
+                            ],
+                            InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Identifier(
+                        VariableId::local("y", 0),
+                        InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
+                    ),
+                ],
+                InferredType::Record(vec![("x".to_string(), InferredType::U64)]),
+            );
+
+            assert_eq!(expr, expected);
+        }
+
+        #[test]
+        fn test_record_type_inference_select_with_function_call() {
+            let request_body_type = internal::get_analysed_type_record(vec![
+                ("id".to_string(), AnalysedType::Str(TypeStr)),
+                ("name".to_string(), AnalysedType::Str(TypeStr)),
+                (
+                    "titles".to_string(),
+                    AnalysedType::List(TypeList {
+                        inner: Box::new(AnalysedType::Str(TypeStr)),
+                    }),
+                ),
+                (
+                    "address".to_string(),
+                    internal::get_analysed_type_record(vec![
+                        ("street".to_string(), AnalysedType::Str(TypeStr)),
+                        ("city".to_string(), AnalysedType::Str(TypeStr)),
+                    ]),
+                ),
+            ]);
+
+            let worker_response = internal::create_none(Some(&AnalysedType::Str(TypeStr)));
+
+            let request_type = internal::get_analysed_type_record(vec![(
+                "body".to_string(),
+                request_body_type.clone(),
+            )]);
+
+            let return_type = AnalysedType::Option(TypeOption {
+                inner: Box::new(AnalysedType::try_from(&worker_response).unwrap()),
+            });
+
+            let component_metadata =
+                internal::get_analysed_exports("foo", vec![request_type.clone()], return_type);
+
+            let expr_str = r#"${
+              let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
+              let result = foo(x);
+              match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
+            }"#;
+
+            let mut expr = Expr::from_interpolated_str(expr_str).unwrap();
+
+            let function_type_registry =
+                FunctionTypeRegistry::from_export_metadata(&component_metadata);
+
+            expr.infer_types(&function_type_registry).unwrap();
+
+            let expected = internal::expected_expr_for_select_index();
+
+            assert_eq!(expr, expected);
+        }
     }
+
     mod result_type_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, VariableId};
@@ -1588,11 +1742,17 @@ mod type_inference_tests {
         }
     }
     mod internal {
-        use crate::FunctionTypeRegistry;
-        use golem_wasm_ast::analysis::{
-            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32,
-            TypeU64,
+        use crate::call_type::CallType;
+        use crate::{
+            ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
+            ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
         };
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedType, NameTypePair, TypeRecord, TypeU32, TypeU64,
+        };
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::protobuf::TypedOption;
 
         pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
             let metadata = vec![
@@ -1614,6 +1774,351 @@ mod type_inference_tests {
                 }),
             ];
             FunctionTypeRegistry::from_export_metadata(&metadata)
+        }
+
+        pub(crate) fn get_analysed_type_record(
+            record_type: Vec<(String, AnalysedType)>,
+        ) -> AnalysedType {
+            let record = TypeRecord {
+                fields: record_type
+                    .into_iter()
+                    .map(|(name, typ)| NameTypePair { name, typ })
+                    .collect(),
+            };
+            AnalysedType::Record(record)
+        }
+
+        pub(crate) fn create_none(typ: Option<&AnalysedType>) -> TypeAnnotatedValue {
+            TypeAnnotatedValue::Option(Box::new(TypedOption {
+                value: None,
+                typ: typ.map(|t| t.into()),
+            }))
+        }
+
+        pub(crate) fn get_analysed_exports(
+            function_name: &str,
+            input_types: Vec<AnalysedType>,
+            output: AnalysedType,
+        ) -> Vec<AnalysedExport> {
+            let analysed_function_parameters = input_types
+                .into_iter()
+                .enumerate()
+                .map(|(index, typ)| AnalysedFunctionParameter {
+                    name: format!("param{}", index),
+                    typ,
+                })
+                .collect();
+
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }],
+            })]
+        }
+
+        pub(crate) fn expected_expr_for_select_index() -> Expr {
+            Expr::Multiple(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        None,
+                        Box::new(Expr::Record(
+                            vec![(
+                                "body".to_string(),
+                                Box::new(Expr::Record(
+                                    vec![
+                                        ("id".to_string(), Box::new(Expr::literal("bId"))),
+                                        ("name".to_string(), Box::new(Expr::literal("bName"))),
+                                        (
+                                            "titles".to_string(),
+                                            Box::new(Expr::SelectField(
+                                                Box::new(Expr::SelectField(
+                                                    Box::new(Expr::Identifier(
+                                                        VariableId::global("request".to_string()),
+                                                        InferredType::Record(vec![(
+                                                            "body".to_string(),
+                                                            InferredType::Record(vec![
+                                                                (
+                                                                    "address".to_string(),
+                                                                    InferredType::Record(vec![
+                                                                        (
+                                                                            "street".to_string(),
+                                                                            InferredType::Str,
+                                                                        ),
+                                                                        (
+                                                                            "city".to_string(),
+                                                                            InferredType::Str,
+                                                                        ),
+                                                                    ]),
+                                                                ),
+                                                                (
+                                                                    "titles".to_string(),
+                                                                    InferredType::List(Box::new(
+                                                                        InferredType::Str,
+                                                                    )),
+                                                                ),
+                                                            ]),
+                                                        )]),
+                                                    )),
+                                                    "body".to_string(),
+                                                    InferredType::Record(vec![
+                                                        (
+                                                            "address".to_string(),
+                                                            InferredType::Record(vec![
+                                                                (
+                                                                    "street".to_string(),
+                                                                    InferredType::Str,
+                                                                ),
+                                                                (
+                                                                    "city".to_string(),
+                                                                    InferredType::Str,
+                                                                ),
+                                                            ]),
+                                                        ),
+                                                        (
+                                                            "titles".to_string(),
+                                                            InferredType::List(Box::new(
+                                                                InferredType::Str,
+                                                            )),
+                                                        ),
+                                                    ]),
+                                                )),
+                                                "titles".to_string(),
+                                                InferredType::List(Box::new(InferredType::Str)),
+                                            )),
+                                        ),
+                                        (
+                                            "address".to_string(),
+                                            Box::new(Expr::SelectField(
+                                                Box::new(Expr::SelectField(
+                                                    Box::new(Expr::Identifier(
+                                                        VariableId::global("request".to_string()),
+                                                        InferredType::Record(vec![(
+                                                            "body".to_string(),
+                                                            InferredType::Record(vec![
+                                                                (
+                                                                    "address".to_string(),
+                                                                    InferredType::Record(vec![
+                                                                        (
+                                                                            "street".to_string(),
+                                                                            InferredType::Str,
+                                                                        ),
+                                                                        (
+                                                                            "city".to_string(),
+                                                                            InferredType::Str,
+                                                                        ),
+                                                                    ]),
+                                                                ),
+                                                                (
+                                                                    "titles".to_string(),
+                                                                    InferredType::List(Box::new(
+                                                                        InferredType::Str,
+                                                                    )),
+                                                                ),
+                                                            ]),
+                                                        )]),
+                                                    )),
+                                                    "body".to_string(),
+                                                    InferredType::Record(vec![
+                                                        (
+                                                            "address".to_string(),
+                                                            InferredType::Record(vec![
+                                                                (
+                                                                    "street".to_string(),
+                                                                    InferredType::Str,
+                                                                ),
+                                                                (
+                                                                    "city".to_string(),
+                                                                    InferredType::Str,
+                                                                ),
+                                                            ]),
+                                                        ),
+                                                        (
+                                                            "titles".to_string(),
+                                                            InferredType::List(Box::new(
+                                                                InferredType::Str,
+                                                            )),
+                                                        ),
+                                                    ]),
+                                                )),
+                                                "address".to_string(),
+                                                InferredType::Record(vec![
+                                                    ("street".to_string(), InferredType::Str),
+                                                    ("city".to_string(), InferredType::Str),
+                                                ]),
+                                            )),
+                                        ),
+                                    ],
+                                    InferredType::Record(vec![
+                                        (
+                                            "address".to_string(),
+                                            InferredType::Record(vec![
+                                                ("street".to_string(), InferredType::Str),
+                                                ("city".to_string(), InferredType::Str),
+                                            ]),
+                                        ),
+                                        ("id".to_string(), InferredType::Str),
+                                        ("name".to_string(), InferredType::Str),
+                                        (
+                                            "titles".to_string(),
+                                            InferredType::List(Box::new(InferredType::Str)),
+                                        ),
+                                    ]),
+                                )),
+                            )],
+                            InferredType::Record(vec![(
+                                "body".to_string(),
+                                InferredType::Record(vec![
+                                    (
+                                        "address".to_string(),
+                                        InferredType::Record(vec![
+                                            ("street".to_string(), InferredType::Str),
+                                            ("city".to_string(), InferredType::Str),
+                                        ]),
+                                    ),
+                                    ("id".to_string(), InferredType::Str),
+                                    ("name".to_string(), InferredType::Str),
+                                    (
+                                        "titles".to_string(),
+                                        InferredType::List(Box::new(InferredType::Str)),
+                                    ),
+                                ]),
+                            )]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("result", 0),
+                        None,
+                        Box::new(Expr::Call(
+                            CallType::Function(ParsedFunctionName {
+                                site: ParsedFunctionSite::Global,
+                                function: ParsedFunctionReference::Function {
+                                    function: "foo".to_string(),
+                                },
+                            }),
+                            vec![Expr::Identifier(
+                                VariableId::local("x", 0),
+                                InferredType::Record(vec![(
+                                    "body".to_string(),
+                                    InferredType::Record(vec![
+                                        (
+                                            "address".to_string(),
+                                            InferredType::Record(vec![
+                                                ("street".to_string(), InferredType::Str),
+                                                ("city".to_string(), InferredType::Str),
+                                            ]),
+                                        ),
+                                        ("id".to_string(), InferredType::Str),
+                                        ("name".to_string(), InferredType::Str),
+                                        (
+                                            "titles".to_string(),
+                                            InferredType::List(Box::new(InferredType::Str)),
+                                        ),
+                                    ]),
+                                )]),
+                            )],
+                            InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                InferredType::Str,
+                            )))),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::PatternMatch(
+                        Box::new(Expr::Identifier(
+                            VariableId::local("result", 0),
+                            InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                InferredType::Str,
+                            )))),
+                        )),
+                        vec![
+                            MatchArm {
+                                arm_pattern: ArmPattern::Literal(Box::new(Expr::Option(
+                                    Some(Box::new(Expr::Identifier(
+                                        VariableId::MatchIdentifier(MatchIdentifier::new(
+                                            "value".to_string(),
+                                            1,
+                                        )),
+                                        InferredType::Option(Box::new(InferredType::Str)),
+                                    ))),
+                                    InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                        InferredType::Str,
+                                    )))),
+                                ))),
+                                arm_resolution_expr: Box::new(Expr::literal("personal-id")),
+                            },
+                            MatchArm {
+                                arm_pattern: ArmPattern::Literal(Box::new(Expr::Option(
+                                    None,
+                                    InferredType::Option(Box::new(InferredType::Option(Box::new(
+                                        InferredType::Str,
+                                    )))),
+                                ))),
+                                arm_resolution_expr: Box::new(Expr::SelectIndex(
+                                    Box::new(Expr::SelectField(
+                                        Box::new(Expr::SelectField(
+                                            Box::new(Expr::Identifier(
+                                                VariableId::local("x", 0),
+                                                InferredType::Record(vec![(
+                                                    "body".to_string(),
+                                                    InferredType::Record(vec![
+                                                        (
+                                                            "address".to_string(),
+                                                            InferredType::Record(vec![
+                                                                (
+                                                                    "street".to_string(),
+                                                                    InferredType::Str,
+                                                                ),
+                                                                (
+                                                                    "city".to_string(),
+                                                                    InferredType::Str,
+                                                                ),
+                                                            ]),
+                                                        ),
+                                                        ("id".to_string(), InferredType::Str),
+                                                        ("name".to_string(), InferredType::Str),
+                                                        (
+                                                            "titles".to_string(),
+                                                            InferredType::List(Box::new(
+                                                                InferredType::Str,
+                                                            )),
+                                                        ),
+                                                    ]),
+                                                )]),
+                                            )),
+                                            "body".to_string(),
+                                            InferredType::Record(vec![
+                                                (
+                                                    "address".to_string(),
+                                                    InferredType::Record(vec![
+                                                        ("street".to_string(), InferredType::Str),
+                                                        ("city".to_string(), InferredType::Str),
+                                                    ]),
+                                                ),
+                                                ("id".to_string(), InferredType::Str),
+                                                ("name".to_string(), InferredType::Str),
+                                                (
+                                                    "titles".to_string(),
+                                                    InferredType::List(Box::new(InferredType::Str)),
+                                                ),
+                                            ]),
+                                        )),
+                                        "titles".to_string(),
+                                        InferredType::List(Box::new(InferredType::Str)),
+                                    )),
+                                    1,
+                                    InferredType::Str,
+                                )),
+                            },
+                        ],
+                        InferredType::Str,
+                    ),
+                ],
+                InferredType::Str,
+            )
         }
     }
 }
