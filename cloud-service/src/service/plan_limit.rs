@@ -77,7 +77,7 @@ pub struct CheckLimitResult {
 
 impl CheckLimitResult {
     pub fn in_limit(&self) -> bool {
-        self.count < self.limit
+        self.count <= self.limit
     }
 
     pub fn not_in_limit(&self) -> bool {

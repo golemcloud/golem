@@ -281,7 +281,7 @@ impl ComponentService for ComponentServiceDefault {
             .update_component_limit(
                 &namespace.account_id,
                 component_id,
-                1,
+                0,
                 component_size as i64,
             )
             .await?;
