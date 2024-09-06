@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::diagnose::VersionRequirement::{ExactVersion, MinimumVersion, TodoVersion};
+use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
+
 use regex::Regex;
 use std::cmp::max;
 use std::collections::HashSet;
@@ -112,12 +113,7 @@ impl Langugage {
 
     pub fn tools(&self) -> Vec<Tool> {
         match self {
-            Langugage::CCcp => vec![
-                Tool::Clang,
-                Tool::WasiSdk,
-                Tool::WitBindgen,
-                Tool::WasmTools,
-            ],
+            Langugage::CCcp => vec![Tool::WasiSdk, Tool::WitBindgen, Tool::WasmTools],
             Langugage::Go => vec![
                 Tool::TinyGo,
                 Tool::WitBindgen,
@@ -131,7 +127,11 @@ impl Langugage {
                 Tool::GolemSdkTypeScript,
             ],
             Langugage::Python => vec![Tool::ComponentizePy],
-            Langugage::Rust => vec![Tool::RustTargetWasm32Wasi, Tool::CargoComponent],
+            Langugage::Rust => vec![
+                Tool::RustTargetWasm32Wasi,
+                Tool::CargoComponent,
+                Tool::GolemSdkRust,
+            ],
             Langugage::Zig => vec![Tool::Zig, Tool::WitBindgen, Tool::WasmTools],
         }
     }
@@ -179,18 +179,16 @@ impl Display for Langugage {
 #[allow(clippy::enum_variant_names)]
 enum VersionRequirement {
     ExactVersion(&'static str),
+    ExactByNameVersion(&'static str),
     MinimumVersion(&'static str),
-    TodoVersion, // TODO
 }
 
 impl VersionRequirement {
-    pub fn to_parsed_version(&self) -> Version {
+    pub fn as_str(&self) -> &str {
         match self {
-            ExactVersion(version) => Version::from(version).expect("Failed to parse exact version"),
-            MinimumVersion(version) => {
-                Version::from(version).expect("Failed to parse minimum version")
-            }
-            TodoVersion => Version::from("0.0.0.0").expect("TODO version"),
+            ExactVersion(version) => version,
+            ExactByNameVersion(version) => version,
+            MinimumVersion(version) => version,
         }
     }
 }
@@ -198,19 +196,21 @@ impl VersionRequirement {
 enum VersionRelation {
     OkEqual,
     OkNewer,
+    KoNotEqual,
     KoNewer,
     KoOlder,
-    Missing,
+    Error,
 }
 
 impl Display for VersionRelation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            VersionRelation::OkEqual => f.write_str("equal:   ok"),
-            VersionRelation::OkNewer => f.write_str("newer:   ok"),
-            VersionRelation::KoNewer => f.write_str("newer:   !!"),
-            VersionRelation::KoOlder => f.write_str("older:   !!"),
-            VersionRelation::Missing => f.write_str("missing: !!"),
+            VersionRelation::OkEqual => f.write_str("equal: ok"),
+            VersionRelation::OkNewer => f.write_str("newer: ok"),
+            VersionRelation::KoNotEqual => f.write_str("<--->: !!"),
+            VersionRelation::KoNewer => f.write_str("newer: !!"),
+            VersionRelation::KoOlder => f.write_str("older: !!"),
+            VersionRelation::Error => f.write_str("error: !!"),
         }
     }
 }
@@ -225,7 +225,6 @@ struct ToolMetadata {
 enum Tool {
     Cargo,
     CargoComponent,
-    Clang,
     ComponentizeJs,
     ComponentizePy,
     Go,
@@ -260,11 +259,6 @@ impl Tool {
                 description: "Cargo subcommand for building WebAssembly components",
                 version_requirement: ExactVersion("0.13.2"),
             },
-            Tool::Clang => ToolMetadata {
-                short_name: "clang",
-                description: "C and C++ compiler",
-                version_requirement: TodoVersion,
-            },
             Tool::ComponentizeJs => ToolMetadata {
                 short_name: "componentize-js",
                 description:
@@ -289,7 +283,7 @@ impl Tool {
             Tool::GolemSdkRust => ToolMetadata {
                 short_name: "golem-rust",
                 description: "Golem SDK for Rust",
-                version_requirement: TodoVersion,
+                version_requirement: MinimumVersion("1.0.0"),
             },
             Tool::GolemSdkTypeScript => ToolMetadata {
                 short_name: "golem-ts",
@@ -334,7 +328,7 @@ impl Tool {
             Tool::RustTargetWasm32Wasi => ToolMetadata {
                 short_name: "rust target wasm32-wasi",
                 description: "Rust target for building WebAssembly components",
-                version_requirement: TodoVersion,
+                version_requirement: ExactByNameVersion("wasm32-wasi"),
             },
             Tool::TinyGo => ToolMetadata {
                 short_name: "tinygo",
@@ -344,7 +338,8 @@ impl Tool {
             Tool::WasiSdk => ToolMetadata {
                 short_name: "wasi-sdk",
                 description: "WebAssembly toolchain for C and C++",
-                version_requirement: TodoVersion,
+                // NOTE: Version is not detectable currently, from 24.0 it will be stored in a version file
+                version_requirement: ExactByNameVersion("WASI_SDK set"),
             },
             Tool::WasmTools => ToolMetadata {
                 short_name: "wasm-tools",
@@ -368,7 +363,6 @@ impl Tool {
         match self {
             Tool::Cargo => vec![Tool::Rustup],
             Tool::CargoComponent => vec![Tool::Cargo],
-            Tool::Clang => vec![],
             Tool::ComponentizeJs => vec![Tool::Npm],
             Tool::ComponentizePy => vec![Tool::Pip],
             Tool::Go => vec![],
@@ -424,14 +418,13 @@ impl Tool {
             Tool::CargoComponent => {
                 cmd_version(dir, "cargo-component", vec!["--version"], &version_regex)
             }
-            Tool::Clang => cmd_version(dir, "clang", vec!["--version"], &version_regex),
             Tool::ComponentizeJs => npm_package_version(dir, "@golemcloud/componentize-js"),
             Tool::ComponentizePy => {
                 cmd_version(dir, "componentize-py", vec!["--version"], &version_regex)
             }
             Tool::Go => cmd_version(dir, "go", vec!["version"], &version_regex),
             Tool::GolemSdkGo => go_mod_version(dir, "github.com/golemcloud/golem-go"),
-            Tool::GolemSdkRust => Err("TODO".to_string()),
+            Tool::GolemSdkRust => rust_package_version(dir, "golem-rust"),
             Tool::GolemSdkTypeScript => npm_package_version(dir, "@golemcloud/golem-ts"),
             Tool::Jco => npm_package_version(dir, "@golemcloud/jco"),
             Tool::Node => cmd_version(dir, "node", vec!["--version"], &version_regex),
@@ -440,12 +433,99 @@ impl Tool {
             Tool::Python => cmd_version(dir, "python", vec!["--version"], &version_regex),
             Tool::Rustc => cmd_version(dir, "rustc", vec!["--version"], &version_regex),
             Tool::Rustup => cmd_version(dir, "rustup", vec!["--version"], &version_regex),
-            Tool::RustTargetWasm32Wasi => Err("TODO".to_string()),
+            Tool::RustTargetWasm32Wasi => rust_target(dir, "wasm32-wasi"),
             Tool::TinyGo => cmd_version(dir, "tinygo", vec!["version"], &version_regex),
-            Tool::WasiSdk => Err("TODO".to_string()),
+            Tool::WasiSdk => std::env::var("WASI_SDK")
+                .map(|_| "WASI_SDK set".to_string())
+                .map_err(|_| "WASI_SDK no set".to_string()),
             Tool::WasmTools => cmd_version(dir, "wasm-tools", vec!["--version"], &version_regex),
             Tool::WitBindgen => cmd_version(dir, "wit-bindgen", vec!["--version"], &version_regex),
             Tool::Zig => cmd_version(dir, "zig", vec!["version"], &version_regex),
+        }
+    }
+}
+
+struct DetectedTool {
+    tool: Tool,
+    metadata: ToolMetadata,
+    version: Option<String>,
+    version_relation: VersionRelation,
+    details: String,
+}
+
+impl DetectedTool {
+    pub fn new(dir: &Path, tool: Tool) -> Self {
+        let metadata = tool.metadata();
+        let version = tool.get_version(dir);
+        let required_version = &metadata.version_requirement;
+
+        fn compare(
+            required_version: &str,
+            version: &str,
+            newer_accepted: bool,
+        ) -> Result<VersionRelation, String> {
+            match Version::from(required_version) {
+                Some(required_version) => match Version::from(version) {
+                    Some(version) => {
+                        let comp_op = version.compare(&required_version);
+                        match comp_op {
+                            CompOp::Eq => Ok(VersionRelation::OkEqual),
+                            CompOp::Lt => Ok(VersionRelation::KoOlder),
+                            CompOp::Gt if newer_accepted => Ok(VersionRelation::OkNewer),
+                            CompOp::Gt => Ok(VersionRelation::KoNewer),
+                            _ => Err(format!("Unexpected compare result: {}", comp_op.sign())),
+                        }
+                    }
+                    None => Err(format!("Failed to parse detected version: {}", version)),
+                },
+                None => Err(format!(
+                    "Failed to parse required version: {}",
+                    required_version
+                )),
+            }
+        }
+
+        let result = match &version {
+            Ok(version) => match &required_version {
+                ExactVersion(required_version) => compare(required_version, version, false),
+                ExactByNameVersion(required_version) => {
+                    if version == required_version {
+                        Ok(VersionRelation::OkEqual)
+                    } else {
+                        Ok(VersionRelation::KoNotEqual)
+                    }
+                }
+                MinimumVersion(required_version) => compare(required_version, version, true),
+            },
+            Err(error) => Err(format!("Failed to get tool version: {}", error)),
+        };
+
+        match result {
+            Ok(relation) => {
+                let sign = match relation {
+                    VersionRelation::OkEqual => "==",
+                    VersionRelation::OkNewer => ">",
+                    VersionRelation::KoNotEqual => "!=",
+                    VersionRelation::KoNewer => ">",
+                    VersionRelation::KoOlder => "<",
+                    VersionRelation::Error => "!!",
+                };
+
+                Self {
+                    tool,
+                    metadata: tool.metadata(),
+                    version: version.ok(),
+                    version_relation: relation,
+                    details: format!("({}{})", sign, required_version.as_str()),
+                }
+            }
+            Err(details) => Self {
+                tool,
+                metadata: tool.metadata(),
+                version: None,
+                version_relation: VersionRelation::Error,
+                details,
+            },
         }
     }
 }
@@ -467,66 +547,41 @@ pub fn diagnose() {
             let all_tools: Vec<_> =
                 Tool::with_all_dependencies(detected_language.language.tools_with_rpc())
                     .iter()
-                    .map(|t| (*t, t.metadata()))
-                    .map(|(tool, meta)| {
-                        (tool, meta, tool.get_version(&detected_language.project_dir))
-                    })
+                    .map(|t| DetectedTool::new(&detected_language.project_dir, *t))
                     .collect();
 
             let (name_padding, version_padding) = {
                 let mut name_padding = 0;
                 let mut version_padding = 0;
-                for (_, meta, version) in &all_tools {
-                    name_padding = max(name_padding, meta.short_name.len());
+                for tool in &all_tools {
+                    name_padding = max(name_padding, tool.metadata.short_name.len());
                     version_padding = max(
                         version_padding,
-                        version.as_ref().ok().map(|v| v.len()).unwrap_or(0),
+                        tool.version.as_ref().map(|v| v.len()).unwrap_or(0),
                     );
                 }
                 (name_padding + 1, version_padding + 1)
             };
 
             println!("Recommended tooling:");
-            for (_, metadata, _) in &all_tools {
+            for tool in &all_tools {
                 println!(
                     "  {: <width$} {}",
-                    format!("{}:", metadata.short_name),
-                    metadata.description,
+                    format!("{}:", tool.metadata.short_name),
+                    tool.metadata.description,
                     width = name_padding,
                 );
             }
             println!();
 
             println!("Installed tool versions:");
-            for (_, metadata, version) in &all_tools {
-                let required_version = metadata.version_requirement.to_parsed_version();
-
-                let version = match version {
-                    Ok(version) => Version::from(version)
-                        .ok_or_else(|| format!("Failed to parse version: {}", version)),
-                    Err(err) => Err(err.clone()),
-                };
-
-                let comp_op = version.as_ref().ok().map(|v| v.compare(&required_version));
-                let version_relation = match (&comp_op, &metadata.version_requirement) {
-                    (Some(CompOp::Eq), _) => VersionRelation::OkEqual,
-                    (Some(CompOp::Gt), MinimumVersion(_)) => VersionRelation::OkNewer,
-                    (Some(CompOp::Lt), _) => VersionRelation::KoOlder,
-                    (Some(CompOp::Gt), ExactVersion(_)) => VersionRelation::KoNewer,
-                    _ => VersionRelation::Missing,
-                };
-
+            for tool in &all_tools {
                 println!(
                     "  {: <name_padding$} [{}] {: <version_padding$}{}",
-                    format!("{}:", metadata.short_name),
-                    version_relation,
-                    match version {
-                        Ok(version) => version.to_string(),
-                        Err(error) => format!("{: <version_padding$} ({})", "", error).to_string(),
-                    },
-                    comp_op
-                        .map(|c| format!(" ({}{})", c.sign(), required_version))
-                        .unwrap_or_else(|| "".to_string()),
+                    format!("{}:", tool.metadata.short_name),
+                    tool.version_relation,
+                    tool.version.clone().unwrap_or_else(|| "".to_string()),
+                    tool.details,
                 );
             }
         }
@@ -549,6 +604,23 @@ fn cmd_version(dir: &Path, cmd: &str, args: Vec<&str>, regex: &Regex) -> Result<
     }
 }
 
+fn rust_target(dir: &Path, target_name: &str) -> Result<String, String> {
+    dep_version(
+        dir,
+        "rustup",
+        vec!["target", "list", "--installed"],
+        |dep| (dep == target_name).then(|| target_name.to_string()),
+    )
+}
+
+fn rust_package_version(dir: &Path, package_name: &str) -> Result<String, String> {
+    dep_version(dir, "cargo", vec!["tree", "--prefix", "none"], |dep| {
+        let tokens: Vec<_> = dep.split(' ').collect();
+        (tokens.len() >= 2 && tokens[0] == package_name && tokens[1].starts_with("v"))
+            .then(|| tokens[1][1..].to_string())
+    })
+}
+
 fn npm_package_version(dir: &Path, package_name: &str) -> Result<String, String> {
     fn trim_scope_symbol(s: &str) -> &str {
         s.starts_with("@").then(|| &s[1..]).unwrap_or(s)
@@ -567,7 +639,7 @@ fn npm_package_version(dir: &Path, package_name: &str) -> Result<String, String>
 
 fn go_mod_version(dir: &Path, module_name: &str) -> Result<String, String> {
     dep_version(dir, "go", vec!["list", "-m", "all"], |dep| {
-        let tokens: Vec<_> = dep.split(" ").collect();
+        let tokens: Vec<_> = dep.split(' ').collect();
         (tokens.len() == 2 && tokens[0] == module_name && tokens[1].starts_with("v"))
             .then(|| tokens[1][1..].to_string())
     })
