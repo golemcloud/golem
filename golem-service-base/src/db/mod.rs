@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::ops::Deref;
 use std::path::Path;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -22,38 +21,14 @@ use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteCon
 use tracing::info;
 
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
-struct DbPostgresConfigWrapper<'a>(&'a DbPostgresConfig);
-impl<'a> Deref for DbPostgresConfigWrapper<'a> {
-    type Target = DbPostgresConfig;
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-struct DbSqliteConfigWrapper<'a>(&'a DbSqliteConfig);
-impl<'a> Deref for DbSqliteConfigWrapper<'a> {
-    type Target = DbSqliteConfig;
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
 
-impl<'a> From<DbPostgresConfigWrapper<'a>> for PgConnectOptions {
-    fn from(config: DbPostgresConfigWrapper) -> Self {
-        PgConnectOptions::new()
-            .host(config.host.as_str())
-            .port(config.port)
-            .database(config.database.as_str())
-            .username(config.username.as_str())
-            .password(config.password.as_str())
-    }
-}
-
-impl<'a> From<DbSqliteConfigWrapper<'a>> for SqliteConnectOptions {
-    fn from(config: DbSqliteConfigWrapper) -> Self {
-        SqliteConnectOptions::new()
-            .filename(std::path::Path::new(config.database.as_str()))
-            .create_if_missing(true)
-    }
+fn create_postgres_options(config: &DbPostgresConfig) -> PgConnectOptions {
+    PgConnectOptions::new()
+        .host(config.host.as_str())
+        .port(config.port)
+        .database(config.database.as_str())
+        .username(config.username.as_str())
+        .password(config.password.as_str())
 }
 
 pub async fn create_postgres_pool(
@@ -64,7 +39,6 @@ pub async fn create_postgres_pool(
         "DB Pool: postgresql://{}:{}/{}?currentSchema={}",
         config.host, config.port, config.database, schema
     );
-    let conn_options = PgConnectOptions::from(DbPostgresConfigWrapper(config));
 
     PgPoolOptions::new()
         .max_connections(config.max_connections)
@@ -76,7 +50,7 @@ pub async fn create_postgres_pool(
                 Ok(())
             })
         })
-        .connect_with(conn_options)
+        .connect_with(create_postgres_options(config))
         .await
         .map_err(|e| e.into())
 }
@@ -87,8 +61,7 @@ pub async fn postgres_migrate(config: &DbPostgresConfig, path: &str) -> Result<(
         "DB migration: postgresql://{}:{}/{}?currentSchema={}, path: {}",
         config.host, config.port, config.database, schema, path
     );
-    let conn_options = PgConnectOptions::from(DbPostgresConfigWrapper(config));
-    let mut conn = PgConnection::connect_with(&conn_options).await?;
+    let mut conn = PgConnection::connect_with(&create_postgres_options(config)).await?;
     let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", schema);
     conn.execute(sqlx::query(&sql)).await?;
     let sql = format!("SET SCHEMA '{}';", schema);
@@ -111,21 +84,25 @@ pub async fn postgres_migrate(config: &DbPostgresConfig, path: &str) -> Result<(
     Ok(())
 }
 
+fn create_sqlite_options(config: &DbSqliteConfig) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(Path::new(config.database.as_str()))
+        .create_if_missing(true)
+}
+
 pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>, Box<dyn Error>> {
     info!("DB Pool: sqlite://{}", config.database);
-    let conn_options = SqliteConnectOptions::from(DbSqliteConfigWrapper(config));
 
     SqlitePoolOptions::new()
         .max_connections(config.max_connections)
-        .connect_with(conn_options)
+        .connect_with(create_sqlite_options(config))
         .await
         .map_err(|e| e.into())
 }
 
 pub async fn sqlite_migrate(config: &DbSqliteConfig, path: &str) -> Result<(), Box<dyn Error>> {
     info!("DB migration: sqlite://{}, path: {}", config.database, path);
-    let conn_options = SqliteConnectOptions::from(DbSqliteConfigWrapper(config));
-    let mut conn = SqliteConnection::connect_with(&conn_options).await?;
+    let mut conn = SqliteConnection::connect_with(&create_sqlite_options(config)).await?;
     let migrator = sqlx::migrate::Migrator::new(Path::new(path)).await?;
     migrator.run(&mut conn).await?;
     let _ = conn.close().await;
