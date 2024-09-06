@@ -1,4 +1,18 @@
-use crate::InvocationName;
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::call_type::CallType;
 use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
@@ -23,20 +37,18 @@ pub enum RegistryKey {
 }
 
 impl RegistryKey {
-    pub fn from_invocation_name(invocation_name: &InvocationName) -> RegistryKey {
+    pub fn from_invocation_name(invocation_name: &CallType) -> RegistryKey {
         match invocation_name {
-            InvocationName::VariantConstructor(variant_name) => {
+            CallType::VariantConstructor(variant_name) => {
                 RegistryKey::VariantName(variant_name.clone())
             }
-            InvocationName::Function(function_name) => {
-                match function_name.site().interface_name() {
-                    None => RegistryKey::FunctionName(function_name.function().function_name()),
-                    Some(interface_name) => RegistryKey::FunctionNameWithInterface {
-                        interface_name: interface_name.to_string(),
-                        function_name: function_name.function().function_name(),
-                    },
-                }
-            }
+            CallType::Function(function_name) => match function_name.site().interface_name() {
+                None => RegistryKey::FunctionName(function_name.function().function_name()),
+                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
+                    interface_name: interface_name.to_string(),
+                    function_name: function_name.function().function_name(),
+                },
+            },
         }
     }
 }

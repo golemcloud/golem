@@ -23,7 +23,7 @@ use crate::expr::Expr;
 use crate::parser::rib_expr::rib_program;
 use combine::stream::easy;
 
-pub fn block<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn multi_line_block<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     spaces().with(between(
         char_('{').skip(spaces()),
         char_('}').skip(spaces()),

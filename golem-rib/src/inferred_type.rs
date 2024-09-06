@@ -1,18 +1,24 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::collections::{HashMap, HashSet};
 
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
 
 // TODO; Clean up Unification
-
-// The reason to replicate analysed_type types
-// in inferred_type can be explained with an example.
-// During the type_pull_down stage
-// we are yet unsure of a specific AnalysedType (it can be AllOf(...))
-// yet for a specific field
-// type, and yet be able to say that the root node is of the type record
-// with the field name, and tag their types as InferredTypes.
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
 pub enum InferredType {
     Bool,
     S8,
@@ -39,10 +45,10 @@ pub enum InferredType {
     },
     Variant(Vec<(String, Option<InferredType>)>),
     Resource {
-        resource_id: AnalysedResourceId,
-        resource_mode: AnalysedResourceMode,
+        resource_id: u64,
+        resource_mode: u8,
     },
-    OneOf(Vec<InferredType>), // literalOneOf 1 --> u32 or u8?
+    OneOf(Vec<InferredType>),
     AllOf(Vec<InferredType>),
     Unknown,
     // Because function result can be a vector of types
@@ -53,22 +59,43 @@ pub struct TypeErrorMessage(pub String);
 
 impl InferredType {
     pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
-        if types.is_empty() {
+        let flattened = InferredType::flatten_all_of_list(&types);
+
+        let mut types: Vec<InferredType> =
+            flattened.into_iter().filter(|t| !t.is_unknown()).collect();
+
+        let mut unique_types: HashSet<InferredType> = HashSet::new();
+        types.retain(|t| unique_types.insert(t.clone()));
+
+        if unique_types.is_empty() {
             None
-        } else if types.len() == 1 {
-            types.into_iter().next()
+        } else if unique_types.len() == 1 {
+            unique_types.into_iter().next()
         } else {
-            Some(InferredType::AllOf(types))
+            let mut unique_all_of_types: Vec<InferredType> = unique_types.into_iter().collect();
+            unique_all_of_types.sort();
+            Some(InferredType::AllOf(unique_all_of_types))
         }
     }
 
     pub fn one_of(types: Vec<InferredType>) -> Option<InferredType> {
+        let flattened = InferredType::flatten_one_of_list(&types);
+
+        let mut types: Vec<InferredType> =
+            flattened.into_iter().filter(|t| !t.is_unknown()).collect();
+
+        // Make sure they are unique types
+        let mut unique_types: HashSet<InferredType> = HashSet::new();
+        types.retain(|t| unique_types.insert(t.clone()));
+
         if types.is_empty() {
             None
         } else if types.len() == 1 {
             types.into_iter().next()
         } else {
-            Some(InferredType::OneOf(types))
+            let mut unique_one_of_types: Vec<InferredType> = unique_types.into_iter().collect(); // Step 1: Col
+            unique_one_of_types.sort();
+            Some(InferredType::OneOf(unique_one_of_types))
         }
     }
 
@@ -85,6 +112,7 @@ impl InferredType {
     pub fn is_one_of(&self) -> bool {
         matches!(self, InferredType::OneOf(_))
     }
+
     pub fn un_resolved(&self) -> Option<String> {
         match self {
             InferredType::Bool => None,
@@ -192,22 +220,11 @@ impl InferredType {
     }
     pub fn unify_types(&self) -> Result<InferredType, Vec<String>> {
         match self {
-            // AllOf types may include AllOf Types and OneOf types within itself
-            // Semantic reasoning is possible for  such a type only if group all the one-ofs together
-            // within this list and flatten all the all-ofs allowing reasonable unification.
-            // Example: AllOf(OneOf(u32, u8), AllOf(Str), OneOf(u16, u32)) is flattened
-            // to AllOf(OneOf(u32, u8, u16, u32), Str)
-            // and now this type cannot be unified and cannot pass since a Str is not one of the numbers
             InferredType::AllOf(types) => {
                 let flattened_all_ofs = Self::flatten_all_of_list(types);
                 Self::unify_all_required_types(&flattened_all_ofs)
             }
 
-            // Unlike AllOf types, which hardly fails while unification, OneOfs is more prone to type check failures.as
-            // Unifying OneOfs should return a proper type back instead of alternatives.
-            // Example: There is no reason to the following
-            // let x = Expr::Number(1, OneOf(U32, U64));
-            // call(x) // expecting U32
             InferredType::OneOf(one_of_types) => {
                 let flattened_one_ofs = Self::flatten_one_of_list(one_of_types);
                 Self::unify_all_alternative_types(&flattened_one_ofs)
@@ -277,8 +294,8 @@ impl InferredType {
                 resource_id,
                 resource_mode,
             } => Ok(InferredType::Resource {
-                resource_id: resource_id.clone(),
-                resource_mode: resource_mode.clone(),
+                resource_id: *resource_id,
+                resource_mode: *resource_mode,
             }),
 
             _ => Ok(self.clone()),
@@ -363,7 +380,6 @@ impl InferredType {
                 }
             };
         }
-        // This may or may not result in AllOf itself
         Ok(unified_type)
     }
 
@@ -373,16 +389,9 @@ impl InferredType {
             let unified = typ.unify_types().unwrap_or(typ.clone());
             unified_type = unified_type.unify_with_required(&unified)?;
         }
-        // This may or may not result in AllOf itself
         Ok(unified_type)
     }
 
-    // An example:
-    // OneOf(Record("a" ->  Type A), Record("a" ->  Type B))
-    // a field exist on both sides, and if Type A != Type B, they couldn't be merged
-    // However, if it says
-    // OneOf(Record("a" -> AllOf(OneOf(TypeA, TypeB), TypeA), Record("a" -> TypeA))
-    // these could be merged, since the types merge to TypeA on both sides
     fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, Vec<String>> {
         if self == &InferredType::Unknown {
             Ok(other.clone())
@@ -569,8 +578,8 @@ impl InferredType {
                 ) => {
                     if a_id == b_id && a_mode == b_mode {
                         Ok(InferredType::Resource {
-                            resource_id: a_id.clone(),
-                            resource_mode: a_mode.clone(),
+                            resource_id: *a_id,
+                            resource_mode: *a_mode,
                         })
                     } else {
                         Err(vec!["Resource id or mode do not match".to_string()])
@@ -599,7 +608,6 @@ impl InferredType {
                     }
                 }
 
-                // In all other cases, it should match exact
                 (a, b) => {
                     if a == b {
                         Ok(a.clone())
@@ -625,7 +633,6 @@ impl InferredType {
             self.unify_types()
         } else {
             match (self, other) {
-                // { name: Opt<Str>, age: Option<U32> } and { name: Str }
                 (InferredType::Record(a_fields), InferredType::Record(b_fields)) => {
                     let mut fields: HashMap<String, InferredType> = HashMap::new();
                     // Common fields unified else kept it as it is
@@ -661,21 +668,11 @@ impl InferredType {
                     Box::new(a_type.unify_with_required(b_type)?),
                 )),
                 (InferredType::Flags(a_flags), InferredType::Flags(b_flags)) => {
-                    // It's hard to unify flags. Or the semantic meaning of unifying flags is hard
-                    // so we simply expect them to be the same, as the ProtoVal expects a vector of boolean
-                    // in the correct order when invoking worker function with flags. Unifying them has
-                    // no guarantee it's in the right order
                     if a_flags != b_flags {
                         return Err(vec!["Flags do not match".to_string()]);
                     }
                     Ok(InferredType::Flags(a_flags.clone()))
                 }
-                // It's hard to unify flags. Or the semantic meaning of unifying flags is hard
-                // so we simply expect them to be the same, as the ProtoVal expects a vector of boolean
-                // in the correct order when invoking worker function with flags. Unifying them has
-                // no guarantee it's in the right order. Also most probably enums and flags are derived
-                // from component metadata and type inference shouldn't need to deal with dynamically created
-                // enum strings
                 (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                     if a_variants != b_variants {
                         return Err(vec!["Enum variants do not match".to_string()]);
@@ -709,7 +706,6 @@ impl InferredType {
                         error: b_error,
                     },
                 ) => {
-                    // here we basically replace the ones that are empty with the other that is non empty
                     let ok = match (a_ok, b_ok) {
                         (Some(a_inner), Some(b_inner)) => {
                             Some(Box::new(a_inner.unify_with_required(b_inner)?))
@@ -729,8 +725,6 @@ impl InferredType {
                     };
                     Ok(InferredType::Result { ok, error })
                 }
-                // Here we make sure we unify the types but pick just one side of the variant
-                // There can be changes in this logic but depends on the test cases
                 (InferredType::Variant(a_variants), InferredType::Variant(b_variants)) => {
                     let mut variants = HashMap::new();
                     for (a_name, a_type) in a_variants {
@@ -769,12 +763,11 @@ impl InferredType {
                         return Err(vec!["Resource id or mode do not match".to_string()]);
                     }
                     Ok(InferredType::Resource {
-                        resource_id: a_id.clone(),
-                        resource_mode: a_mode.clone(),
+                        resource_id: *a_id,
+                        resource_mode: *a_mode,
                     })
                 }
 
-                // Given we always flatten AllOf and OneOf, in reality we can check if All of the types are part of the One ofs.
                 (InferredType::AllOf(types), InferredType::OneOf(one_of_types)) => {
                     for typ in types {
                         if !one_of_types.contains(typ) {
@@ -783,11 +776,9 @@ impl InferredType {
                             );
                         }
                     }
-                    // Once we know the types in the AllOf are part of OneOf, we can simply return the unified all-of
                     Self::unify_all_required_types(types)
                 }
 
-                // Given we always flatten AllOf and OneOf, in reality we can check if All of the types are part of the One ofs.
                 (InferredType::OneOf(one_of_types), InferredType::AllOf(all_of_types)) => {
                     for required_type in all_of_types {
                         if !one_of_types.contains(required_type) {
@@ -1058,74 +1049,54 @@ impl InferredType {
         }
     }
 
-    // The only to update inferred type is to discard unknown types
-    // and push that as `allOf`
-    pub fn update(&mut self, new_inferred_type: InferredType) {
+    pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
         if !internal::need_update(self, &new_inferred_type) {
-            return;
+            return self.clone();
         }
 
-        match (&mut *self, new_inferred_type) {
-            (InferredType::Unknown, new_type) => {
-                *self = new_type;
-            }
+        match (self, new_inferred_type) {
+            (InferredType::Unknown, new_type) => new_type,
 
-            (InferredType::AllOf(existing_types), InferredType::AllOf(mut new_types)) => {
-                // Extend with new types only if they are not already present
-                new_types.retain(|new_type| {
-                    !existing_types.contains(new_type) || !new_type.is_unknown()
-                });
-                existing_types.retain(|x| !x.is_unknown());
-                existing_types.extend(new_types);
+            (InferredType::AllOf(existing_types), InferredType::AllOf(new_types)) => {
+                let mut all_types = new_types.clone();
+                all_types.extend(existing_types.clone());
+
+                InferredType::all_of(all_types).unwrap_or(InferredType::Unknown)
             }
 
             (InferredType::AllOf(existing_types), new_type) => {
-                if !existing_types.contains(&new_type) && !new_type.is_unknown() {
-                    existing_types.retain(|x| !x.is_unknown());
-                    existing_types.push(new_type);
-                }
+                let mut all_types = existing_types.clone();
+                all_types.push(new_type);
+
+                InferredType::all_of(all_types).unwrap_or(InferredType::Unknown)
             }
 
-            (current_type, InferredType::AllOf(mut new_types)) => {
-                new_types.retain(|x| !x.is_unknown());
+            (current_type, InferredType::AllOf(new_types)) => {
+                let mut all_types = new_types.clone();
+                all_types.push(current_type.clone());
 
-                if new_types.contains(current_type) || current_type.is_unknown() {
-                    *current_type = InferredType::AllOf(new_types);
-                } else {
-                    new_types.push(current_type.clone());
-                    *current_type = InferredType::AllOf(new_types);
-                }
+                InferredType::all_of(all_types).unwrap_or(InferredType::Unknown)
             }
 
-            (InferredType::OneOf(existing_types), InferredType::OneOf(mut new_types)) => {
-                // Extend with new types only if they are not already present
-                new_types.retain(|new_type| !existing_types.contains(new_type));
-                existing_types.extend(new_types);
+            (InferredType::OneOf(existing_types), InferredType::OneOf(new_types)) => {
+                let mut one_of_types = new_types.clone();
+                one_of_types.extend(existing_types.clone());
+
+                InferredType::one_of(one_of_types).unwrap_or(InferredType::Unknown)
             }
 
-            (InferredType::OneOf(types), new_type) => {
-                types.retain(|x| !x.is_unknown());
-                *self = InferredType::AllOf(vec![self.clone(), new_type]);
+            (InferredType::OneOf(_), new_type) => {
+                InferredType::all_of(vec![self.clone(), new_type]).unwrap_or(InferredType::Unknown)
             }
 
-            (current_type, InferredType::OneOf(mut newtypes)) => {
-                newtypes.retain(|x| !x.is_unknown());
-                if !current_type.is_unknown() {
-                    *self = InferredType::AllOf(vec![
-                        current_type.clone(),
-                        InferredType::OneOf(newtypes),
-                    ]);
-                } else {
-                    *self = InferredType::OneOf(newtypes);
-                }
+            (current_type, InferredType::OneOf(newtypes)) => {
+                InferredType::all_of(vec![current_type.clone(), InferredType::OneOf(newtypes)])
+                    .unwrap_or(InferredType::Unknown)
             }
 
             (current_type, new_type) => {
-                if current_type != &new_type && !current_type.is_unknown() {
-                    *current_type = InferredType::AllOf(vec![current_type.clone(), new_type]);
-                } else {
-                    *current_type = new_type;
-                }
+                InferredType::all_of(vec![current_type.clone(), new_type.clone()])
+                    .unwrap_or(InferredType::Unknown)
             }
         }
     }
@@ -1176,8 +1147,11 @@ impl From<AnalysedType> for InferredType {
             ),
             AnalysedType::Handle(golem_wasm_ast::analysis::TypeHandle { resource_id, mode }) => {
                 InferredType::Resource {
-                    resource_id,
-                    resource_mode: mode,
+                    resource_id: resource_id.0,
+                    resource_mode: match mode {
+                        AnalysedResourceMode::Owned => 0,
+                        AnalysedResourceMode::Borrowed => 1,
+                    },
                 }
             }
         }
@@ -1206,6 +1180,7 @@ mod internal {
 
 #[cfg(test)]
 mod test {
+
     #[test]
     fn test_flatten_one_of() {
         use super::InferredType;
