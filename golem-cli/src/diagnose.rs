@@ -722,7 +722,7 @@ pub fn diagnose(command: cli::Command) {
             }
             println!();
 
-            diagnose_tools(
+            report_tools(
                 Tool::with_all_dependencies(selected_language.language.tools_with_rpc())
                     .iter()
                     .map(|t| DetectedTool::new(&selected_language.project_dir, *t))
@@ -738,7 +738,7 @@ pub fn diagnose(command: cli::Command) {
                 println!("Running diagnostics for common Worker to Worker RPC tooling.\n");
 
                 let dir = PathBuf::from(".");
-                diagnose_tools(
+                report_tools(
                     Tool::with_all_dependencies(Language::common_rpc_tools())
                         .iter()
                         .map(|t| DetectedTool::new(&dir, *t))
@@ -752,7 +752,7 @@ pub fn diagnose(command: cli::Command) {
     }
 }
 
-fn diagnose_tools(all_tools: Vec<DetectedTool>) {
+fn report_tools(all_tools: Vec<DetectedTool>) {
     let (name_padding, version_padding) = {
         let mut name_padding = 0;
         let mut version_padding = 0;
