@@ -233,7 +233,10 @@ where
                             set_not_draft.push(api_definition_key.clone());
                         }
                         let definition = record.try_into().map_err(|e| {
-                            ApiDeploymentError::internal(e, "Failed to convert record")
+                            ApiDeploymentError::internal(
+                                e,
+                                "Failed to convert API definition record",
+                            )
                         })?;
                         definitions.push(definition);
                     }
@@ -369,10 +372,9 @@ where
                 subdomain: deployment_record.subdomain,
             };
 
-            let namespace: Namespace = deployment_record
-                .namespace
-                .try_into()
-                .map_err(|e| ApiDeploymentError::internal(e, "Failed to convert record"))?;
+            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|e| {
+                ApiDeploymentError::internal(e, "Failed to convert API deployment namespace")
+            })?;
 
             let api_definition_key = ApiDefinitionIdWithVersion {
                 id: deployment_record.definition_id.into(),
@@ -427,10 +429,9 @@ where
             }
 
             if namespace.is_none() {
-                namespace =
-                    Some(deployment_record.namespace.try_into().map_err(|e| {
-                        ApiDeploymentError::internal(e, "Failed to convert namespace")
-                    })?);
+                namespace = Some(deployment_record.namespace.try_into().map_err(|e| {
+                    ApiDeploymentError::internal(e, "Failed to convert API deployment namespace")
+                })?);
             }
 
             if created_at.is_none() || created_at.is_some_and(|t| t > deployment_record.created_at)
@@ -468,11 +469,9 @@ where
         let mut values: Vec<CompiledHttpApiDefinition> = vec![];
 
         for record in records {
-            values.push(
-                record
-                    .try_into()
-                    .map_err(|e| ApiDeploymentError::internal(e, "Failed to convert record"))?,
-            );
+            values.push(record.try_into().map_err(|e| {
+                ApiDeploymentError::internal(e, "Failed to convert API definition record")
+            })?);
         }
 
         Ok(values)

@@ -266,7 +266,7 @@ where
             compiled_http_api_definition.clone(),
             created_at,
         )
-        .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
+        .map_err(|e| ApiDefinitionError::internal(e, "Failed to create API definition record"))?;
 
         self.definition_repo.create(&record).await?;
 
@@ -319,7 +319,7 @@ where
             compiled_http_api_definition.clone(),
             created_at,
         )
-        .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
+        .map_err(|e| ApiDefinitionError::internal(e, "Failed to create API definition record"))?;
 
         self.definition_repo.update(&record).await?;
 
@@ -341,9 +341,9 @@ where
 
         match value {
             Some(v) => {
-                let definition = v
-                    .try_into()
-                    .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
+                let definition = v.try_into().map_err(|e| {
+                    ApiDefinitionError::internal(e, "Failed to convert API definition record")
+                })?;
                 Ok(Some(definition))
             }
             None => Ok(None),
@@ -396,7 +396,9 @@ where
             .iter()
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
-            .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
+            .map_err(|e| {
+                ApiDefinitionError::internal(e, "Failed to convert API definition record")
+            })?;
 
         Ok(values)
     }
@@ -418,7 +420,9 @@ where
             .iter()
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
-            .map_err(|e| ApiDefinitionError::internal(e, "Failed to convert record"))?;
+            .map_err(|e| {
+                ApiDefinitionError::internal(e, "Failed to convert API definition record")
+            })?;
 
         Ok(values)
     }
