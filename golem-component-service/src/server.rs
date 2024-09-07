@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_component_service::api::make_open_api_service;
 use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
 use golem_component_service::service::Services;
 use golem_component_service::{api, grpcapi, metrics};
-use golem_service_base::config::DbConfig;
 use golem_service_base::db;
 use opentelemetry::global;
 use poem::listener::TcpListener;

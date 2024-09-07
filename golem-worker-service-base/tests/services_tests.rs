@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_common::model::ComponentId;
     use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
-    use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
     use golem_service_base::model::Component;
     use golem_wasm_ast::analysis::{
