@@ -466,6 +466,7 @@ impl Expr {
         self.infer_function_types(function_type_registry)
             .map_err(|x| vec![x])?;
         self.infer_variants(function_type_registry);
+        self.infer_enums(function_type_registry);
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.unify_types()?;
@@ -608,6 +609,10 @@ impl Expr {
                 }
             }
         }
+    }
+
+    pub fn infer_enums(&mut self, function_type_registry: &FunctionTypeRegistry) {
+        type_inference::infer_enums(self, function_type_registry);
     }
 
     pub fn infer_variants(&mut self, function_type_registry: &FunctionTypeRegistry) {
@@ -978,6 +983,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                         Expr::call(name.try_into()?, params)
                     }
                     golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
+                        name,
+                    ) => Expr::call(ParsedFunctionName::parse(name)?, params),
+                    golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                         name,
                     ) => Expr::call(ParsedFunctionName::parse(name)?, params),
                 }

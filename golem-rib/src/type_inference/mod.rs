@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use enum_resolution::*;
 pub use expr_visitor::*;
 pub use function_type_inference::*;
 pub use global_input_inference::*;
@@ -41,6 +42,7 @@ mod type_reset;
 mod type_unification;
 mod variant_resolution;
 
+mod enum_resolution;
 mod global_input_inference;
 mod inference_fix_point;
 mod type_binding;
@@ -343,6 +345,149 @@ mod type_inference_tests {
             assert_eq!(expr, expected);
         }
     }
+    mod enum_tests {
+        use crate::type_inference::type_inference_tests::internal;
+        use crate::type_inference::type_inference_tests::internal::{
+            get_analysed_exports, get_analysed_type_enum,
+        };
+        use crate::{Expr, FunctionTypeRegistry};
+
+        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+
+        #[tokio::test]
+        async fn test_enum_construction_and_pattern_match() {
+            let input_enum_type = get_analysed_type_enum(vec!["foo", "bar", "foo-bar"]);
+
+            let output_enum_type =
+                get_analysed_type_enum(vec!["success", "failure", "in-progress"]);
+
+            let component_metadata = get_analysed_exports(
+                "process",
+                vec![
+                    input_enum_type.clone(),
+                    input_enum_type.clone(),
+                    input_enum_type.clone(),
+                    AnalysedType::Str(TypeStr),
+                ],
+                output_enum_type.clone(),
+            );
+
+            let expr = r#"
+              let user: str = request.body.user-id;
+              let query1 = foo;
+              let query2 = bar;
+              let query3 = foo-bar;
+              let result = process(query1, query2, query3, user);
+
+              let x = match result {
+                success => "success ${user}",
+                failure => "failed ${user}",
+                in-progress => "in-progress"
+              };
+
+               let y = match query2 {
+                foo => "y foo ${user}",
+                bar => "y bar ${user}",
+                foo-bar => "y foo-bar"
+              };
+
+              let z = match query3 {
+                foo => "z foo ${user}",
+                bar => "z bar ${user}",
+                foo-bar => "z foo-bar"
+              };
+
+              { x: x, y: y, z: z }
+
+            "#;
+
+            let function_type_registry =
+                FunctionTypeRegistry::from_export_metadata(&component_metadata);
+
+            let mut expr = Expr::from_text(expr).unwrap();
+
+            expr.infer_types(&function_type_registry).unwrap();
+
+            let expected = internal::expected_expr_for_enum_test();
+
+            assert_eq!(expr, expected);
+        }
+    }
+
+    mod variant_tests {
+
+        use crate::type_inference::type_inference_tests::internal::{
+            get_analysed_exports, get_analysed_type_variant,
+        };
+        use crate::{Expr, FunctionTypeRegistry};
+
+        use golem_wasm_ast::analysis::{AnalysedType, TypeStr, TypeU64};
+
+        #[tokio::test]
+        async fn test_variant_construction_and_pattern_match() {
+            let input_variant_type = get_analysed_type_variant(vec![
+                ("foo", Some(AnalysedType::U64(TypeU64))),
+                ("bar-baz", Some(AnalysedType::Str(TypeStr))),
+                ("foo-bar", None),
+            ]);
+
+            let output_variant_type = get_analysed_type_variant(vec![
+                ("success", Some(AnalysedType::U64(TypeU64))),
+                ("in-progress", Some(AnalysedType::Str(TypeStr))),
+                ("failure", None),
+            ]);
+
+            let component_metadata = get_analysed_exports(
+                "process",
+                vec![
+                    input_variant_type.clone(),
+                    input_variant_type.clone(),
+                    input_variant_type.clone(),
+                    AnalysedType::Str(TypeStr),
+                ],
+                output_variant_type.clone(),
+            );
+
+            let expr = r#"
+              let user = request.body.user-id;
+              let query1 = foo(user);
+              let query2 = bar-baz("jon");
+              let query3 = foo-bar;
+              let result = process(query1, query2, query3, user);
+
+              let x = match result {
+                success(number) => "success ${number}",
+                failure => "failed ${user}",
+                in-progress(txt) => "in-progress ${txt}"
+              };
+
+               let y = match query2 {
+                foo(n) => "y foo ${n}",
+                bar-baz(n) => "y bar ${n}",
+                foo-bar => "y foo-bar"
+              };
+
+              let z = match query3 {
+                foo(n) => "z foo ${n}",
+                bar-baz(n) => "z bar ${n}",
+                foo-bar => "z foo-bar"
+              };
+
+              { x: x, y: y, z: z }
+
+            "#;
+
+            let function_type_registry =
+                FunctionTypeRegistry::from_export_metadata(&component_metadata);
+
+            let mut expr = Expr::from_text(expr).unwrap();
+
+            let result = expr.infer_types(&function_type_registry);
+
+            assert!(result.is_ok());
+        }
+    }
+
     mod concat_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, VariableId};
@@ -1636,7 +1781,6 @@ mod type_inference_tests {
             assert_eq!(expr, expected);
         }
     }
-
     mod result_type_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, VariableId};
@@ -1743,13 +1887,15 @@ mod type_inference_tests {
     }
     mod internal {
         use crate::call_type::CallType;
+        use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
         };
+        use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedType, NameTypePair, TypeRecord, TypeU32, TypeU64,
+            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32, TypeU64,
         };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedOption;
@@ -1774,6 +1920,30 @@ mod type_inference_tests {
                 }),
             ];
             FunctionTypeRegistry::from_export_metadata(&metadata)
+        }
+
+        pub(crate) fn get_analysed_type_enum(cases: Vec<&str>) -> AnalysedType {
+            let type_enum = TypeEnum {
+                cases: cases.into_iter().map(|s| s.to_string()).collect(),
+            };
+
+            AnalysedType::Enum(type_enum)
+        }
+
+        pub(crate) fn get_analysed_type_variant(
+            variants: Vec<(&str, Option<AnalysedType>)>,
+        ) -> AnalysedType {
+            let name_option_pairs = variants
+                .into_iter()
+                .map(|(name, typ)| NameOptionTypePair {
+                    name: name.to_string(),
+                    typ,
+                })
+                .collect::<Vec<_>>();
+
+            AnalysedType::Variant(TypeVariant {
+                cases: name_option_pairs,
+            })
         }
 
         pub(crate) fn get_analysed_type_record(
@@ -1817,6 +1987,389 @@ mod type_inference_tests {
                     typ: output,
                 }],
             })]
+        }
+
+        pub(crate) fn expected_expr_for_enum_test() -> Expr {
+            Expr::Multiple(
+                vec![
+                    Expr::Let(
+                        VariableId::local("user", 0),
+                        Some(TypeName::Str),
+                        Box::new(Expr::SelectField(
+                            Box::new(Expr::SelectField(
+                                Box::new(Expr::Identifier(
+                                    VariableId::global("request".to_string()),
+                                    InferredType::Record(vec![(
+                                        "body".to_string(),
+                                        InferredType::Record(vec![(
+                                            "user-id".to_string(),
+                                            InferredType::Str,
+                                        )]),
+                                    )]),
+                                )),
+                                "body".to_string(),
+                                InferredType::Record(vec![(
+                                    "user-id".to_string(),
+                                    InferredType::Str,
+                                )]),
+                            )),
+                            "user-id".to_string(),
+                            InferredType::Str,
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("query1", 0),
+                        None,
+                        Box::new(Expr::Call(
+                            CallType::EnumConstructor("foo".to_string()),
+                            vec![],
+                            InferredType::Enum(vec![
+                                "foo".to_string(),
+                                "bar".to_string(),
+                                "foo-bar".to_string(),
+                            ]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("query2", 0),
+                        None,
+                        Box::new(Expr::Call(
+                            CallType::EnumConstructor("bar".to_string()),
+                            vec![],
+                            InferredType::Enum(vec![
+                                "foo".to_string(),
+                                "bar".to_string(),
+                                "foo-bar".to_string(),
+                            ]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("query3", 0),
+                        None,
+                        Box::new(Expr::Call(
+                            CallType::EnumConstructor("foo-bar".to_string()),
+                            vec![],
+                            InferredType::Enum(vec![
+                                "foo".to_string(),
+                                "bar".to_string(),
+                                "foo-bar".to_string(),
+                            ]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("result", 0),
+                        None,
+                        Box::new(Expr::Call(
+                            CallType::Function(ParsedFunctionName {
+                                site: ParsedFunctionSite::Global,
+                                function: ParsedFunctionReference::Function {
+                                    function: "process".to_string(),
+                                },
+                            }),
+                            vec![
+                                Expr::Identifier(
+                                    VariableId::local("query1", 0),
+                                    InferredType::Enum(vec![
+                                        "foo".to_string(),
+                                        "bar".to_string(),
+                                        "foo-bar".to_string(),
+                                    ]),
+                                ),
+                                Expr::Identifier(
+                                    VariableId::local("query2", 0),
+                                    InferredType::Enum(vec![
+                                        "foo".to_string(),
+                                        "bar".to_string(),
+                                        "foo-bar".to_string(),
+                                    ]),
+                                ),
+                                Expr::Identifier(
+                                    VariableId::local("query3", 0),
+                                    InferredType::Enum(vec![
+                                        "foo".to_string(),
+                                        "bar".to_string(),
+                                        "foo-bar".to_string(),
+                                    ]),
+                                ),
+                                Expr::Identifier(VariableId::local("user", 0), InferredType::Str),
+                            ],
+                            InferredType::Enum(vec![
+                                "success".to_string(),
+                                "failure".to_string(),
+                                "in-progress".to_string(),
+                            ]),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        None,
+                        Box::new(Expr::PatternMatch(
+                            Box::new(Expr::Identifier(
+                                VariableId::local("result", 0),
+                                InferredType::Enum(vec![
+                                    "success".to_string(),
+                                    "failure".to_string(),
+                                    "in-progress".to_string(),
+                                ]),
+                            )),
+                            vec![
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("success".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "success".to_string(),
+                                            "failure".to_string(),
+                                            "in-progress".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                        vec![
+                                            Expr::Literal(
+                                                "success ".to_string(),
+                                                InferredType::Str,
+                                            ),
+                                            Expr::Identifier(
+                                                VariableId::local("user", 0),
+                                                InferredType::Str,
+                                            ),
+                                        ],
+                                        InferredType::Str,
+                                    )),
+                                },
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("failure".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "success".to_string(),
+                                            "failure".to_string(),
+                                            "in-progress".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                        vec![
+                                            Expr::Literal("failed ".to_string(), InferredType::Str),
+                                            Expr::Identifier(
+                                                VariableId::local("user", 0),
+                                                InferredType::Str,
+                                            ),
+                                        ],
+                                        InferredType::Str,
+                                    )),
+                                },
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("in-progress".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "success".to_string(),
+                                            "failure".to_string(),
+                                            "in-progress".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Literal(
+                                        "in-progress".to_string(),
+                                        InferredType::Str,
+                                    )),
+                                },
+                            ],
+                            InferredType::Str,
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("y", 0),
+                        None,
+                        Box::new(Expr::PatternMatch(
+                            Box::new(Expr::Identifier(
+                                VariableId::local("query2", 0),
+                                InferredType::Enum(vec![
+                                    "foo".to_string(),
+                                    "bar".to_string(),
+                                    "foo-bar".to_string(),
+                                ]),
+                            )),
+                            vec![
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("foo".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "foo".to_string(),
+                                            "bar".to_string(),
+                                            "foo-bar".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                        vec![
+                                            Expr::Literal("y foo ".to_string(), InferredType::Str),
+                                            Expr::Identifier(
+                                                VariableId::local("user", 0),
+                                                InferredType::Str,
+                                            ),
+                                        ],
+                                        InferredType::Str,
+                                    )),
+                                },
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("bar".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "foo".to_string(),
+                                            "bar".to_string(),
+                                            "foo-bar".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                        vec![
+                                            Expr::Literal("y bar ".to_string(), InferredType::Str),
+                                            Expr::Identifier(
+                                                VariableId::local("user", 0),
+                                                InferredType::Str,
+                                            ),
+                                        ],
+                                        InferredType::Str,
+                                    )),
+                                },
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("foo-bar".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "foo".to_string(),
+                                            "bar".to_string(),
+                                            "foo-bar".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Literal(
+                                        "y foo-bar".to_string(),
+                                        InferredType::Str,
+                                    )),
+                                },
+                            ],
+                            InferredType::Str,
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Let(
+                        VariableId::local("z", 0),
+                        None,
+                        Box::new(Expr::PatternMatch(
+                            Box::new(Expr::Identifier(
+                                VariableId::local("query3", 0),
+                                InferredType::Enum(vec![
+                                    "foo".to_string(),
+                                    "bar".to_string(),
+                                    "foo-bar".to_string(),
+                                ]),
+                            )),
+                            vec![
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("foo".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "foo".to_string(),
+                                            "bar".to_string(),
+                                            "foo-bar".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                        vec![
+                                            Expr::Literal("z foo ".to_string(), InferredType::Str),
+                                            Expr::Identifier(
+                                                VariableId::local("user", 0),
+                                                InferredType::Str,
+                                            ),
+                                        ],
+                                        InferredType::Str,
+                                    )),
+                                },
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("bar".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "foo".to_string(),
+                                            "bar".to_string(),
+                                            "foo-bar".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Concat(
+                                        vec![
+                                            Expr::Literal("z bar ".to_string(), InferredType::Str),
+                                            Expr::Identifier(
+                                                VariableId::local("user", 0),
+                                                InferredType::Str,
+                                            ),
+                                        ],
+                                        InferredType::Str,
+                                    )),
+                                },
+                                MatchArm {
+                                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Call(
+                                        CallType::EnumConstructor("foo-bar".to_string()),
+                                        vec![],
+                                        InferredType::Enum(vec![
+                                            "foo".to_string(),
+                                            "bar".to_string(),
+                                            "foo-bar".to_string(),
+                                        ]),
+                                    ))),
+                                    arm_resolution_expr: Box::new(Expr::Literal(
+                                        "z foo-bar".to_string(),
+                                        InferredType::Str,
+                                    )),
+                                },
+                            ],
+                            InferredType::Str,
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::Record(
+                        vec![
+                            (
+                                "x".to_string(),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("x", 0),
+                                    InferredType::Str,
+                                )),
+                            ),
+                            (
+                                "y".to_string(),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("y", 0),
+                                    InferredType::Str,
+                                )),
+                            ),
+                            (
+                                "z".to_string(),
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("z", 0),
+                                    InferredType::Str,
+                                )),
+                            ),
+                        ],
+                        InferredType::Record(vec![
+                            ("x".to_string(), InferredType::Str),
+                            ("y".to_string(), InferredType::Str),
+                            ("z".to_string(), InferredType::Str),
+                        ]),
+                    ),
+                ],
+                InferredType::Record(vec![
+                    ("x".to_string(), InferredType::Str),
+                    ("y".to_string(), InferredType::Str),
+                    ("z".to_string(), InferredType::Str),
+                ]),
+            )
         }
 
         pub(crate) fn expected_expr_for_select_index() -> Expr {

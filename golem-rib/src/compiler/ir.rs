@@ -52,6 +52,7 @@ pub enum RibIR {
     Deconstruct,
     InvokeFunction(ParsedFunctionName, usize, AnalysedTypeWithUnit),
     PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
+    PushEnum(String, AnalysedType),
     Throw(String),
     GetTag,
     Concat(usize),
@@ -203,6 +204,20 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     analysed_variant_type,
                 ))
             }
+            Instruction::EnumConstruction(enum_construction) => {
+                let enum_type = enum_construction
+                    .return_type
+                    .ok_or("Missing return_type for enum construction".to_string())?;
+
+                let analysed_enum_type = (&enum_type)
+                    .try_into()
+                    .map_err(|_| "Failed to convert AnalysedType".to_string())?;
+
+                Ok(RibIR::PushEnum(
+                    enum_construction.enum_name,
+                    analysed_enum_type,
+                ))
+            }
             Instruction::Throw(value) => Ok(RibIR::Throw(value)),
             Instruction::PushFlag(flag) => Ok(RibIR::PushFlag(
                 flag.type_annotated_value
@@ -296,6 +311,16 @@ impl From<RibIR> for ProtoRibIR {
                 Instruction::VariantConstruction(
                     golem_api_grpc::proto::golem::rib::VariantConstructionInstruction {
                         variant_name: name,
+                        return_type: Some(typ),
+                    },
+                )
+            }
+            RibIR::PushEnum(name, return_type) => {
+                let typ = golem_wasm_ast::analysis::protobuf::Type::from(&return_type);
+
+                Instruction::EnumConstruction(
+                    golem_api_grpc::proto::golem::rib::EnumConstructionInstruction {
+                        enum_name: name,
                         return_type: Some(typ),
                     },
                 )

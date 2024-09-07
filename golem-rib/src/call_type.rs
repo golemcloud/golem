@@ -21,6 +21,7 @@ use std::fmt::Display;
 pub enum CallType {
     Function(ParsedFunctionName),
     VariantConstructor(String),
+    EnumConstructor(String),
 }
 
 impl Display for CallType {
@@ -28,6 +29,7 @@ impl Display for CallType {
         match self {
             CallType::Function(parsed_fn_name) => write!(f, "{}", parsed_fn_name),
             CallType::VariantConstructor(name) => write!(f, "{}", name),
+            CallType::EnumConstructor(name) => write!(f, "{}", name),
         }
     }
 }
@@ -44,6 +46,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::InvocationName> for CallType {
             }
             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(name) => {
                 Ok(CallType::VariantConstructor(name))
+            }
+            golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(name) => {
+                Ok(CallType::EnumConstructor(name))
             }
         }
     }
@@ -62,6 +67,13 @@ impl From<CallType> for golem_api_grpc::proto::golem::rib::InvocationName {
             CallType::VariantConstructor(name) => {
                 golem_api_grpc::proto::golem::rib::InvocationName {
                     name: Some(golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
+                        name,
+                    )),
+                }
+            }
+            CallType::EnumConstructor(name) => {
+                golem_api_grpc::proto::golem::rib::InvocationName {
+                    name: Some(golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                         name,
                     )),
                 }

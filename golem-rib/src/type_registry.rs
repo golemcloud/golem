@@ -29,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum RegistryKey {
     VariantName(String),
+    EnumName(String),
     FunctionName(String),
     FunctionNameWithInterface {
         interface_name: String,
@@ -42,6 +43,7 @@ impl RegistryKey {
             CallType::VariantConstructor(variant_name) => {
                 RegistryKey::VariantName(variant_name.clone())
             }
+            CallType::EnumConstructor(enum_name) => RegistryKey::EnumName(enum_name.clone()),
             CallType::Function(function_name) => match function_name.site().interface_name() {
                 None => RegistryKey::FunctionName(function_name.function().function_name()),
                 Some(interface_name) => RegistryKey::FunctionNameWithInterface {
@@ -154,18 +156,29 @@ impl FunctionTypeRegistry {
         }
 
         for ty in types {
-            if let AnalysedType::Variant(variant) = ty.clone() {
-                for name_type_pair in variant.cases {
-                    map.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
-                        name_type_pair.typ.map_or(
-                            RegistryValue::Value(ty.clone()),
-                            |variant_parameter_typ| RegistryValue::Function {
-                                parameter_types: vec![variant_parameter_typ],
-                                return_types: vec![ty.clone()],
-                            },
-                        )
-                    });
+            match ty.clone() {
+                AnalysedType::Variant(variant) => {
+                    for name_type_pair in variant.cases {
+                        map.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
+                            name_type_pair.typ.map_or(
+                                RegistryValue::Value(ty.clone()),
+                                |variant_parameter_typ| RegistryValue::Function {
+                                    parameter_types: vec![variant_parameter_typ],
+                                    return_types: vec![ty.clone()],
+                                },
+                            )
+                        });
+                    }
                 }
+                AnalysedType::Enum(type_enum) => {
+                    for name_type_pair in type_enum.cases {
+                        map.insert(
+                            RegistryKey::EnumName(name_type_pair.clone()),
+                            RegistryValue::Value(ty.clone()),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
 

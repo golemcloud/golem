@@ -109,7 +109,7 @@ mod internal {
     use combine::attempt;
     use combine::error::StreamError;
     use combine::many1;
-    use combine::parser::char::{digit, letter};
+    use combine::parser::char::{char, digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
 
@@ -154,7 +154,7 @@ mod internal {
     }
 
     fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
-        many1(letter().or(digit()).or(char_('_')))
+        many1(letter().or(digit()).or(char_('_')).or(char('-')))
             .and_then(|s: Vec<char>| {
                 if s.first().map_or(false, |&c| c.is_alphabetic()) {
                     Ok(s)

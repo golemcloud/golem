@@ -156,6 +156,7 @@ message InvocationName {
    oneof name {
      golem.rib.ParsedFunctionName parsed = 1;
      string variant_constructor = 2;
+     string enum_constructor = 3;
    }
 }
 

@@ -37,6 +37,7 @@ message RibIR {
         PushTupleInstruction push_tuple = 27;
         Negate negate = 28;
         ConcatInstruction concat = 29;
+        EnumConstructionInstruction enum_construction = 30;
     }
 }
 
@@ -89,6 +90,11 @@ message CallInstruction {
 message VariantConstructionInstruction {
     string variant_name = 1;
     wasm.ast.Type return_type = 3;
+}
+
+message EnumConstructionInstruction {
+    string enum_name = 1;
+    wasm.ast.Type return_type = 2;
 }
 
 message EqualTo {}

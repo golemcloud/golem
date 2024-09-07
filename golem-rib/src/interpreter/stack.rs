@@ -16,7 +16,9 @@ use crate::interpreter::result::RibInterpreterResult;
 use golem_wasm_ast::analysis::protobuf::{NameTypePair, Type};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{TypedList, TypedOption, TypedRecord, TypedTuple, TypedVariant};
+use golem_wasm_rpc::protobuf::{
+    TypedEnum, TypedList, TypedOption, TypedRecord, TypedTuple, TypedVariant,
+};
 
 #[derive(Debug)]
 pub struct InterpreterStack {
@@ -105,6 +107,13 @@ impl InterpreterStack {
         }));
 
         self.push_val(value);
+    }
+
+    pub fn push_enum(&mut self, enum_name: String, typ: Vec<String>) {
+        self.push_val(TypeAnnotatedValue::Enum(TypedEnum {
+            typ,
+            value: enum_name,
+        }))
     }
 
     pub fn push_some(&mut self, inner_element: TypeAnnotatedValue, inner_type: &AnalysedType) {

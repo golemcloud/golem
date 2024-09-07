@@ -148,6 +148,10 @@ impl Interpreter {
                     .await?;
                 }
 
+                RibIR::PushEnum(enum_name, analysed_type) => {
+                    internal::run_push_enum_instruction(&mut self.stack, enum_name, analysed_type)?;
+                }
+
                 RibIR::Throw(message) => {
                     return Err(message);
                 }
@@ -456,6 +460,23 @@ mod internal {
             result => Err(format!(
                 "Expected a sequence value to select an index. But obtained {:?}",
                 result
+            )),
+        }
+    }
+
+    pub(crate) fn run_push_enum_instruction(
+        interpreter_stack: &mut InterpreterStack,
+        enum_name: String,
+        analysed_type: AnalysedType,
+    ) -> Result<(), String> {
+        match analysed_type {
+            AnalysedType::Enum(typed_enum) => {
+                interpreter_stack.push_enum(enum_name, typed_enum.cases);
+                Ok(())
+            }
+            _ => Err(format!(
+                "Expected a enum type for {}, but obtained {:?}",
+                enum_name, analysed_type
             )),
         }
     }
