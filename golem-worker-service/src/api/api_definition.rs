@@ -320,7 +320,7 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
-    use golem_service_base::config::DbSqliteConfig;
+    use golem_common::config::DbSqliteConfig;
     use golem_service_base::db;
     use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
     use golem_worker_service_base::repo::api_deployment;
