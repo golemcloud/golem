@@ -46,6 +46,7 @@ pub mod compatibility;
 pub mod guest_languages;
 pub mod guest_languages2;
 pub mod hot_update;
+pub mod key_value_storage;
 pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod rust_rpc;
