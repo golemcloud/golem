@@ -179,12 +179,13 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _api_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String> {
+        let prefix = Self::composite_key(&namespace, "");
         Ok(self
             .kvs
             .iter()
             .filter_map(|item| {
-                if item.key().starts_with(&Self::composite_key(&namespace, "")) {
-                    Some(item.key().clone())
+                if item.key().starts_with(&prefix) {
+                    Some(item.key()[prefix.len()..].to_string())
                 } else {
                     None
                 }
@@ -259,6 +260,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
             .sorted_sets
             .entry(Self::composite_key(&namespace, key))
             .or_default();
+        entry.retain(|(_, v)| v != value);
         entry.push((score, value.to_vec()));
         entry.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         Ok(())

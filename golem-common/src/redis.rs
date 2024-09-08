@@ -740,6 +740,35 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
+    pub async fn keys<K>(&self, pattern: K) -> RedisResult<Vec<String>>
+    where
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+
+        //https://redis.io/commands/keys/
+        let args: Vec<String> = vec![self.prefixed_key(pattern)];
+
+        //https://github.com/aembke/fred.rs/blob/3a91ee9bc12faff9d32627c0db2c9b24c54efa03/examples/custom.rs#L7
+
+        self.record(
+            start,
+            "KEYS",
+            self.pool
+                .next()
+                .custom_raw(cmd!("KEYS"), args)
+                .await
+                .and_then(|f| f.try_into())
+                .and_then(|v: RedisValue| v.convert::<Vec<String>>())
+                .map(|keys| {
+                    keys.into_iter()
+                        .map(|key| key[self.key_prefix.len()..].to_string())
+                        .collect()
+                }),
+        )
+    }
+
     fn parse_key_scan_frame(&self, frame: Resp3Frame) -> RedisResult<(u64, Vec<String>)> {
         use fred::prelude::*;
         if let Resp3Frame::Array { mut data, .. } = frame {
