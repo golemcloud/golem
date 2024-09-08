@@ -58,7 +58,7 @@ impl ComponentError {
 
 impl From<RepoError> for ComponentError {
     fn from(error: RepoError) -> Self {
-        ComponentError::Internal(anyhow::Error::msg(error.to_string()))
+        ComponentError::internal(error, "Repository error")
     }
 }
 
@@ -721,5 +721,21 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
         _namespace: &Namespace,
     ) -> Result<(), ComponentError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::repo::RepoError;
+    use crate::service::component::ComponentError;
+
+    #[test]
+    pub fn test_repo_error_to_service_error() {
+        let repo_err = RepoError::Internal("some sql error".to_string());
+        let component_err: ComponentError = repo_err.into();
+        assert_eq!(
+            component_err.to_string(),
+            "Internal error: Repository error".to_string()
+        );
     }
 }

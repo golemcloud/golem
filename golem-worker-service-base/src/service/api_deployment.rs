@@ -34,7 +34,7 @@ use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::repo::RepoError;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use chrono::Utc;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 #[async_trait]
 pub trait ApiDeploymentService<Namespace> {
@@ -84,14 +84,22 @@ pub enum ApiDeploymentError<Namespace> {
     #[error("API deployment definitions conflict error: {0}")]
     ApiDefinitionsConflict(String),
     #[error("Internal error: {0}")]
-    InternalError(String),
+    InternalError(#[from] anyhow::Error),
+}
+
+impl<T> ApiDeploymentError<T> {
+    fn internal<E, C>(error: E, context: C) -> Self
+    where
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
+    {
+        ApiDeploymentError::InternalError(anyhow::Error::msg(error).context(context))
+    }
 }
 
 impl<Namespace> From<RepoError> for ApiDeploymentError<Namespace> {
     fn from(error: RepoError) -> Self {
-        match error {
-            RepoError::Internal(e) => ApiDeploymentError::InternalError(e.clone()),
-        }
+        ApiDeploymentError::internal(error, "Repository error")
     }
 }
 
@@ -153,8 +161,10 @@ impl ApiDeploymentServiceDefault {
 }
 
 #[async_trait]
-impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
-    ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault
+impl<Namespace> ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault
+where
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
     async fn deploy(
         &self,
@@ -222,9 +232,10 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                         if record.draft {
                             set_not_draft.push(api_definition_key.clone());
                         }
-                        let definition = record.try_into().map_err(|_| {
-                            ApiDeploymentError::InternalError(
-                                "Failed to convert record".to_string(),
+                        let definition = record.try_into().map_err(|e| {
+                            ApiDeploymentError::internal(
+                                e,
+                                "Failed to convert API definition record",
                             )
                         })?;
                         definitions.push(definition);
@@ -361,8 +372,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
                 subdomain: deployment_record.subdomain,
             };
 
-            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|_| {
-                ApiDeploymentError::InternalError("Failed to convert namespace".to_string())
+            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|e| {
+                ApiDeploymentError::internal(e, "Failed to convert API deployment namespace")
             })?;
 
             let api_definition_key = ApiDefinitionIdWithVersion {
@@ -418,8 +429,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
             }
 
             if namespace.is_none() {
-                namespace = Some(deployment_record.namespace.try_into().map_err(|_| {
-                    ApiDeploymentError::InternalError("Failed to convert namespace".to_string())
+                namespace = Some(deployment_record.namespace.try_into().map_err(|e| {
+                    ApiDeploymentError::internal(e, "Failed to convert API deployment namespace")
                 })?);
             }
 
@@ -458,8 +469,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         let mut values: Vec<CompiledHttpApiDefinition> = vec![];
 
         for record in records {
-            values.push(record.try_into().map_err(|_| {
-                ApiDeploymentError::InternalError("Failed to convert record".to_string())
+            values.push(record.try_into().map_err(|e| {
+                ApiDeploymentError::internal(e, "Failed to convert API definition record")
             })?);
         }
 
@@ -549,5 +560,21 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         _site: &ApiSiteString,
     ) -> Result<bool, ApiDeploymentError<Namespace>> {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::repo::RepoError;
+    use crate::service::api_deployment::ApiDeploymentError;
+
+    #[test]
+    pub fn test_repo_error_to_service_error() {
+        let repo_err = RepoError::Internal("some sql error".to_string());
+        let service_err: ApiDeploymentError<String> = repo_err.into();
+        assert_eq!(
+            service_err.to_string(),
+            "Internal error: Repository error".to_string()
+        );
     }
 }
