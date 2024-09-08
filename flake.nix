@@ -1,6 +1,7 @@
 {
   inputs.golem-examples.url = "github:golemcloud/golem-examples";
   inputs.golem-examples.flake = false;
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs";
 
   outputs = { self, nixpkgs, golem-examples }:
   let system = "x86_64-linux";
@@ -10,7 +11,6 @@
   {
     # packages.${system}.update = import ./default.nix { inherit pkgs golem-examples; };
     packages.${system}.default = import ./default.nix { inherit pkgs golem-examples;
-        
         # updateTOML = commands.set.replace-nix-deps-in-tomls;
     };
     devShells.${system}.default = pkgs.mkShell {
