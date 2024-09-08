@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
 
@@ -12,7 +26,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 let record_type = vec![(field.to_string(), field_type)];
                 let inferred_record_type = InferredType::Record(record_type);
 
-                // the type of the expr is a record type having the specific field
                 expr.add_infer_type_mut(inferred_record_type);
                 queue.push_back(expr);
             }
@@ -89,8 +102,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
-    use crate::type_inference::precise_types::*;
-    use crate::{ArmPattern, Expr, InferredType, TypeRefinement};
+    use crate::type_refinement::precise_types::*;
+    use crate::type_refinement::TypeRefinement;
+    use crate::{ArmPattern, Expr, InferredType};
     use std::collections::VecDeque;
 
     pub(crate) fn handle_option(
@@ -258,7 +272,7 @@ mod type_push_down_tests {
                 "titles".to_string(),
                 Box::new(Expr::Identifier(
                     VariableId::global("x".to_string()),
-                    InferredType::AllOf(vec![InferredType::Unknown, InferredType::U64]),
+                    InferredType::U64,
                 )),
             )],
             InferredType::AllOf(vec![

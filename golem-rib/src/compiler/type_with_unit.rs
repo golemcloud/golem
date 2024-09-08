@@ -1,9 +1,24 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::InferredType;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::{
-    AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64,
-    TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64,
-    TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
+    TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
+    TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16,
+    TypeU32, TypeU64, TypeU8, TypeVariant,
 };
 use serde::{Deserialize, Serialize};
 
@@ -157,8 +172,12 @@ impl TryFrom<&InferredType> for AnalysedTypeWithUnit {
                 resource_mode,
             } => Ok(AnalysedTypeWithUnit::analysed_type(AnalysedType::Handle(
                 TypeHandle {
-                    resource_id: resource_id.clone(),
-                    mode: resource_mode.clone(),
+                    resource_id: AnalysedResourceId(*resource_id),
+                    mode: if resource_mode == &0 {
+                        AnalysedResourceMode::Owned
+                    } else {
+                        AnalysedResourceMode::Borrowed
+                    },
                 },
             ))),
 

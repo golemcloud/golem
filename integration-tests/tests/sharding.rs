@@ -671,10 +671,6 @@ pub static DEPS: EnvBasedTestDependencies = {
     });
 
     deps.redis_monitor().assert_valid();
-    println!(
-        "Started a cluster of {} worker executors",
-        deps.worker_executor_cluster().size()
-    );
 
     deps
 };

@@ -420,3 +420,50 @@ impl RetryConfig {
 pub fn env_config_provider() -> Env {
     Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR)
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum DbConfig {
+    Postgres(DbPostgresConfig),
+    Sqlite(DbSqliteConfig),
+}
+
+impl Default for DbConfig {
+    fn default() -> Self {
+        DbConfig::Sqlite(DbSqliteConfig {
+            database: "golem_service.db".to_string(),
+            max_connections: 10,
+        })
+    }
+}
+
+impl DbConfig {
+    pub fn postgres_example() -> Self {
+        Self::Postgres(DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: "postgres".to_string(),
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: 5432,
+            max_connections: 10,
+            schema: None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DbSqliteConfig {
+    pub database: String,
+    pub max_connections: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DbPostgresConfig {
+    pub host: String,
+    pub database: String,
+    pub username: String,
+    pub password: String,
+    pub port: u16,
+    pub max_connections: u32,
+    pub schema: Option<String>,
+}

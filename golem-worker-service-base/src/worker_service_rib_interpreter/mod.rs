@@ -830,7 +830,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_evaluation_with_request_body_index_of_object() {
+    async fn test_evaluation_with_request_body_invalid_index_of_object() {
         let noop_executor = DefaultEvaluator::noop();
 
         let request_details = get_request_details(
@@ -905,7 +905,7 @@ mod tests {
 
         let _expected = TypeAnnotatedValue::Str("bStreet".to_string());
 
-        assert!(result.contains("Types do not match. Inferred to be both Record([(\"street\", Str), (\"city\", Str)]) and List(Unknown)"));
+        assert!(result.contains("Types do not match. Inferred to be both List(Str) and Record([(\"street\", Str), (\"city\", Str)])"));
     }
 
     #[tokio::test]

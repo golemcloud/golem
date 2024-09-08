@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_inference::precise_types::{
-    ErrType, ListType, OkType, OptionalType, RecordType, TupleType,
-};
-use crate::{InferredType, RefinedType};
+pub use refined_type::*;
+pub use type_extraction::*;
+
+pub(crate) mod precise_types;
+mod refined_type;
+mod type_extraction;
+
+use crate::type_refinement::precise_types::*;
+use crate::InferredType;
 use std::ops::Deref;
 
 /// # Example:
@@ -148,7 +153,8 @@ impl TypeRefinement for TupleType {
 }
 
 mod internal {
-    use crate::{InferredType, RefinedType};
+    use crate::type_refinement::RefinedType;
+    use crate::InferredType;
 
     pub(crate) fn refine_inferred_type<F, A>(
         inferred_type: &InferredType,
@@ -187,8 +193,9 @@ mod internal {
 
 #[cfg(test)]
 mod type_refinement_tests {
-    use crate::type_inference::precise_types::OptionalType;
-    use crate::{InferredType, RefinedType, TypeRefinement};
+    use crate::type_refinement::precise_types::OptionalType;
+    use crate::type_refinement::{RefinedType, TypeRefinement};
+    use crate::InferredType;
 
     #[test]
     fn test_type_refinement_option() {
@@ -223,8 +230,8 @@ mod type_refinement_tests {
 
         let inner_type = refined_type.inner_type();
         let expected_inner_type = InferredType::AllOf(vec![
-            InferredType::U64,
             InferredType::U32,
+            InferredType::U64,
             InferredType::Str,
         ]);
 
@@ -254,8 +261,9 @@ mod type_refinement_tests {
 
         let inner_type = refined_type.inner_type();
         let expected_inner_type = InferredType::AllOf(vec![
+            InferredType::U32,
             InferredType::U64,
-            InferredType::AllOf(vec![InferredType::U32, InferredType::Str]),
+            InferredType::Str,
         ]);
 
         assert_eq!(refined_type, expected_refine_type);
@@ -280,8 +288,8 @@ mod type_refinement_tests {
 
         let inner_type = refined_type.inner_type();
         let expected_inner_type = InferredType::OneOf(vec![
-            InferredType::U64,
             InferredType::U32,
+            InferredType::U64,
             InferredType::Str,
         ]);
 
@@ -311,8 +319,9 @@ mod type_refinement_tests {
 
         let inner_type = refined_type.inner_type();
         let expected_inner_type = InferredType::OneOf(vec![
+            InferredType::U32,
             InferredType::U64,
-            InferredType::OneOf(vec![InferredType::U32, InferredType::Str]),
+            InferredType::Str,
         ]);
 
         assert_eq!(refined_type, expected_refine_type);
@@ -411,7 +420,7 @@ mod type_refinement_tests {
             InferredType::U64,
             InferredType::OneOf(vec![
                 InferredType::U32,
-                InferredType::AllOf(vec![InferredType::Str, InferredType::Bool]),
+                InferredType::AllOf(vec![InferredType::Bool, InferredType::Str]),
             ]),
         ]);
 

@@ -176,7 +176,7 @@ pub async fn benchmark_invocations(
                     result.retries as u64,
                 );
                 recorder_clone.count(
-                    &ResultKey::secondary(&format!("{prefix_clone}worker-{n}-retries")),
+                    &ResultKey::secondary(format!("{prefix_clone}worker-{n}-retries")),
                     result.retries as u64,
                 );
                 recorder_clone.count(
@@ -184,7 +184,7 @@ pub async fn benchmark_invocations(
                     result.timeouts as u64,
                 );
                 recorder_clone.count(
-                    &ResultKey::secondary(&format!("{prefix_clone}worker-{n}-timeouts")),
+                    &ResultKey::secondary(format!("{prefix_clone}worker-{n}-timeouts")),
                     result.timeouts as u64,
                 );
             }
