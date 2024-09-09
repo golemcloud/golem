@@ -1,5 +1,5 @@
+use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_service_base::config::DbConfig;
 use golem_service_base::db;
 use tracing::{error, info};
 

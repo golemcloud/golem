@@ -16,9 +16,9 @@ mod tests {
     use cloud_service::service::project_grant::ProjectGrantService;
     use cloud_service::service::project_policy::ProjectPolicyService;
     use cloud_service::service::Services;
+    use golem_common::config::DbConfig;
     use golem_common::model::AccountId;
     use golem_common::model::ProjectId;
-    use golem_service_base::config::DbConfig;
     use golem_service_base::db;
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;

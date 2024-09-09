@@ -5,8 +5,8 @@ use std::time::Duration;
 use cloud_common::model::PlanId;
 use cloud_common::model::Role;
 use golem_common::config::ConfigLoader;
+use golem_common::config::DbConfig;
 use golem_common::tracing::TracingConfig;
-use golem_service_base::config::DbConfig;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

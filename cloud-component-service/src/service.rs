@@ -3,6 +3,11 @@ pub mod component;
 pub mod limit;
 pub mod project;
 
+use crate::config::ComponentServiceConfig;
+use crate::service::auth::{AuthService, CloudAuthService, CloudNamespace};
+use crate::service::limit::{LimitService, LimitServiceDefault};
+use crate::service::project::{ProjectService, ProjectServiceDefault};
+use golem_common::config::DbConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
@@ -13,15 +18,10 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_service_base::config::{ComponentStoreConfig, DbConfig};
+use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::db;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
-
-use crate::config::ComponentServiceConfig;
-use crate::service::auth::{AuthService, CloudAuthService, CloudNamespace};
-use crate::service::limit::{LimitService, LimitServiceDefault};
-use crate::service::project::{ProjectService, ProjectServiceDefault};
 
 #[derive(Clone)]
 pub struct Services {

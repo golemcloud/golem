@@ -1,7 +1,7 @@
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
+use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::{ComponentStoreConfig, DbConfig};
+use golem_service_base::config::ComponentStoreConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -1,4 +1,4 @@
-use golem_service_base::config::DbConfig;
+use golem_common::config::DbConfig;
 use golem_service_base::db;
 use std::sync::Arc;
 

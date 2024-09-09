@@ -12,8 +12,8 @@ mod tests {
         ApiDomainService, ApiDomainServiceDefault, InMemoryRegisterDomain, RegisterDomain,
     };
     use cloud_worker_service::service::auth::{AuthService, CloudAuthCtx, CloudAuthServiceNoop};
+    use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_common::model::ProjectId;
-    use golem_service_base::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::db;
     use std::sync::Arc;
     use testcontainers::clients::Cli;
