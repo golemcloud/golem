@@ -1,0 +1,20 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Golem CLI Shell completion
+
+The `golem-cli completion` command can be used to generate shell completions for many popular shells:
+
+<Tabs items={["bash", "elvish", "fish", "powershell", "zsh"]}>
+  <Tabs.Tab>```shell copy golem-cli completion --generate bash ```</Tabs.Tab>
+  <Tabs.Tab>```shell copy golem-cli completion --generate elvish ```</Tabs.Tab>
+  <Tabs.Tab>```shell copy golem-cli completion --generate fish ```</Tabs.Tab>
+  <Tabs.Tab>```shell copy golem-cli completion --generate powershell ```</Tabs.Tab>
+  <Tabs.Tab>```shell copy golem-cli completion --generate zsh ```</Tabs.Tab>
+</Tabs>
+
+The above command will generate and print the shell completion script to the standard output, redirect the output into a file to save the script. Consult your shell documentation about where to place it.
+
+<Callout type={"info"}>
+  After every golem-cli update, it is advised to also regenerate the shell completion to always
+  include all the latest commands and flags.
+</Callout>

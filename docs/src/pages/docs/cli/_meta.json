@@ -1,4 +1,5 @@
 {
+  "shell-completion": "Shell completion",
   "components": "Components",
   "workers": "Workers",
   "profiles": "Profiles",
