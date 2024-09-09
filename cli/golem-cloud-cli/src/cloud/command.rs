@@ -13,6 +13,7 @@ use golem_cli::command::api_deployment::ApiDeploymentSubcommand;
 use golem_cli::command::component::ComponentSubCommand;
 use golem_cli::command::profile::ProfileSubCommand;
 use golem_cli::command::worker::{WorkerRefSplit, WorkerSubcommand};
+use golem_cli::diagnose;
 use golem_cli::model::{Format, WorkerName};
 use golem_common::model::WorkerId;
 use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ResourceUri, ToOssUri, WorkerUri};
@@ -440,6 +441,13 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
     Completion {
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
+    },
+
+    /// Diagnose required tooling
+    #[command()]
+    Diagnose {
+        #[command(flatten)]
+        command: diagnose::cli::Command,
     },
 }
 

@@ -6,6 +6,7 @@ use colored::Colorize;
 use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cli::command::profile::UniversalProfileAdd;
 use golem_cli::config::{CloudProfile, ProfileName};
+use golem_cli::diagnose::diagnose;
 use golem_cli::examples;
 use golem_cli::factory::ServiceFactory;
 use golem_cli::init::{CliKind, PrintCompletion, ProfileAuth};
@@ -277,6 +278,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         CloudCommand::Init {} => init(cli_kind, &config_dir, &CloudProfileAuth()).await,
         CloudCommand::Completion { generator } => {
             print_completion.print_completion(generator);
+            Ok(GolemResult::Str("".to_string()))
+        }
+        CloudCommand::Diagnose { command } => {
+            diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
     };
