@@ -17,6 +17,7 @@ use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
 use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
+use crate::diagnose;
 use crate::model::{ComponentUriArg, Format};
 use crate::oss::model::OssContext;
 use clap::{Parser, Subcommand};
@@ -90,6 +91,13 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
     Completion {
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
+    },
+
+    /// Diagnose required tooling
+    #[command()]
+    Diagnose {
+        #[command(flatten)]
+        command: diagnose::cli::Command,
     },
 }
 

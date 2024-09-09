@@ -14,6 +14,7 @@
 
 use crate::command::profile::UniversalProfileAdd;
 use crate::config::{OssProfile, ProfileName};
+use crate::diagnose::diagnose;
 use crate::examples;
 use crate::factory::ServiceFactory;
 use crate::init::{init_profile, CliKind, PrintCompletion, ProfileAuth};
@@ -139,6 +140,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }
         OssCommand::Completion { generator } => {
             print_completion.print_completion(generator);
+            Ok(GolemResult::Str("".to_string()))
+        }
+        OssCommand::Diagnose { command } => {
+            diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
     };

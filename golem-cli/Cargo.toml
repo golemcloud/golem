@@ -24,11 +24,14 @@ golem-client = { path = "../golem-client", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 
+anyhow.workspace = true
 async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 clap-verbosity-flag = "2.1.1"
 clap_complete = { version = "4.5.13" }
+cli-table = { workspace = true }
+colored = "2.1.0"
 derive_more = { workspace = true }
 dirs = "5.0.1"
 futures-util = { workspace = true }
@@ -40,12 +43,15 @@ h2 = "0.3.24"
 http = { workspace = true }
 hyper = { workspace = true }
 indoc = "2.0.4"
+inquire = "0.7.5"
+iso8601 = "0.6.1"
 itertools = { workspace = true }
 lenient_bool = "0.1.1"
 log = { version = "0.4.22" }
 native-tls = "0.2.11"
 openapiv3 = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -53,6 +59,7 @@ serde_yaml = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 testcontainers-modules = { workspace = true }
+textwrap = "0.16.1"
 tokio = { workspace = true }
 tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
 tower = "0.4.13"
@@ -62,13 +69,8 @@ tungstenite = "0.20.1"
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = "=0.0.11"
+walkdir = "2.5.0"
 wasm-wave = { workspace = true }
-cli-table = { workspace = true }
-textwrap = "0.16.1"
-anyhow.workspace = true
-colored = "2.1.0"
-inquire = "0.7.5"
-iso8601 = "0.6.1"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
@@ -86,7 +88,6 @@ testcontainers-modules = { workspace = true }
 tokio-postgres = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
-regex = { workspace = true }
 strip-ansi-escapes = "0.2.0"
 
 [features]
