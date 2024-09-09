@@ -29,8 +29,8 @@ use crate::model::{
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use golem_client::model::{
-    AnalysedExport, AnalysedInstance, AnalysedType, InvokeParameters, InvokeResult, ScanCursor,
-    StringFilterComparator, WorkerFilter, WorkerNameFilter,
+    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedType, InvokeParameters,
+    InvokeResult, ScanCursor, StringFilterComparator, WorkerFilter, WorkerNameFilter,
 };
 use golem_common::model::{ComponentId, WorkerId};
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
@@ -698,34 +698,34 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             .get_metadata(&component_urn, worker.component_version)
             .await?;
 
-        let function = component
-            .metadata
-            .exports
-            .iter()
-            .flat_map(|exp| match exp {
-                AnalysedExport::Instance(AnalysedInstance {
-                    name: prefix,
-                    functions,
-                }) => functions
-                    .iter()
-                    .map(|f| {
-                        (
-                            format!("{prefix}.{{{}}}", f.name),
-                            show_exported_function(&format!("{prefix}."), f),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                AnalysedExport::Function(f) => {
-                    vec![(f.name.clone(), show_exported_function("", f))]
-                }
-            })
-            .find(|(name, _)| name == function_name);
+        fn match_function(
+            target_function_name: &str,
+            prefix: Option<&str>,
+            function: &AnalysedFunction,
+        ) -> Option<String> {
+            let function_name = show_exported_function(prefix, function);
+            if function_name == target_function_name {
+                Some(function_name)
+            } else {
+                None
+            }
+        }
+
+        let function = component.metadata.exports.iter().find_map(|exp| match exp {
+            AnalysedExport::Instance(AnalysedInstance {
+                name: prefix,
+                functions,
+            }) => functions
+                .iter()
+                .find_map(|f| match_function(function_name, Some(prefix), f)),
+            AnalysedExport::Function(f) => match_function(function_name, None, f),
+        });
 
         match function {
             None => Err(GolemError(format!(
                 "Can't find function '{function_name}' in component {component_urn}."
             ))),
-            Some((_, function)) => Ok(GolemResult::Str(function)),
+            Some(function) => Ok(GolemResult::Str(function)),
         }
     }
 
