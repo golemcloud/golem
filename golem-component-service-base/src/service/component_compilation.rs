@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::componentcompilation::{
+use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_service_client::ComponentCompilationServiceClient,
     ComponentCompilationRequest,
 };
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::ComponentId;
+use tonic::transport::Channel;
 
 #[async_trait]
 pub trait ComponentCompilationService {
@@ -25,32 +27,39 @@ pub trait ComponentCompilationService {
 }
 
 pub struct ComponentCompilationServiceDefault {
-    uri: http_02::Uri,
+    client: GrpcClient<ComponentCompilationServiceClient<Channel>>,
 }
 
 impl ComponentCompilationServiceDefault {
     pub fn new(uri: http_02::Uri) -> Self {
-        Self { uri }
+        let client = GrpcClient::new(
+            ComponentCompilationServiceClient::new,
+            uri,
+            GrpcClientConfig::default(), // TODO
+        );
+        Self { client }
     }
 }
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDefault {
     async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64) {
-        let mut client = match ComponentCompilationServiceClient::connect(self.uri.clone()).await {
-            Ok(client) => client,
-            Err(e) => {
-                tracing::error!("Failed to connect to ComponentCompilationService: {e:?}");
-                return;
-            }
-        };
+        let component_id_clone = component_id.clone();
+        let result = self
+            .client
+            .call(move |client| {
+                let component_id_clone = component_id_clone.clone();
+                Box::pin(async move {
+                    let request = ComponentCompilationRequest {
+                        component_id: Some(component_id_clone.into()),
+                        component_version,
+                    };
 
-        let request = ComponentCompilationRequest {
-            component_id: Some(component_id.clone().into()),
-            component_version,
-        };
-
-        match client.enqueue_compilation(request).await {
+                    client.enqueue_compilation(request).await
+                })
+            })
+            .await;
+        match result {
             Ok(_) => tracing::info!(
                 "Enqueued compilation for component {component_id} version {component_version}",
             ),

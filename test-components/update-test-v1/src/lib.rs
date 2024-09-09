@@ -1,10 +1,11 @@
 mod bindings;
 
+use crate::bindings::exports::golem::component::api::*;
+use rand::RngCore;
+use reqwest::{Client, Response};
 use std::cell::RefCell;
 use std::thread::sleep;
 use std::time::Duration;
-use rand::RngCore;
-use crate::bindings::exports::golem::component::api::*;
 
 struct State {
     last: u64,
@@ -25,6 +26,7 @@ impl Guest for Component {
 
             for _ in 0..30 {
                 current += 10;
+                report_f1(current);
                 sleep(Duration::from_millis(speed_ms));
             }
 
@@ -39,7 +41,29 @@ impl Guest for Component {
     }
 
     fn f3() -> u64 {
-        std::env::args().collect::<Vec<_>>().len() as u64 +
-            std::env::vars().collect::<Vec<_>>().len() as u64
+        std::env::args().collect::<Vec<_>>().len() as u64
+            + std::env::vars().collect::<Vec<_>>().len() as u64
     }
 }
+
+fn report_f1(current: u64) {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let client = Client::builder().build().unwrap();
+
+    let url = format!("http://localhost:{port}/f1");
+
+    println!("Sending POST {url}");
+
+    let response: Response = client
+        .post(&url)
+        .body(current.to_string())
+        .send()
+        .expect("Request failed");
+
+    let status = response.status();
+    let _ = response.text(); // ignoring response body
+
+    println!("Received {status}");
+}
+
+bindings::export!(Component with_types_in bindings);

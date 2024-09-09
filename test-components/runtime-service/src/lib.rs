@@ -62,7 +62,7 @@ impl Guest for Component {
             max_attempts: max_retries as u32,
             min_delay: 1000000000, // 1s
             max_delay: 1000000000, // 1s
-            multiplier: 1,
+            multiplier: 1.0,
         });
         let overridden_retry_policy = get_retry_policy();
         println!("Overridden retry policy: {overridden_retry_policy:?}");
@@ -176,6 +176,16 @@ impl Guest for Component {
             }
         }
         workers
+    }
+
+    fn get_self_metadata() -> WorkerMetadata {
+        println!("Get self metadata");
+        bindings::golem::api::host::get_self_metadata()
+    }
+
+    fn get_worker_metadata(worker_id: WorkerId) -> Option<WorkerMetadata> {
+        println!("Get worker: {worker_id:?} metadata");
+        bindings::golem::api::host::get_worker_metadata(&worker_id)
     }
 
     fn update_worker(worker_id: WorkerId, component_version: ComponentVersion, update_mode: UpdateMode) {
@@ -304,3 +314,5 @@ fn read_body(incoming_response: &wasi::http::types::IncomingResponse) -> Vec<u8>
     }
     body
 }
+
+bindings::export!(Component with_types_in bindings);

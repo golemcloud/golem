@@ -3,6 +3,11 @@ syntax = "proto3";
 package golem.apidefinition;
 
 import "golem/component/component_id.proto";
+import "golem/rib/expr.proto";
+import "golem/rib/rib_input.proto";
+import "golem/rib/rib_byte_code.proto";
+import "golem/component/versioned_component_id.proto";
+import "google/protobuf/timestamp.proto";
 
 message ApiDefinition {
   ApiDefinitionId id = 1;
@@ -11,6 +16,7 @@ message ApiDefinition {
     HttpApiDefinition http = 3;
   }
   bool draft = 4;
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message ApiDefinitionList {
@@ -21,6 +27,10 @@ message HttpApiDefinition {
   repeated HttpRoute routes = 1;
 }
 
+message CompiledHttpApiDefinition {
+  repeated CompiledHttpRoute routes = 1;
+}
+
 message ApiDefinitionId {
   string value = 1;
 }
@@ -29,6 +39,12 @@ message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
   WorkerBinding binding = 3;
+}
+
+message CompiledHttpRoute {
+    HttpMethod method = 1;
+    string path = 2;
+    CompiledWorkerBinding binding = 3;
 }
 
 enum HttpMethod {
@@ -44,10 +60,21 @@ enum HttpMethod {
 }
 
 message WorkerBinding {
-  golem.component.ComponentId component = 1;
-  string worker_id = 2;
-  string function_name = 3;
-  repeated string function_params = 4;
-  optional string response = 5;
-  optional string idempotency_key = 6;
+  golem.component.VersionedComponentId component = 1;
+  golem.rib.Expr worker_name = 2;
+  golem.rib.Expr response = 3;
+  optional golem.rib.Expr idempotency_key = 4;
+}
+
+message CompiledWorkerBinding {
+  golem.component.VersionedComponentId component = 1;
+  golem.rib.Expr worker_name = 2;
+  golem.rib.RibByteCode compiled_worker_name_expr = 3;
+  golem.rib.RibInputType worker_name_rib_input = 4;
+  golem.rib.Expr response = 5;
+  golem.rib.RibByteCode compiled_response_expr = 6;
+  golem.rib.RibInputType response_rib_input = 7;
+  optional golem.rib.Expr idempotency_key = 8;
+  optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
+  optional golem.rib.RibInputType idempotency_key_rib_input = 10;
 }

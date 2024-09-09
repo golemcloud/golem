@@ -40,14 +40,18 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     let mut short_args = make(
         "_short",
         "CLI_short",
-        CliLive::make(deps.clone()).unwrap().with_short_args(),
+        CliLive::make("api_deployment_short", deps.clone())
+            .unwrap()
+            .with_short_args(),
         deps.clone(),
     );
 
     let mut long_args = make(
         "_long",
         "CLI_long",
-        CliLive::make(deps.clone()).unwrap().with_long_args(),
+        CliLive::make("api_deployment_long", deps.clone())
+            .unwrap()
+            .with_long_args(),
         deps,
     );
 
@@ -62,7 +66,8 @@ pub fn make_definition(
     id: &str,
 ) -> Result<HttpApiDefinition, Failed> {
     let component = make_shopping_cart_component(deps, id, cli)?;
-    let def = golem_def(id, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(id, &component_id);
     let path = make_golem_file(&def)?;
 
     cli.run(&["api-definition", "add", path.to_str().unwrap()])
@@ -82,28 +87,28 @@ fn api_deployment_deploy(
     let deployment: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),
         "sdomain",
     ])?;
 
-    assert_eq!(deployment.site.subdomain, "sdomain");
+    let api_definition_info = deployment.api_definitions.first().unwrap();
+
+    assert_eq!(deployment.site.subdomain, Some("sdomain".to_string()));
     assert_eq!(deployment.site.host, host);
-    assert_eq!(deployment.api_definition_id, definition.id);
-    assert_eq!(deployment.version, definition.version);
+    assert_eq!(api_definition_info.id, definition.id);
+    assert_eq!(api_definition_info.version, definition.version);
 
     let updated_def: HttpApiDefinition = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
-        &deployment.api_definition_id,
+        &deployment.api_definitions.first().unwrap().id,
         &cfg.arg('V', "version"),
-        &deployment.version,
+        &deployment.api_definitions.first().unwrap().version,
     ])?;
 
     assert!(definition.draft);
@@ -126,10 +131,8 @@ fn api_deployment_get(
     let created: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),
@@ -157,10 +160,8 @@ fn api_deployment_list(
     let created: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),
@@ -194,10 +195,8 @@ fn api_deployment_delete(
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),

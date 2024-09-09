@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::WasiView;
+use wasmtime_wasi::WasiView;
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
@@ -34,8 +34,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "get");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -57,7 +58,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(Some(value)) => {
                 let incoming_value = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(IncomingValueEntry::new(value))?;
                 Ok(Ok(Some(incoming_value)))
             }
@@ -65,7 +66,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
@@ -78,8 +79,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "set");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -113,7 +115,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
@@ -125,8 +127,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "delete");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -149,7 +152,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
@@ -161,8 +164,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("keyvalue::eventual", "exists");
-        let account_id = self.state.account_id.clone();
+        let account_id = self.owned_worker_id.account_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -185,10 +189,46 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(e) => {
                 let error = self
                     .as_wasi_view()
-                    .table_mut()
+                    .table()
                     .push(ErrorEntry::new(format!("{:?}", e)))?;
                 Ok(Err(error))
             }
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn get(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+    ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
+        (*self).get(bucket, key).await
+    }
+
+    async fn set(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+        outgoing_value: Resource<OutgoingValue>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        (*self).set(bucket, key, outgoing_value).await
+    }
+
+    async fn delete(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        (*self).delete(bucket, key).await
+    }
+
+    async fn exists(
+        &mut self,
+        bucket: Resource<Bucket>,
+        key: Key,
+    ) -> anyhow::Result<Result<bool, Resource<Error>>> {
+        (*self).exists(bucket, key).await
     }
 }

@@ -13,18 +13,21 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
-use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecutor};
+use crate::components::worker_executor::{
+    new_client, wait_for_startup, WorkerExecutor, WorkerExecutorEnvVars,
+};
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
-
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::components::component_service::ComponentService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::WorkerService;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
 
@@ -39,13 +42,16 @@ pub struct SpawnedWorkerExecutor {
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+    env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
     verbosity: Level,
     out_level: Level,
     err_level: Level,
+    client: Option<WorkerExecutorClient<Channel>>,
 }
 
 impl SpawnedWorkerExecutor {
     pub async fn new(
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -57,14 +63,16 @@ impl SpawnedWorkerExecutor {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
     ) -> Self {
-        println!("Starting golem-worker-executor process");
+        info!("Starting golem-worker-executor process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-worker-executor at {executable:?}");
         }
 
         let (child, logger) = Self::start(
+            env_vars.as_ref(),
             executable,
             working_directory,
             http_port,
@@ -90,13 +98,24 @@ impl SpawnedWorkerExecutor {
             component_service,
             shard_manager,
             worker_service,
+            env_vars,
             verbosity,
             out_level,
             err_level,
+            client: if shared_client {
+                Some(
+                    new_client("localhost", grpc_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 
     async fn start(
+        env_vars: &(dyn WorkerExecutorEnvVars + Send + Sync + 'static),
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -111,20 +130,24 @@ impl SpawnedWorkerExecutor {
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(
-                http_port,
-                grpc_port,
-                component_service,
-                shard_manager,
-                worker_service,
-                redis,
-                verbosity,
-            ))
+            .envs(
+                env_vars
+                    .env_vars(
+                        http_port,
+                        grpc_port,
+                        component_service,
+                        shard_manager,
+                        worker_service,
+                        redis,
+                        verbosity,
+                    )
+                    .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("Failed to start golem-shard-manager");
+            .expect("Failed to start worker");
 
         let logger = ChildProcessLogger::log_child_process(
             &format!("[worker-{grpc_port}]"),
@@ -141,6 +164,13 @@ impl SpawnedWorkerExecutor {
 
 #[async_trait]
 impl WorkerExecutor for SpawnedWorkerExecutor {
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client("localhost", self.grpc_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         "localhost".to_string()
     }
@@ -165,6 +195,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         info!("Restarting golem-worker-executor {}", self.grpc_port);
 
         let (child, logger) = Self::start(
+            self.env_vars.as_ref(),
             &self.executable,
             &self.working_directory,
             self.http_port,

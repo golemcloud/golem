@@ -80,10 +80,6 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
 
 // Here, we declare a Rust implementation of the `ShoppingCart` trait.
 impl Guest for Component {
-    fn not_durable() -> () {
-        set_oplog_persistence_level(PersistenceLevel::PersistNothing);
-    }
-
     fn initialize_cart(user_id: String) -> () {
         with_state(|state| {
             println!("Initializing cart for user {}", user_id);
@@ -162,3 +158,5 @@ impl Guest for Component {
         })
     }
 }
+
+bindings::export!(Component with_types_in bindings);

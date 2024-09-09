@@ -1,39 +1,74 @@
-use golem_worker_service::api;
-use golem_worker_service::api::make_open_api_service;
-use golem_worker_service::service::Services;
-use golem_worker_service::{config, grpcapi};
-use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::metrics;
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
+
 use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
 use prometheus::Registry;
-use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
 use tokio::select;
+use tracing::error;
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+use golem_common::config::DbConfig;
+use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_service_base::db;
+use golem_worker_service::api;
+use golem_worker_service::api::make_open_api_service;
+use golem_worker_service::config::make_config_loader;
+use golem_worker_service::grpcapi;
+use golem_worker_service::service::Services;
+use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
+use golem_worker_service_base::metrics;
+
+fn main() -> std::io::Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         let services = Services::noop();
         let api_service = make_open_api_service(&services);
         println!("{}", api_service.spec_yaml());
         Ok(())
-    } else {
+    } else if let Some(config) = make_config_loader().load_or_dump_config() {
         let prometheus = metrics::register_all();
-        let config: WorkerServiceBaseConfig = config::get_config();
         app(&config, prometheus).await
+    } else {
+        Ok(())
     }
 }
 
 pub async fn app(
-    worker_config: &WorkerServiceBaseConfig,
+    config: &WorkerServiceBaseConfig,
     prometheus_registry: Registry,
 ) -> std::io::Result<()> {
-    init_tracing_metrics();
-    let config = worker_config.clone();
+    let config = config.clone();
+
+    init_tracing(&config, prometheus_registry.clone());
+
+    match config.db.clone() {
+        DbConfig::Postgres(c) => {
+            db::postgres_migrate(&c, "./db/migration/postgres")
+                .await
+                .map_err(|e| {
+                    error!(error = e, "DB - postgres - init error");
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
+        }
+        DbConfig::Sqlite(c) => {
+            db::sqlite_migrate(&c, "./db/migration/sqlite")
+                .await
+                .map_err(|e| {
+                    error!(error = e, "DB - sqlite - init error");
+                    std::io::Error::new(std::io::ErrorKind::Other, "Init error")
+                })?;
+        }
+    };
 
     let services: Services = Services::new(&config)
         .await
@@ -87,17 +122,17 @@ pub async fn app(
     Ok(())
 }
 
-fn init_tracing_metrics() {
-    let prometheus = prometheus::default_registry();
+fn init_tracing(config: &WorkerServiceBaseConfig, prometheus_registry: Registry) {
+    init_tracing_with_default_env_filter(&config.tracing);
+
     let exporter = opentelemetry_prometheus::exporter()
-        .with_registry(prometheus.clone())
+        .with_registry(prometheus_registry.clone())
         .build()
         .unwrap();
 
-    global::set_meter_provider(MeterProvider::builder().with_reader(exporter).build());
-
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(true)
-        .init();
+    global::set_meter_provider(
+        MeterProviderBuilder::default()
+            .with_reader(exporter)
+            .build(),
+    );
 }

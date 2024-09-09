@@ -1,11 +1,26 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::config::CompileWorkerConfig;
 use crate::model::*;
 use crate::UriBackConversion;
 use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::download_component_response;
-use golem_api_grpc::proto::golem::component::ComponentError;
-use golem_api_grpc::proto::golem::component::DownloadComponentRequest;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::download_component_response;
+use golem_api_grpc::proto::golem::component::v1::ComponentError;
+use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::ComponentId;
@@ -19,6 +34,7 @@ use http::Uri;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use tonic::transport::Channel;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -27,13 +43,13 @@ use wasmtime::Engine;
 #[derive(Clone)]
 pub struct CompileWorker {
     // Config
-    uri: Uri,
     access_token: Uuid,
     config: CompileWorkerConfig,
 
     // Resources
     engine: Engine,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+    client: GrpcClient<ComponentServiceClient<Channel>>,
 }
 
 impl CompileWorker {
@@ -48,12 +64,23 @@ impl CompileWorker {
         sender: mpsc::Sender<CompiledComponent>,
         mut recv: mpsc::Receiver<CompilationRequest>,
     ) {
+        let max_component_size = config.max_component_size;
         let worker = Self {
-            uri,
             engine,
             compiled_component_service,
-            config,
+            config: config.clone(),
             access_token,
+            client: GrpcClient::new(
+                move |channel| {
+                    ComponentServiceClient::new(channel)
+                        .max_decoding_message_size(max_component_size)
+                },
+                uri.as_http_02(),
+                GrpcClientConfig {
+                    retries_on_unavailable: config.retries.clone(),
+                    ..Default::default() // TODO
+                },
+            ),
         };
 
         tokio::spawn(async move {
@@ -110,12 +137,11 @@ impl CompileWorker {
         };
 
         let bytes = download_via_grpc(
-            &self.uri,
+            &self.client,
             &self.access_token,
             &self.config.retries,
             &component_with_version.id,
             component_with_version.version,
-            self.config.max_component_size,
         )
         .await?;
 
@@ -142,40 +168,39 @@ impl CompileWorker {
 }
 
 async fn download_via_grpc(
-    endpoint: &Uri,
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
     component_version: u64,
-    max_component_size: usize,
 ) -> Result<Vec<u8>, CompilationError> {
-    let desc = format!("Downloading component {component_id}@{component_version}");
-    tracing::debug!("{}", &desc);
     with_retries(
-        &desc,
         "components",
         "download",
+        Some(format!("{component_id}@{component_version}")),
         retry_config,
         &(
-            endpoint.clone(),
+            client.clone(),
             component_id.clone(),
             access_token.to_owned(),
         ),
-        |(endpoint, component_id, access_token)| {
+        |(client, component_id, access_token)| {
             Box::pin(async move {
-                let mut client = ComponentServiceClient::connect(endpoint.as_http_02())
+                let component_id = component_id.clone();
+                let access_token = *access_token;
+                let response = client
+                    .call(move |client| {
+                        let request = authorised_grpc_request(
+                            DownloadComponentRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: Some(component_version),
+                            },
+                            &access_token,
+                        );
+                        Box::pin(client.download_component(request))
+                    })
                     .await?
-                    .max_decoding_message_size(max_component_size);
-
-                let request = authorised_grpc_request(
-                    DownloadComponentRequest {
-                        component_id: Some(component_id.clone().into()),
-                        version: Some(component_version),
-                    },
-                    access_token,
-                );
-
-                let response = client.download_component(request).await?.into_inner();
+                    .into_inner();
 
                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
                 let bytes = chunks

@@ -17,16 +17,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 use tracing::Level;
 
-use golem_api_grpc::proto::golem::workerexecutor::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
 use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::wait_for_startup_grpc;
 use crate::components::worker_service::WorkerService;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 
 pub mod docker;
 pub mod k8s;
@@ -35,9 +35,7 @@ pub mod spawned;
 
 #[async_trait]
 pub trait WorkerExecutor {
-    async fn client(&self) -> WorkerExecutorClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
-    }
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>>;
 
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
@@ -59,54 +57,117 @@ pub trait WorkerExecutor {
     async fn restart(&self);
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> WorkerExecutorClient<Channel> {
-    WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-worker-executor")
+async fn new_client(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
+    Ok(WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}")).await?)
+}
+
+fn new_client_lazy(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
+    Ok(WorkerExecutorClient::new(
+        Endpoint::try_from(format!("http://{host}:{grpc_port}"))?.connect_lazy(),
+    ))
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-worker-executor", timeout).await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
+#[async_trait]
+pub trait WorkerExecutorEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
 
-    let vars: &[(&str, &str)] = &[
-        ("RUST_LOG"                                      , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
-        ("ENVIRONMENT"                    , "local"),
-        ("WASMTIME_BACKTRACE_DETAILS"                    , "1"),
-        ("RUST_BACKTRACE"                                , "1"),
-        ("GOLEM__REDIS__HOST"                            , &redis.private_host()),
-        ("GOLEM__REDIS__PORT"                            , &redis.private_port().to_string()),
-        ("GOLEM__REDIS__KEY_PREFIX"                      , redis.prefix()),
-        ("GOLEM__PUBLIC_WORKER_API__HOST"                , &worker_service.private_host()),
-        ("GOLEM__PUBLIC_WORKER_API__PORT"                , &worker_service.private_grpc_port().to_string()),
-        ("GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN"        , "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__COMPONENT_SERVICE__CONFIG__HOST"        , &component_service.private_host()),
-        ("GOLEM__COMPONENT_SERVICE__CONFIG__PORT"        , &component_service.private_grpc_port().to_string()),
-        ("GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN", "2A354594-7A63-4091-A46B-CC58D379F677"),
-        ("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Local"),
-        ("GOLEM__COMPILED_COMPONENT_SERVICE__CONFIG__ROOT", "/tmp/ittest-local-object-store/golem"),
-        ("GOLEM__BLOB_STORE_SERVICE__TYPE"               , "InMemory"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__TYPE"            , "Grpc"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST"    , &shard_manager.private_host()),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT"    , &shard_manager.private_grpc_port().to_string()),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS"    , "5"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY"    , "100ms"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY"    , "2s"),
-        ("GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER"    , "2"),
-        ("GOLEM__PORT"                                   , &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT"                              , &http_port.to_string()),
-    ];
-
-    HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+#[async_trait]
+impl WorkerExecutorEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        EnvVarBuilder::golem_service(verbosity)
+            .with_str("ENVIRONMENT", "local")
+            .with_str("WASMTIME_BACKTRACE_DETAILS", "1")
+            .with_str("GOLEM__KEY_VALUE_STORAGE__TYPE", "Redis")
+            .with_str("GOLEM__INDEXED_STORAGE__TYPE", "KVStoreRedis")
+            .with_str(
+                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+                "/tmp/ittest-local-object-store/golem",
+            )
+            .with_str(
+                "GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST",
+                &redis.private_host(),
+            )
+            .with_str(
+                "GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT",
+                &redis.private_port().to_string(),
+            )
+            .with_str("GOLEM__KEY_VALUE_STORAGE__CONFIG__PREFIX", redis.prefix())
+            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+            .with_str(
+                "GOLEM__PUBLIC_WORKER_API__HOST",
+                &worker_service.private_host(),
+            )
+            .with(
+                "GOLEM__PUBLIC_WORKER_API__PORT",
+                worker_service.private_grpc_port().to_string(),
+            )
+            .with_str(
+                "GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN",
+                "2A354594-7A63-4091-A46B-CC58D379F677",
+            )
+            .with_str(
+                "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
+                &component_service.private_host(),
+            )
+            .with(
+                "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
+                component_service.private_grpc_port().to_string(),
+            )
+            .with_str(
+                "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
+                "2A354594-7A63-4091-A46B-CC58D379F677",
+            )
+            .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
+            .with_str("GOLEM__SHARD_MANAGER_SERVICE__TYPE", "Grpc")
+            .with_str(
+                "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST",
+                &shard_manager.private_host(),
+            )
+            .with(
+                "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT",
+                shard_manager.private_grpc_port().to_string(),
+            )
+            .with_str(
+                "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS",
+                "5",
+            )
+            .with_str(
+                "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY",
+                "100ms",
+            )
+            .with_str(
+                "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY",
+                "2s",
+            )
+            .with_str(
+                "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
+                "2",
+            )
+            .with("GOLEM__PORT", grpc_port.to_string())
+            .with("GOLEM__HTTP_PORT", http_port.to_string())
+            .build()
+    }
 }

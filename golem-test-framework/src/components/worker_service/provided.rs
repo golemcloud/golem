@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::worker_service::WorkerService;
+use crate::components::worker_service::{new_client, WorkerService};
 use async_trait::async_trait;
-
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
+use tonic::transport::Channel;
 use tracing::info;
 
 pub struct ProvidedWorkerService {
@@ -22,22 +23,45 @@ pub struct ProvidedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
+    client: Option<WorkerServiceClient<Channel>>,
 }
 
 impl ProvidedWorkerService {
-    pub fn new(host: String, http_port: u16, grpc_port: u16, custom_request_port: u16) -> Self {
+    pub async fn new(
+        host: String,
+        http_port: u16,
+        grpc_port: u16,
+        custom_request_port: u16,
+        shared_client: bool,
+    ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
-            host,
+            host: host.clone(),
             http_port,
             grpc_port,
             custom_request_port,
+            client: if shared_client {
+                Some(
+                    new_client(&host, grpc_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
+    async fn client(&self) -> crate::Result<WorkerServiceClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client(&self.host, self.grpc_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         self.host.clone()
     }

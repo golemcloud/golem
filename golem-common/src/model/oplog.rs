@@ -1,17 +1,228 @@
+use bincode::de::read::Reader;
+use bincode::de::{BorrowDecoder, Decoder};
+use bincode::enc::write::Writer;
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::{BorrowDecode, Decode, Encode};
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-
-use bincode::{Decode, Encode};
-use bytes::Bytes;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::config::RetryConfig;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, CallingConvention, ComponentVersion, IdempotencyKey, Timestamp, WorkerId,
-    WorkerInvocation,
+    AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId, WorkerInvocation,
 };
-use crate::serialization::{serialize, try_deserialize};
 
-pub type OplogIndex = u64;
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    Default,
+)]
+pub struct OplogIndex(u64);
+
+impl OplogIndex {
+    pub const NONE: OplogIndex = OplogIndex(0);
+    pub const INITIAL: OplogIndex = OplogIndex(1);
+
+    pub const fn from_u64(value: u64) -> OplogIndex {
+        OplogIndex(value)
+    }
+
+    /// Gets the previous oplog index
+    pub fn previous(&self) -> OplogIndex {
+        OplogIndex(self.0 - 1)
+    }
+
+    /// Gets the next oplog index
+    pub fn next(&self) -> OplogIndex {
+        OplogIndex(self.0 + 1)
+    }
+
+    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
+    /// having `count` elements.
+    pub fn range_end(&self, count: u64) -> OplogIndex {
+        OplogIndex(self.0 + count - 1)
+    }
+}
+
+impl Display for OplogIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<OplogIndex> for u64 {
+    fn from(value: OplogIndex) -> Self {
+        value.0
+    }
+}
+
+#[derive(Clone)]
+pub struct AtomicOplogIndex(Arc<AtomicU64>);
+
+impl AtomicOplogIndex {
+    pub fn from_u64(value: u64) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value)))
+    }
+
+    pub fn get(&self) -> OplogIndex {
+        OplogIndex(self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    pub fn set(&self, value: OplogIndex) {
+        self.0.store(value.0, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn from_oplog_index(value: OplogIndex) -> AtomicOplogIndex {
+        AtomicOplogIndex(Arc::new(AtomicU64::new(value.0)))
+    }
+
+    /// Gets the previous oplog index
+    pub fn previous(&self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the next oplog index
+    pub fn next(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Gets the last oplog index belonging to an inclusive range starting at this oplog index,
+    /// having `count` elements.
+    pub fn range_end(&self, count: u64) {
+        self.0
+            .fetch_sub(count - 1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl Display for AtomicOplogIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+impl From<AtomicOplogIndex> for u64 {
+    fn from(value: AtomicOplogIndex) -> Self {
+        value.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl From<AtomicOplogIndex> for OplogIndex {
+    fn from(value: AtomicOplogIndex) -> Self {
+        OplogIndex::from_u64(value.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadId(pub Uuid);
+
+impl Default for PayloadId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PayloadId {
+    pub fn new() -> PayloadId {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Display for PayloadId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Encode for PayloadId {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        encoder.writer().write(self.0.as_bytes())
+    }
+}
+
+impl Decode for PayloadId {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
+
+impl<'de> BorrowDecode<'de> for PayloadId {
+    fn borrow_decode<D: BorrowDecoder<'de>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let mut bytes = [0u8; 16];
+        decoder.reader().read(&mut bytes)?;
+        Ok(Self(Uuid::from_bytes(bytes)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct WorkerResourceId(pub u64);
+
+impl WorkerResourceId {
+    pub const INITIAL: WorkerResourceId = WorkerResourceId(0);
+
+    pub fn next(&self) -> WorkerResourceId {
+        WorkerResourceId(self.0 + 1)
+    }
+}
+
+impl Display for WorkerResourceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+pub struct IndexedResourceKey {
+    pub resource_name: String,
+    pub resource_params: Vec<String>,
+}
+
+impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+    fn from(value: IndexedResourceKey) -> Self {
+        golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
+    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
+        IndexedResourceKey {
+            resource_name: value.resource_name,
+            resource_params: value.resource_params,
+        }
+    }
+}
+
+/// Worker log levels including the special stdout and stderr channels
+#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode)]
+#[repr(u8)]
+pub enum LogLevel {
+    Stdout,
+    Stderr,
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Critical,
+}
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
@@ -22,26 +233,28 @@ pub enum OplogEntry {
         args: Vec<String>,
         env: Vec<(String, String)>,
         account_id: AccountId,
+        parent: Option<WorkerId>,
+        component_size: u64,
+        initial_total_linear_memory_size: u64,
     },
     /// The worker invoked a host function
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        response: Vec<u8>,
+        response: OplogPayload,
         wrapped_function_type: WrappedFunctionType,
     },
     /// The worker has been invoked
     ExportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        request: Vec<u8>,
+        request: OplogPayload,
         idempotency_key: IdempotencyKey,
-        calling_convention: Option<CallingConvention>,
     },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
         timestamp: Timestamp,
-        response: Vec<u8>,
+        response: OplogPayload,
         consumed_fuel: i64,
     },
     /// Worker suspended
@@ -105,12 +318,38 @@ pub enum OplogEntry {
     SuccessfulUpdate {
         timestamp: Timestamp,
         target_version: ComponentVersion,
+        new_component_size: u64,
     },
     /// An update failed to be applied
     FailedUpdate {
         timestamp: Timestamp,
         target_version: ComponentVersion,
         details: Option<String>,
+    },
+    /// Increased total linear memory size
+    GrowMemory { timestamp: Timestamp, delta: u64 },
+    /// Created a resource instance
+    CreateResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+    },
+    /// Dropped a resource instance
+    DropResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+    },
+    /// Adds additional information for a created resource instance
+    DescribeResource {
+        timestamp: Timestamp,
+        id: WorkerResourceId,
+        indexed_resource: IndexedResourceKey,
+    },
+    /// The worker emitted a log message
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
     },
 }
 
@@ -121,6 +360,9 @@ impl OplogEntry {
         args: Vec<String>,
         env: Vec<(String, String)>,
         account_id: AccountId,
+        parent: Option<WorkerId>,
+        component_size: u64,
+        initial_total_linear_memory_size: u64,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
@@ -129,50 +371,10 @@ impl OplogEntry {
             args,
             env,
             account_id,
+            parent,
+            component_size,
+            initial_total_linear_memory_size,
         }
-    }
-
-    pub fn imported_function_invoked<R: Encode>(
-        function_name: String,
-        response: &R,
-        wrapped_function_type: WrappedFunctionType,
-    ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-
-        Ok(OplogEntry::ImportedFunctionInvoked {
-            timestamp: Timestamp::now_utc(),
-            function_name,
-            response: serialized_response,
-            wrapped_function_type,
-        })
-    }
-
-    pub fn exported_function_invoked<R: Encode>(
-        function_name: String,
-        request: &R,
-        idempotency_key: IdempotencyKey,
-        calling_convention: Option<CallingConvention>,
-    ) -> Result<OplogEntry, String> {
-        let serialized_request = serialize(request)?.to_vec();
-        Ok(OplogEntry::ExportedFunctionInvoked {
-            timestamp: Timestamp::now_utc(),
-            function_name,
-            request: serialized_request,
-            idempotency_key,
-            calling_convention,
-        })
-    }
-
-    pub fn exported_function_completed<R: Encode>(
-        response: &R,
-        consumed_fuel: i64,
-    ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-        Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp: Timestamp::now_utc(),
-            response: serialized_response,
-            consumed_fuel,
-        })
     }
 
     pub fn jump(jump: OplogRegion) -> OplogEntry {
@@ -226,7 +428,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn end_atomic_region(begin_index: u64) -> OplogEntry {
+    pub fn end_atomic_region(begin_index: OplogIndex) -> OplogEntry {
         OplogEntry::EndAtomicRegion {
             timestamp: Timestamp::now_utc(),
             begin_index,
@@ -260,10 +462,14 @@ impl OplogEntry {
         }
     }
 
-    pub fn successful_update(target_version: ComponentVersion) -> OplogEntry {
+    pub fn successful_update(
+        target_version: ComponentVersion,
+        new_component_size: u64,
+    ) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp: Timestamp::now_utc(),
             target_version,
+            new_component_size,
         }
     }
 
@@ -275,12 +481,76 @@ impl OplogEntry {
         }
     }
 
+    pub fn grow_memory(delta: u64) -> OplogEntry {
+        OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta,
+        }
+    }
+
+    pub fn create_resource(id: WorkerResourceId) -> OplogEntry {
+        OplogEntry::CreateResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+        }
+    }
+
+    pub fn drop_resource(id: WorkerResourceId) -> OplogEntry {
+        OplogEntry::DropResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+        }
+    }
+
+    pub fn describe_resource(
+        id: WorkerResourceId,
+        indexed_resource: IndexedResourceKey,
+    ) -> OplogEntry {
+        OplogEntry::DescribeResource {
+            timestamp: Timestamp::now_utc(),
+            id,
+            indexed_resource,
+        }
+    }
+
+    pub fn log(level: LogLevel, context: String, message: String) -> OplogEntry {
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            level,
+            context,
+            message,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
 
     pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+    }
+
+    /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
+    /// is not a RemoteWrite entry which does not belong to the batched remote write started at `idx`.
+    pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
+        match self {
+            OplogEntry::ImportedFunctionInvoked {
+                wrapped_function_type,
+                ..
+            } => match wrapped_function_type {
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_index))
+                    if *begin_index == idx =>
+                {
+                    true
+                }
+                WrappedFunctionType::ReadLocal => true,
+                WrappedFunctionType::WriteLocal => true,
+                WrappedFunctionType::ReadRemote => true,
+                _ => false,
+            },
+            OplogEntry::ExportedFunctionCompleted { .. } => false,
+            _ => true,
+        }
     }
 
     /// True if the oplog entry is a "hint" that should be skipped during replay
@@ -295,25 +565,12 @@ impl OplogEntry {
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
                 | OplogEntry::FailedUpdate { .. }
+                | OplogEntry::GrowMemory { .. }
+                | OplogEntry::CreateResource { .. }
+                | OplogEntry::DropResource { .. }
+                | OplogEntry::DescribeResource { .. }
+                | OplogEntry::Log { .. }
         )
-    }
-
-    pub fn payload<T: Decode>(&self) -> Result<Option<T>, String> {
-        match &self {
-            OplogEntry::ImportedFunctionInvoked { response, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(response);
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionInvoked { request, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(request);
-                try_deserialize(&response_bytes)
-            }
-            OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                let response_bytes: Bytes = Bytes::copy_from_slice(response);
-                try_deserialize(&response_bytes)
-            }
-            _ => Ok(None),
-        }
     }
 
     pub fn timestamp(&self) -> Timestamp {
@@ -336,7 +593,12 @@ impl OplogEntry {
             | OplogEntry::PendingWorkerInvocation { timestamp, .. }
             | OplogEntry::PendingUpdate { timestamp, .. }
             | OplogEntry::SuccessfulUpdate { timestamp, .. }
-            | OplogEntry::FailedUpdate { timestamp, .. } => *timestamp,
+            | OplogEntry::FailedUpdate { timestamp, .. }
+            | OplogEntry::GrowMemory { timestamp, .. }
+            | OplogEntry::CreateResource { timestamp, .. }
+            | OplogEntry::DropResource { timestamp, .. }
+            | OplogEntry::DescribeResource { timestamp, .. } => *timestamp,
+            OplogEntry::Log { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -350,7 +612,7 @@ pub enum UpdateDescription {
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
         target_version: ComponentVersion,
-        source: SnapshotSource,
+        payload: OplogPayload,
     },
 }
 
@@ -371,129 +633,59 @@ pub struct TimestampedUpdateDescription {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum SnapshotSource {
-    /// Load the snapshot from the given byte array
+pub enum OplogPayload {
+    /// Load the payload from the given byte array
     Inline(Vec<u8>),
 
-    /// Load the snapshot from the blob store
-    BlobStore {
-        account_id: AccountId,
-        container: String,
-        object: String,
+    /// Load the payload from the blob storage
+    External {
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WrappedFunctionType {
+    /// The side-effect reads from the worker's local state (for example local file system,
+    /// random generator, etc.)
     ReadLocal,
+    /// The side-effect writes to the worker's local state (for example local file system)
     WriteLocal,
+    /// The side-effect reads from external state (for example a key-value store)
     ReadRemote,
+    /// The side-effect manipulates external state (for example an RPC call)
     WriteRemote,
+    /// The side-effect manipulates external state through multiple invoked functions (for example
+    /// a HTTP request where reading the response involves multiple host function calls)
+    ///
+    /// On the first invocation of the batch, the parameter should be `None` - this triggers
+    /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
+    /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
+    /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+    WriteRemoteBatched(Option<OplogIndex>),
 }
 
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum WorkerError {
     Unknown(String),
+    InvalidRequest(String),
     StackOverflow,
+    OutOfMemory,
 }
 
-impl Display for WorkerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl WorkerError {
+    pub fn to_string(&self, error_logs: &str) -> String {
+        let error_logs = if !error_logs.is_empty() {
+            format!("\n\n{}", error_logs)
+        } else {
+            "".to_string()
+        };
         match self {
-            WorkerError::Unknown(message) => write!(f, "{}", message),
-            WorkerError::StackOverflow => write!(f, "Stack overflow"),
+            WorkerError::Unknown(message) => format!("{message}{error_logs}"),
+            WorkerError::InvalidRequest(message) => format!("{message}{error_logs}"),
+            WorkerError::StackOverflow => format!("Stack overflow{error_logs}"),
+            WorkerError::OutOfMemory => format!("Out of memory{error_logs}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use golem_wasm_rpc::protobuf::{val, Val, ValResult};
-
-    use crate::model::{CallingConvention, IdempotencyKey};
-
-    use super::{OplogEntry, WrappedFunctionType};
-
-    #[test]
-    fn oplog_entry_imported_function_invoked_payload_roundtrip() {
-        let entry = OplogEntry::imported_function_invoked(
-            "function_name".to_string(),
-            &("example payload".to_string()),
-            WrappedFunctionType::ReadLocal,
-        )
-        .unwrap();
-
-        if let OplogEntry::ImportedFunctionInvoked { response, .. } = &entry {
-            assert_eq!(response.len(), 17);
-        } else {
-            unreachable!()
-        }
-
-        let response = entry.payload::<String>().unwrap().unwrap();
-
-        assert_eq!(response, "example payload");
-    }
-
-    #[test]
-    fn oplog_entry_exported_function_invoked_payload_roundtrip() {
-        let val1 = Val {
-            val: Some(val::Val::Result(Box::new(ValResult {
-                discriminant: 0,
-                value: Some(Box::new(Val {
-                    val: Some(val::Val::U64(10)),
-                })),
-            }))),
-        };
-        let entry = OplogEntry::exported_function_invoked(
-            "function_name".to_string(),
-            &vec![val1.clone()],
-            IdempotencyKey {
-                value: "idempotency-key".to_string(),
-            },
-            Some(CallingConvention::Stdio),
-        )
-        .unwrap();
-
-        if let OplogEntry::ExportedFunctionInvoked { request, .. } = &entry {
-            assert_eq!(request.len(), 9);
-        } else {
-            unreachable!()
-        }
-
-        let request: Vec<Val> = entry.payload().unwrap().unwrap();
-
-        assert_eq!(request, vec![val1]);
-    }
-
-    #[test]
-    fn oplog_entry_exported_function_completed_roundtrip() {
-        let val1 = Val {
-            val: Some(val::Val::Result(Box::new(ValResult {
-                discriminant: 0,
-                value: Some(Box::new(Val {
-                    val: Some(val::Val::U64(10)),
-                })),
-            }))),
-        };
-        let val2 = Val {
-            val: Some(val::Val::String("something".to_string())),
-        };
-
-        let entry = OplogEntry::exported_function_completed(
-            &vec![val1.clone(), val2.clone()],
-            1_000_000_000,
-        )
-        .unwrap();
-
-        if let OplogEntry::ExportedFunctionCompleted { response, .. } = &entry {
-            assert_eq!(response.len(), 21);
-        } else {
-            unreachable!()
-        }
-
-        let response: Vec<Val> = entry.payload().unwrap().unwrap();
-
-        assert_eq!(response, vec![val1, val2]);
     }
 }

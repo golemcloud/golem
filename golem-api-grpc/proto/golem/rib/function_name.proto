@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package golem.rib;
+
+message ParsedFunctionName {
+  ParsedFunctionSite site = 1;
+  ParsedFunctionReference function = 2;
+}
+
+message ParsedFunctionSite {
+  oneof site {
+    GlobalFunctionSite global = 1;
+    InterfaceFunctionSite interface = 2;
+    PackageInterfaceFunctionSite package_interface = 3;
+  }
+}
+
+message GlobalFunctionSite {
+
+}
+
+message InterfaceFunctionSite {
+  string name = 1;
+}
+
+message PackageInterfaceFunctionSite {
+  string namespace = 1;
+  string package = 2;
+  string interface = 3;
+  SemVersion version = 4;
+}
+
+message SemVersion {
+  uint64 major = 1;
+  uint64 minor = 2;
+  uint64 patch = 3;
+  string pre = 4;
+  string build = 5;
+}
+
+message ParsedFunctionReference {
+  oneof function_reference {
+    FunctionFunctionReference function = 1;
+    RawResourceConstructorFunctionReference raw_resource_constructor = 2;
+    RawResourceDropFunctionReference raw_resource_drop = 3;
+    RawResourceMethodFunctionReference raw_resource_method = 4;
+    RawResourceStaticMethodFunctionReference raw_resource_static_method = 5;
+    IndexedResourceConstructorFunctionReference indexed_resource_constructor = 6;
+    IndexedResourceMethodFunctionReference indexed_resource_method = 7;
+    IndexedResourceStaticMethodFunctionReference indexed_resource_static_method = 8;
+    IndexedResourceDropFunctionReference indexed_resource_drop = 9;
+  }
+}
+
+message FunctionFunctionReference {
+  string function = 1;
+}
+
+message RawResourceConstructorFunctionReference {
+  string resource = 1;
+}
+
+message RawResourceDropFunctionReference {
+  string resource = 1;
+}
+
+message RawResourceMethodFunctionReference {
+  string resource = 1;
+  string method = 2;
+}
+
+message RawResourceStaticMethodFunctionReference {
+  string resource = 1;
+  string method = 2;
+}
+
+message IndexedResourceConstructorFunctionReference {
+  string resource = 1;
+  repeated string resource_params = 2;
+}
+
+message IndexedResourceMethodFunctionReference {
+  string resource = 1;
+  repeated string resource_params = 2;
+  string method = 3;
+}
+
+message IndexedResourceStaticMethodFunctionReference {
+  string resource = 1;
+  repeated string resource_params = 2;
+  string method = 3;
+}
+
+message IndexedResourceDropFunctionReference {
+  string resource = 1;
+  repeated string resource_params = 2;
+}

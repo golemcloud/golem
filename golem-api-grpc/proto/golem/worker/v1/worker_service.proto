@@ -1,0 +1,205 @@
+syntax = "proto3";
+
+package golem.worker.v1;
+
+import public "golem/common/empty.proto";
+import public "golem/worker/complete_parameters.proto";
+import public "golem/worker/cursor.proto";
+import public "golem/worker/idempotency_key.proto";
+import public "golem/worker/invocation_context.proto";
+import public "golem/worker/invoke_parameters.proto";
+import public "golem/worker/invoke_result.proto";
+import public "golem/worker/invoke_result_json.proto";
+import public "golem/worker/v1/worker_error.proto";
+import public "golem/worker/worker_filter.proto";
+import public "golem/worker/worker_metadata.proto";
+import public "golem/worker/log_event.proto";
+import public "golem/worker/worker_id.proto";
+import public "golem/component/component_id.proto";
+import public "golem/worker/update_mode.proto";
+
+service WorkerService {
+  rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
+  rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
+  rpc DeleteWorker (DeleteWorkerRequest) returns (DeleteWorkerResponse);
+  rpc GetWorkerMetadata (GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+
+  rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
+  rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
+  rpc InvokeAndAwaitJson (InvokeAndAwaitJsonRequest) returns (InvokeAndAwaitJsonResponse);
+  rpc Invoke (InvokeRequest) returns (InvokeResponse);
+  rpc InvokeJson (InvokeJsonRequest) returns (InvokeResponse);
+  rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
+  rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
+
+  rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
+}
+
+message LaunchNewWorkerRequest {
+  golem.component.ComponentId componentId = 1;
+  string name = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+}
+
+message LaunchNewWorkerResponse {
+  oneof result {
+    LaunchNewWorkerSuccessResponse success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message LaunchNewWorkerSuccessResponse {
+  golem.worker.WorkerId workerId = 1;
+  uint64 component_version = 2;
+}
+
+message CompletePromiseRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.CompleteParameters completeParameters = 2;
+}
+
+message CompletePromiseResponse {
+  oneof result {
+    bool success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message DeleteWorkerRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message DeleteWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message GetWorkerMetadataRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message GetWorkerMetadataResponse {
+  oneof result {
+    golem.worker.WorkerMetadata success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message InterruptWorkerRequest {
+  golem.worker.WorkerId workerId = 1;
+  bool recoverImmediately = 2;
+}
+
+message InterruptWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message InvokeAndAwaitRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  golem.worker.InvokeParameters invokeParameters = 4;
+  optional golem.worker.InvocationContext context = 6;
+}
+
+message InvokeAndAwaitResponse {
+  oneof result {
+    golem.worker.InvokeResult success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message InvokeAndAwaitJsonRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  repeated string invokeParameters = 4;
+  optional golem.worker.InvocationContext context = 6;
+}
+
+message InvokeAndAwaitJsonResponse {
+  oneof result {
+    string success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message InvokeRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  golem.worker.InvokeParameters invokeParameters = 4;
+  optional golem.worker.InvocationContext context = 6;
+}
+
+message InvokeResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message InvokeJsonRequest {
+  golem.worker.WorkerId workerId = 1;
+  golem.worker.IdempotencyKey idempotencyKey = 2;
+  string function = 3;
+  repeated string invokeParameters = 4;
+  optional golem.worker.InvocationContext context = 6;
+}
+
+message ResumeWorkerRequest {
+  golem.worker.WorkerId workerId = 1;
+}
+
+message ResumeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message ConnectWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+}
+
+message GetWorkersMetadataRequest {
+  golem.component.ComponentId component_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+  golem.worker.Cursor cursor = 3;
+  uint64 count = 4;
+  bool precise = 5;
+}
+
+
+message GetWorkersMetadataResponse {
+  oneof result {
+    GetWorkersMetadataSuccessResponse success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message GetWorkersMetadataSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+  optional golem.worker.Cursor cursor = 2;
+}
+
+
+message UpdateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  uint64 target_version = 2;
+  golem.worker.UpdateMode mode = 3;
+}
+
+message UpdateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    WorkerError error = 2;
+  }
+}

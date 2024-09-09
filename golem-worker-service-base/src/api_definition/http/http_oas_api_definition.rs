@@ -3,11 +3,11 @@ use openapiv3::OpenAPI;
 use poem_openapi::types::ParseFromJSON;
 use poem_openapi::{registry, types};
 
-use crate::api_definition::http::HttpApiDefinition;
+use crate::api_definition::http::HttpApiDefinitionRequest;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 
-pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String> {
+pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinitionRequest, String> {
     let api_definition_id = ApiDefinitionId(get_root_extension(
         &openapi,
         GOLEM_API_DEFINITION_ID_EXTENSION,
@@ -18,7 +18,7 @@ pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinition, String>
 
     let routes = get_routes(openapi.paths)?;
 
-    Ok(HttpApiDefinition {
+    Ok(HttpApiDefinitionRequest {
         id: api_definition_id,
         version: api_definition_version,
         routes,
@@ -75,14 +75,14 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 }
 
 mod internal {
-    use crate::api_definition::http::{AllPathPatterns, HttpResponseMapping, MethodPattern, Route};
-    use crate::expression::Expr;
+    use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use rib::Expr;
     use serde_json::Value;
 
-    use crate::expression;
+    use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
@@ -154,10 +154,8 @@ mod internal {
             ))?;
 
         let binding = GolemWorkerBinding {
-            worker_id: get_worker_id_expr(worker_bridge_info)?,
-            function_name: get_function_name(worker_bridge_info)?,
-            function_params: get_function_params_expr(worker_bridge_info)?,
-            component: get_component_id(worker_bridge_info)?,
+            worker_name: get_worker_id_expr(worker_bridge_info)?,
+            component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
         };
@@ -169,98 +167,66 @@ mod internal {
         })
     }
 
-    pub(crate) fn get_component_id(worker_bridge_info: &Value) -> Result<ComponentId, String> {
-        let component_id = worker_bridge_info
+    pub(crate) fn get_component_id(
+        worker_bridge_info: &Value,
+    ) -> Result<VersionedComponentId, String> {
+        let component_id_str = worker_bridge_info
             .get("component-id")
             .ok_or("No component-id found")?
             .as_str()
             .ok_or("component-id is not a string")?;
-        Ok(ComponentId(
-            Uuid::parse_str(component_id).map_err(|err| err.to_string())?,
-        ))
+
+        let version = worker_bridge_info
+            .get("component-version")
+            .ok_or("No component-version found")?
+            .as_u64()
+            .ok_or("component-version is not a u64")?;
+
+        let component_id =
+            ComponentId(Uuid::parse_str(component_id_str).map_err(|err| err.to_string())?);
+
+        Ok(VersionedComponentId {
+            component_id,
+            version,
+        })
     }
 
     pub(crate) fn get_response_mapping(
         worker_bridge_info: &Value,
-    ) -> Result<Option<ResponseMapping>, String> {
+    ) -> Result<ResponseMapping, String> {
         let response = {
-            let response_mapping_optional = worker_bridge_info.get("response");
+            let response_mapping_optional = worker_bridge_info.get("response").ok_or(
+                "No response mapping found. It should be a string representing expression"
+                    .to_string(),
+            )?;
 
             match response_mapping_optional {
-                None => Ok(None),
-                Some(Value::Null) => Ok(None),
-                Some(Value::String(expr)) => expression::from_string(expr)
-                    .map_err(|err| err.to_string())
-                    .map(Some),
+                Value::String(expr) => rib::from_string(expr).map_err(|err| err.to_string()),
                 _ => Err(
                     "Invalid response mapping type. It should be a string representing expression"
                         .to_string(),
                 ),
             }
-        };
+        }?;
 
-        match response? {
-            Some(response_mapping_expr) => {
-                // Validating
-                let _ =
-                    HttpResponseMapping::try_from(&ResponseMapping(response_mapping_expr.clone()))
-                        .map_err(|err| err.to_string())?;
-
-                Ok(Some(ResponseMapping(response_mapping_expr)))
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn get_function_params_expr(
-        worker_bridge_info: &Value,
-    ) -> Result<Vec<Expr>, String> {
-        let function_params = worker_bridge_info
-            .get("function-params")
-            .ok_or("No function-params found")?
-            .as_array()
-            .ok_or("function-params is not an array")?;
-        let mut exprs = vec![];
-        for param in function_params {
-            match param {
-                Value::String(function_param_expr_str) => {
-                    let function_param_expr = expression::from_string(function_param_expr_str)
-                        .map_err(|err| err.to_string())?;
-                    exprs.push(function_param_expr);
-                }
-                _ => return Err(
-                    "Invalid function param type. It should be a string representing expression"
-                        .to_string(),
-                ),
-            }
-        }
-        Ok(exprs)
-    }
-
-    pub(crate) fn get_function_name(worker_bridge_info: &Value) -> Result<String, String> {
-        let function_name = worker_bridge_info
-            .get("function-name")
-            .ok_or("No function-name found")?
-            .as_str()
-            .ok_or("function-name is not a string")?;
-        Ok(function_name.to_string())
+        Ok(ResponseMapping(response.clone()))
     }
 
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
         let worker_id = worker_bridge_info
-            .get("worker-id")
-            .ok_or("No worker-id found")?
+            .get("worker-name")
+            .ok_or("No worker-name found")?
             .as_str()
-            .ok_or("worker-id is not a string")?;
+            .ok_or("worker-name is not a string")?;
 
-        expression::from_string(worker_id).map_err(|err| err.to_string())
+        rib::from_string(worker_id).map_err(|err| err.to_string())
     }
 
     pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
         if let Some(key) = worker_bridge_info.get("idempotency-key") {
             let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
             Ok(Some(
-                expression::from_string(key_expr).map_err(|err| err.to_string())?,
+                rib::from_string(key_expr).map_err(|err| err.to_string())?,
             ))
         } else {
             Ok(None)
@@ -276,10 +242,10 @@ mod internal {
 mod tests {
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::expression::{Expr, InnerNumber};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::PathItem;
+    use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -287,12 +253,11 @@ mod tests {
     fn test_get_route_from_path_item() {
         let path_item = PathItem {
             extensions: vec![("x-golem-worker-bridge".to_string(), json!({
-                "worker-id": "worker-${request.body.user}",
-                "function-name": "test",
-                "function-params": ["${request}"],
+                "worker-name": "worker-${request.body.user}",
                 "component-id": "00000000-0000-0000-0000-000000000000",
+                "component-version": 0,
                 "idempotency-key": "test-key",
-                "response": "${{headers : {ContentType: 'json', user-id: 'foo'}, body: worker.response, status: 200}}"
+                "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
                 .collect(),
@@ -308,50 +273,36 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_id: Expr::Concat(vec![
-                        Expr::Literal("worker-".to_string()),
-                        Expr::SelectField(
-                            Box::new(Expr::SelectField(
-                                Box::new(Expr::Request()),
-                                "body".to_string()
-                            )),
-                            "user".to_string()
+                    worker_name: Expr::concat(vec![
+                        Expr::literal("worker-"),
+                        Expr::select_field(
+                            Expr::select_field(Expr::identifier("request"), "body"),
+                            "user"
                         )
                     ]),
-                    function_name: "test".to_string(),
-                    function_params: vec![Expr::Request()],
-                    component: ComponentId(Uuid::nil()),
-                    idempotency_key: Some(Expr::Literal("test-key".to_string())),
-                    response: Some(ResponseMapping(Expr::Record(
+                    component_id: golem_service_base::model::VersionedComponentId {
+                        component_id: ComponentId(Uuid::nil()),
+                        version: 0
+                    },
+                    idempotency_key: Some(Expr::literal("test-key")),
+                    response: ResponseMapping(Expr::record(
                         vec![
                             (
                                 "headers".to_string(),
-                                Box::new(Expr::Record(vec![
-                                    (
-                                        "ContentType".to_string(),
-                                        Box::new(Expr::Literal("json".to_string())),
-                                    ),
-                                    (
-                                        "user-id".to_string(),
-                                        Box::new(Expr::Literal("foo".to_string())),
-                                    )
-                                ])),
+                                Expr::record(vec![
+                                    ("ContentType".to_string(), Expr::literal("json"),),
+                                    ("user-id".to_string(), Expr::literal("foo"),)
+                                ]),
                             ),
                             (
                                 "body".to_string(),
-                                Box::new(Expr::SelectField(
-                                    Box::new(Expr::Worker()),
-                                    "response".to_string(),
-                                )),
+                                Expr::select_field(Expr::identifier("worker"), "response",),
                             ),
-                            (
-                                "status".to_string(),
-                                Box::new(Expr::Number(InnerNumber::UnsignedInteger(200)))
-                            ),
+                            ("status".to_string(), Expr::number(200f64)),
                         ]
                         .into_iter()
                         .collect()
-                    )))
+                    ))
                 }
             })
         );

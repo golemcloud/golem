@@ -2,21 +2,17 @@ use ::http::Uri;
 pub mod api;
 pub mod api_definition;
 pub mod app_config;
-pub mod auth;
-
-mod evaluator;
-mod expression;
+pub mod getter;
 pub mod http;
-mod merge;
 pub mod metrics;
 mod parser;
-mod primitive;
+pub(crate) mod path;
 pub mod repo;
 pub mod service;
-pub mod tokeniser;
-pub mod wasm_wave_read;
 mod worker_binding;
 pub mod worker_bridge_execution;
+pub mod worker_service_rib_interpreter;
+
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }

@@ -18,17 +18,18 @@ use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
 
+use crate::model::oplog::OplogIndex;
 use bincode::{Decode, Encode};
 use range_set_blaze::RangeSetBlaze;
 
 #[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
 pub struct OplogRegion {
-    pub start: u64,
-    pub end: u64,
+    pub start: OplogIndex,
+    pub end: OplogIndex,
 }
 
 impl OplogRegion {
-    pub fn contains(&self, target: u64) -> bool {
+    pub fn contains(&self, target: OplogIndex) -> bool {
         target > self.end && target <= self.start
     }
 
@@ -43,15 +44,22 @@ impl OplogRegion {
         }
     }
 
-    pub fn from_range(range: RangeInclusive<u64>) -> OplogRegion {
+    pub fn from_index_range(range: RangeInclusive<OplogIndex>) -> OplogRegion {
         OplogRegion {
             start: *range.start(),
             end: *range.end(),
         }
     }
 
+    pub fn from_range(range: RangeInclusive<u64>) -> OplogRegion {
+        OplogRegion {
+            start: OplogIndex::from_u64(*range.start()),
+            end: OplogIndex::from_u64(*range.end()),
+        }
+    }
+
     pub fn to_range(&self) -> RangeInclusive<u64> {
-        self.start..=self.end
+        self.start.into()..=self.end.into()
     }
 }
 
@@ -98,9 +106,9 @@ impl DeletedRegionsBuilder {
 
 /// Structure holding all the regions deleted from the oplog by jumps. Deleted regions
 /// can be stacked to introduce temporary overrides.
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct DeletedRegions {
-    regions: Vec<BTreeMap<u64, OplogRegion>>,
+    regions: Vec<BTreeMap<OplogIndex, OplogRegion>>,
 }
 
 impl Default for DeletedRegions {
@@ -170,18 +178,18 @@ impl DeletedRegions {
     }
 
     /// Returns the list of deleted regions
-    pub fn regions(&self) -> Values<'_, u64, OplogRegion> {
+    pub fn regions(&self) -> Values<'_, OplogIndex, OplogRegion> {
         self.regions.last().unwrap().values()
     }
 
     /// Becomes the list of deleted regions
-    pub fn into_regions(mut self) -> IntoValues<u64, OplogRegion> {
+    pub fn into_regions(mut self) -> IntoValues<OplogIndex, OplogRegion> {
         self.regions.pop().unwrap().into_values()
     }
 
     /// Gets the next deleted region after, possibly including, the given oplog index.
     /// Returns None if there are no more deleted regions.
-    pub fn find_next_deleted_region(&self, from: u64) -> Option<OplogRegion> {
+    pub fn find_next_deleted_region(&self, from: OplogIndex) -> Option<OplogRegion> {
         self.regions
             .last()
             .unwrap()
@@ -190,7 +198,7 @@ impl DeletedRegions {
             .map(|(_, region)| region.clone())
     }
 
-    pub fn is_in_deleted_region(&self, oplog_index: u64) -> bool {
+    pub fn is_in_deleted_region(&self, oplog_index: OplogIndex) -> bool {
         self.regions
             .last()
             .unwrap()
@@ -217,67 +225,71 @@ impl Display for DeletedRegions {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::oplog::OplogIndex;
     use crate::model::regions::{DeletedRegionsBuilder, OplogRegion};
+
+    fn oplog_region(start: u64, end: u64) -> OplogRegion {
+        OplogRegion {
+            start: OplogIndex::from_u64(start),
+            end: OplogIndex::from_u64(end),
+        }
+    }
 
     #[test]
     pub fn builder_from_overlapping_ranges() {
         let mut builder = DeletedRegionsBuilder::new();
-        builder.add(OplogRegion { start: 2, end: 8 });
-        builder.add(OplogRegion { start: 2, end: 14 });
-        builder.add(OplogRegion { start: 20, end: 22 });
+        builder.add(oplog_region(2, 8));
+        builder.add(oplog_region(2, 14));
+        builder.add(oplog_region(20, 22));
         let deleted_regions = builder.build();
 
         assert_eq!(
             deleted_regions.into_regions().collect::<Vec<_>>(),
-            vec![
-                OplogRegion { start: 2, end: 14 },
-                OplogRegion { start: 20, end: 22 },
-            ]
+            vec![oplog_region(2, 14), oplog_region(20, 22),]
         );
     }
 
     #[test]
     pub fn builder_from_initial_state() {
-        let mut builder = DeletedRegionsBuilder::from_regions(vec![
-            OplogRegion { start: 2, end: 8 },
-            OplogRegion { start: 20, end: 22 },
-        ]);
+        let mut builder =
+            DeletedRegionsBuilder::from_regions(vec![oplog_region(2, 8), oplog_region(20, 22)]);
 
-        builder.add(OplogRegion { start: 20, end: 24 });
-        builder.add(OplogRegion { start: 30, end: 40 });
+        builder.add(oplog_region(20, 24));
+        builder.add(oplog_region(30, 40));
 
         let deleted_regions = builder.build();
 
         assert_eq!(
             deleted_regions.into_regions().collect::<Vec<_>>(),
             vec![
-                OplogRegion { start: 2, end: 8 },
-                OplogRegion { start: 20, end: 24 },
-                OplogRegion { start: 30, end: 40 },
+                oplog_region(2, 8),
+                oplog_region(20, 24),
+                oplog_region(30, 40),
             ]
         );
     }
 
     #[test]
     pub fn find_next_deleted_region() {
-        let deleted_regions = DeletedRegionsBuilder::from_regions(vec![
-            OplogRegion { start: 2, end: 8 },
-            OplogRegion { start: 20, end: 22 },
-        ])
-        .build();
+        let deleted_regions =
+            DeletedRegionsBuilder::from_regions(vec![oplog_region(2, 8), oplog_region(20, 22)])
+                .build();
 
         assert_eq!(
-            deleted_regions.find_next_deleted_region(0),
-            Some(OplogRegion { start: 2, end: 8 })
+            deleted_regions.find_next_deleted_region(OplogIndex::from_u64(0)),
+            Some(oplog_region(2, 8))
         );
         assert_eq!(
-            deleted_regions.find_next_deleted_region(2),
-            Some(OplogRegion { start: 2, end: 8 })
+            deleted_regions.find_next_deleted_region(OplogIndex::from_u64(2)),
+            Some(oplog_region(2, 8))
         );
         assert_eq!(
-            deleted_regions.find_next_deleted_region(8),
-            Some(OplogRegion { start: 20, end: 22 })
+            deleted_regions.find_next_deleted_region(OplogIndex::from_u64(8)),
+            Some(oplog_region(20, 22))
         );
-        assert_eq!(deleted_regions.find_next_deleted_region(22), None);
+        assert_eq!(
+            deleted_regions.find_next_deleted_region(OplogIndex::from_u64(22)),
+            None
+        );
     }
 }

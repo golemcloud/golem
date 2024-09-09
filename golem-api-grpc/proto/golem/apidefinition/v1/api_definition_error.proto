@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package golem.apidefinition.v1;
+
+import "golem/common/error_body.proto";
+import public "golem/component/component_id.proto";
+
+message ApiDefinitionError {
+  oneof error {
+    golem.common.ErrorsBody bad_request = 1;
+    RouteValidationErrorsBody invalid_routes = 2;
+    golem.common.ErrorBody unauthorized = 3;
+    golem.common.ErrorBody limit_exceeded = 4;
+    golem.common.ErrorBody not_found = 5;
+    golem.common.ErrorBody already_exists = 6;
+    golem.common.ErrorBody internal_error = 7;
+    golem.common.ErrorBody not_draft = 8;
+  }
+}
+
+message RouteValidationErrorsBody {
+    repeated RouteValidationError errors = 1;
+}
+
+message RouteValidationError {
+  string method = 1;
+  string path = 2;
+  golem.component.ComponentId component = 3;
+  string detail = 4;
+}

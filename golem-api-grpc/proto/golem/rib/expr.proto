@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package golem.rib;
+
+import "golem/rib/function_name.proto";
+import "golem/rib/type_name.proto";
+
+message Expr {
+  oneof expr {
+    LetExpr let = 1;
+    SelectFieldExpr select_field = 2;
+    SelectIndexExpr select_index = 3;
+    SequenceExpr sequence = 4;
+    RecordExpr record = 5;
+    TupleExpr tuple = 6;
+    LiteralExpr literal = 7;
+    NumberExpr number = 8;
+    FlagsExpr flags = 9;
+    IdentifierExpr identifier = 10;
+    BooleanExpr boolean = 11;
+    ConcatExpr concat = 12;
+    MultipleExpr multiple = 13;
+    NotExpr not = 14;
+    GreaterThanExpr greater_than = 15;
+    GreaterThanOrEqualToExpr greater_than_or_equal = 16;
+    LessThanOrEqualToExpr less_than_or_equal = 17;
+    EqualToExpr equal_to = 18;
+    LessThanExpr less_than = 19;
+    CondExpr cond = 20;
+    PatternMatchExpr pattern_match = 21;
+    OptionExpr option = 22;
+    ResultExpr result = 23;
+    CallExpr call = 24;
+  }
+}
+
+message LetExpr {
+  string name = 1;
+  Expr expr = 2;
+  optional TypeName type_name = 3;
+}
+
+message SelectFieldExpr {
+  string field = 1;
+  Expr expr = 2;
+}
+
+message SelectIndexExpr {
+  uint64 index = 1;
+  Expr expr = 2;
+}
+
+message SequenceExpr {
+  repeated Expr exprs = 1;
+}
+
+message RecordExpr {
+  repeated RecordFieldExpr fields = 1;
+}
+
+message RecordFieldExpr {
+  string name = 1;
+  Expr expr = 2;
+}
+
+message TupleExpr {
+  repeated Expr exprs = 1;
+}
+
+message LiteralExpr {
+  string value = 1;
+}
+
+message NumberExpr {
+  double float = 1;
+  optional TypeName type_name = 2;
+}
+
+message FlagsExpr {
+  repeated string values = 1;
+}
+
+message IdentifierExpr {
+  string name = 1;
+}
+
+message BooleanExpr {
+  bool value = 1;
+}
+
+message ConcatExpr {
+  repeated Expr exprs = 1;
+}
+
+message MultipleExpr {
+  repeated Expr exprs = 1;
+}
+
+message NotExpr {
+  Expr expr = 1;
+}
+
+message GreaterThanExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message GreaterThanOrEqualToExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message LessThanOrEqualToExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message EqualToExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message LessThanExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message CondExpr {
+  Expr left = 1;
+  Expr cond = 2;
+  Expr right = 3;
+}
+
+message PatternMatchExpr {
+  Expr expr = 1;
+  repeated MatchArm patterns = 2;
+}
+
+message OptionExpr {
+  optional Expr expr = 1;
+}
+
+message ResultExpr {
+  oneof result {
+    Expr ok = 1;
+    Expr err = 2;
+  }
+}
+
+message CallExpr {
+  InvocationName name = 1;
+  repeated Expr params = 2;
+}
+
+message InvocationName {
+   oneof name {
+     golem.rib.ParsedFunctionName parsed = 1;
+     string variant_constructor = 2;
+     string enum_constructor = 3;
+   }
+}
+
+message MatchArm {
+  ArmPattern pattern = 1;
+  Expr expr = 2;
+}
+
+message ArmPattern {
+  oneof pattern {
+    WildCardArmPattern wild_card = 1;
+    AsArmPattern as = 2;
+    ConstructorArmPattern constructor = 3;
+    LiteralArmPattern literal = 4;
+  }
+}
+
+message WildCardArmPattern {
+
+}
+
+message AsArmPattern {
+  string name = 1;
+  ArmPattern pattern = 2;
+}
+
+message ConstructorArmPattern {
+  string name = 1;
+  repeated ArmPattern patterns = 2;
+}
+
+message LiteralArmPattern {
+  Expr expr = 1;
+}

@@ -6,6 +6,7 @@ interface api {
   start-polling: func(until: string) -> ();
   increment: func() -> ();
   get-count: func() -> u64;
+  slow-body-stream: func() -> u64;
 }
 
 world http-client-test {

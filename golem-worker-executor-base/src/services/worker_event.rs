@@ -12,115 +12,187 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::events::{record_broadcast_event, record_event};
+use futures_util::{stream, StreamExt};
+use golem_common::model::{IdempotencyKey, LogLevel, WorkerEvent};
+use ringbuf::storage::Heap;
+use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::*;
 
-use crate::metrics::events::{record_broadcast_event, record_event};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Critical,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum WorkerEvent {
-    StdOut(Vec<u8>),
-    StdErr(Vec<u8>),
-    Log {
-        level: LogLevel,
-        context: String,
-        message: String,
-    },
-    Close,
-}
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::Stream;
 
 /// Per-worker event stream
 pub trait WorkerEventService {
-    fn emit_event(&self, event: WorkerEvent);
+    /// Emit an arbitrary worker event.
+    ///
+    /// There are helpers like `emit_stdout` for specific types.
+    fn emit_event(&self, event: WorkerEvent, is_live: bool);
 
-    fn emit_stdout(&self, data: Vec<u8>) {
-        self.emit_event(WorkerEvent::StdOut(data))
-    }
-
-    fn emit_stderr(&self, data: Vec<u8>) {
-        self.emit_event(WorkerEvent::StdErr(data))
-    }
-
-    fn emit_log(&self, log_level: LogLevel, context: &str, message: &str) {
-        self.emit_event(WorkerEvent::Log {
-            level: log_level,
-            context: context.to_string(),
-            message: message.to_string(),
-        })
-    }
-
+    /// Subscribes to the worker event stream and returns a receiver which can be either consumed one
+    /// by one using `WorkerEventReceiver::recv` or converted to a tokio stream.
     fn receiver(&self) -> WorkerEventReceiver;
+
+    /// Gets a string representation of the worker's stderr stream. The stream is truncated to the last
+    /// N elements and may be further truncated by guest language specific matchers. The stream is
+    /// guaranteed to contain information only emitted during the _last_ invocation.
+    fn get_last_invocation_errors(&self) -> String;
+
+    fn emit_stdout(&self, bytes: Vec<u8>, is_live: bool) {
+        self.emit_event(WorkerEvent::stdout(bytes), is_live)
+    }
+
+    fn emit_stderr(&self, bytes: Vec<u8>, is_live: bool) {
+        self.emit_event(WorkerEvent::stderr(bytes), is_live)
+    }
+
+    fn emit_log(&self, log_level: LogLevel, context: &str, message: &str, is_live: bool) {
+        self.emit_event(WorkerEvent::log(log_level, context, message), is_live)
+    }
+
+    fn emit_invocation_start(
+        &self,
+        function: &str,
+        idempotency_key: &IdempotencyKey,
+        is_live: bool,
+    ) {
+        self.emit_event(
+            WorkerEvent::invocation_start(function, idempotency_key),
+            is_live,
+        )
+    }
+
+    fn emit_invocation_finished(
+        &self,
+        function: &str,
+        idempotency_key: &IdempotencyKey,
+        is_live: bool,
+    ) {
+        self.emit_event(
+            WorkerEvent::invocation_finished(function, idempotency_key),
+            is_live,
+        )
+    }
+}
+
+#[derive(Clone)]
+struct WorkerEventEntry {
+    event: WorkerEvent,
+    is_live: bool,
 }
 
 pub struct WorkerEventReceiver {
-    history: Vec<WorkerEvent>,
+    history: Vec<WorkerEventEntry>,
     receiver: Receiver<WorkerEvent>,
 }
 
 impl WorkerEventReceiver {
     pub async fn recv(&mut self) -> Result<WorkerEvent, RecvError> {
-        match self.history.pop() {
-            Some(event) => Ok(event),
-            None => self.receiver.recv().await,
+        loop {
+            let popped = self.history.pop();
+            match popped {
+                Some(entry) if entry.is_live => break Ok(entry.event),
+                Some(_) => continue,
+                None => break self.receiver.recv().await,
+            }
         }
+    }
+
+    pub fn to_stream(self) -> impl Stream<Item = Result<WorkerEvent, BroadcastStreamRecvError>> {
+        let Self { history, receiver } = self;
+        stream::iter(history.into_iter().filter_map(
+            |WorkerEventEntry { event, is_live }| {
+                if is_live {
+                    Some(Ok(event))
+                } else {
+                    None
+                }
+            },
+        ))
+        .chain(BroadcastStream::new(receiver))
     }
 }
 
 pub struct WorkerEventServiceDefault {
     sender: Sender<WorkerEvent>,
-    ring: HeapRb<WorkerEvent>,
+    ring_prod: Arc<Mutex<<SharedRb<Heap<WorkerEventEntry>> as Split>::Prod>>,
+    ring_cons: Arc<Mutex<<SharedRb<Heap<WorkerEventEntry>> as Split>::Cons>>,
 }
 
 impl WorkerEventServiceDefault {
     pub fn new(channel_capacity: usize, ring_capacity: usize) -> WorkerEventServiceDefault {
         let (tx, _) = channel(channel_capacity);
-        let ring = HeapRb::new(ring_capacity);
-        // ring.sub
-        WorkerEventServiceDefault { sender: tx, ring }
+        let (ring_prod, ring_cons) = HeapRb::new(ring_capacity).split();
+        WorkerEventServiceDefault {
+            sender: tx,
+            ring_prod: Arc::new(Mutex::new(ring_prod)),
+            ring_cons: Arc::new(Mutex::new(ring_cons)),
+        }
     }
 }
 
 impl Drop for WorkerEventServiceDefault {
     fn drop(&mut self) {
-        self.emit_event(WorkerEvent::Close);
+        self.emit_event(WorkerEvent::Close, true);
     }
 }
 
 impl WorkerEventService for WorkerEventServiceDefault {
-    fn emit_event(&self, event: WorkerEvent) {
-        record_event(label(&event));
+    fn emit_event(&self, event: WorkerEvent, is_live: bool) {
+        if is_live {
+            record_event(label(&event));
 
-        if self.sender.receiver_count() > 0 {
-            record_broadcast_event(label(&event));
+            if self.sender.receiver_count() > 0 {
+                record_broadcast_event(label(&event));
 
-            let _ = self.sender.send(event.clone());
+                let _ = self.sender.send(event.clone());
+            }
         }
-        let _ = unsafe { Producer::new(&self.ring) }.push(event);
+
+        let entry = WorkerEventEntry { event, is_live };
+        let mut ring_prod = self.ring_prod.lock().unwrap();
+        while ring_prod.try_push(entry.clone()).is_err() {
+            let mut ring_cons = self.ring_cons.lock().unwrap();
+            let _ = ring_cons.try_pop();
+        }
     }
 
     fn receiver(&self) -> WorkerEventReceiver {
         let receiver = self.sender.subscribe();
-        let history = self.ring.iter().cloned().rev().collect();
+        let ring_cons = self.ring_cons.lock().unwrap();
+        let history = ring_cons.iter().cloned().collect();
         WorkerEventReceiver { history, receiver }
+    }
+
+    fn get_last_invocation_errors(&self) -> String {
+        let ring_cons = self.ring_cons.lock().unwrap();
+        let history: Vec<_> = ring_cons.iter().cloned().collect();
+        let mut stderr_chunks = Vec::new();
+        for event in history.iter().rev() {
+            match &event.event {
+                WorkerEvent::StdErr { bytes, .. } => {
+                    stderr_chunks.push(bytes.clone());
+                }
+                WorkerEvent::InvocationStart { .. } => break,
+                _ => {}
+            }
+        }
+        stderr_chunks.reverse();
+        String::from_utf8_lossy(&stderr_chunks.concat()).to_string()
     }
 }
 
 fn label(event: &WorkerEvent) -> &'static str {
     match event {
-        WorkerEvent::StdOut(_) => "stdout",
-        WorkerEvent::StdErr(_) => "stderr",
+        WorkerEvent::StdOut { .. } => "stdout",
+        WorkerEvent::StdErr { .. } => "stderr",
         WorkerEvent::Log { .. } => "log",
+        WorkerEvent::InvocationStart { .. } => "invocation_start",
+        WorkerEvent::InvocationFinished { .. } => "invocation_finished",
         WorkerEvent::Close => "close",
     }
 }
@@ -157,7 +229,7 @@ mod tests {
         });
 
         for b in 1..5u8 {
-            svc.emit_event(WorkerEvent::StdOut(vec![b]));
+            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
         }
 
         let svc2 = svc.clone();
@@ -176,7 +248,7 @@ mod tests {
         });
 
         for b in 5..9u8 {
-            svc.emit_event(WorkerEvent::StdOut(vec![b]));
+            svc.emit_event(WorkerEvent::stdout(vec![b]), true);
         }
 
         drop(svc);
@@ -190,23 +262,23 @@ mod tests {
         assert_eq!(
             result1
                 == vec![
-                    WorkerEvent::StdOut(vec![1]),
-                    WorkerEvent::StdOut(vec![2]),
-                    WorkerEvent::StdOut(vec![3]),
-                    WorkerEvent::StdOut(vec![5]),
-                    WorkerEvent::StdOut(vec![6]),
-                    WorkerEvent::StdOut(vec![7]),
-                    WorkerEvent::StdOut(vec![8]),
+                    WorkerEvent::stdout(vec![1]),
+                    WorkerEvent::stdout(vec![2]),
+                    WorkerEvent::stdout(vec![3]),
+                    WorkerEvent::stdout(vec![5]),
+                    WorkerEvent::stdout(vec![6]),
+                    WorkerEvent::stdout(vec![7]),
+                    WorkerEvent::stdout(vec![8]),
                 ],
             result2
                 == vec![
-                    WorkerEvent::StdOut(vec![1]),
-                    WorkerEvent::StdOut(vec![2]),
-                    WorkerEvent::StdOut(vec![3]),
-                    WorkerEvent::StdOut(vec![5]),
-                    WorkerEvent::StdOut(vec![6]),
-                    WorkerEvent::StdOut(vec![7]),
-                    WorkerEvent::StdOut(vec![8]),
+                    WorkerEvent::stdout(vec![1]),
+                    WorkerEvent::stdout(vec![2]),
+                    WorkerEvent::stdout(vec![3]),
+                    WorkerEvent::stdout(vec![5]),
+                    WorkerEvent::stdout(vec![6]),
+                    WorkerEvent::stdout(vec![7]),
+                    WorkerEvent::stdout(vec![8]),
                 ]
         )
     }
@@ -234,7 +306,7 @@ mod tests {
 
         for b in 1..1001 {
             let s = format!("{}", b);
-            svc.emit_event(WorkerEvent::StdOut(s.as_bytes().into()));
+            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
         }
 
         let svc2 = svc.clone();
@@ -254,7 +326,7 @@ mod tests {
 
         for b in 1001..1005 {
             let s = format!("{}", b);
-            svc.emit_event(WorkerEvent::StdOut(s.as_bytes().into()));
+            svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
         }
 
         drop(svc);
@@ -269,14 +341,14 @@ mod tests {
             result1.len() == 1004,
             result2
                 == vec![
-                    WorkerEvent::StdOut("997".as_bytes().into()),
-                    WorkerEvent::StdOut("998".as_bytes().into()),
-                    WorkerEvent::StdOut("999".as_bytes().into()),
-                    WorkerEvent::StdOut("1000".as_bytes().into()),
-                    WorkerEvent::StdOut("1001".as_bytes().into()),
-                    WorkerEvent::StdOut("1002".as_bytes().into()),
-                    WorkerEvent::StdOut("1003".as_bytes().into()),
-                    WorkerEvent::StdOut("1004".as_bytes().into()),
+                    WorkerEvent::stdout("997".as_bytes().into()),
+                    WorkerEvent::stdout("998".as_bytes().into()),
+                    WorkerEvent::stdout("999".as_bytes().into()),
+                    WorkerEvent::stdout("1000".as_bytes().into()),
+                    WorkerEvent::stdout("1001".as_bytes().into()),
+                    WorkerEvent::stdout("1002".as_bytes().into()),
+                    WorkerEvent::stdout("1003".as_bytes().into()),
+                    WorkerEvent::stdout("1004".as_bytes().into()),
                 ]
         )
     }

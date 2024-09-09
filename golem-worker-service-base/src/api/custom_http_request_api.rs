@@ -1,37 +1,42 @@
+use std::future::Future;
 use std::sync::Arc;
 
-use crate::api_definition::http::HttpApiDefinition;
-use async_trait::async_trait;
+use crate::api_definition::http::CompiledHttpApiDefinition;
+use crate::worker_service_rib_interpreter::{DefaultEvaluator, WorkerServiceRibInterpreter};
+use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
 use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::api_definition_lookup::ApiDefinitionLookup;
+use crate::service::api_definition_lookup::ApiDefinitionsLookup;
 
-use crate::worker_binding::WorkerBindingResolver;
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::worker_binding::RequestToWorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequestExecutor;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+    pub evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     pub api_definition_lookup_service:
-        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
     pub fn new(
-        worker_to_http_response_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+        worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         api_definition_lookup_service: Arc<
-            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
+            dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
+        let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
+            worker_request_executor_service.clone(),
+        ));
+
         Self {
-            worker_to_http_response_service,
+            evaluator,
             api_definition_lookup_service,
         }
     }
@@ -76,7 +81,7 @@ impl CustomHttpRequestApi {
             req_body: json_request_body,
         };
 
-        let api_definition = match self
+        let possible_api_definitions = match self
             .api_definition_lookup_service
             .get(api_request.clone())
             .await
@@ -90,54 +95,18 @@ impl CustomHttpRequestApi {
             }
         };
 
-        match api_request.resolve(&api_definition) {
-            Some(resolved_route) => {
-                let resolved_worker_request =
-                    match WorkerRequest::from_resolved_route(resolved_route.clone()) {
-                        Ok(golem_worker_request) => golem_worker_request,
-                        Err(e) => {
-                            error!(
-                                "API request id: {} - request error: {}",
-                                &api_definition.id, e
-                            );
-                            return Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Body::from_string(
-                                    format!("API request error {}", e).to_string(),
-                                ));
-                        }
-                    };
-
-                // Execute the request using a executor
-                match self
-                    .worker_to_http_response_service
-                    .execute(resolved_worker_request.clone())
+        match api_request
+            .resolve_worker_binding(possible_api_definitions)
+            .await
+        {
+            Ok(resolved_worker_request) => {
+                resolved_worker_request
+                    .interpret_response_mapping::<poem::Response>(&self.evaluator)
                     .await
-                {
-                    Ok(worker_response) => worker_response.to_http_response(
-                        &resolved_route.resolved_worker_binding_template.response,
-                        &resolved_route.typed_value_from_input,
-                    ),
-
-                    Err(e) => {
-                        error!(
-                            "API request id: {} - request error: {}",
-                            &api_definition.id, e
-                        );
-                        Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from_string(
-                                format!("API request error {}", e).to_string(),
-                            ))
-                    }
-                }
             }
 
-            None => {
-                error!(
-                    "API request id: {} - request error: {}",
-                    &api_definition.id, "Unable to find a route"
-                );
+            Err(msg) => {
+                error!("Failed to resolve the API definition; error: {}", msg);
 
                 Response::builder()
                     .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -147,12 +116,10 @@ impl CustomHttpRequestApi {
     }
 }
 
-#[async_trait]
 impl Endpoint for CustomHttpRequestApi {
     type Output = Response;
 
-    async fn call(&self, req: Request) -> poem::Result<Self::Output> {
-        let result = self.execute(req).await;
-        Ok(result)
+    fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {
+        self.execute(req).map(Ok)
     }
 }

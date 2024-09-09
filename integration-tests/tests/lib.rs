@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use ctor::{ctor, dtor};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::ops::Deref;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
+
+use ctor::{ctor, dtor};
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 
 mod worker;
 
@@ -25,33 +24,16 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        // let console_layer = console_subscriber::spawn().with_filter(
-        //     EnvFilter::try_new("trace").unwrap()
-        //);
-        let ansi_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(true)
-            .with_filter(
-                EnvFilter::try_new("debug,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn,fred=warn").unwrap()
-            );
-
-        tracing_subscriber::registry()
-            // .with(console_layer) // Uncomment this to use tokio-console. Also needs RUSTFLAGS="--cfg tokio_unstable"
-            .with(ansi_layer)
-            .init();
-
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test("integration-tests"));
         Self
     }
 }
 
 #[ctor]
 pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::blocking_new(3);
+    let deps = EnvBasedTestDependencies::blocking_new_from_worker_executor_cluster_size(3);
 
     deps.redis_monitor().assert_valid();
-    println!(
-        "Started a cluster of {} worker executors",
-        deps.worker_executor_cluster().size()
-    );
 
     deps
 };
@@ -63,5 +45,9 @@ unsafe fn drop_deps() {
     (*base_deps_ptr).kill_all()
 }
 
+// Note: by having it after DEPS, we don't see logs during setting up the env. But moving it before
+// it crashes the dropping of the tracing subscriber with
+// cannot access a Thread Local Storage value during or after destruction: AccessError
+// This will be solved by our new test library in the future
 #[ctor]
 pub static TRACING: Tracing = Tracing::init();

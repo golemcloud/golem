@@ -5,7 +5,6 @@ pub mod config;
 pub mod grpcapi;
 pub mod service;
 pub mod worker_bridge_request_executor;
-
 fn empty_worker_metadata() -> WorkerRequestMetadata {
     WorkerRequestMetadata {
         account_id: Some(golem_common::model::AccountId {

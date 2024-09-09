@@ -19,11 +19,15 @@ use crate::components::k8s::{
 };
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor::{env_vars, wait_for_startup, WorkerExecutor};
+use crate::components::worker_executor::{
+    new_client, wait_for_startup, WorkerExecutor, WorkerExecutorEnvVars,
+};
 use crate::components::worker_service::WorkerService;
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -31,6 +35,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct K8sWorkerExecutor {
@@ -41,6 +46,7 @@ pub struct K8sWorkerExecutor {
     pod: Arc<Mutex<K8sPod>>,
     service: Arc<Mutex<K8sService>>,
     routing: Arc<Mutex<K8sRouting>>,
+    client: Option<WorkerExecutorClient<Channel>>,
 }
 
 impl K8sWorkerExecutor {
@@ -58,20 +64,54 @@ impl K8sWorkerExecutor {
         worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
+    ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            idx,
+            verbosity,
+            redis,
+            component_service,
+            shard_manager,
+            worker_service,
+            timeout,
+            service_annotations,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        idx: usize,
+        verbosity: Level,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
     ) -> Self {
         info!("Starting Golem Worker Executor {idx} pod");
 
         let name = &format!("golem-worker-executor-{idx}");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_service,
-            shard_manager,
-            worker_service,
-            redis,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_service,
+                shard_manager,
+                worker_service,
+                redis,
+                verbosity,
+            )
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))
@@ -175,11 +215,20 @@ impl K8sWorkerExecutor {
         Self {
             namespace: namespace.clone(),
             idx,
-            local_host,
+            local_host: local_host.clone(),
             local_port,
             pod: Arc::new(Mutex::new(managed_pod)),
             service: Arc::new(Mutex::new(managed_service)),
             routing: Arc::new(Mutex::new(managed_routing)),
+            client: if shared_client {
+                Some(
+                    new_client(&local_host, local_port)
+                        .await
+                        .expect("Failed to create client"),
+                )
+            } else {
+                None
+            },
         }
     }
 
@@ -190,6 +239,13 @@ impl K8sWorkerExecutor {
 
 #[async_trait]
 impl WorkerExecutor for K8sWorkerExecutor {
+    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => Ok(new_client(&self.local_host, self.local_port).await?),
+        }
+    }
+
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", self.name(), &self.namespace.0)
     }

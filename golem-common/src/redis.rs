@@ -57,11 +57,12 @@ impl RedisPool {
         redis_config.username.clone_from(&config.username);
         redis_config.password.clone_from(&config.password);
 
+        // NOTE: jitter setting is not converted, using the default fred jitter settings
         let policy = ReconnectPolicy::new_exponential(
             config.retries.max_attempts,
             config.retries.min_delay.as_millis() as u32,
             config.retries.max_delay.as_millis() as u32,
-            config.retries.multiplier,
+            config.retries.multiplier.round() as u32,
         );
         let pool = FredRedisPool::new(redis_config, None, None, Some(policy), config.pool_size)?;
 
@@ -153,6 +154,22 @@ impl<'a> RedisLabelledApi<'a> {
         self.record(start, "DEL", self.pool.del(self.prefixed_key(key)).await)
     }
 
+    pub async fn del_many<R, K>(&self, key: Vec<K>) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "DEL",
+            self.pool
+                .del(key.iter().map(|k| self.prefixed_key(k)).collect::<Vec<_>>())
+                .await,
+        )
+    }
+
     pub async fn get<R, K>(&self, key: K) -> RedisResult<R>
     where
         R: FromRedis,
@@ -184,7 +201,19 @@ impl<'a> RedisLabelledApi<'a> {
     {
         self.ensure_connected().await?;
         let start = Instant::now();
-        self.record(start, "MGET", self.pool.mget(keys).await)
+        let keys = keys.into();
+        self.record(
+            start,
+            "MGET",
+            self.pool
+                .mget(
+                    keys.inner()
+                        .iter()
+                        .map(|k| self.prefixed_key(k.as_str().expect("key must be a string")))
+                        .collect::<Vec<_>>(),
+                )
+                .await,
+        )
     }
 
     pub async fn hdel<R, K, F>(&self, key: K, fields: F) -> RedisResult<R>
@@ -261,6 +290,28 @@ impl<'a> RedisLabelledApi<'a> {
         )
     }
 
+    pub async fn mset<K, V>(&self, key_values: HashMap<K, V>) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+        V: TryInto<RedisValue> + Send,
+        V::Error: Into<RedisError> + Send,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "MSET",
+            self.pool
+                .mset(
+                    key_values
+                        .into_iter()
+                        .map(|(k, v)| (self.prefixed_key(k), v))
+                        .collect::<Vec<_>>(),
+                )
+                .await,
+        )
+    }
+
     pub async fn hmset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
         R: FromRedis,
@@ -290,6 +341,23 @@ impl<'a> RedisLabelledApi<'a> {
             start,
             "HSET",
             self.pool.hset(self.prefixed_key(key), values).await,
+        )
+    }
+
+    pub async fn hsetnx<R, K, F, V>(&self, key: K, field: F, value: V) -> RedisResult<R>
+    where
+        R: FromRedis,
+        K: AsRef<str>,
+        F: Into<RedisKey> + Send,
+        V: TryInto<RedisValue> + Send,
+        V::Error: Into<RedisError> + Send,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "HSETNX",
+            self.pool.hsetnx(self.prefixed_key(key), field, value).await,
         )
     }
 
@@ -630,7 +698,7 @@ impl<'a> RedisLabelledApi<'a> {
         )?;
         let info: HashMap<&str, &str> =
             HashMap::from_iter(info.lines().filter_map(|line| line.trim().split_once(':')));
-        debug!("Redis replication info: {:?}", info);
+        debug!(info = format!("{:?}", info), "Redis replication info");
         let connected_slaves = info
             .get("connected_slaves")
             .and_then(|s| s.parse().ok())
@@ -669,6 +737,35 @@ impl<'a> RedisLabelledApi<'a> {
                 .custom_raw(cmd!("SCAN"), args)
                 .await
                 .and_then(|f| self.parse_key_scan_frame(f)),
+        )
+    }
+
+    pub async fn keys<K>(&self, pattern: K) -> RedisResult<Vec<String>>
+    where
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+
+        //https://redis.io/commands/keys/
+        let args: Vec<String> = vec![self.prefixed_key(pattern)];
+
+        //https://github.com/aembke/fred.rs/blob/3a91ee9bc12faff9d32627c0db2c9b24c54efa03/examples/custom.rs#L7
+
+        self.record(
+            start,
+            "KEYS",
+            self.pool
+                .next()
+                .custom_raw(cmd!("KEYS"), args)
+                .await
+                .and_then(|f| f.try_into())
+                .and_then(|v: RedisValue| v.convert::<Vec<String>>())
+                .map(|keys| {
+                    keys.into_iter()
+                        .map(|key| key[self.key_prefix.len()..].to_string())
+                        .collect()
+                }),
         )
     }
 

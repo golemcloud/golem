@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::components::component_compilation_service::{
-    env_vars, wait_for_startup, ComponentCompilationService,
+    wait_for_startup, ComponentCompilationService, ComponentCompilationServiceEnvVars,
 };
 use crate::components::component_service::ComponentService;
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -53,14 +54,37 @@ impl K8sComponentCompilationService {
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
     ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            verbosity,
+            component_service,
+            timeout,
+            service_annotations,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentCompilationServiceEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        verbosity: Level,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Self {
         info!("Starting Golem Component Compilation Service pod");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_service,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_service,
+                verbosity,
+            )
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))

@@ -12,20 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::shard_manager::{env_vars, ShardManager};
-use crate::components::{DOCKER, NETWORK};
-use async_trait::async_trait;
-
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use async_trait::async_trait;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
-
 use tracing::{info, Level};
+
+use crate::components::docker::KillContainer;
+use crate::components::redis::Redis;
+use crate::components::shard_manager::{ShardManager, ShardManagerEnvVars};
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 
 pub struct DockerShardManager {
     container: Container<'static, ShardManagerImage>,
+    keep_container: bool,
+    public_http_port: u16,
+    public_grpc_port: u16,
 }
 
 impl DockerShardManager {
@@ -33,21 +37,64 @@ impl DockerShardManager {
     const HTTP_PORT: u16 = 9021;
     const GRPC_PORT: u16 = 9020;
 
-    pub fn new(redis: Arc<dyn Redis + Send + Sync + 'static>, verbosity: Level) -> Self {
+    pub async fn new(
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        number_of_shards_override: Option<usize>,
+        verbosity: Level,
+        keep_container: bool,
+    ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            number_of_shards_override,
+            redis,
+            verbosity,
+            keep_container,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
+        number_of_shards_override: Option<usize>,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+        keep_container: bool,
+    ) -> Self {
         info!("Starting golem-shard-manager container");
 
-        let env_vars = env_vars(Self::HTTP_PORT, Self::GRPC_PORT, redis, verbosity);
+        let env_vars = env_vars
+            .env_vars(
+                number_of_shards_override,
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                redis,
+                verbosity,
+            )
+            .await;
 
-        let image = RunnableImage::from(ShardManagerImage::new(
+        let mut image = RunnableImage::from(ShardManagerImage::new(
             Self::GRPC_PORT,
             Self::HTTP_PORT,
             env_vars,
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
+
+        if let Some(number_of_shards) = number_of_shards_override {
+            image = image.with_env_var(("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string()))
+        }
+
         let container = DOCKER.run(image);
 
-        Self { container }
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
+
+        Self {
+            container,
+            keep_container,
+            public_http_port,
+            public_grpc_port,
+        }
     }
 }
 
@@ -70,18 +117,21 @@ impl ShardManager for DockerShardManager {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.kill(self.keep_container);
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, number_of_shards_override: Option<usize>) {
+        if number_of_shards_override.is_some() {
+            panic!("number_of_shards_override not supported for docker")
+        }
         self.container.start();
     }
 }
@@ -94,17 +144,19 @@ impl Drop for DockerShardManager {
 
 #[derive(Debug)]
 struct ShardManagerImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [u16; 2],
 }
 
 impl ShardManagerImage {
-    pub fn new(port: u16, http_port: u16, env_vars: HashMap<String, String>) -> ShardManagerImage {
+    pub fn new(
+        grpc_port: u16,
+        http_port: u16,
+        env_vars: HashMap<String, String>,
+    ) -> ShardManagerImage {
         ShardManagerImage {
-            grpc_port: port,
-            http_port,
             env_vars,
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
@@ -131,6 +183,6 @@ impl Image for ShardManagerImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+        self.expose_ports.to_vec()
     }
 }

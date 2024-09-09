@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use create_component_request::Data;
-use golem_api_grpc::proto::golem::component::{
+use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response,
     get_component_metadata_response, get_components_response, update_component_request,
     update_component_response, CreateComponentRequest, CreateComponentRequestChunk,
@@ -33,11 +33,11 @@ use tokio::io::AsyncReadExt;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_common::model::ComponentId;
 
 use crate::components::rdb::Rdb;
-use crate::components::wait_for_startup_grpc;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 
 pub mod docker;
 pub mod filesystem;
@@ -47,9 +47,7 @@ pub mod spawned;
 
 #[async_trait]
 pub trait ComponentService {
-    async fn client(&self) -> ComponentServiceClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
-    }
+    async fn client(&self) -> ComponentServiceClient<Channel>;
 
     async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
         let mut retries = 3;
@@ -164,10 +162,6 @@ pub trait ComponentService {
             Some(create_component_response::Result::Success(component)) => {
                 info!("Created component {component:?}");
                 Ok(component
-                    .protected_component_id
-                    .ok_or(AddComponentError::Other(
-                        "Missing protected_component_id field".to_string(),
-                    ))?
                     .versioned_component_id
                     .ok_or(AddComponentError::Other(
                         "Missing versioned_component_id field".to_string(),
@@ -239,12 +233,7 @@ pub trait ComponentService {
             }
             Some(update_component_response::Result::Success(component)) => {
                 info!("Created component {component:?}");
-                component
-                    .protected_component_id
-                    .unwrap()
-                    .versioned_component_id
-                    .unwrap()
-                    .version
+                component.versioned_component_id.unwrap().version
             }
             Some(update_component_response::Result::Error(error)) => {
                 panic!("Failed to update component in golem-component-service: {error:?}");
@@ -309,32 +298,51 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-component-service", timeout).await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    component_compilation_service_host: &str,
-    component_compilation_service_port: u16,
-    rdb: Arc<dyn Rdb + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
-    let vars: &[(&str, &str)] = &[
-        ("RUST_LOG"                     , &format!("{log_level},cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn,h2=warn,hyper=warn,tower=warn")),
-        ("RUST_BACKTRACE"               , "1"),
-        ("GOLEM__COMPILATION__TYPE", "Enabled"),
-        ("GOLEM__COMPILATION__CONFIG__HOST", component_compilation_service_host),
-        ("GOLEM__COMPILATION__CONFIG__PORT", &component_compilation_service_port.to_string()),
-        ("GOLEM__COMPONENT_STORE__TYPE", "Local"),
-        ("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", ""),
-        ("GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH", "/tmp/ittest-local-object-store/golem"),
-        ("GOLEM__GRPC_PORT", &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT", &http_port.to_string()),
-    ];
+#[async_trait]
+pub trait ComponentServiceEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
 
-    let mut vars: HashMap<String, String> =
-        HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    vars.extend(rdb.info().env().clone());
-    vars
+#[async_trait]
+impl ComponentServiceEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        http_port: u16,
+        grpc_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        let mut builder = EnvVarBuilder::golem_service(verbosity)
+            .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
+            .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
+            .with_str(
+                "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
+                "/tmp/ittest-local-object-store/golem",
+            )
+            .with("GOLEM__GRPC_PORT", grpc_port.to_string())
+            .with("GOLEM__HTTP_PORT", http_port.to_string())
+            .with_all(rdb.info().env("golem_component"));
+
+        match component_compilation_service {
+            Some((host, port)) => {
+                builder = builder
+                    .with_str("GOLEM__COMPILATION__TYPE", "Enabled")
+                    .with("GOLEM__COMPILATION__CONFIG__HOST", host.to_string())
+                    .with("GOLEM__COMPILATION__CONFIG__PORT", port.to_string());
+            }
+            _ => builder = builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
+        };
+
+        builder.build()
+    }
 }
 
 #[derive(Debug)]

@@ -1,14 +1,14 @@
 use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem::apidefinition::api_definition_service_server::ApiDefinitionServiceServer;
-use golem_api_grpc::proto::golem::worker::worker_service_server::WorkerServiceServer;
+use golem_api_grpc::proto::golem::apidefinition::v1::api_definition_service_server::ApiDefinitionServiceServer;
+use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServiceServer;
 use std::net::SocketAddr;
 use tonic::transport::{Error, Server};
 
-use crate::grpcapi::register_api_definition::GrpcApiDefinitionService;
+use crate::grpcapi::api_definition::GrpcApiDefinitionService;
 use crate::grpcapi::worker::WorkerGrpcApi;
 use crate::service::Services;
 
-mod register_api_definition;
+mod api_definition;
 mod worker;
 
 pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<(), Error> {

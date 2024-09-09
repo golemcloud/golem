@@ -1,15 +1,26 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ctor::{ctor, dtor};
-use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use tracing::Level;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::rdb::Rdb;
@@ -29,13 +40,19 @@ use golem_test_framework::config::TestDependencies;
 mod common;
 
 pub mod api;
+pub mod blob_storage;
 pub mod blobstore;
+pub mod compatibility;
 pub mod guest_languages;
+pub mod guest_languages2;
 pub mod hot_update;
+pub mod key_value_storage;
 pub mod keyvalue;
-pub mod rpc;
+pub mod measure_test_component_mem;
+pub mod rust_rpc;
 pub mod scalability;
 pub mod transactions;
+pub mod ts_rpc;
 pub mod wasi;
 
 #[derive(Clone)]
@@ -132,7 +149,7 @@ impl WorkerExecutorTestDependencies {
         ));
         // Connecting to the worker executor started in-process
         let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
-            ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port),
+            ProvidedWorkerExecutor::new("localhost".to_string(), http_port, grpc_port, true),
         );
         // Fake worker service forwarding all requests to the worker executor directly
         let worker_service: Arc<dyn WorkerService + Send + Sync + 'static> = Arc::new(
@@ -204,28 +221,9 @@ struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        // let console_layer = console_subscriber::spawn().with_filter(
-        //     EnvFilter::try_new("trace").unwrap()
-        //);
-        let ansi_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(true)
-            .with_filter(
-                EnvFilter::builder()
-                    .with_default_directive("debug".parse().unwrap())
-                    .from_env_lossy()
-                    .add_directive("cranelift_codegen=warn".parse().unwrap())
-                    .add_directive("wasmtime_cranelift=warn".parse().unwrap())
-                    .add_directive("wasmtime_jit=warn".parse().unwrap())
-                    .add_directive("h2=warn".parse().unwrap())
-                    .add_directive("hyper=warn".parse().unwrap())
-                    .add_directive("tower=warn".parse().unwrap())
-                    .add_directive("fred=warn".parse().unwrap()),
-            );
-
-        tracing_subscriber::registry()
-            // .with(console_layer) // Uncomment this to use tokio-console. Also needs RUSTFLAGS="--cfg tokio_unstable"
-            .with(ansi_layer)
-            .init();
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
+            "worker-executor-tests-base",
+        ));
 
         Self
     }

@@ -16,18 +16,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::components::component_compilation_service::ComponentCompilationService;
-pub use cli::{CliParams, CliTestDependencies};
+pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
+pub use env::EnvBasedTestDependenciesConfig;
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::service::Service;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 
-mod cli;
+pub mod cli;
 mod env;
 
 pub trait TestDependencies {
@@ -46,6 +48,7 @@ pub trait TestDependencies {
     fn kill_all(&self) {
         self.worker_executor_cluster().kill_all();
         self.worker_service().kill();
+        self.component_compilation_service().kill();
         self.component_service().kill();
         self.shard_manager().kill();
         self.rdb().kill();
@@ -58,4 +61,12 @@ pub trait TestDependencies {
 pub enum DbType {
     Postgres,
     Sqlite,
+}
+
+pub trait TestService {
+    fn service(&self) -> Arc<dyn Service + Send + Sync + 'static>;
+
+    fn kill_all(&self) {
+        self.service().kill();
+    }
 }

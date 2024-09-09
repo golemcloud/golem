@@ -30,3 +30,5 @@ impl Guest for Component {
         elapsed
     }
 }
+
+bindings::export!(Component with_types_in bindings);

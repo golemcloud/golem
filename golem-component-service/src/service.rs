@@ -12,24 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod component;
-
+use golem_common::config::DbConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
 use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::db;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
-use crate::config::{ComponentServiceConfig, DbConfig};
-use crate::db;
-use crate::repo::component::{ComponentRepo, DbComponentRepo};
+use crate::config::ComponentServiceConfig;
+use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+use golem_component_service_base::service::component::{
+    ComponentService, ComponentServiceDefault, ComponentServiceNoop,
+};
+use golem_service_base::auth::DefaultNamespace;
 
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<dyn component::ComponentService + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
 }
 
@@ -60,18 +63,18 @@ impl Services {
                 }
             };
 
-        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> = match config
-            .compilation
-            .clone()
-        {
-            ComponentCompilationConfig::Enabled(config) => {
-                Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
-            }
-            ComponentCompilationConfig::Disabled => Arc::new(ComponentCompilationServiceDisabled),
-        };
+        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
+            match config.compilation.clone() {
+                ComponentCompilationConfig::Enabled(config) => {
+                    Arc::new(ComponentCompilationServiceDefault::new(config.uri()))
+                }
+                ComponentCompilationConfig::Disabled(_) => {
+                    Arc::new(ComponentCompilationServiceDisabled)
+                }
+            };
 
-        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceDefault::new(
+        let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
+            Arc::new(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
                 compilation_service.clone(),
@@ -84,8 +87,8 @@ impl Services {
     }
 
     pub fn noop() -> Self {
-        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceNoop::default());
+        let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
+            Arc::new(ComponentServiceNoop::default());
 
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
             Arc::new(ComponentCompilationServiceDisabled);

@@ -30,7 +30,7 @@ lazy_static! {
 
 pub fn register_all() -> Registry {
     VERSION_INFO
-        .with_label_values(&[version(), wasmtime_runtime::VERSION])
+        .with_label_values(&[version(), wasmtime::VERSION])
         .inc();
 
     default_registry().clone()
@@ -62,9 +62,10 @@ const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
 pub mod component {
     use std::time::Duration;
 
-    use golem_common::metrics::DEFAULT_TIME_BUCKETS;
     use lazy_static::lazy_static;
     use prometheus::*;
+
+    use golem_common::metrics::DEFAULT_TIME_BUCKETS;
 
     lazy_static! {
         pub static ref COMPILATION_TIME_SECONDS: Histogram = register_histogram!(
@@ -108,118 +109,6 @@ pub mod events {
     }
 }
 
-pub mod grpc {
-    use lazy_static::lazy_static;
-    use prometheus::*;
-    use tracing::{error, info};
-
-    use crate::error::GolemError;
-
-    lazy_static! {
-        static ref GRPC_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-            "grpc_success_seconds",
-            "Time taken for successfully serving gRPC requests",
-            &["api"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref GRPC_FAILURE_SECONDS: HistogramVec = register_histogram_vec!(
-            "grpc_failure_seconds",
-            "Time taken for serving failed gRPC requests",
-            &["api", "error"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref GRPC_ACTIVE_STREAMS: Gauge =
-            register_gauge!("grpc_active_streams", "Number of active gRPC streams").unwrap();
-    }
-
-    pub fn record_grpc_success(api_name: &'static str, duration: std::time::Duration) {
-        GRPC_SUCCESS_SECONDS
-            .with_label_values(&[api_name])
-            .observe(duration.as_secs_f64());
-    }
-
-    pub fn record_grpc_failure(
-        api_name: &'static str,
-        error_kind: &'static str,
-        duration: std::time::Duration,
-    ) {
-        GRPC_FAILURE_SECONDS
-            .with_label_values(&[api_name, error_kind])
-            .observe(duration.as_secs_f64());
-    }
-
-    pub fn record_new_grpc_active_stream() {
-        GRPC_ACTIVE_STREAMS.inc();
-    }
-
-    pub fn record_closed_grpc_active_stream() {
-        GRPC_ACTIVE_STREAMS.dec();
-    }
-
-    pub struct RecordedGrpcRequest {
-        api_name: &'static str,
-        start_time: Option<std::time::Instant>,
-        details_to_log: String,
-    }
-
-    impl RecordedGrpcRequest {
-        pub fn new(api_name: &'static str, details_to_log: String) -> Self {
-            Self {
-                api_name,
-                start_time: Some(std::time::Instant::now()),
-                details_to_log,
-            }
-        }
-
-        pub fn succeed<T>(mut self, result: T) -> T {
-            match self.start_time.take() {
-                Some(start) => {
-                    let elapsed = start.elapsed();
-                    info!(
-                        "{} ({}) succeeded in {}ms",
-                        self.api_name,
-                        self.details_to_log,
-                        elapsed.as_millis()
-                    );
-
-                    record_grpc_success(self.api_name, elapsed);
-                    result
-                }
-                None => result,
-            }
-        }
-
-        pub fn fail<T>(mut self, result: T, error: &GolemError) -> T {
-            match self.start_time.take() {
-                Some(start) => {
-                    let elapsed = start.elapsed();
-                    error!(
-                        "{} ({}) failed in {}ms with error {:?}",
-                        self.api_name,
-                        self.details_to_log,
-                        elapsed.as_millis(),
-                        error
-                    );
-
-                    record_grpc_failure(self.api_name, error.kind(), elapsed);
-                    result
-                }
-                None => result,
-            }
-        }
-    }
-
-    impl Drop for RecordedGrpcRequest {
-        fn drop(&mut self) {
-            if let Some(start) = self.start_time.take() {
-                record_grpc_failure(self.api_name, "Drop", start.elapsed());
-            }
-        }
-    }
-}
-
 pub mod workers {
     use lazy_static::lazy_static;
     use prometheus::*;
@@ -227,7 +116,7 @@ pub mod workers {
     lazy_static! {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
             "worker_executor_call_total",
-            "Number of calls to the worker executor service",
+            "Number of calls to the worker layer",
             &["api"]
         )
         .unwrap();
@@ -237,32 +126,6 @@ pub mod workers {
         WORKER_EXECUTOR_CALL_TOTAL
             .with_label_values(&[api_name])
             .inc();
-    }
-}
-
-pub mod invocation_keys {
-    use lazy_static::lazy_static;
-    use prometheus::*;
-
-    lazy_static! {
-        static ref IDEMPOTENCY_KEYS_PENDING_COUNT: Gauge = register_gauge!(
-            "idempotency_keys_pending_count",
-            "Number of pending idempotency keys"
-        )
-        .unwrap();
-        static ref IDEMPOTENCY_KEYS_CONFIRMED_COUNT: Gauge = register_gauge!(
-            "idempotency_keys_confirmed_count",
-            "Number of confirmed idempotency keys"
-        )
-        .unwrap();
-    }
-
-    pub fn record_pending_idempotency_keys_count(count: usize) {
-        IDEMPOTENCY_KEYS_PENDING_COUNT.set(count as f64);
-    }
-
-    pub fn record_confirmed_idempotency_keys_count(count: usize) {
-        IDEMPOTENCY_KEYS_CONFIRMED_COUNT.set(count as f64);
     }
 }
 
@@ -309,6 +172,8 @@ pub mod wasm {
     use lazy_static::lazy_static;
     use prometheus::*;
     use tracing::debug;
+
+    use golem_common::metrics::api::TraceErrorKind;
 
     use crate::error::GolemError;
 
@@ -387,7 +252,7 @@ pub mod wasm {
 
     pub fn record_create_worker_failure(error: &GolemError) {
         CREATE_WORKER_FAILURE_TOTAL
-            .with_label_values(&[error.kind()])
+            .with_label_values(&[error.trace_error_kind()])
             .inc();
     }
 

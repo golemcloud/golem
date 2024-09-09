@@ -1,12 +1,16 @@
-use crate::model::Pod;
-use crate::worker_executor::WorkerExecutorService;
-use async_trait::async_trait;
-use golem_common::config::RetryConfig;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tracing::debug;
+
+use async_trait::async_trait;
+
+use golem_common::config::RetryConfig;
+use golem_common::retries::with_retriable_errors;
+
+use crate::error::HealthCheckError;
+use crate::model::Pod;
+use crate::worker_executor::WorkerExecutorService;
 
 #[async_trait]
 pub trait HealthCheck {
@@ -37,36 +41,27 @@ pub async fn get_unhealthy_pods(
         .collect()
 }
 
-async fn health_check_with_retries<'a, F>(
+async fn health_check_with_retries<F>(
+    target: &'static str,
     implementation: F,
     retry_config: &RetryConfig,
-    pod: &'a Pod,
+    pod: &Pod,
 ) -> bool
 where
-    F: Fn(&'a Pod) -> Pin<Box<dyn Future<Output = bool> + 'a + Send>>,
+    F: for<'a> Fn(
+        &'a Pod,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HealthCheckError>> + 'a + Send>>,
 {
-    let retry_max_attempts = retry_config.max_attempts;
-    let retry_min_delay = retry_config.min_delay;
-    let retry_max_delay = retry_config.max_delay;
-    let retry_multiplier = retry_config.multiplier;
-
-    let mut attempts = 0;
-    let mut delay = retry_min_delay;
-
-    loop {
-        match implementation(pod).await {
-            true => return true,
-            false => {
-                if attempts >= retry_max_attempts {
-                    debug!("Health check for {pod} failed {attempts}, marking as unhealthy");
-                    return false;
-                }
-                tokio::time::sleep(delay).await;
-                attempts += 1;
-                delay = std::cmp::min(delay * retry_multiplier, retry_max_delay);
-            }
-        }
-    }
+    with_retriable_errors(
+        target,
+        "healtcheck",
+        Some(format!("{pod}")),
+        retry_config,
+        pod,
+        implementation,
+    )
+    .await
+    .is_ok()
 }
 
 #[derive(Clone)]
@@ -91,7 +86,11 @@ impl GrpcHealthCheck {
 impl HealthCheck for GrpcHealthCheck {
     async fn health_check(&self, pod: &Pod) -> bool {
         health_check_with_retries(
-            |pod| Box::pin(async move { self.worker_executors.health_check(pod).await }),
+            "worker_executor_grpc",
+            |pod| {
+                let worker_executors = self.worker_executors.clone();
+                Box::pin(async move { worker_executors.health_check(pod).await })
+            },
             &self.retry_config,
             pod,
         )
@@ -101,12 +100,13 @@ impl HealthCheck for GrpcHealthCheck {
 
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes {
-    use crate::healthcheck::{health_check_with_retries, HealthCheck};
     use async_trait::async_trait;
-    use golem_common::config::RetryConfig;
-    use k8s_openapi::api::core::v1::Pod;
+    use k8s_openapi::api::core::v1::{Pod, PodStatus};
     use kube::{Api, Client};
-    use tracing::info;
+
+    use golem_common::config::RetryConfig;
+
+    use crate::healthcheck::{health_check_with_retries, HealthCheck, HealthCheckError};
 
     #[derive(Clone)]
     pub struct KubernetesHealthCheck {
@@ -128,47 +128,30 @@ pub mod kubernetes {
             })
         }
 
-        async fn health_check_impl(&self, pod: &crate::model::Pod) -> bool {
+        async fn health_check_impl(&self, pod: &crate::model::Pod) -> Result<(), HealthCheckError> {
             let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
 
             match &pod.pod_name {
-                Some(pod_name) => {
-                    match pods.get_opt(pod_name).await {
-                        Ok(Some(k8s_pod)) => match k8s_pod.status {
-                            Some(status) => {
-                                let is_ready =
-                                    status
-                                        .conditions
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .any(|condition| {
-                                            condition.type_ == "Ready" && condition.status == "True"
-                                        });
-                                if !is_ready {
-                                    info!("Pod {pod} is not ready, marking as unhealthy");
-                                }
-                                is_ready
-                            }
-                            None => {
-                                info!("Pod {pod} has no status, marking as unhealthy");
-                                false
-                            }
-                        },
-                        Ok(None) => {
-                            info!("Pod {pod} not found by K8s, marking as unhealthy");
-                            false
-                        }
-                        Err(err) => {
-                            info!("Error while fetching pod {pod} from K8s: {err}, marking as unhealthy");
-                            false
-                        }
-                    }
-                }
-                None => {
-                    info!("Pod {pod} did not provide a pod_name on registration, marking as unhealthy");
-                    false
-                }
+                Some(pod_name) => match pods.get_opt(pod_name).await {
+                    Ok(Some(k8s_pod)) => match k8s_pod.status {
+                        Some(status) => Self::is_pod_ready(status)
+                            .then_some(())
+                            .ok_or(HealthCheckError::K8sOther("pod status is not ready")),
+                        None => Err(HealthCheckError::K8sOther("no pod status")),
+                    },
+                    Ok(None) => Err(HealthCheckError::K8sOther("pod not found")),
+                    Err(err) => Err(HealthCheckError::K8sConnectError(err)),
+                },
+                None => Err(HealthCheckError::K8sOther("no pod_name")),
             }
+        }
+
+        fn is_pod_ready(pod_status: PodStatus) -> bool {
+            pod_status
+                .conditions
+                .unwrap_or_default()
+                .iter()
+                .any(|c| c.type_ == "Ready" && c.status == "True")
         }
     }
 
@@ -176,7 +159,11 @@ pub mod kubernetes {
     impl HealthCheck for KubernetesHealthCheck {
         async fn health_check(&self, pod: &crate::model::Pod) -> bool {
             health_check_with_retries(
-                |pod| Box::pin(async move { self.health_check_impl(pod).await }),
+                "worker_executor_k8s",
+                |pod| {
+                    let health_check = self.clone();
+                    Box::pin(async move { health_check.health_check_impl(pod).await })
+                },
                 &self.retry_config,
                 pod,
             )

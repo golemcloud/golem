@@ -12,20 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, ComponentService};
-use crate::components::rdb::Rdb;
-use crate::components::{DOCKER, NETWORK};
-use async_trait::async_trait;
-
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use async_trait::async_trait;
 use testcontainers::core::WaitFor;
 use testcontainers::{Container, Image, RunnableImage};
-
+use tonic::transport::Channel;
 use tracing::{info, Level};
+
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+
+use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
+use crate::components::docker::KillContainer;
+use crate::components::rdb::Rdb;
+use crate::components::{GolemEnvVars, DOCKER, NETWORK};
 
 pub struct DockerComponentService {
     container: Container<'static, GolemComponentServiceImage>,
+    keep_container: bool,
+    public_http_port: u16,
+    public_grpc_port: u16,
+    client: Option<ComponentServiceClient<Channel>>,
 }
 
 impl DockerComponentService {
@@ -33,22 +41,43 @@ impl DockerComponentService {
     const HTTP_PORT: u16 = 8081;
     const GRPC_PORT: u16 = 9091;
 
-    pub fn new(
-        component_compilation_service_host: &str,
-        component_compilation_service_port: u16,
+    pub async fn new(
+        component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         verbosity: Level,
+        shared_client: bool,
+        keep_container: bool,
+    ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            component_compilation_service,
+            rdb,
+            verbosity,
+            shared_client,
+            keep_container,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        verbosity: Level,
+        shared_client: bool,
+        keep_container: bool,
     ) -> Self {
         info!("Starting golem-component-service container");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_compilation_service_host,
-            component_compilation_service_port,
-            rdb,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_compilation_service,
+                rdb,
+                verbosity,
+            )
+            .await;
 
         let image = RunnableImage::from(GolemComponentServiceImage::new(
             Self::GRPC_PORT,
@@ -57,14 +86,35 @@ impl DockerComponentService {
         ))
         .with_container_name(Self::NAME)
         .with_network(NETWORK);
+
         let container = DOCKER.run(image);
 
-        Self { container }
+        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
+        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
+
+        Self {
+            container,
+            keep_container,
+            public_http_port,
+            public_grpc_port,
+            client: if shared_client {
+                Some(new_client("localhost", public_grpc_port).await)
+            } else {
+                None
+            },
+        }
     }
 }
 
 #[async_trait]
 impl ComponentService for DockerComponentService {
+    async fn client(&self) -> ComponentServiceClient<Channel> {
+        match &self.client {
+            Some(client) => client.clone(),
+            None => new_client("localhost", self.public_grpc_port).await,
+        }
+    }
+
     fn private_host(&self) -> String {
         Self::NAME.to_string()
     }
@@ -82,15 +132,15 @@ impl ComponentService for DockerComponentService {
     }
 
     fn public_http_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::HTTP_PORT)
+        self.public_http_port
     }
 
     fn public_grpc_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(Self::GRPC_PORT)
+        self.public_grpc_port
     }
 
     fn kill(&self) {
-        self.container.stop()
+        self.container.kill(self.keep_container);
     }
 }
 
@@ -102,9 +152,8 @@ impl Drop for DockerComponentService {
 
 #[derive(Debug)]
 struct GolemComponentServiceImage {
-    grpc_port: u16,
-    http_port: u16,
     env_vars: HashMap<String, String>,
+    expose_ports: [u16; 2],
 }
 
 impl GolemComponentServiceImage {
@@ -114,9 +163,8 @@ impl GolemComponentServiceImage {
         env_vars: HashMap<String, String>,
     ) -> GolemComponentServiceImage {
         GolemComponentServiceImage {
-            grpc_port,
-            http_port,
             env_vars,
+            expose_ports: [grpc_port, http_port],
         }
     }
 }
@@ -141,6 +189,6 @@ impl Image for GolemComponentServiceImage {
     }
 
     fn expose_ports(&self) -> Vec<u16> {
-        vec![self.grpc_port, self.http_port]
+        self.expose_ports.to_vec()
     }
 }

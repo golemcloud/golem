@@ -20,6 +20,12 @@ use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config::RetryConfig;
+use crate::model::oplog::{
+    IndexedResourceKey, OplogEntry, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
+};
+use crate::model::regions::DeletedRegions;
+use crate::newtype_uuid;
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -27,20 +33,26 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::worker::Cursor;
+use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object, Union};
+use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::config::RetryConfig;
-use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription};
-use crate::model::regions::DeletedRegions;
-use crate::newtype_uuid;
-
+pub mod component_metadata;
+pub mod exports;
 pub mod oplog;
 pub mod regions;
+
+use crate::uri::oss::urn::WorkerUrn;
+use golem_api_grpc::proto::golem::shardmanager::{
+    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
+};
 
 newtype_uuid!(
     ComponentId,
@@ -56,6 +68,12 @@ pub struct Timestamp(iso8601_timestamp::Timestamp);
 impl Timestamp {
     pub fn now_utc() -> Timestamp {
         Timestamp(iso8601_timestamp::Timestamp::now_utc())
+    }
+
+    pub fn to_millis(&self) -> u64 {
+        self.0
+            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
+            .whole_milliseconds() as u64
     }
 }
 
@@ -232,7 +250,7 @@ impl WorkerId {
     }
 
     pub fn uri(&self) -> String {
-        format!("worker://{}", self.slug())
+        WorkerUrn { id: self.clone() }.to_string()
     }
 }
 
@@ -286,9 +304,46 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
     }
 }
 
+/// Associates a worker-id with its owner account
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
+pub struct OwnedWorkerId {
+    pub account_id: AccountId,
+    pub worker_id: WorkerId,
+}
+
+impl OwnedWorkerId {
+    pub fn new(account_id: &AccountId, worker_id: &WorkerId) -> Self {
+        Self {
+            account_id: account_id.clone(),
+            worker_id: worker_id.clone(),
+        }
+    }
+
+    pub fn worker_id(&self) -> WorkerId {
+        self.worker_id.clone()
+    }
+
+    pub fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
+
+    pub fn component_id(&self) -> ComponentId {
+        self.worker_id.component_id.clone()
+    }
+
+    pub fn worker_name(&self) -> String {
+        self.worker_id.worker_name.clone()
+    }
+}
+
+impl Display for OwnedWorkerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.account_id, self.worker_id)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct PromiseId {
-    #[serde(rename = "instance_id")]
     pub worker_id: WorkerId,
     pub oplog_idx: OplogIndex,
 }
@@ -313,7 +368,7 @@ impl From<PromiseId> for golem_api_grpc::proto::golem::worker::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            oplog_idx: value.oplog_idx,
+            oplog_idx: value.oplog_idx.into(),
         }
     }
 }
@@ -326,7 +381,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseId> for PromiseId {
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            oplog_idx: value.oplog_idx,
+            oplog_idx: OplogIndex::from_u64(value.oplog_idx),
         })
     }
 }
@@ -337,15 +392,62 @@ impl Display for PromiseId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
+/// Actions that can be scheduled to be executed at a given point in time
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
+pub enum ScheduledAction {
+    /// Completes a given promise
+    CompletePromise {
+        account_id: AccountId,
+        promise_id: PromiseId,
+    },
+    /// Archives all entries from the first non-empty layer of an oplog to the next layer,
+    /// if the last oplog index did not change. If there are more layers below, schedules
+    /// a next action to archive the next layer.
+    ArchiveOplog {
+        owned_worker_id: OwnedWorkerId,
+        last_oplog_index: OplogIndex,
+        next_after: Duration,
+    },
+}
+
+impl ScheduledAction {
+    pub fn owned_worker_id(&self) -> OwnedWorkerId {
+        match self {
+            ScheduledAction::CompletePromise {
+                account_id,
+                promise_id,
+            } => OwnedWorkerId::new(account_id, &promise_id.worker_id),
+            ScheduledAction::ArchiveOplog {
+                owned_worker_id, ..
+            } => owned_worker_id.clone(),
+        }
+    }
+}
+
+impl Display for ScheduledAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScheduledAction::CompletePromise { promise_id, .. } => {
+                write!(f, "complete[{}]", promise_id)
+            }
+            ScheduledAction::ArchiveOplog {
+                owned_worker_id, ..
+            } => {
+                write!(f, "archive[{}]", owned_worker_id)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Encode, Decode)]
 pub struct ScheduleId {
     pub timestamp: i64,
-    pub promise_id: PromiseId,
+    pub action: ScheduledAction,
 }
 
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.promise_id, self.timestamp)
+        write!(f, "{}@{}", self.action, self.timestamp)
     }
 }
 
@@ -421,6 +523,105 @@ impl From<ShardId> for golem_api_grpc::proto::golem::shardmanager::ShardId {
 impl From<golem_api_grpc::proto::golem::shardmanager::ShardId> for ShardId {
     fn from(proto: golem_api_grpc::proto::golem::shardmanager::ShardId) -> Self {
         Self { value: proto.value }
+    }
+}
+
+#[derive(Clone)]
+pub struct NumberOfShards {
+    pub value: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Pod {
+    host: String,
+    port: u16,
+}
+
+impl Pod {
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build URI")
+    }
+
+    pub fn uri_02(&self) -> http_02::Uri {
+        http_02::Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build URI")
+    }
+}
+
+impl From<GrpcPod> for Pod {
+    fn from(value: GrpcPod) -> Self {
+        Self {
+            host: value.host,
+            port: value.port as u16,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RoutingTable {
+    pub number_of_shards: NumberOfShards,
+    shard_assignments: HashMap<ShardId, Pod>,
+}
+
+impl RoutingTable {
+    pub fn lookup(&self, worker_id: &WorkerId) -> Option<&Pod> {
+        self.shard_assignments.get(&ShardId::from_worker_id(
+            &worker_id.clone(),
+            self.number_of_shards.value,
+        ))
+    }
+
+    pub fn random(&self) -> Option<&Pod> {
+        self.shard_assignments
+            .values()
+            .choose(&mut rand::thread_rng())
+    }
+
+    pub fn first(&self) -> Option<&Pod> {
+        self.shard_assignments.values().next()
+    }
+
+    pub fn all(&self) -> HashSet<&Pod> {
+        self.shard_assignments.values().collect()
+    }
+}
+
+impl From<GrpcRoutingTable> for RoutingTable {
+    fn from(value: GrpcRoutingTable) -> Self {
+        Self {
+            number_of_shards: NumberOfShards {
+                value: value.number_of_shards as usize,
+            },
+            shard_assignments: value
+                .shard_assignments
+                .into_iter()
+                .map(RoutingTableEntry::from)
+                .map(|routing_table_entry| (routing_table_entry.shard_id, routing_table_entry.pod))
+                .collect(),
+        }
+    }
+}
+
+pub struct RoutingTableEntry {
+    shard_id: ShardId,
+    pod: Pod,
+}
+
+impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
+    fn from(value: GrpcRoutingTableEntry) -> Self {
+        Self {
+            shard_id: value.shard_id.unwrap().into(),
+            pod: value.pod.unwrap().into(),
+        }
     }
 }
 
@@ -562,46 +763,6 @@ impl Display for IdempotencyKey {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Encode, Decode, Enum)]
-pub enum CallingConvention {
-    Component,
-    Stdio,
-}
-
-impl TryFrom<i32> for CallingConvention {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(CallingConvention::Component),
-            1 => Ok(CallingConvention::Stdio),
-            _ => Err(format!("Unknown calling convention: {}", value)),
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::worker::CallingConvention> for CallingConvention {
-    fn from(value: golem_api_grpc::proto::golem::worker::CallingConvention) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::worker::CallingConvention::Component => {
-                CallingConvention::Component
-            }
-            golem_api_grpc::proto::golem::worker::CallingConvention::Stdio => {
-                CallingConvention::Stdio
-            }
-        }
-    }
-}
-
-impl From<CallingConvention> for i32 {
-    fn from(value: CallingConvention) -> Self {
-        match value {
-            CallingConvention::Component => 0,
-            CallingConvention::Stdio => 1,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
@@ -609,6 +770,7 @@ pub struct WorkerMetadata {
     pub env: Vec<(String, String)>,
     pub account_id: AccountId,
     pub created_at: Timestamp,
+    pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
 }
 
@@ -620,16 +782,27 @@ impl WorkerMetadata {
             env: vec![],
             account_id,
             created_at: Timestamp::now_utc(),
+            parent: None,
             last_known_status: WorkerStatusRecord::default(),
         }
     }
+
+    pub fn owned_worker_id(&self) -> OwnedWorkerId {
+        OwnedWorkerId::new(&self.account_id, &self.worker_id)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct WorkerResourceDescription {
+    pub created_at: Timestamp,
+    pub indexed_resource_key: Option<IndexedResourceKey>,
 }
 
 /// Contains status information about a worker according to a given oplog index.
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub deleted_regions: DeletedRegions,
@@ -641,6 +814,9 @@ pub struct WorkerStatusRecord {
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_version: ComponentVersion,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
 }
 
@@ -657,19 +833,22 @@ impl Default for WorkerStatusRecord {
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
             component_version: 0,
-            oplog_idx: 0,
+            component_size: 0,
+            total_linear_memory_size: 0,
+            owned_resources: HashMap::new(),
+            oplog_idx: OplogIndex::default(),
         }
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
@@ -783,7 +962,6 @@ pub enum WorkerInvocation {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<golem_wasm_rpc::Value>,
-        calling_convention: CallingConvention,
     },
     ManualUpdate {
         target_version: ComponentVersion,
@@ -797,6 +975,15 @@ impl WorkerInvocation {
                 idempotency_key, ..
             } => idempotency_key == key,
             _ => false,
+        }
+    }
+
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            _ => None,
         }
     }
 }
@@ -906,67 +1093,6 @@ impl ToJSON for AccountId {
 impl Display for AccountId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", &self.value)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ParsedFunctionName {
-    pub interface: Option<String>,
-    pub function: String,
-}
-
-impl ParsedFunctionName {
-    pub fn new(interface: Option<String>, function: String) -> Self {
-        Self {
-            interface,
-            function,
-        }
-    }
-
-    pub fn method_as_static(&self) -> Option<ParsedFunctionName> {
-        if self.function.starts_with("[method]") {
-            Some(ParsedFunctionName {
-                interface: self.interface.clone(),
-                function: self.function.replace("[method]", "[static]"),
-            })
-        } else {
-            None
-        }
-    }
-}
-
-pub fn parse_function_name(name: &str) -> ParsedFunctionName {
-    let parts = name.match_indices('/').collect::<Vec<_>>();
-    match parts.len() {
-        1 => ParsedFunctionName::new(
-            Some(name[0..parts[0].0].to_string()),
-            name[(parts[0].0 + 1)..name.len()].to_string(),
-        ),
-        2 => ParsedFunctionName::new(
-            Some(name[0..parts[1].0].to_string()),
-            name[(parts[1].0 + 1)..name.len()].to_string(),
-        ),
-        3 => {
-            let instance = &name[0..parts[1].0];
-            let resource_name = &name[(parts[1].0 + 1)..parts[2].0];
-            let function_name = &name[(parts[2].0 + 1)..name.len()];
-
-            match function_name {
-                "new" => ParsedFunctionName::new(
-                    Some(instance.to_string()),
-                    format!("[constructor]{}", resource_name),
-                ),
-                "drop" => ParsedFunctionName::new(
-                    Some(instance.to_string()),
-                    format!("[drop]{}", resource_name),
-                ),
-                _ => ParsedFunctionName::new(
-                    Some(instance.to_string()),
-                    format!("[method]{}.{}", resource_name, function_name),
-                ),
-            }
-        }
-        _ => ParsedFunctionName::new(None, name.to_string()),
     }
 }
 
@@ -1683,6 +1809,380 @@ impl From<FilterComparator> for i32 {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object, Default)]
+pub struct ScanCursor {
+    pub cursor: u64,
+    pub layer: usize,
+}
+
+impl ScanCursor {
+    pub fn is_finished(&self) -> bool {
+        self.cursor == 0
+    }
+}
+
+impl Display for ScanCursor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.layer, self.cursor)
+    }
+}
+
+impl FromStr for ScanCursor {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts = s.split('/').collect::<Vec<&str>>();
+        if parts.len() == 2 {
+            Ok(ScanCursor {
+                layer: parts[0]
+                    .parse()
+                    .map_err(|e| format!("Invalid layer part: {}", e))?,
+                cursor: parts[1]
+                    .parse()
+                    .map_err(|e| format!("Invalid cursor part: {}", e))?,
+            })
+        } else {
+            Err("Invalid cursor, must have 'layer/cursor' format".to_string())
+        }
+    }
+}
+
+impl From<Cursor> for ScanCursor {
+    fn from(value: Cursor) -> Self {
+        Self {
+            cursor: value.cursor,
+            layer: value.layer as usize,
+        }
+    }
+}
+
+impl From<ScanCursor> for Cursor {
+    fn from(value: ScanCursor) -> Self {
+        Self {
+            cursor: value.cursor,
+            layer: value.layer as u64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Critical,
+}
+
+impl From<golem_api_grpc::proto::golem::worker::Level> for LogLevel {
+    fn from(value: golem_api_grpc::proto::golem::worker::Level) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::Level::Trace => LogLevel::Trace,
+            golem_api_grpc::proto::golem::worker::Level::Debug => LogLevel::Debug,
+            golem_api_grpc::proto::golem::worker::Level::Info => LogLevel::Info,
+            golem_api_grpc::proto::golem::worker::Level::Warn => LogLevel::Warn,
+            golem_api_grpc::proto::golem::worker::Level::Error => LogLevel::Error,
+            golem_api_grpc::proto::golem::worker::Level::Critical => LogLevel::Critical,
+        }
+    }
+}
+
+impl From<LogLevel> for golem_api_grpc::proto::golem::worker::Level {
+    fn from(value: LogLevel) -> Self {
+        match value {
+            LogLevel::Trace => golem_api_grpc::proto::golem::worker::Level::Trace,
+            LogLevel::Debug => golem_api_grpc::proto::golem::worker::Level::Debug,
+            LogLevel::Info => golem_api_grpc::proto::golem::worker::Level::Info,
+            LogLevel::Warn => golem_api_grpc::proto::golem::worker::Level::Warn,
+            LogLevel::Error => golem_api_grpc::proto::golem::worker::Level::Error,
+            LogLevel::Critical => golem_api_grpc::proto::golem::worker::Level::Critical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WorkerEvent {
+    StdOut {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    StdErr {
+        timestamp: Timestamp,
+        bytes: Vec<u8>,
+    },
+    Log {
+        timestamp: Timestamp,
+        level: LogLevel,
+        context: String,
+        message: String,
+    },
+    InvocationStart {
+        timestamp: Timestamp,
+        function: String,
+        idempotency_key: IdempotencyKey,
+    },
+    InvocationFinished {
+        timestamp: Timestamp,
+        function: String,
+        idempotency_key: IdempotencyKey,
+    },
+    Close,
+}
+
+impl WorkerEvent {
+    pub fn stdout(bytes: Vec<u8>) -> WorkerEvent {
+        WorkerEvent::StdOut {
+            timestamp: Timestamp::now_utc(),
+            bytes,
+        }
+    }
+
+    pub fn stderr(bytes: Vec<u8>) -> WorkerEvent {
+        WorkerEvent::StdErr {
+            timestamp: Timestamp::now_utc(),
+            bytes,
+        }
+    }
+
+    pub fn log(level: LogLevel, context: &str, message: &str) -> WorkerEvent {
+        WorkerEvent::Log {
+            timestamp: Timestamp::now_utc(),
+            level,
+            context: context.to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    pub fn invocation_start(function: &str, idempotency_key: &IdempotencyKey) -> WorkerEvent {
+        WorkerEvent::InvocationStart {
+            timestamp: Timestamp::now_utc(),
+            function: function.to_string(),
+            idempotency_key: idempotency_key.clone(),
+        }
+    }
+
+    pub fn invocation_finished(function: &str, idempotency_key: &IdempotencyKey) -> WorkerEvent {
+        WorkerEvent::InvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            function: function.to_string(),
+            idempotency_key: idempotency_key.clone(),
+        }
+    }
+
+    pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
+        match self {
+            WorkerEvent::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
+                timestamp: *timestamp,
+                level: oplog::LogLevel::Stdout,
+                context: String::new(),
+                message: String::from_utf8_lossy(bytes).to_string(),
+            }),
+            WorkerEvent::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
+                timestamp: *timestamp,
+                level: oplog::LogLevel::Stdout,
+                context: String::new(),
+                message: String::from_utf8_lossy(bytes).to_string(),
+            }),
+            WorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Some(OplogEntry::Log {
+                timestamp: *timestamp,
+                level: match level {
+                    LogLevel::Trace => oplog::LogLevel::Trace,
+                    LogLevel::Debug => oplog::LogLevel::Debug,
+                    LogLevel::Info => oplog::LogLevel::Info,
+                    LogLevel::Warn => oplog::LogLevel::Warn,
+                    LogLevel::Error => oplog::LogLevel::Error,
+                    LogLevel::Critical => oplog::LogLevel::Critical,
+                },
+                context: context.clone(),
+                message: message.clone(),
+            }),
+            WorkerEvent::InvocationStart { .. } => None,
+            WorkerEvent::InvocationFinished { .. } => None,
+            WorkerEvent::Close => None,
+        }
+    }
+}
+
+impl Display for WorkerEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerEvent::StdOut { bytes, .. } => {
+                write!(
+                    f,
+                    "<stdout> {}",
+                    String::from_utf8(bytes.clone()).unwrap_or_default()
+                )
+            }
+            WorkerEvent::StdErr { bytes, .. } => {
+                write!(
+                    f,
+                    "<stderr> {}",
+                    String::from_utf8(bytes.clone()).unwrap_or_default()
+                )
+            }
+            WorkerEvent::Log {
+                level,
+                context,
+                message,
+                ..
+            } => {
+                write!(f, "<log> {:?} {} {}", level, context, message)
+            }
+            WorkerEvent::InvocationStart {
+                function,
+                idempotency_key,
+                ..
+            } => {
+                write!(f, "<invocation-start> {} {}", function, idempotency_key)
+            }
+            WorkerEvent::InvocationFinished {
+                function,
+                idempotency_key,
+                ..
+            } => {
+                write!(f, "<invocation-finished> {} {}", function, idempotency_key)
+            }
+            WorkerEvent::Close => {
+                write!(f, "<close>")
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::LogEvent> for WorkerEvent {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::LogEvent,
+    ) -> Result<Self, Self::Error> {
+        match value.event {
+            Some(event) => match event {
+                golem_api_grpc::proto::golem::worker::log_event::Event::Stdout(event) => {
+                    Ok(WorkerEvent::StdOut {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        bytes: event.message.into_bytes(),
+                    })
+                }
+                golem_api_grpc::proto::golem::worker::log_event::Event::Stderr(event) => {
+                    Ok(WorkerEvent::StdErr {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        bytes: event.message.into_bytes(),
+                    })
+                }
+                golem_api_grpc::proto::golem::worker::log_event::Event::Log(event) => {
+                    Ok(WorkerEvent::Log {
+                        timestamp: event.timestamp.clone().ok_or("Missing timestamp")?.into(),
+                        level: event.level().into(),
+                        context: event.context,
+                        message: event.message,
+                    })
+                }
+                golem_api_grpc::proto::golem::worker::log_event::Event::InvocationStarted(
+                    event,
+                ) => Ok(WorkerEvent::InvocationStart {
+                    timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                    function: event.function,
+                    idempotency_key: event
+                        .idempotency_key
+                        .ok_or("Missing idempotency key")?
+                        .into(),
+                }),
+                golem_api_grpc::proto::golem::worker::log_event::Event::InvocationFinished(
+                    event,
+                ) => Ok(WorkerEvent::InvocationFinished {
+                    timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                    function: event.function,
+                    idempotency_key: event
+                        .idempotency_key
+                        .ok_or("Missing idempotency key")?
+                        .into(),
+                }),
+            },
+            None => Err("Missing event".to_string()),
+        }
+    }
+}
+
+impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
+    type Error = String;
+
+    fn try_from(value: WorkerEvent) -> Result<Self, Self::Error> {
+        match value {
+            WorkerEvent::StdOut { timestamp, bytes } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::Stdout(
+                    golem::worker::StdOutLog {
+                        message: String::from_utf8_lossy(&bytes).to_string(),
+                        timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            WorkerEvent::StdErr { timestamp, bytes } => Ok(golem::worker::LogEvent {
+                event: Some(
+                    golem_api_grpc::proto::golem::worker::log_event::Event::Stderr(
+                        golem::worker::StdErrLog {
+                            message: String::from_utf8_lossy(&bytes).to_string(),
+                            timestamp: Some(timestamp.into()),
+                        },
+                    ),
+                ),
+            }),
+            WorkerEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::Log(golem::worker::Log {
+                    level: match level {
+                        LogLevel::Trace => golem::worker::Level::Trace.into(),
+                        LogLevel::Debug => golem::worker::Level::Debug.into(),
+                        LogLevel::Info => golem::worker::Level::Info.into(),
+                        LogLevel::Warn => golem::worker::Level::Warn.into(),
+                        LogLevel::Error => golem::worker::Level::Error.into(),
+                        LogLevel::Critical => golem::worker::Level::Critical.into(),
+                    },
+                    context,
+                    message,
+                    timestamp: Some(timestamp.into()),
+                })),
+            }),
+            WorkerEvent::InvocationStart {
+                timestamp,
+                function,
+                idempotency_key,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::InvocationStarted(
+                    golem::worker::InvocationStarted {
+                        function,
+                        idempotency_key: Some(idempotency_key.into()),
+                        timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            WorkerEvent::InvocationFinished {
+                timestamp,
+                function,
+                idempotency_key,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::InvocationFinished(
+                    golem::worker::InvocationFinished {
+                        function,
+                        idempotency_key: Some(idempotency_key.into()),
+                        timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            WorkerEvent::Close => Err("Close event is not supported via protobuf".to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -1692,8 +2192,8 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::model::{
-        parse_function_name, AccountId, ComponentId, FilterComparator, StringFilterComparator,
-        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentId, FilterComparator, StringFilterComparator, Timestamp, WorkerFilter,
+        WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
 
     #[test]
@@ -1705,99 +2205,6 @@ mod tests {
         let ts2: Timestamp = prost_ts.into();
 
         assert_eq!(ts2, ts);
-    }
-
-    #[test]
-    fn parse_function_name_global() {
-        let parsed = parse_function_name("run-example");
-        assert_eq!(parsed.interface, None);
-        assert_eq!(parsed.function, "run-example");
-    }
-
-    #[test]
-    fn parse_function_name_in_exported_interface_no_package() {
-        let parsed = parse_function_name("interface/fn1");
-        assert_eq!(parsed.interface, Some("interface".to_string()));
-        assert_eq!(parsed.function, "fn1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_in_exported_interface() {
-        let parsed = parse_function_name("ns:name/interface/fn1");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "fn1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_constructor_syntax_sugar() {
-        let parsed = parse_function_name("ns:name/interface/resource1/new");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[constructor]resource1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_constructor() {
-        let parsed = parse_function_name("ns:name/interface/[constructor]resource1");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[constructor]resource1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_method_syntax_sugar() {
-        let parsed = parse_function_name("ns:name/interface/resource1/do-something");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[method]resource1.do-something".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_method() {
-        let parsed = parse_function_name("ns:name/interface/[method]resource1.do-something");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[method]resource1.do-something".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_static_method_syntax_sugar() {
-        // Note: the syntax sugared version cannot distinguish between method and static - so we need to check the actual existence of
-        // the function and fallback.
-        let parsed = parse_function_name("ns:name/interface/resource1/do-something-static")
-            .method_as_static()
-            .unwrap();
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[static]resource1.do-something-static".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_static() {
-        let parsed = parse_function_name("ns:name/interface/[static]resource1.do-something-static");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(
-            parsed.function,
-            "[static]resource1.do-something-static".to_string()
-        );
-    }
-
-    #[test]
-    fn parse_function_name_drop_syntax_sugar() {
-        let parsed = parse_function_name("ns:name/interface/resource1/drop");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[drop]resource1".to_string());
-    }
-
-    #[test]
-    fn parse_function_name_drop() {
-        let parsed = parse_function_name("ns:name/interface/[drop]resource1");
-        assert_eq!(parsed.interface, Some("ns:name/interface".to_string()));
-        assert_eq!(parsed.function, "[drop]resource1".to_string());
     }
 
     #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
@@ -1880,7 +2287,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(
                     FilterComparator::Equal,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_and(vec![
@@ -1904,7 +2311,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .or(WorkerFilter::new_status(
                     FilterComparator::NotEqual,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_or(vec![
@@ -1918,7 +2325,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(
                     FilterComparator::NotEqual,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_or(vec![
@@ -1934,7 +2341,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .or(WorkerFilter::new_status(
                     FilterComparator::NotEqual,
-                    WorkerStatus::Running
+                    WorkerStatus::Running,
                 ))
                 .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
             WorkerFilter::new_and(vec![
@@ -1964,6 +2371,7 @@ mod tests {
                 value: "account-1".to_string(),
             },
             created_at: Timestamp::now_utc(),
+            parent: None,
             last_known_status: WorkerStatusRecord {
                 component_version: 1,
                 ..WorkerStatusRecord::default()
@@ -1974,7 +2382,7 @@ mod tests {
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
                 .and(WorkerFilter::new_status(
                     FilterComparator::Equal,
-                    WorkerStatus::Idle
+                    WorkerStatus::Idle,
                 ))
                 .matches(&worker_metadata)
         );
@@ -1986,7 +2394,7 @@ mod tests {
         )
         .and(WorkerFilter::new_status(
             FilterComparator::Equal,
-            WorkerStatus::Idle
+            WorkerStatus::Idle,
         ))
         .matches(&worker_metadata));
 

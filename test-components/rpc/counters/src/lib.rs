@@ -1,19 +1,20 @@
 mod bindings;
 
-use std::cell::RefCell;
-use bindings::*;
 use crate::bindings::exports::rpc::counters::api::{Guest, GuestCounter};
+use bindings::*;
+use std::cell::RefCell;
+use std::env::{args, vars};
 
 pub struct Component;
 
 struct State {
     dropped_counters: Vec<(String, u64)>,
-    global: u64
+    global: u64,
 }
 
 static mut STATE: State = State {
     dropped_counters: vec![],
-    global: 0
+    global: 0,
 };
 
 fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
@@ -23,10 +24,10 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
 }
 
 impl Guest for Component {
+    type Counter = crate::Counter;
+
     fn get_all_dropped() -> Vec<(String, u64)> {
-        with_state(|state| {
-            state.dropped_counters.clone()
-        })
+        with_state(|state| state.dropped_counters.clone())
     }
 
     fn inc_global_by(value: u64) {
@@ -36,9 +37,13 @@ impl Guest for Component {
     }
 
     fn get_global_value() -> u64 {
-        with_state(|state| {
-            state.global
-        })
+        with_state(|state| state.global)
+    }
+
+    fn bug_wasm_rpc_i32(
+        in_: exports::rpc::counters::api::TimelineNode,
+    ) -> exports::rpc::counters::api::TimelineNode {
+        in_
     }
 }
 
@@ -65,13 +70,25 @@ impl GuestCounter for Counter {
         println!("Getting value of counter {}", self.name);
         *self.value.borrow()
     }
+
+    fn get_args(&self) -> Vec<String> {
+        args().collect::<Vec<_>>()
+    }
+
+    fn get_env(&self) -> Vec<(String, String)> {
+        vars().collect::<Vec<_>>()
+    }
 }
 
 impl Drop for Counter {
     fn drop(&mut self) {
         println!("Dropping counter {}", self.name);
         with_state(|state| {
-            state.dropped_counters.push((self.name.clone(), *self.value.borrow()));
+            state
+                .dropped_counters
+                .push((self.name.clone(), *self.value.borrow()));
         });
     }
 }
+
+bindings::export!(Component with_types_in bindings);

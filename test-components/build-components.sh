@@ -2,28 +2,34 @@
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
-"update-test-v1" "update-test-v2" "update-test-v3" "update-test-v4" "rust-echo" "golem-rust-tests")
-zig_test_components=("zig-1" "zig-3")
+"update-test-v1" "update-test-v2" "update-test-v3" "update-test-v4" "rust-echo" "golem-rust-tests" "durability-overhead" "logging")
+zig_test_components=("zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
 js_test_components=("js-1" "js-2" "js-3" "js-4" "js-echo")
 java_test_components=("java-1" "java-2")
 dotnet_test_components=("csharp-1")
 swift_test_components=("swift-1")
-c_test_components=("c-1")
+c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
+ts_test_components=("ts-rpc")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
+# - update-wit: update the wit/deps directories
 # - rust / zig / tinygo / grain / js / java / dotnet / swift / c / python: build only the specified language
 
 rebuild=false
 single_lang=false
+update_wit=false
 lang=""
 for arg in "$@"; do
   case $arg in
     rebuild)
       rebuild=true
+      ;;
+    update-wit)
+      update_wit=true
       ;;
     rust)
       single_lang=true
@@ -65,6 +71,10 @@ for arg in "$@"; do
       single_lang=true
       lang="python"
       ;;
+    ts)
+      single_lang=true
+      lang="ts"
+      ;;
     *)
       echo "Unknown argument: $arg"
       exit 1
@@ -77,6 +87,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
   for subdir in "${rust_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       cargo clean
@@ -98,6 +112,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "zig" ]; then
   for subdir in "${zig_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm -rf zig-out
@@ -121,11 +139,15 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "tinygo" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       rm *.wasm
       rm -rf tinygo_wasi
     fi
-    wit-bindgen tiny-go --out-dir tinygo_wasi ./wit
+    wit-bindgen tiny-go --out-dir binding --rename-package binding ./wit
     tinygo build -target=wasi -tags=purego -o main.wasm main.go
 
     echo "Turning the module into a WebAssembly Component..."
@@ -144,6 +166,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "grain" ]; then
   for subdir in ${grain_test_components[@]}; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -165,6 +191,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "js" ]; then
   for subdir in ${js_test_components[@]}; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -191,6 +221,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "java" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       mvn clean
     fi
@@ -213,6 +247,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "dotnet" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       dotnet clean
     fi
@@ -233,6 +271,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "swift" ]; then
   for subdir in ${swift_test_components[@]}; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -256,10 +298,14 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       rm *.wasm
     fi
-    wit-bindgen c ./wit
+    wit-bindgen c --autodrop-borrows yes ./wit
     ~/wasi-sdk-20.0/bin/clang --sysroot ~/wasi-sdk-20.0/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
 
     echo "Turning the module into a WebAssembly Component..."
@@ -278,6 +324,10 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
     if [ "$rebuild" = true ]; then
       rm *.wasm
       rm -rf bindings
@@ -285,12 +335,41 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "python" ]; then
 
     echo "Compiling the python code into a WebAssembly Component..."
     componentize-py bindings bindings
-    componentize-py componentize test
+    componentize-py componentize test -o "${subdir}_full.wasm"
+    wasm-tools strip "${subdir}_full.wasm" -o "${subdir}.wasm"
 
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    mv index.wasm $target
+    mv "$subdir.wasm" $target
+
     wasm-tools print "$target" >"$target_wat"
+
+    popd || exit
+  done
+fi
+
+if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
+  echo "Building the TS test components"
+  for subdir in ${ts_test_components[@]}; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
+    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
+      wit-deps update
+    fi
+
+    if [ "$update_wit" = true ] && [ -f "update-deps.sh" ]; then
+      ./update-deps.sh
+    fi
+
+    if [ "$rebuild" = true ]; then
+      rm *.wasm
+      rm package-lock.json
+      rm -rf node_modules
+    fi
+
+    ./componentize.sh
+    cp *.wasm ..
 
     popd || exit
   done

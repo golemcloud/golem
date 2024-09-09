@@ -1,21 +1,60 @@
+use crate::cloud::ProjectId;
+use crate::model::conversions::analysed_function_client_to_model;
+use crate::model::wave::function_wave_compatible;
 use crate::model::GolemError;
 use golem_client::model::{
-    Component, Export, ExportFunction, ExportInstance, FunctionResult, NameOptionTypePair,
-    NameTypePair, ResourceMode, Type, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedInstance,
+    AnalysedResourceMode, AnalysedType, ComponentMetadata, NameOptionTypePair, NameTypePair,
+    TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
 };
-use golem_wasm_ast::wave::DisplayNamedFunc;
+use golem_common::model::ComponentId;
+use golem_common::uri::oss::urn::ComponentUrn;
+use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
+use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::model::wave::{func_to_analysed, function_wave_compatible};
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component {
+    pub versioned_component_id: VersionedComponentId,
+    pub component_name: String,
+    pub component_size: u64,
+    pub metadata: ComponentMetadata,
+    pub project_id: Option<ProjectId>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<golem_client::model::Component> for Component {
+    fn from(value: golem_client::model::Component) -> Self {
+        let golem_client::model::Component {
+            versioned_component_id,
+            component_name,
+            component_size,
+            metadata,
+            created_at,
+        } = value;
+
+        Component {
+            versioned_component_id,
+            component_name,
+            component_size,
+            metadata,
+            project_id: None,
+            created_at,
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
-    pub component_id: String,
+    pub component_urn: ComponentUrn,
     pub component_version: u64,
     pub component_name: String,
     pub component_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
 }
 
@@ -28,23 +67,26 @@ impl From<Component> for ComponentView {
 impl From<&Component> for ComponentView {
     fn from(value: &Component) -> Self {
         ComponentView {
-            component_id: value.versioned_component_id.component_id.to_string(),
+            component_urn: ComponentUrn {
+                id: ComponentId(value.versioned_component_id.component_id),
+            },
             component_version: value.versioned_component_id.version,
             component_name: value.component_name.to_string(),
             component_size: value.component_size,
+            project_id: value.project_id,
             exports: value
                 .metadata
                 .exports
                 .iter()
                 .flat_map(|exp| match exp {
-                    Export::Instance(ExportInstance { name, functions }) => {
+                    AnalysedExport::Instance(AnalysedInstance { name, functions }) => {
                         let fs: Vec<String> = functions
                             .iter()
-                            .map(|f| show_exported_function(&format!("{name}/"), f))
+                            .map(|f| show_exported_function(&format!("{name}."), f))
                             .collect();
                         fs
                     }
-                    Export::Function(f) => {
+                    AnalysedExport::Function(f) => {
                         vec![show_exported_function("", f)]
                     }
                 })
@@ -53,9 +95,9 @@ impl From<&Component> for ComponentView {
     }
 }
 
-fn render_type(typ: &Type) -> String {
+fn render_type(typ: &AnalysedType) -> String {
     match typ {
-        Type::Variant(TypeVariant { cases }) => {
+        AnalysedType::Variant(TypeVariant { cases }) => {
             let cases_str = cases
                 .iter()
                 .map(|NameOptionTypePair { name, typ }| match typ {
@@ -66,7 +108,7 @@ fn render_type(typ: &Type) -> String {
                 .join(", ");
             format!("variant {{ {cases_str} }}")
         }
-        Type::Result(boxed) => {
+        AnalysedType::Result(boxed) => {
             let ok_str = boxed.ok.as_ref().map(render_type);
             let err_str = boxed.err.as_ref().map(render_type);
 
@@ -82,53 +124,53 @@ fn render_type(typ: &Type) -> String {
                 "result".to_string()
             }
         }
-        Type::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        Type::Enum(TypeEnum { cases }) => format!("enum {{ {} }}", cases.join(", ")),
-        Type::Flags(TypeFlags { cases }) => format!("flags {{ {} }}", cases.join(", ")),
-        Type::Record(TypeRecord { cases }) => {
-            let pairs: Vec<String> = cases
+        AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
+        AnalysedType::Enum(TypeEnum { cases }) => format!("enum {{ {} }}", cases.join(", ")),
+        AnalysedType::Flags(TypeFlags { names }) => format!("flags {{ {} }}", names.join(", ")),
+        AnalysedType::Record(TypeRecord { fields }) => {
+            let pairs: Vec<String> = fields
                 .iter()
                 .map(|NameTypePair { name, typ }| format!("{name}: {}", render_type(typ)))
                 .collect();
 
             format!("record {{ {} }}", pairs.join(", "))
         }
-        Type::Tuple(TypeTuple { items }) => {
+        AnalysedType::Tuple(TypeTuple { items }) => {
             let typs: Vec<String> = items.iter().map(render_type).collect();
             format!("tuple<{}>", typs.join(", "))
         }
-        Type::List(boxed) => format!("list<{}>", render_type(&boxed.inner)),
-        Type::Str { .. } => "string".to_string(),
-        Type::Chr { .. } => "char".to_string(),
-        Type::F64 { .. } => "float64".to_string(),
-        Type::F32 { .. } => "float32".to_string(),
-        Type::U64 { .. } => "u64".to_string(),
-        Type::S64 { .. } => "s64".to_string(),
-        Type::U32 { .. } => "u32".to_string(),
-        Type::S32 { .. } => "s32".to_string(),
-        Type::U16 { .. } => "u16".to_string(),
-        Type::S16 { .. } => "s16".to_string(),
-        Type::U8 { .. } => "u8".to_string(),
-        Type::S8 { .. } => "s8".to_string(),
-        Type::Bool { .. } => "bool".to_string(),
-        Type::Handle(handle) => match handle.mode {
-            ResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id),
-            ResourceMode::Owned => format!("handle<{}>", handle.resource_id),
+        AnalysedType::List(boxed) => format!("list<{}>", render_type(&boxed.inner)),
+        AnalysedType::Str { .. } => "string".to_string(),
+        AnalysedType::Chr { .. } => "char".to_string(),
+        AnalysedType::F64 { .. } => "float64".to_string(),
+        AnalysedType::F32 { .. } => "float32".to_string(),
+        AnalysedType::U64 { .. } => "u64".to_string(),
+        AnalysedType::S64 { .. } => "s64".to_string(),
+        AnalysedType::U32 { .. } => "u32".to_string(),
+        AnalysedType::S32 { .. } => "s32".to_string(),
+        AnalysedType::U16 { .. } => "u16".to_string(),
+        AnalysedType::S16 { .. } => "s16".to_string(),
+        AnalysedType::U8 { .. } => "u8".to_string(),
+        AnalysedType::S8 { .. } => "s8".to_string(),
+        AnalysedType::Bool { .. } => "bool".to_string(),
+        AnalysedType::Handle(handle) => match handle.mode {
+            AnalysedResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id),
+            AnalysedResourceMode::Owned => format!("handle<{}>", handle.resource_id),
         },
     }
 }
 
-fn render_result(r: &FunctionResult) -> String {
+fn render_result(r: &AnalysedFunctionResult) -> String {
     render_type(&r.typ)
 }
 
-fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
+pub fn show_exported_function(prefix: &str, f: &AnalysedFunction) -> String {
     if function_wave_compatible(f) {
         let name = &f.name;
 
         DisplayNamedFunc {
-            name: format!("{prefix}{name}"),
-            func: func_to_analysed(f),
+            name: format!("{prefix}{{{name}}}"),
+            func: analysed_function_client_to_model(f),
         }
         .to_string()
     } else {
@@ -136,7 +178,7 @@ fn show_exported_function(prefix: &str, f: &ExportFunction) -> String {
     }
 }
 
-fn custom_show_exported_function(prefix: &str, f: &ExportFunction) -> String {
+fn custom_show_exported_function(prefix: &str, f: &AnalysedFunction) -> String {
     let name = &f.name;
     let params = f
         .parameters
@@ -150,26 +192,41 @@ fn custom_show_exported_function(prefix: &str, f: &ExportFunction) -> String {
     let res_str = results.join(", ");
 
     if results.is_empty() {
-        format!("{prefix}{name}({params})")
+        format!("{prefix}{{{name}}}({params})")
     } else if results.len() == 1 {
-        format!("{prefix}{name}({params}) -> {res_str}")
+        format!("{prefix}{{{name}}}({params}) -> {res_str}")
     } else {
-        format!("{prefix}{name}({params}) -> ({res_str})")
+        format!("{prefix}{{{name}}}({params}) -> ({res_str})")
     }
 }
 
 fn resolve_function<'t>(
     component: &'t Component,
     function: &str,
-) -> Result<&'t ExportFunction, GolemError> {
-    let functions = component
-        .metadata
-        .exports
-        .iter()
-        .flat_map(export_to_functions)
-        .filter(|(name, _)| name == function)
-        .map(|(_, f)| f)
-        .collect::<Vec<_>>();
+) -> Result<(&'t AnalysedFunction, ParsedFunctionName), GolemError> {
+    let parsed = ParsedFunctionName::parse(function).map_err(GolemError)?;
+    let mut functions = Vec::new();
+
+    for export in &component.metadata.exports {
+        match export {
+            AnalysedExport::Instance(interface) => {
+                if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {
+                    for function in &interface.functions {
+                        if parsed.function().function_name() == function.name {
+                            functions.push(function);
+                        }
+                    }
+                }
+            }
+            AnalysedExport::Function(ref f @ AnalysedFunction { name, .. }) => {
+                if parsed.site() == &ParsedFunctionSite::Global
+                    && &parsed.function().function_name() == name
+                {
+                    functions.push(f);
+                }
+            }
+        }
+    }
 
     if functions.len() > 1 {
         info!("Multiple function with the same name '{function}' declared");
@@ -178,7 +235,7 @@ fn resolve_function<'t>(
             "Multiple function results with the same name declared".to_string(),
         ))
     } else if let Some(func) = functions.first() {
-        Ok(func)
+        Ok((func, parsed))
     } else {
         info!("No function '{function}' declared for component");
 
@@ -189,8 +246,8 @@ fn resolve_function<'t>(
 pub fn function_result_types<'t>(
     component: &'t Component,
     function: &str,
-) -> Result<Vec<&'t Type>, GolemError> {
-    let func = resolve_function(component, function)?;
+) -> Result<Vec<&'t AnalysedType>, GolemError> {
+    let (func, _) = resolve_function(component, function)?;
 
     Ok(func.results.iter().map(|r| &r.typ).collect())
 }
@@ -198,23 +255,13 @@ pub fn function_result_types<'t>(
 pub fn function_params_types<'t>(
     component: &'t Component,
     function: &str,
-) -> Result<Vec<&'t Type>, GolemError> {
-    let func = resolve_function(component, function)?;
+) -> Result<Vec<&'t AnalysedType>, GolemError> {
+    let (func, parsed) = resolve_function(component, function)?;
 
-    Ok(func.parameters.iter().map(|r| &r.typ).collect())
-}
-
-fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
-    match export {
-        Export::Instance(inst) => {
-            let prefix = format!("{}/", inst.name);
-
-            inst.functions
-                .iter()
-                .map(|f| (format!("{prefix}{}", f.name), f))
-                .collect()
-        }
-        Export::Function(f) => vec![(f.name.clone(), f)],
+    if parsed.function().is_indexed_resource() {
+        Ok(func.parameters.iter().skip(1).map(|r| &r.typ).collect())
+    } else {
+        Ok(func.parameters.iter().map(|r| &r.typ).collect())
     }
 }
 
@@ -222,33 +269,34 @@ fn export_to_functions(export: &Export) -> Vec<(String, &ExportFunction)> {
 mod tests {
     use crate::model::component::show_exported_function;
     use golem_client::model::{
-        ExportFunction, FunctionParameter, FunctionResult, NameOptionTypePair, NameTypePair,
-        ResourceMode, Type, TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle,
-        TypeList, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr,
-        TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+        AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceMode,
+        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
+        TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16,
+        TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8,
+        TypeVariant,
     };
 
     #[test]
     fn show_exported_function_handles_type_handle() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "n".to_string(),
             parameters: vec![],
-            results: vec![FunctionResult {
+            results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: Type::Handle(TypeHandle {
+                typ: AnalysedType::Handle(TypeHandle {
                     resource_id: 1,
-                    mode: ResourceMode::Borrowed,
+                    mode: AnalysedResourceMode::Borrowed,
                 }),
             }],
         };
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "n() -> &handle<1>")
+        assert_eq!(repr, "{n}() -> &handle<1>")
     }
 
     #[test]
     fn show_no_results_wave() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![],
             results: vec![],
@@ -256,18 +304,18 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc()")
+        assert_eq!(repr, "{abc}()")
     }
 
     #[test]
     fn show_no_results_custom() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "abc".to_string(),
-            parameters: vec![FunctionParameter {
+            parameters: vec![AnalysedFunctionParameter {
                 name: "n".to_string(),
-                typ: Type::Handle(TypeHandle {
+                typ: AnalysedType::Handle(TypeHandle {
                     resource_id: 1,
-                    mode: ResourceMode::Owned,
+                    mode: AnalysedResourceMode::Owned,
                 }),
             }],
             results: vec![],
@@ -275,15 +323,15 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n: handle<1>)")
+        assert_eq!(repr, "{abc}(n: handle<1>)")
     }
 
     #[test]
     fn show_result_wave() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![],
-            results: vec![FunctionResult {
+            results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: type_bool(),
             }],
@@ -291,48 +339,48 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc() -> bool")
+        assert_eq!(repr, "{abc}() -> bool")
     }
 
     #[test]
     fn show_result_custom() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![],
-            results: vec![FunctionResult {
+            results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: Type::Handle(TypeHandle {
+                typ: AnalysedType::Handle(TypeHandle {
                     resource_id: 1,
-                    mode: ResourceMode::Owned,
+                    mode: AnalysedResourceMode::Owned,
                 }),
             }],
         };
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc() -> handle<1>")
+        assert_eq!(repr, "{abc}() -> handle<1>")
     }
 
     #[test]
     fn show_params_and_results_wave() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![
-                FunctionParameter {
+                AnalysedFunctionParameter {
                     name: "n1".to_string(),
                     typ: type_bool(),
                 },
-                FunctionParameter {
+                AnalysedFunctionParameter {
                     name: "n2".to_string(),
                     typ: type_bool(),
                 },
             ],
             results: vec![
-                FunctionResult {
+                AnalysedFunctionResult {
                     name: Some("r1".to_string()),
                     typ: type_bool(),
                 },
-                FunctionResult {
+                AnalysedFunctionResult {
                     name: None,
                     typ: type_bool(),
                 },
@@ -341,32 +389,32 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n1: bool, n2: bool) -> (bool, bool)")
+        assert_eq!(repr, "{abc}(n1: bool, n2: bool) -> (bool, bool)")
     }
 
     #[test]
     fn show_params_and_results_custom() {
-        let f = ExportFunction {
+        let f = AnalysedFunction {
             name: "abc".to_string(),
             parameters: vec![
-                FunctionParameter {
+                AnalysedFunctionParameter {
                     name: "n1".to_string(),
                     typ: type_bool(),
                 },
-                FunctionParameter {
+                AnalysedFunctionParameter {
                     name: "n2".to_string(),
-                    typ: Type::Handle(TypeHandle {
+                    typ: AnalysedType::Handle(TypeHandle {
                         resource_id: 1,
-                        mode: ResourceMode::Owned,
+                        mode: AnalysedResourceMode::Owned,
                     }),
                 },
             ],
             results: vec![
-                FunctionResult {
+                AnalysedFunctionResult {
                     name: Some("r1".to_string()),
                     typ: type_bool(),
                 },
-                FunctionResult {
+                AnalysedFunctionResult {
                     name: None,
                     typ: type_bool(),
                 },
@@ -375,17 +423,17 @@ mod tests {
 
         let repr = show_exported_function("", &f);
 
-        assert_eq!(repr, "abc(n1: bool, n2: handle<1>) -> (bool, bool)")
+        assert_eq!(repr, "{abc}(n1: bool, n2: handle<1>) -> (bool, bool)")
     }
 
-    fn ensure_same_export(typ: Type, expected: &str) {
-        let expected_wave = format!("wn() -> {expected}");
-        let expected_custom = format!("cn() -> tuple<handle<1>, {expected}>");
+    fn ensure_same_export(typ: AnalysedType, expected: &str) {
+        let expected_wave = format!("{{wn}}() -> {expected}");
+        let expected_custom = format!("{{cn}}() -> tuple<handle<1>, {expected}>");
 
-        let wave_f = ExportFunction {
+        let wave_f = AnalysedFunction {
             name: "wn".to_string(),
             parameters: vec![],
-            results: vec![FunctionResult {
+            results: vec![AnalysedFunctionResult {
                 name: None,
                 typ: typ.clone(),
             }],
@@ -393,16 +441,16 @@ mod tests {
         let wave_res = show_exported_function("", &wave_f);
         assert_eq!(wave_res, expected_wave);
 
-        let custom_f = ExportFunction {
+        let custom_f = AnalysedFunction {
             name: "cn".to_string(),
             parameters: vec![],
-            results: vec![FunctionResult {
+            results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: Type::Tuple(TypeTuple {
+                typ: AnalysedType::Tuple(TypeTuple {
                     items: vec![
-                        Type::Handle(TypeHandle {
+                        AnalysedType::Handle(TypeHandle {
                             resource_id: 1,
-                            mode: ResourceMode::Owned,
+                            mode: AnalysedResourceMode::Owned,
                         }),
                         typ,
                     ],
@@ -415,9 +463,12 @@ mod tests {
 
     #[test]
     fn same_export_for_variant() {
-        ensure_same_export(Type::Variant(TypeVariant { cases: vec![] }), "variant {  }");
         ensure_same_export(
-            Type::Variant(TypeVariant {
+            AnalysedType::Variant(TypeVariant { cases: vec![] }),
+            "variant {  }",
+        );
+        ensure_same_export(
+            AnalysedType::Variant(TypeVariant {
                 cases: vec![NameOptionTypePair {
                     name: "v1".to_string(),
                     typ: Some(type_bool()),
@@ -426,11 +477,11 @@ mod tests {
             "variant { v1(bool) }",
         );
         ensure_same_export(
-            Type::Variant(TypeVariant {
+            AnalysedType::Variant(TypeVariant {
                 cases: vec![
                     NameOptionTypePair {
                         name: "v1".to_string(),
-                        typ: Some(Type::Bool(TypeBool {})),
+                        typ: Some(AnalysedType::Bool(TypeBool {})),
                     },
                     NameOptionTypePair {
                         name: "v2".to_string(),
@@ -442,35 +493,35 @@ mod tests {
         );
     }
 
-    fn type_bool() -> Type {
-        Type::Bool(TypeBool {})
+    fn type_bool() -> AnalysedType {
+        AnalysedType::Bool(TypeBool {})
     }
 
     #[test]
     fn same_export_for_result() {
         ensure_same_export(
-            Type::Result(Box::new(TypeResult {
+            AnalysedType::Result(Box::new(TypeResult {
                 ok: None,
                 err: None,
             })),
             "result",
         );
         ensure_same_export(
-            Type::Result(Box::new(TypeResult {
+            AnalysedType::Result(Box::new(TypeResult {
                 ok: Some(type_bool()),
                 err: None,
             })),
             "result<bool>",
         );
         ensure_same_export(
-            Type::Result(Box::new(TypeResult {
+            AnalysedType::Result(Box::new(TypeResult {
                 ok: None,
                 err: Some(type_bool()),
             })),
             "result<_, bool>",
         );
         ensure_same_export(
-            Type::Result(Box::new(TypeResult {
+            AnalysedType::Result(Box::new(TypeResult {
                 ok: Some(type_bool()),
                 err: Some(type_bool()),
             })),
@@ -481,22 +532,22 @@ mod tests {
     #[test]
     fn same_export_for_option() {
         ensure_same_export(
-            Type::Option(Box::new(TypeOption { inner: type_bool() })),
+            AnalysedType::Option(Box::new(TypeOption { inner: type_bool() })),
             "option<bool>",
         )
     }
 
     #[test]
     fn same_export_for_enum() {
-        ensure_same_export(Type::Enum(TypeEnum { cases: vec![] }), "enum {  }");
+        ensure_same_export(AnalysedType::Enum(TypeEnum { cases: vec![] }), "enum {  }");
         ensure_same_export(
-            Type::Enum(TypeEnum {
+            AnalysedType::Enum(TypeEnum {
                 cases: vec!["a".to_string()],
             }),
             "enum { a }",
         );
         ensure_same_export(
-            Type::Enum(TypeEnum {
+            AnalysedType::Enum(TypeEnum {
                 cases: vec!["a".to_string(), "b".to_string()],
             }),
             "enum { a, b }",
@@ -505,16 +556,19 @@ mod tests {
 
     #[test]
     fn same_export_for_flags() {
-        ensure_same_export(Type::Flags(TypeFlags { cases: vec![] }), "flags {  }");
         ensure_same_export(
-            Type::Flags(TypeFlags {
-                cases: vec!["a".to_string()],
+            AnalysedType::Flags(TypeFlags { names: vec![] }),
+            "flags {  }",
+        );
+        ensure_same_export(
+            AnalysedType::Flags(TypeFlags {
+                names: vec!["a".to_string()],
             }),
             "flags { a }",
         );
         ensure_same_export(
-            Type::Flags(TypeFlags {
-                cases: vec!["a".to_string(), "b".to_string()],
+            AnalysedType::Flags(TypeFlags {
+                names: vec!["a".to_string(), "b".to_string()],
             }),
             "flags { a, b }",
         );
@@ -522,10 +576,13 @@ mod tests {
 
     #[test]
     fn same_export_for_record() {
-        ensure_same_export(Type::Record(TypeRecord { cases: vec![] }), "record {  }");
         ensure_same_export(
-            Type::Record(TypeRecord {
-                cases: vec![NameTypePair {
+            AnalysedType::Record(TypeRecord { fields: vec![] }),
+            "record {  }",
+        );
+        ensure_same_export(
+            AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
                     name: "n1".to_string(),
                     typ: type_bool(),
                 }],
@@ -533,8 +590,8 @@ mod tests {
             "record { n1: bool }",
         );
         ensure_same_export(
-            Type::Record(TypeRecord {
-                cases: vec![
+            AnalysedType::Record(TypeRecord {
+                fields: vec![
                     NameTypePair {
                         name: "n1".to_string(),
                         typ: type_bool(),
@@ -551,15 +608,15 @@ mod tests {
 
     #[test]
     fn same_export_for_tuple() {
-        ensure_same_export(Type::Tuple(TypeTuple { items: vec![] }), "tuple<>");
+        ensure_same_export(AnalysedType::Tuple(TypeTuple { items: vec![] }), "tuple<>");
         ensure_same_export(
-            Type::Tuple(TypeTuple {
+            AnalysedType::Tuple(TypeTuple {
                 items: vec![type_bool()],
             }),
             "tuple<bool>",
         );
         ensure_same_export(
-            Type::Tuple(TypeTuple {
+            AnalysedType::Tuple(TypeTuple {
                 items: vec![type_bool(), type_bool()],
             }),
             "tuple<bool, bool>",
@@ -569,69 +626,69 @@ mod tests {
     #[test]
     fn same_export_for_list() {
         ensure_same_export(
-            Type::List(Box::new(TypeList { inner: type_bool() })),
+            AnalysedType::List(Box::new(TypeList { inner: type_bool() })),
             "list<bool>",
         )
     }
 
     #[test]
     fn same_export_for_str() {
-        ensure_same_export(Type::Str(TypeStr {}), "string")
+        ensure_same_export(AnalysedType::Str(TypeStr {}), "string")
     }
 
     #[test]
     fn same_export_for_chr() {
-        ensure_same_export(Type::Chr(TypeChr {}), "char")
+        ensure_same_export(AnalysedType::Chr(TypeChr {}), "char")
     }
 
     #[test]
     fn same_export_for_f64() {
-        ensure_same_export(Type::F64(TypeF64 {}), "float64")
+        ensure_same_export(AnalysedType::F64(TypeF64 {}), "float64")
     }
 
     #[test]
     fn same_export_for_f32() {
-        ensure_same_export(Type::F32(TypeF32 {}), "float32")
+        ensure_same_export(AnalysedType::F32(TypeF32 {}), "float32")
     }
 
     #[test]
     fn same_export_for_u64() {
-        ensure_same_export(Type::U64(TypeU64 {}), "u64")
+        ensure_same_export(AnalysedType::U64(TypeU64 {}), "u64")
     }
 
     #[test]
     fn same_export_for_s64() {
-        ensure_same_export(Type::S64(TypeS64 {}), "s64")
+        ensure_same_export(AnalysedType::S64(TypeS64 {}), "s64")
     }
 
     #[test]
     fn same_export_for_u32() {
-        ensure_same_export(Type::U32(TypeU32 {}), "u32")
+        ensure_same_export(AnalysedType::U32(TypeU32 {}), "u32")
     }
 
     #[test]
     fn same_export_for_s32() {
-        ensure_same_export(Type::S32(TypeS32 {}), "s32")
+        ensure_same_export(AnalysedType::S32(TypeS32 {}), "s32")
     }
 
     #[test]
     fn same_export_for_u16() {
-        ensure_same_export(Type::U16(TypeU16 {}), "u16")
+        ensure_same_export(AnalysedType::U16(TypeU16 {}), "u16")
     }
 
     #[test]
     fn same_export_for_s16() {
-        ensure_same_export(Type::S16(TypeS16 {}), "s16")
+        ensure_same_export(AnalysedType::S16(TypeS16 {}), "s16")
     }
 
     #[test]
     fn same_export_for_u8() {
-        ensure_same_export(Type::U8(TypeU8 {}), "u8")
+        ensure_same_export(AnalysedType::U8(TypeU8 {}), "u8")
     }
 
     #[test]
     fn same_export_for_s8() {
-        ensure_same_export(Type::S8(TypeS8 {}), "s8")
+        ensure_same_export(AnalysedType::S8(TypeS8 {}), "s8")
     }
 
     #[test]

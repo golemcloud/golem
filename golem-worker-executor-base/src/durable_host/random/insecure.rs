@@ -19,11 +19,12 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::random::insecure::Host;
+use wasmtime_wasi::bindings::random::insecure::Host;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_insecure_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("random::insecure", "get_insecure_random_bytes");
         Durability::<Ctx, Vec<u8>, SerializableError>::wrap(
             self,
@@ -39,6 +40,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_insecure_random_u64(&mut self) -> anyhow::Result<u64> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("random::insecure", "get_insecure_random_u64");
         Durability::<Ctx, u64, SerializableError>::wrap(
             self,
@@ -47,5 +49,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             |ctx| Box::pin(async { Host::get_insecure_random_u64(&mut ctx.as_wasi_view()).await }),
         )
         .await
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn get_insecure_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
+        (*self).get_insecure_random_bytes(len).await
+    }
+
+    async fn get_insecure_random_u64(&mut self) -> anyhow::Result<u64> {
+        (*self).get_insecure_random_u64().await
     }
 }

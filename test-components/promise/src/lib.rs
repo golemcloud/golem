@@ -7,7 +7,9 @@ struct Component;
 
 impl Guest for Component {
     fn run() -> Vec<u8> {
-        let promise_id = golem_create_promise();
-        golem_await_promise(&promise_id)
+        let promise_id = create_promise();
+        await_promise(&promise_id)
     }
 }
+
+bindings::export!(Component with_types_in bindings);

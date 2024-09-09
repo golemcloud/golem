@@ -17,7 +17,6 @@ use http::{HeaderName, HeaderValue, Version};
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use crate::durable_host::serialized::SerializableError;
 use wasmtime_wasi_http::bindings::http::types::{
@@ -71,7 +70,7 @@ impl From<SerializedHttpVersion> for Version {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum SerializableResponse {
     Pending,
     HeadersReceived(SerializableResponseHeaders),
@@ -79,10 +78,10 @@ pub enum SerializableResponse {
     InternalError(Option<SerializableError>),
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct SerializableResponseHeaders {
-    status: u16,
-    headers: HashMap<String, Vec<u8>>,
+    pub status: u16,
+    pub headers: HashMap<String, Vec<u8>>,
 }
 
 impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
@@ -110,20 +109,17 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
             headers.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
         }
 
-        let fake_worker = tokio::spawn(async {}).into();
-
         Ok(Self {
             status: value.status,
             headers,
             body: Some(HostIncomingBody::failing(
                 "Body stream was interrupted due to a restart".to_string(),
             )), // NOTE: high enough timeout so it does not matter, but not as high to overflow instants
-            worker: Arc::new(fake_worker),
         })
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct SerializableTlsAlertReceivedPayload {
     pub alert_id: Option<u8>,
     pub alert_message: Option<String>,
@@ -147,7 +143,7 @@ impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct SerializableDnsErrorPayload {
     pub rcode: Option<String>,
     pub info_code: Option<u16>,
@@ -171,7 +167,7 @@ impl From<SerializableDnsErrorPayload> for DnsErrorPayload {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct SerializableFieldSizePayload {
     pub field_name: Option<String>,
     pub field_size: Option<u32>,
@@ -195,7 +191,7 @@ impl From<SerializableFieldSizePayload> for FieldSizePayload {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum SerializableErrorCode {
     DnsTimeout,
     DnsError(SerializableDnsErrorPayload),

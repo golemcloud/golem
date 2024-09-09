@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_service::{env_vars, wait_for_startup, ComponentService};
+use crate::components::component_service::{
+    new_client, wait_for_startup, ComponentService, ComponentServiceEnvVars,
+};
 use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
 use crate::components::rdb::Rdb;
+use crate::components::GolemEnvVars;
 use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_scoped::TokioScope;
+use async_trait::async_trait;
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -27,6 +32,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tonic::transport::Channel;
 use tracing::{info, Level};
 
 pub struct K8sComponentService {
@@ -36,6 +42,7 @@ pub struct K8sComponentService {
     pod: Arc<Mutex<K8sPod>>,
     service: Arc<Mutex<K8sService>>,
     routing: Arc<Mutex<K8sRouting>>,
+    client: Option<ComponentServiceClient<Channel>>,
 }
 
 impl K8sComponentService {
@@ -47,22 +54,48 @@ impl K8sComponentService {
         namespace: &K8sNamespace,
         routing_type: &K8sRoutingType,
         verbosity: Level,
-        component_compilation_service_host: &str,
-        component_compilation_service_port: u16,
+        component_compilation_service: Option<(&str, u16)>,
         rdb: Arc<dyn Rdb + Send + Sync + 'static>,
         timeout: Duration,
         service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
+    ) -> Self {
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            namespace,
+            routing_type,
+            verbosity,
+            component_compilation_service,
+            rdb,
+            timeout,
+            service_annotations,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentServiceEnvVars + Send + Sync + 'static>,
+        namespace: &K8sNamespace,
+        routing_type: &K8sRoutingType,
+        verbosity: Level,
+        component_compilation_service: Option<(&str, u16)>,
+        rdb: Arc<dyn Rdb + Send + Sync + 'static>,
+        timeout: Duration,
+        service_annotations: Option<std::collections::BTreeMap<String, String>>,
+        shared_client: bool,
     ) -> Self {
         info!("Starting Golem Component Service pod");
 
-        let env_vars = env_vars(
-            Self::HTTP_PORT,
-            Self::GRPC_PORT,
-            component_compilation_service_host,
-            component_compilation_service_port,
-            rdb,
-            verbosity,
-        );
+        let env_vars = env_vars
+            .env_vars(
+                Self::HTTP_PORT,
+                Self::GRPC_PORT,
+                component_compilation_service,
+                rdb,
+                verbosity,
+            )
+            .await;
         let env_vars = env_vars
             .into_iter()
             .map(|(k, v)| json!({"name": k, "value": v}))
@@ -165,16 +198,29 @@ impl K8sComponentService {
 
         Self {
             namespace: namespace.clone(),
-            local_host,
+            local_host: local_host.clone(),
             local_port,
             pod: Arc::new(Mutex::new(managed_pod)),
             service: Arc::new(Mutex::new(managed_service)),
             routing: Arc::new(Mutex::new(managed_routing)),
+            client: if shared_client {
+                Some(new_client(&local_host, local_port).await)
+            } else {
+                None
+            },
         }
     }
 }
 
+#[async_trait]
 impl ComponentService for K8sComponentService {
+    async fn client(&self) -> ComponentServiceClient<Channel> {
+        match &self.client {
+            Some(client) => client.clone(),
+            None => new_client(&self.local_host, self.local_port).await,
+        }
+    }
+
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
     }

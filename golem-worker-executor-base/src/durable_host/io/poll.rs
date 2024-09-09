@@ -15,16 +15,19 @@
 use crate::model::InterruptKind;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
+use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::bindings::wasi::io::poll::{Host, HostPollable, Pollable};
+use wasmtime_wasi::bindings::io::poll::{Host, HostPollable, Pollable};
 
-use crate::durable_host::{DurableWorkerCtx, SuspendForSleep};
+use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll:pollable", "ready");
         HostPollable::ready(&mut self.as_wasi_view(), self_).await
     }
@@ -33,6 +36,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         record_host_function_call("io::poll:pollable", "block");
         let in_ = vec![self_];
         let _ = self.poll(in_).await?;
+        let _permit = self.begin_async_host_function().await?;
         Ok(())
     }
 
@@ -45,8 +49,17 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll", "poll");
-        let result = Host::poll(&mut self.as_wasi_view(), in_).await;
+
+        let result = Durability::<Ctx, Vec<u32>, SerializableError>::wrap_conditionally(
+            self,
+            WrappedFunctionType::ReadLocal,
+            "golem io::poll::poll",
+            |ctx| Box::pin(async move { Host::poll(&mut ctx.as_wasi_view(), in_).await }),
+            |result| is_suspend_for_sleep(result).is_none(), // We must not persist the suspend signal
+        )
+        .await;
 
         match is_suspend_for_sleep(&result) {
             Some(duration) => {
@@ -55,6 +68,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
             None => result,
         }
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostPollable for &mut DurableWorkerCtx<Ctx> {
+    async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
+        (*self).ready(self_).await
+    }
+
+    async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
+        (*self).block(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<Pollable>) -> anyhow::Result<()> {
+        (*self).drop(rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
+        (*self).poll(in_).await
     }
 }
 

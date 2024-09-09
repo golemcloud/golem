@@ -16,12 +16,13 @@ use crate::components::component_service::ComponentService;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
-use crate::components::worker_executor::WorkerExecutor;
+use crate::components::worker_executor::{WorkerExecutor, WorkerExecutorEnvVars};
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::GolemEnvVars;
 use async_trait::async_trait;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 
@@ -31,6 +32,41 @@ pub struct SpawnedWorkerExecutorCluster {
 }
 
 impl SpawnedWorkerExecutorCluster {
+    async fn make_worker_executor(
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        executable: PathBuf,
+        working_directory: PathBuf,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        shared_client: bool,
+    ) -> Arc<dyn WorkerExecutor + Send + Sync + 'static> {
+        Arc::new(
+            SpawnedWorkerExecutor::new(
+                env_vars,
+                &executable,
+                &working_directory,
+                http_port,
+                grpc_port,
+                redis,
+                component_service,
+                shard_manager,
+                worker_service,
+                verbosity,
+                out_level,
+                err_level,
+                shared_client,
+            )
+            .await,
+        )
+    }
+
     pub async fn new(
         size: usize,
         base_http_port: u16,
@@ -44,33 +80,75 @@ impl SpawnedWorkerExecutorCluster {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        shared_client: bool,
+    ) -> Self {
+        Self::new_base(
+            Arc::new(GolemEnvVars()),
+            size,
+            base_http_port,
+            base_grpc_port,
+            executable,
+            working_directory,
+            redis,
+            component_service,
+            shard_manager,
+            worker_service,
+            verbosity,
+            out_level,
+            err_level,
+            shared_client,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Arc<dyn WorkerExecutorEnvVars + Send + Sync + 'static>,
+        size: usize,
+        base_http_port: u16,
+        base_grpc_port: u16,
+        executable: &Path,
+        working_directory: &Path,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        shared_client: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
-        let mut worker_executors = Vec::new();
+        let mut worker_executors_joins = Vec::new();
 
         for i in 0..size {
             let http_port = base_http_port + i as u16;
             let grpc_port = base_grpc_port + i as u16;
 
-            let worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static> = Arc::new(
-                SpawnedWorkerExecutor::new(
-                    executable,
-                    working_directory,
-                    http_port,
-                    grpc_port,
-                    redis.clone(),
-                    component_service.clone(),
-                    shard_manager.clone(),
-                    worker_service.clone(),
-                    verbosity,
-                    out_level,
-                    err_level,
-                )
-                .await,
-            );
+            let worker_executor_join = tokio::spawn(Self::make_worker_executor(
+                env_vars.clone(),
+                executable.to_path_buf(),
+                working_directory.to_path_buf(),
+                http_port,
+                grpc_port,
+                redis.clone(),
+                component_service.clone(),
+                shard_manager.clone(),
+                worker_service.clone(),
+                verbosity,
+                out_level,
+                err_level,
+                shared_client,
+            ));
 
-            worker_executors.push(worker_executor);
+            worker_executors_joins.push(worker_executor_join);
         }
+
+        let mut worker_executors = Vec::new();
+
+        for join in worker_executors_joins {
+            worker_executors.push(join.await.expect("Failed to join"));
+        }
+
         Self {
             worker_executors,
             stopped_indices: Arc::new(Mutex::new(HashSet::new())),

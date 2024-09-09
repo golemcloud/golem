@@ -15,14 +15,14 @@ name = "worker-executor"
 path = "src/server.rs"
 
 [dependencies]
-golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-wasm-rpc = { workspace = true }
 golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-cap-std = "2.0.0" # keep in sync with wasmtime
+cap-std = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
 humantime-serde = { workspace = true }
@@ -37,7 +37,6 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { version = "=17.0.0", features = ["component-model"] }
-wasmtime-runtime = { version = "=17.0.0" }
-wasmtime-wasi = { version = "=17.0.0" }
-wasmtime-wasi-http = { version = "=17.0.0" }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }

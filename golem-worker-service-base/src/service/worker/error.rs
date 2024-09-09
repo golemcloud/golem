@@ -1,4 +1,18 @@
-use golem_api_grpc::proto::golem::worker::{
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
 use golem_common::model::{AccountId, ComponentId, WorkerId};
@@ -47,7 +61,7 @@ impl From<WorkerServiceError> for GrpcWorkerError {
 impl From<WorkerServiceError> for worker_error::Error {
     fn from(error: WorkerServiceError) -> Self {
         use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
-        use golem_api_grpc::proto::golem::worker::WorkerExecutionError;
+        use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 
         match error {
             error @ (WorkerServiceError::ComponentNotFound(_)
@@ -71,5 +85,11 @@ impl From<WorkerServiceError> for worker_error::Error {
                 worker_error::Error::InternalError(worker_execution_error.into())
             }
         }
+    }
+}
+
+impl From<GolemError> for WorkerServiceError {
+    fn from(value: GolemError) -> Self {
+        WorkerServiceError::Golem(value)
     }
 }

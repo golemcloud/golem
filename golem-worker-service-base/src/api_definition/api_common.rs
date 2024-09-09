@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::fmt::Display;
 
-use crate::service::api_definition::ApiDefinitionKey;
+use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,12 @@ use poem_openapi::Object;
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiDefinitionId(pub String);
 
+impl From<String> for ApiDefinitionId {
+    fn from(id: String) -> Self {
+        ApiDefinitionId(id)
+    }
+}
+
 impl Display for ApiDefinitionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -22,58 +28,54 @@ impl Display for ApiDefinitionId {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiVersion(pub String);
 
+impl From<String> for ApiVersion {
+    fn from(id: String) -> Self {
+        ApiVersion(id)
+    }
+}
+
 impl Display for ApiVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-// Constraints applicable to any type of API Definition
-pub trait HasApiDefinitionId {
-    fn get_api_definition_id(&self) -> ApiDefinitionId;
-}
-
-pub trait HasVersion {
-    fn get_version(&self) -> ApiVersion;
-}
-
-pub trait HasIsDraft {
-    // Editable. Can't be published.
-    fn is_draft(&self) -> bool;
-    fn set_not_draft(&mut self);
-}
-
 pub trait HasGolemWorkerBindings {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding>;
 }
 
-#[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
-)]
-pub struct ApiDeployment<Namespace> {
-    pub api_definition_id: ApiDefinitionKey<Namespace>,
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
+pub struct ApiDeploymentRequest<Namespace> {
+    pub namespace: Namespace,
+    pub api_definition_keys: Vec<ApiDefinitionIdWithVersion>,
     pub site: ApiSite,
 }
 
-#[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
+pub struct ApiDeployment<Namespace> {
+    pub namespace: Namespace,
+    pub api_definition_keys: Vec<ApiDefinitionIdWithVersion>,
+    pub site: ApiSite,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Object)]
 pub struct ApiSite {
     pub host: String,
-    pub subdomain: String,
+    pub subdomain: Option<String>,
 }
 
 impl Display for ApiSite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Need to see how to remove the need of subdomain for localhost , as subdomains are not allowed for localhost
-        let host = &self.host;
-        if host.contains("localhost") || host.contains("127.0.0.1") {
-            write!(f, "{}", self.host)
-        } else {
-            write!(f, "{}.{}", self.subdomain, self.host)
+        match &self.subdomain {
+            Some(subdomain) => write!(f, "{}.{}", subdomain, self.host),
+            None => write!(f, "{}", self.host),
         }
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash, Serialize, Deserialize, NewType)]
 pub struct ApiSiteString(pub String);
 
 impl From<&ApiSite> for ApiSiteString {

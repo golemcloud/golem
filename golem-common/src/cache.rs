@@ -27,6 +27,7 @@ use dashmap::try_result::TryResult::{Absent, Locked, Present};
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tracing::Instrument;
 
 use crate::metrics::caching::{
     record_cache_capacity, record_cache_eviction, record_cache_hit, record_cache_miss,
@@ -280,29 +281,32 @@ impl<
                         let pending_value_clone = pending_value.clone();
                         let self_clone = self.clone();
 
-                        tokio::task::spawn(async move {
-                            let value = f2(&pending_value_clone).await;
-                            if let Ok(success_value) = &value {
-                                self_clone.state.items.insert(
-                                    key_clone,
-                                    Item::Cached {
-                                        value: success_value.clone(),
-                                        last_access: Instant::now(),
-                                    },
-                                );
-                                let old_count =
-                                    self_clone.state.count.fetch_add(1, Ordering::SeqCst);
+                        tokio::task::spawn(
+                            async move {
+                                let value = f2(&pending_value_clone).await;
+                                if let Ok(success_value) = &value {
+                                    self_clone.state.items.insert(
+                                        key_clone,
+                                        Item::Cached {
+                                            value: success_value.clone(),
+                                            last_access: Instant::now(),
+                                        },
+                                    );
+                                    let old_count =
+                                        self_clone.state.count.fetch_add(1, Ordering::SeqCst);
 
-                                record_cache_size(self_clone.name, old_count.saturating_add(1));
+                                    record_cache_size(self_clone.name, old_count.saturating_add(1));
 
-                                if Some(old_count) == self_clone.capacity {
-                                    self_clone.evict();
+                                    if Some(old_count) == self_clone.capacity {
+                                        self_clone.evict();
+                                    }
+                                }
+                                if tx_clone.receiver_count() > 0 {
+                                    let _ = tx_clone.send(value.clone());
                                 }
                             }
-                            if tx_clone.receiver_count() > 0 {
-                                let _ = tx_clone.send(value.clone());
-                            }
-                        });
+                            .in_current_span(),
+                        );
                     }
 
                     Ok(PendingOrFinal::Pending(pending_value))
@@ -329,6 +333,20 @@ impl<
         if removed {
             let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
             record_cache_size(self.name, count.saturating_sub(1));
+        }
+    }
+
+    pub fn create_weak_remover(&self, key: K) -> impl FnOnce() {
+        let weak_state = Arc::downgrade(&self.state);
+        let name = self.name;
+        move || {
+            if let Some(state) = weak_state.upgrade() {
+                let removed = state.items.remove(&key).is_some();
+                if removed {
+                    let count = state.count.fetch_sub(1, Ordering::SeqCst);
+                    record_cache_size(name, count.saturating_sub(1));
+                }
+            }
         }
     }
 

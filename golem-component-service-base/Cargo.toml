@@ -6,12 +6,39 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = { workspace = true } 
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base" }
 golem-wasm-ast = { workspace = true }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
 http_02 = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 serde = { workspace = true }
+sqlx = { workspace = true, features = [
+    "runtime-tokio",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "migrate",
+    "chrono",
+] }
+tap = { workspace = true }
 thiserror = { workspace = true }
+tonic = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.3", features = ["html_reports"] }
+fastrand = "2.0.2"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

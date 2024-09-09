@@ -12,8 +12,8 @@ opt-level = 's'
 strip = true
 
 [dependencies]
-wit-bindgen = { version = "0.17.0", default-features = false, features = ["realloc"] }
-time = { version = "0.3.21", features = ["formatting"] }
+wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
+time = { version = "0.3.36", features = ["formatting"] }
 
 [package.metadata.component]
 package = "golem:it"

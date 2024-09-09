@@ -4,19 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"golem.com/tinygo_wasi/roundtrip"
-	"golem.com/tinygo_wasi/tinygo_wasi"
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/golemcloud/golem-go/std"
+	"golem.com/tinygo_wasi/binding"
 )
 
 func init() {
-	a := TinygoWasiImpl{}
-	tinygo_wasi.SetTinygoWasi(a)
+	binding.SetBinding(&Impl{})
 }
 
-type TinygoWasiImpl struct {
+type Impl struct {
 }
 
 type ExampleRequest struct {
@@ -30,12 +30,16 @@ type ExampleResponse struct {
 	Message    string
 }
 
-func (e TinygoWasiImpl) Example1(s string) string {
-	http.DefaultClient.Transport = roundtrip.WasiHttpTransport{}
+func (i *Impl) Example1(_ string) string {
+	std.Init(std.Packages{
+		Os:      true,
+		NetHttp: true,
+	})
 
-	port := "9999"
-	if p := os.Getenv("PORT"); p != "" {
-		port = p
+	port := os.Getenv("PORT")
+
+	if port == "" {
+		panic("missing or empty PORT env var")
 	}
 
 	postBody, _ := json.Marshal(ExampleRequest{

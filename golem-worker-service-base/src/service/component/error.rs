@@ -1,7 +1,8 @@
 use tonic::Status;
 
-use golem_api_grpc::proto::golem::worker::{
-    self, worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
+use golem_api_grpc::proto::golem::worker::v1::{
+    worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 
 // The dependents of golem-worker-service-base is expected
@@ -14,7 +15,7 @@ pub enum ComponentServiceError {
     Forbidden(String),
     #[error("Not found: {0}")]
     NotFound(String),
-    #[error("Bad Request: {0:?}")]
+    #[error("Bad Request: {}", .0.join(", "))]
     BadRequest(Vec<String>),
     #[error("Already Exists: {0}")]
     AlreadyExists(String),
@@ -43,9 +44,9 @@ impl From<tonic::transport::Error> for ComponentServiceError {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::component::ComponentError> for ComponentServiceError {
-    fn from(error: golem_api_grpc::proto::golem::component::ComponentError) -> Self {
-        use golem_api_grpc::proto::golem::component::component_error::Error;
+impl From<golem_api_grpc::proto::golem::component::v1::ComponentError> for ComponentServiceError {
+    fn from(error: golem_api_grpc::proto::golem::component::v1::ComponentError) -> Self {
+        use golem_api_grpc::proto::golem::component::v1::component_error::Error;
         match error.error {
             Some(Error::BadRequest(errors)) => ComponentServiceError::BadRequest(errors.errors),
             Some(Error::Unauthorized(error)) => ComponentServiceError::Unauthorized(error.error),
@@ -89,7 +90,7 @@ impl From<ComponentServiceError> for worker_error::Error {
                 worker_error::Error::BadRequest(ErrorsBody { errors })
             }
             ComponentServiceError::Internal(error) => {
-                worker_error::Error::InternalError(worker::WorkerExecutionError {
+                worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),
                     })),

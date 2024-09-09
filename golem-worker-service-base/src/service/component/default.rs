@@ -1,11 +1,13 @@
 use async_trait::async_trait;
+use chrono::Utc;
 use http::Uri;
-use tracing::info;
+use tonic::transport::Channel;
 
-use golem_api_grpc::proto::golem::component::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::{
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
+use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
@@ -35,13 +37,23 @@ pub trait ComponentService<AuthCtx> {
 
 #[derive(Clone)]
 pub struct RemoteComponentService {
-    uri: Uri,
+    client: GrpcClient<ComponentServiceClient<Channel>>,
     retry_config: RetryConfig,
 }
 
 impl RemoteComponentService {
     pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
-        Self { uri, retry_config }
+        Self {
+            client: GrpcClient::new(
+                ComponentServiceClient::new,
+                uri.as_http_02(),
+                GrpcClientConfig {
+                    retries_on_unavailable: retry_config.clone(),
+                    ..Default::default() // TODO
+                },
+            ),
+            retry_config,
+        }
     }
 }
 
@@ -55,25 +67,23 @@ where
         component_id: &ComponentId,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let desc = format!("Getting latest version of component: {}", component_id);
-        info!("{}", &desc);
-
         let value = with_retries(
-            &desc,
             "component",
             "get_latest",
+            Some(component_id.to_string()),
             &self.retry_config,
-            &(self.uri.clone(), component_id.clone(), metadata.clone()),
-            |(uri, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), metadata.clone()),
+            |(client, id, metadata)| {
                 Box::pin(async move {
-                    let mut client = ComponentServiceClient::connect(uri.as_http_02()).await?;
-                    let request = GetLatestComponentRequest {
-                        component_id: Some(id.clone().into()),
-                    };
-                    let request = with_metadata(request, metadata.clone());
-
                     let response = client
-                        .get_latest_component_metadata(request)
+                        .call(move |client| {
+                            let request = GetLatestComponentRequest {
+                                component_id: Some(id.clone().into()),
+                            };
+                            let request = with_metadata(request, metadata.clone());
+
+                            Box::pin(client.get_latest_component_metadata(request))
+                        })
                         .await?
                         .into_inner();
 
@@ -118,26 +128,27 @@ where
         version: u64,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let desc = format!("Getting component: {}", component_id);
-        info!("{}", &desc);
-
         let value = with_retries(
-            &desc,
             "component",
             "get_component",
+            Some(component_id.to_string()),
             &self.retry_config,
-            &(self.uri.clone(), component_id.clone(), metadata.clone()),
-            |(uri, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), metadata.clone()),
+            |(client, id, metadata)| {
                 Box::pin(async move {
-                    let mut client = ComponentServiceClient::connect(uri.as_http_02()).await?;
-                    let request = GetVersionedComponentRequest {
-                        component_id: Some(id.clone().into()),
-                        version,
-                    };
+                    let response = client
+                        .call(move |client| {
+                            let request = GetVersionedComponentRequest {
+                                component_id: Some(id.clone().into()),
+                                version,
+                            };
 
-                    let request = with_metadata(request, metadata.clone());
+                            let request = with_metadata(request, metadata.clone());
 
-                    let response = client.get_component_metadata(request).await?.into_inner();
+                            Box::pin(client.get_component_metadata(request))
+                        })
+                        .await?
+                        .into_inner();
 
                     match response.result {
                         None => Err(ComponentServiceError::internal("Empty response")),
@@ -183,15 +194,13 @@ fn is_retriable(error: &ComponentServiceError) -> bool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ComponentServiceNoop {}
 
 impl ComponentServiceNoop {
     pub fn test_component() -> Component {
-        use golem_service_base::model::{
-            ComponentMetadata, ComponentName, ProtectedComponentId, UserComponentId,
-            VersionedComponentId,
-        };
+        use golem_common::model::component_metadata::ComponentMetadata;
+        use golem_service_base::model::{ComponentName, VersionedComponentId};
 
         let id = VersionedComponentId {
             component_id: ComponentId::new_v4(),
@@ -200,18 +209,14 @@ impl ComponentServiceNoop {
 
         Component {
             versioned_component_id: id.clone(),
-            user_component_id: UserComponentId {
-                versioned_component_id: id.clone(),
-            },
-            protected_component_id: ProtectedComponentId {
-                versioned_component_id: id.clone(),
-            },
             component_name: ComponentName("test".to_string()),
             component_size: 0,
             metadata: ComponentMetadata {
                 exports: vec![],
                 producers: vec![],
+                memories: vec![],
             },
+            created_at: Some(Utc::now()),
         }
     }
 }

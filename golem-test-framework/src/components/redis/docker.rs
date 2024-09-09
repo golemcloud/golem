@@ -12,24 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::{DOCKER, NETWORK};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
 use testcontainers::{Container, RunnableImage};
 use testcontainers_modules::redis::REDIS_PORT;
 use tracing::info;
 
+use crate::components::docker::KillContainer;
+use crate::components::redis::Redis;
+use crate::components::{DOCKER, NETWORK};
+
 pub struct DockerRedis {
     container: Container<'static, testcontainers_modules::redis::Redis>,
+    keep_container: bool,
     prefix: String,
     valid: AtomicBool,
+    public_port: u16,
 }
 
 impl DockerRedis {
     const NAME: &'static str = "golem_redis";
 
-    pub fn new(prefix: String) -> Self {
+    pub async fn new(prefix: String, keep_container: bool) -> Self {
         info!("Starting Redis container");
 
         let image = RunnableImage::from(testcontainers_modules::redis::Redis)
@@ -38,16 +43,16 @@ impl DockerRedis {
             .with_network(NETWORK);
         let container = DOCKER.run(image);
 
-        super::wait_for_startup(
-            "localhost",
-            container.get_host_port_ipv4(REDIS_PORT),
-            Duration::from_secs(10),
-        );
+        let public_port = container.get_host_port_ipv4(REDIS_PORT);
+
+        super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
         Self {
             container,
+            keep_container,
             prefix,
             valid: AtomicBool::new(true),
+            public_port,
         }
     }
 }
@@ -72,7 +77,7 @@ impl Redis for DockerRedis {
     }
 
     fn public_port(&self) -> u16 {
-        self.container.get_host_port_ipv4(REDIS_PORT)
+        self.public_port
     }
 
     fn prefix(&self) -> &str {
@@ -81,8 +86,7 @@ impl Redis for DockerRedis {
 
     fn kill(&self) {
         info!("Stopping Redis container");
-        self.valid.store(false, Ordering::Release);
-        self.container.stop();
+        self.container.kill(self.keep_container);
     }
 }
 

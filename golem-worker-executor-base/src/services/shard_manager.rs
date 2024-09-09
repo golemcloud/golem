@@ -17,9 +17,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
+use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{ShardAssignment, ShardId};
 use golem_common::retries::with_retries;
+use tonic::transport::Channel;
 
 use crate::error::GolemError;
 use crate::grpc::UriBackConversion;
@@ -44,48 +46,44 @@ pub fn configured(
 
 pub struct ShardManagerServiceGrpc {
     config: ShardManagerServiceGrpcConfig,
+    client: GrpcClient<ShardManagerServiceClient<Channel>>,
 }
 
 impl ShardManagerServiceGrpc {
     pub fn new(config: ShardManagerServiceGrpcConfig) -> Self {
-        Self { config }
+        let client = GrpcClient::new(
+            ShardManagerServiceClient::new,
+            config.uri().as_http_02(),
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default()
+            },
+        );
+        Self { config, client }
     }
 }
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceGrpc {
     async fn register(&self, host: String, port: u16) -> Result<ShardAssignment, GolemError> {
-        let uri: hyper::Uri = self.config.url().to_string().parse().unwrap();
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
-        let desc = format!(
-            "Registering worker executor with shard manager at {uri} using pod name {pod_name:?}"
-        );
         with_retries(
-            &desc,
             "shard_manager",
             "register",
+            Some(format!("{:?}", pod_name)),
             &self.config.retries,
             &(host, port),
             |(host, port)| {
-                let uri = uri.clone();
+                let client = self.client.clone();
                 let pod_name = pod_name.clone();
                 Box::pin(async move {
-                    let mut shard_manager_client =
-                        shard_manager_service_client::ShardManagerServiceClient::connect(
-                            uri.as_http_02(),
-                        )
-                        .await
-                        .map_err(|err| {
-                            GolemError::unknown(format!(
-                                "Connecting to shard manager failed with {}",
-                                err
-                            ))
-                        })?;
-                    let response = shard_manager_client
-                        .register(shardmanager::RegisterRequest {
-                            host: host.clone(),
-                            port: *port as i32,
-                            pod_name: pod_name.clone(),
+                    let response = client
+                        .call(move |client| {
+                            Box::pin(client.register(shardmanager::v1::RegisterRequest {
+                                host: host.clone(),
+                                port: *port as i32,
+                                pod_name: pod_name.clone(),
+                            }))
                         })
                         .await
                         .map_err(|err| {
@@ -95,22 +93,23 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                             ))
                         })?;
                     match response.into_inner() {
-                        shardmanager::RegisterResponse {
+                        shardmanager::v1::RegisterResponse {
                             result:
-                                Some(shardmanager::register_response::Result::Success(
-                                    shardmanager::RegisterSuccess { number_of_shards },
+                                Some(shardmanager::v1::register_response::Result::Success(
+                                    shardmanager::v1::RegisterSuccess { number_of_shards },
                                 )),
                         } => Ok(ShardAssignment {
                             number_of_shards: number_of_shards as usize,
                             shard_ids: HashSet::new(),
                         }),
-                        shardmanager::RegisterResponse {
-                            result: Some(shardmanager::register_response::Result::Failure(failure)),
+                        shardmanager::v1::RegisterResponse {
+                            result:
+                                Some(shardmanager::v1::register_response::Result::Failure(failure)),
                         } => Err(GolemError::unknown(format!(
                             "Registering with shard manager failed with shard manager error {:?}",
                             failure
                         ))),
-                        shardmanager::RegisterResponse { .. } => Err(GolemError::unknown(
+                        shardmanager::v1::RegisterResponse { .. } => Err(GolemError::unknown(
                             "Registering with shard manager failed with unknown error",
                         )),
                     }

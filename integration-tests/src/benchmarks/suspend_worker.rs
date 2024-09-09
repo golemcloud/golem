@@ -12,89 +12,90 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::SystemTime;
-
 use async_trait::async_trait;
-use golem_wasm_rpc::Value;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_test_framework::dsl::TestDsl;
-use integration_tests::benchmarks::{run_benchmark, setup, Context};
+use golem_wasm_rpc::Value;
+use integration_tests::benchmarks::{
+    benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
+    warmup_workers, SimpleBenchmarkContext, SimpleIterationContext,
+};
 
 struct SuspendWorkerLatency {
-    params: CliParams,
     config: RunConfig,
 }
 
 #[async_trait]
 impl Benchmark for SuspendWorkerLatency {
-    type IterationContext = Context;
+    type BenchmarkContext = SimpleBenchmarkContext;
+    type IterationContext = SimpleIterationContext;
 
     fn name() -> &'static str {
         "suspend"
     }
 
-    async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { params, config }
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
+        setup_benchmark(params, cluster_size).await
     }
 
-    async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.params.clone(), self.config.clone(), "clocks", true).await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all()
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
-        // Invoke each worker a few times in parallel
-        let mut fibers = Vec::new();
-        for worker_id in &context.worker_ids {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let fiber = tokio::task::spawn(async move {
-                context_clone
-                    .deps
-                    .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(1.0)])
-                    .await
-                    .expect("invoke_and_await failed");
-            });
-            fibers.push(fiber);
-        }
-
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
+        Self { config }
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
+        setup_simple_iteration(benchmark_context, self.config.clone(), "clocks", true).await
+    }
+
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
+        // Invoke each worker in parallel
+        warmup_workers(
+            &benchmark_context.deps,
+            &context.worker_ids,
+            "sleep-for",
+            vec![Value::F64(1.0)],
+        )
+        .await;
+    }
+
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         // Invoke each worker a 'length' times in parallel and record the duration
-        let mut fibers = Vec::new();
-        for (n, worker_id) in context.worker_ids.iter().enumerate() {
-            let context_clone = context.clone();
-            let worker_id_clone = worker_id.clone();
-            let recorder_clone = recorder.clone();
-            let length = self.config.length;
-            let fiber = tokio::task::spawn(async move {
-                for _ in 0..length {
-                    let start = SystemTime::now();
-                    context_clone
-                        .deps
-                        .invoke_and_await(&worker_id_clone, "sleep-for", vec![Value::F64(10.0)])
-                        .await
-                        .expect("invoke_and_await failed");
-                    let elapsed = start.elapsed().expect("SystemTime elapsed failed");
-                    recorder_clone.duration(&"invocation".to_string(), elapsed);
-                    recorder_clone.duration(&format!("worker-{n}"), elapsed);
-                }
-            });
-            fibers.push(fiber);
-        }
-
-        for fiber in fibers {
-            fiber.await.expect("fiber failed");
-        }
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder,
+            self.config.length,
+            &context.worker_ids,
+            "sleep-for",
+            vec![Value::F64(10.0)],
+            "",
+        )
+        .await;
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        delete_workers(&benchmark_context.deps, &context.worker_ids).await
     }
 }
 

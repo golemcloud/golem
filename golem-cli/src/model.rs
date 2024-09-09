@@ -13,22 +13,34 @@
 // limitations under the License.
 
 pub mod component;
+pub mod conversions;
+pub mod deploy;
 pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
 
+use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use crate::cloud::AccountId;
 use crate::model::text::TextFormat;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{Arg, ArgMatches, Command, Error, FromArgMatches};
+use clap::{Arg, ArgMatches, Error, FromArgMatches};
 use derive_more::{Display, FromStr};
+use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
+use golem_common::model::{ComponentId, WorkerId};
+use golem_common::uri::oss::uri::ComponentUri;
+use golem_common::uri::oss::url::ComponentUrl;
+use golem_common::uri::oss::urn::WorkerUrn;
 use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTier};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
@@ -43,10 +55,65 @@ impl GolemResult {
     pub fn err(s: String) -> Result<GolemResult, GolemError> {
         Err(GolemError(s))
     }
+
+    pub fn print(&self, format: Format) {
+        match self {
+            GolemResult::Ok(r) => r.println(&format),
+            GolemResult::Str(s) => println!("{s}"),
+            GolemResult::Json(json) => match format {
+                Format::Json | Format::Text => {
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap())
+                }
+                Format::Yaml => println!("{}", serde_yaml::to_string(&json).unwrap()),
+            },
+        }
+    }
+
+    pub fn as_json_value(&self) -> Value {
+        match self {
+            GolemResult::Ok(r) => r.as_json_value(),
+            GolemResult::Str(s) => Value::String(s.clone()),
+            GolemResult::Json(json) => json.clone(),
+        }
+    }
+
+    pub fn merge(self, other: GolemResult) -> GolemResult {
+        GolemResult::Ok(Box::new(MergedGolemResult {
+            result1: self,
+            result2: other,
+        }))
+    }
+}
+
+struct MergedGolemResult {
+    result1: GolemResult,
+    result2: GolemResult,
+}
+
+impl PrintRes for MergedGolemResult {
+    fn println(&self, format: &Format) {
+        match format {
+            Format::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&self.as_json_value()).unwrap()
+            ),
+            Format::Yaml => println!("{}", serde_yaml::to_string(&self.as_json_value()).unwrap()),
+            Format::Text => {
+                self.result1.print(*format);
+                println!();
+                self.result2.print(*format);
+            }
+        }
+    }
+
+    fn as_json_value(&self) -> Value {
+        json! {[self.result1.as_json_value(), self.result2.as_json_value()]}
+    }
 }
 
 pub trait PrintRes {
     fn println(&self, format: &Format);
+    fn as_json_value(&self) -> serde_json::Value;
 }
 
 impl<T> PrintRes for T
@@ -60,6 +127,10 @@ where
             Format::Yaml => println!("{}", serde_yaml::to_string(self).unwrap()),
             Format::Text => self.print(),
         }
+    }
+
+    fn as_json_value(&self) -> Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 
@@ -78,9 +149,11 @@ impl From<reqwest::header::InvalidHeaderValue> for GolemError {
     }
 }
 
-impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::Error<T>>
-    for GolemError
-{
+pub trait ResponseContentErrorMapper {
+    fn map(self) -> String;
+}
+
+impl<T: ResponseContentErrorMapper> From<golem_client::Error<T>> for GolemError {
     fn from(value: golem_client::Error<T>) -> Self {
         match value {
             golem_client::Error::Reqwest(error) => GolemError::from(error),
@@ -89,7 +162,7 @@ impl<T: crate::clients::errors::ResponseContentErrorMapper> From<golem_client::E
                 GolemError(format!("Unexpected serialization error: {error}"))
             }
             golem_client::Error::Item(data) => {
-                let error_str = crate::clients::errors::ResponseContentErrorMapper::map(data);
+                let error_str = ResponseContentErrorMapper::map(data);
                 GolemError(error_str)
             }
             golem_client::Error::Unexpected { code, data } => {
@@ -128,10 +201,11 @@ impl std::error::Error for GolemError {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default)]
 pub enum Format {
     Json,
     Yaml,
+    #[default]
     Text,
 }
 
@@ -165,61 +239,86 @@ impl FromStr for Format {
     }
 }
 
-impl FromArgMatches for ComponentIdOrName {
+impl FromArgMatches for ComponentUriArg {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
-        ComponentIdOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
+        ComponentUriOrNameArgs::from_arg_matches(matches).map(|c| (&c).into())
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
-        let prc0: ComponentIdOrNameArgs = (&self.clone()).into();
+        let prc0: ComponentUriOrNameArgs = (&self.clone()).into();
         let mut prc = prc0.clone();
-        let res = ComponentIdOrNameArgs::update_from_arg_matches(&mut prc, matches);
+        let res = ComponentUriOrNameArgs::update_from_arg_matches(&mut prc, matches);
         *self = (&prc).into();
         res
     }
 }
 
-impl clap::Args for ComponentIdOrName {
+impl clap::Args for ComponentUriArg {
     fn augment_args(cmd: clap::Command) -> clap::Command {
-        ComponentIdOrNameArgs::augment_args(cmd)
+        ComponentUriOrNameArgs::augment_args(cmd)
     }
 
     fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
-        ComponentIdOrNameArgs::augment_args_for_update(cmd)
+        ComponentUriOrNameArgs::augment_args_for_update(cmd)
     }
 }
 
 #[derive(clap::Args, Debug, Clone)]
-struct ComponentIdOrNameArgs {
-    #[arg(short = 'C', long, conflicts_with = "component_name", required = true)]
-    component_id: Option<Uuid>,
+#[group(required = true, multiple = false)]
+struct ComponentUriOrNameArgs {
+    /// Component URI. Either URN or URL.
+    #[arg(
+        short = 'C',
+        long,
+        group = "component_group",
+        required = true,
+        value_name = "URI"
+    )]
+    component: Option<ComponentUri>,
 
-    #[arg(short, long, conflicts_with = "component_id", required = true)]
+    /// Name of the component
+    #[arg(short, long, group = "component_group", required = true)]
     component_name: Option<String>,
 }
 
-impl From<&ComponentIdOrNameArgs> for ComponentIdOrName {
-    fn from(value: &ComponentIdOrNameArgs) -> ComponentIdOrName {
-        if let Some(id) = value.component_id {
-            ComponentIdOrName::Id(ComponentId(id))
+impl From<&ComponentUriOrNameArgs> for ComponentUriArg {
+    fn from(value: &ComponentUriOrNameArgs) -> ComponentUriArg {
+        if let Some(uri) = &value.component {
+            ComponentUriArg {
+                uri: uri.clone(),
+                explicit_name: false,
+            }
         } else {
-            ComponentIdOrName::Name(ComponentName(
-                value.component_name.as_ref().unwrap().to_string(),
-            ))
+            let name = value.component_name.as_ref().unwrap().to_string();
+
+            ComponentUriArg {
+                uri: ComponentUri::URL(ComponentUrl { name }),
+                explicit_name: true,
+            }
         }
     }
 }
 
-impl From<&ComponentIdOrName> for ComponentIdOrNameArgs {
-    fn from(value: &ComponentIdOrName) -> ComponentIdOrNameArgs {
-        match value {
-            ComponentIdOrName::Id(ComponentId(id)) => ComponentIdOrNameArgs {
-                component_id: Some(*id),
+impl From<&ComponentUriArg> for ComponentUriOrNameArgs {
+    fn from(value: &ComponentUriArg) -> ComponentUriOrNameArgs {
+        let name = if let ComponentUri::URL(url) = &value.uri {
+            if value.explicit_name {
+                Some(&url.name)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        match name {
+            None => ComponentUriOrNameArgs {
+                component: Some(value.uri.clone()),
                 component_name: None,
             },
-            ComponentIdOrName::Name(ComponentName(name)) => ComponentIdOrNameArgs {
-                component_id: None,
-                component_name: Some(name.clone()),
+            Some(name) => ComponentUriOrNameArgs {
+                component: None,
+                component_name: Some(name.to_string()),
             },
         }
     }
@@ -229,9 +328,9 @@ impl From<&ComponentIdOrName> for ComponentIdOrNameArgs {
 pub struct ComponentName(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum ComponentIdOrName {
-    Id(ComponentId),
-    Name(ComponentName),
+pub struct ComponentUriArg {
+    pub uri: ComponentUri,
+    pub explicit_name: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
@@ -246,14 +345,41 @@ impl IdempotencyKey {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ApiDefinitionIdWithVersion {
+    pub id: ApiDefinitionId,
+    pub version: ApiDefinitionVersion,
+}
+
+impl Display for ApiDefinitionIdWithVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.id, self.version)
+    }
+}
+
+impl FromStr for ApiDefinitionIdWithVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 2 {
+            return Err(format!(
+                "Invalid api definition id with version: {s}. Expected format: <id>/<version>"
+            ));
+        }
+
+        let id = ApiDefinitionId(parts[0].to_string());
+        let version = ApiDefinitionVersion(parts[1].to_string());
+
+        Ok(ApiDefinitionIdWithVersion { id, version })
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct ApiDefinitionId(pub String); // TODO: Validate
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct ApiDefinitionVersion(pub String); // TODO: Validate
-
-#[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
-pub struct ComponentId(pub Uuid);
 
 #[derive(Clone)]
 pub struct JsonValueParser;
@@ -263,7 +389,7 @@ impl TypedValueParser for JsonValueParser {
 
     fn parse_ref(
         &self,
-        cmd: &Command,
+        cmd: &clap::Command,
         arg: Option<&Arg>,
         value: &OsStr,
     ) -> Result<Self::Value, Error> {
@@ -344,6 +470,190 @@ impl FromStr for WorkerUpdateMode {
             _ => Err(format!(
                 "Unknown mode: {s}. Expected one of \"auto\", \"manual\""
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerMetadataView {
+    #[serde(rename = "workerUrn")]
+    pub worker_urn: WorkerUrn,
+    #[serde(rename = "accountId")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub account_id: Option<AccountId>,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub status: golem_client::model::WorkerStatus,
+    #[serde(rename = "componentVersion")]
+    pub component_version: u64,
+    #[serde(rename = "retryCount")]
+    pub retry_count: u64,
+    #[serde(rename = "pendingInvocationCount")]
+    pub pending_invocation_count: u64,
+    pub updates: Vec<golem_client::model::UpdateRecord>,
+    #[serde(rename = "createdAt")]
+    pub created_at: DateTime<Utc>,
+    #[serde(rename = "lastError")]
+    pub last_error: Option<String>,
+    #[serde(rename = "componentSize")]
+    pub component_size: u64,
+    #[serde(rename = "totalLinearMemorySize")]
+    pub total_linear_memory_size: u64,
+    #[serde(rename = "ownedResources")]
+    pub owned_resources: HashMap<String, golem_client::model::ResourceMetadata>,
+}
+
+impl From<WorkerMetadata> for WorkerMetadataView {
+    fn from(value: WorkerMetadata) -> Self {
+        let WorkerMetadata {
+            worker_id,
+            account_id,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+            component_size,
+            total_linear_memory_size,
+            owned_resources,
+        } = value;
+
+        WorkerMetadataView {
+            worker_urn: WorkerUrn {
+                id: WorkerId {
+                    component_id: ComponentId(worker_id.component_id),
+                    worker_name: worker_id.worker_name,
+                },
+            },
+            account_id,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+            component_size,
+            total_linear_memory_size,
+            owned_resources,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerMetadata {
+    pub worker_id: golem_client::model::WorkerId,
+    pub account_id: Option<AccountId>,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub status: golem_client::model::WorkerStatus,
+    pub component_version: u64,
+    pub retry_count: u64,
+    pub pending_invocation_count: u64,
+    pub updates: Vec<golem_client::model::UpdateRecord>,
+    pub created_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<String, golem_client::model::ResourceMetadata>,
+}
+
+impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
+    fn from(value: golem_client::model::WorkerMetadata) -> Self {
+        let golem_client::model::WorkerMetadata {
+            worker_id,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+            component_size,
+            total_linear_memory_size,
+            owned_resources,
+        } = value;
+
+        WorkerMetadata {
+            worker_id,
+            account_id: None,
+            args,
+            env,
+            status,
+            component_version,
+            retry_count,
+            pending_invocation_count,
+            updates,
+            created_at,
+            last_error,
+            component_size,
+            total_linear_memory_size,
+            owned_resources,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkersMetadataResponseView {
+    pub workers: Vec<WorkerMetadataView>,
+    pub cursor: Option<ScanCursor>,
+}
+
+impl From<WorkersMetadataResponse> for WorkersMetadataResponseView {
+    fn from(value: WorkersMetadataResponse) -> Self {
+        let WorkersMetadataResponse { workers, cursor } = value;
+
+        WorkersMetadataResponseView {
+            workers: workers.into_iter().map_into().collect(),
+            cursor,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkersMetadataResponse {
+    pub workers: Vec<WorkerMetadata>,
+    pub cursor: Option<ScanCursor>,
+}
+
+impl From<golem_client::model::WorkersMetadataResponse> for WorkersMetadataResponse {
+    fn from(value: golem_client::model::WorkersMetadataResponse) -> Self {
+        WorkersMetadataResponse {
+            cursor: value.cursor,
+            workers: value.workers.into_iter().map(|m| m.into()).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiDeployment {
+    #[serde(rename = "apiDefinitions")]
+    pub api_definitions: Vec<ApiDefinitionInfo>,
+    #[serde(rename = "projectId")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    pub site: ApiSite,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+impl From<golem_client::model::ApiDeployment> for ApiDeployment {
+    fn from(value: golem_client::model::ApiDeployment) -> Self {
+        ApiDeployment {
+            api_definitions: value.api_definitions,
+            project_id: None,
+            site: value.site,
+            created_at: value.created_at,
         }
     }
 }

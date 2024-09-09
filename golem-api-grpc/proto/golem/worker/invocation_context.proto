@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/worker/worker_id.proto";
+
+message InvocationContext {
+  golem.worker.WorkerId parent = 1;
+  repeated string args = 3;
+  map<string, string> env = 4;
+}

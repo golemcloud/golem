@@ -1,16 +1,18 @@
-use golem_common::model::{CallingConvention, ComponentId, IdempotencyKey, WorkerFilter};
+use crate::empty_worker_metadata;
+use crate::service::{component::ComponentService, worker::WorkerService};
+use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter};
+use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
-use golem_worker_service_base::auth::EmptyAuthCtx;
+use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::model::*;
+use golem_worker_service_base::api::WorkerApiBaseError;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::str::FromStr;
 use tap::TapFallible;
 
-use golem_service_base::model::*;
-use golem_worker_service_base::api::WorkerApiBaseError;
-
-use crate::empty_worker_metadata;
-use crate::service::{component::ComponentService, worker::WorkerService};
+use tracing::Instrument;
 
 pub struct WorkerApi {
     pub component_service: ComponentService,
@@ -19,8 +21,16 @@ pub struct WorkerApi {
 
 type Result<T> = std::result::Result<T, WorkerApiBaseError>;
 
-#[OpenApi(prefix_path = "/v2/components", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
+    /// Launch a new worker.
+    ///
+    /// Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+    ///
+    /// The parameters in the request are the following:
+    /// - `name` is the name of the created worker. This has to be unique, but only for a given component
+    /// - `args` is a list of strings which appear as command line arguments for the worker
+    /// - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
     #[oai(
         path = "/:component_id/workers",
         method = "post",
@@ -31,42 +41,56 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         request: Json<WorkerCreationRequest>,
     ) -> Result<Json<WorkerCreationResponse>> {
-        let component_id = component_id.0;
-        let latest_component = self
-            .component_service
-            .get_latest(&component_id, &EmptyAuthCtx {})
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|error| {
-                WorkerApiBaseError::NotFound(Json(ErrorBody {
-                    error: format!(
-                        "Couldn't retrieve the component: {}. error: {}",
-                        &component_id, error
-                    ),
-                }))
-            })?;
+        let record = recorded_http_api_request!(
+            "launch_new_worker",
+            component_id = component_id.0.to_string(),
+            name = request.name
+        );
 
-        let WorkerCreationRequest { name, args, env } = request.0;
+        let response = {
+            let component_id = component_id.0;
+            let latest_component = self
+                .component_service
+                .get_latest(&component_id, &EmptyAuthCtx::default())
+                .instrument(record.span.clone())
+                .await
+                .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
+                .map_err(|error| {
+                    WorkerApiBaseError::NotFound(Json(ErrorBody {
+                        error: format!(
+                            "Couldn't retrieve the component: {}. error: {}",
+                            &component_id, error
+                        ),
+                    }))
+                })?;
 
-        let worker_id = make_worker_id(component_id, name)?;
-        let worker_id = self
-            .worker_service
-            .create(
-                &worker_id,
-                latest_component.versioned_component_id.version,
-                args,
-                env,
-                empty_worker_metadata(),
-                &EmptyAuthCtx {},
-            )
-            .await?;
+            let WorkerCreationRequest { name, args, env } = request.0;
 
-        Ok(Json(WorkerCreationResponse {
-            worker_id,
-            component_version: latest_component.versioned_component_id.version,
-        }))
+            let worker_id = make_worker_id(component_id, name)?;
+            let worker_id = self
+                .worker_service
+                .create(
+                    &worker_id,
+                    latest_component.versioned_component_id.version,
+                    args,
+                    env,
+                    empty_worker_metadata(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await?;
+            Ok(Json(WorkerCreationResponse {
+                worker_id,
+                component_version: latest_component.versioned_component_id.version,
+            }))
+        };
+
+        record.result(response)
     }
 
+    /// Delete a worker
+    ///
+    /// Interrupts and deletes an existing worker.
     #[oai(
         path = "/:component_id/workers/:worker_name",
         method = "delete",
@@ -78,14 +102,26 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let record =
+            recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
+        let response = self
+            .worker_service
+            .delete(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(DeleteWorkerResponse {}));
 
-        self.worker_service
-            .delete(&worker_id, &EmptyAuthCtx {})
-            .await?;
-
-        Ok(Json(DeleteWorkerResponse {}))
+        record.result(response)
     }
 
+    /// Invoke a function and await it's resolution
+    ///
+    /// Supply the parameters in the request body as JSON.
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke-and-await",
         method = "post",
@@ -97,29 +133,39 @@ impl WorkerApi {
         worker_name: Path<String>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
-        #[oai(name = "calling-convention")] calling_convention: Query<Option<CallingConvention>>,
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResult>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        let calling_convention = calling_convention.0.unwrap_or(CallingConvention::Component);
+        let record = recorded_http_api_request!(
+            "invoke_and_await_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
 
-        let result = self
+        let precise_jsons = params.0.params;
+
+        let response = self
             .worker_service
-            .invoke_and_await_function(
+            .invoke_and_await_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
-                &calling_convention,
+                precise_jsons,
+                None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
             )
-            .await?;
-
-        Ok(Json(InvokeResult { result }))
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|result| Json(InvokeResult { result }));
+        record.result(response)
     }
 
+    /// Invoke a function
+    ///
+    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke",
         method = "post",
@@ -135,20 +181,38 @@ impl WorkerApi {
     ) -> Result<Json<InvokeResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
-            .invoke_function(
+        let record = recorded_http_api_request!(
+            "invoke_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let precise_json_array = params.0.params;
+
+        let response = self
+            .worker_service
+            .invoke_function_json(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                params.0.params,
+                precise_json_array.clone(),
+                None,
                 empty_worker_metadata(),
-                &EmptyAuthCtx {},
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InvokeResponse {}));
 
-        Ok(Json(InvokeResponse {}))
+        record.result(response)
     }
 
+    /// Complete a promise
+    ///
+    /// Completes a promise with a given custom array of bytes.
+    /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+    /// The data field is sent back to the worker and it has no predefined meaning.
     #[oai(
         path = "/:component_id/workers/:worker_name/complete",
         method = "post",
@@ -161,16 +225,35 @@ impl WorkerApi {
         params: Json<CompleteParameters>,
     ) -> Result<Json<bool>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record =
+            recorded_http_api_request!("complete_promise", worker_id = worker_id.to_string());
+
         let CompleteParameters { oplog_idx, data } = params.0;
 
-        let result = self
+        let response = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data, &EmptyAuthCtx {})
-            .await?;
+            .complete_promise(
+                &worker_id,
+                oplog_idx,
+                data,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
-        Ok(Json(result))
+        record.result(response)
     }
 
+    /// Interrupt a worker
+    ///
+    /// Interrupts the execution of a worker.
+    /// The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+    /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+    /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
     #[oai(
         path = "/:component_id/workers/:worker_name/interrupt",
         method = "post",
@@ -184,17 +267,42 @@ impl WorkerApi {
     ) -> Result<Json<InterruptResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record =
+            recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
             .interrupt(
                 &worker_id,
                 recover_immediately.0.unwrap_or(false),
-                &EmptyAuthCtx {},
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InterruptResponse {}));
 
-        Ok(Json(InterruptResponse {}))
+        record.result(response)
     }
 
+    /// Get metadata of a worker
+    ///
+    /// Returns metadata about an existing worker:
+    /// - `workerId` is a combination of the used component and the worker's user specified name
+    /// - `accountId` the account the worker is created by
+    /// - `args` is the provided command line arguments passed to the worker
+    /// - `env` is the provided map of environment variables passed to the worker
+    /// - `componentVersion` is the version of the component used by the worker
+    /// - `retryCount` is the number of retries the worker did in case of a failure
+    /// - `status` is the worker's current status, one of the following:
+    ///     - `Running` if the worker is currently executing
+    ///     - `Idle` if the worker is waiting for an invocation
+    ///     - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+    ///     - `Interrupted` if the worker was interrupted by the user
+    ///     - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+    ///     - `Failed` if the worker failed and there are no more retries scheduled for it
+    ///     - `Exited` if the worker explicitly exited using the exit WASI function
     #[oai(
         path = "/:component_id/workers/:worker_name",
         method = "get",
@@ -206,14 +314,46 @@ impl WorkerApi {
         worker_name: Path<String>,
     ) -> Result<Json<WorkerMetadata>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-        let result = self
-            .worker_service
-            .get_metadata(&worker_id, &EmptyAuthCtx {})
-            .await?;
 
-        Ok(Json(result))
+        let record =
+            recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_metadata(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
     }
 
+    /// Get metadata of multiple workers
+    ///
+    /// ### Filters
+    ///
+    /// | Property    | Comparator             | Description                    | Example                         |
+    /// |-------------|------------------------|--------------------------------|----------------------------------|
+    /// | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+    /// | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+    /// | status      | FilterComparator       | Status of worker               | `status = Running`               |
+    /// | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+    /// | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+    ///
+    ///
+    /// ### Comparators
+    ///
+    /// - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+    /// - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+    ///
+    /// Returns metadata about an existing component workers:
+    /// - `workers` list of workers metadata
+    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
         path = "/:component_id/workers",
         method = "get",
@@ -223,34 +363,71 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         filter: Query<Option<Vec<String>>>,
-        cursor: Query<Option<u64>>,
+        cursor: Query<Option<String>>,
         count: Query<Option<u64>>,
         precise: Query<Option<bool>>,
     ) -> Result<Json<WorkersMetadataResponse>> {
-        let filter = match filter.0 {
-            Some(filters) if !filters.is_empty() => {
-                Some(WorkerFilter::from(filters).map_err(|e| {
+        let record = recorded_http_api_request!(
+            "get_workers_metadata",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let filter = match filter.0 {
+                Some(filters) if !filters.is_empty() => {
+                    Some(WorkerFilter::from(filters).map_err(|e| {
+                        WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    })?)
+                }
+                _ => None,
+            };
+
+            let cursor = match cursor.0 {
+                Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
                     WorkerApiBaseError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
-                })?)
-            }
-            _ => None,
+                })?),
+                None => None,
+            };
+
+            self.worker_service
+                .find_metadata(
+                    &component_id.0,
+                    filter,
+                    cursor.unwrap_or_default(),
+                    count.0.unwrap_or(50),
+                    precise.0.unwrap_or(false),
+                    empty_worker_metadata(),
+                    &EmptyAuthCtx::default(),
+                )
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|(cursor, workers)| Json(WorkersMetadataResponse { workers, cursor }))
         };
 
-        let (cursor, workers) = self
-            .worker_service
-            .find_metadata(
-                &component_id.0,
-                filter,
-                cursor.0.unwrap_or(0),
-                count.0.unwrap_or(50),
-                precise.0.unwrap_or(false),
-                &EmptyAuthCtx {},
-            )
-            .await?;
-
-        Ok(Json(WorkersMetadataResponse { workers, cursor }))
+        record.result(response)
     }
 
+    /// Advanced search for workers
+    ///
+    /// ### Filter types
+    /// | Type      | Comparator             | Description                    | Example                                                                                       |
+    /// |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+    /// | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+    /// | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+    /// | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+    /// | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+    /// | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+    /// | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+    /// | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+    /// | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+    ///
+    /// ### Comparators
+    /// - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+    /// - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+    ///
+    /// Returns metadata about an existing component workers:
+    /// - `workers` list of workers metadata
+    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
     #[oai(
         path = "/:component_id/workers/find",
         method = "post",
@@ -261,21 +438,31 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         params: Json<WorkersMetadataRequest>,
     ) -> Result<Json<WorkersMetadataResponse>> {
-        let (cursor, workers) = self
+        let record = recorded_http_api_request!(
+            "find_workers_metadata",
+            component_id = component_id.0.to_string()
+        );
+
+        let response = self
             .worker_service
             .find_metadata(
                 &component_id.0,
                 params.filter.clone(),
-                params.cursor.unwrap_or(0),
+                params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
-                &EmptyAuthCtx {},
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|(cursor, workers)| Json(WorkersMetadataResponse { workers, cursor }));
 
-        Ok(Json(WorkersMetadataResponse { workers, cursor }))
+        record.result(response)
     }
 
+    /// Resume a worker
     #[oai(
         path = "/:component_id/workers/:worker_name/resume",
         method = "post",
@@ -288,13 +475,23 @@ impl WorkerApi {
     ) -> Result<Json<ResumeResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
-            .resume(&worker_id, &EmptyAuthCtx {})
-            .await?;
+        let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
+        let response = self
+            .worker_service
+            .resume(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(ResumeResponse {}));
 
-        Ok(Json(ResumeResponse {}))
+        record.result(response)
     }
 
+    /// Update a worker
     #[oai(
         path = "/:component_id/workers/:worker_name/update",
         method = "post",
@@ -308,16 +505,23 @@ impl WorkerApi {
     ) -> Result<Json<UpdateWorkerResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        self.worker_service
+        let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
             .update(
                 &worker_id,
                 params.mode.clone().into(),
                 params.target_version,
-                &EmptyAuthCtx {},
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
             )
-            .await?;
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(UpdateWorkerResponse {}));
 
-        Ok(Json(UpdateWorkerResponse {}))
+        record.result(response)
     }
 }
 

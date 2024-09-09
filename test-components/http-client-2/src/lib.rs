@@ -79,7 +79,7 @@ impl Guest for Component {
             println!("Calling the poll endpoint");
             match client.get(format!("http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}")).send() {
                 Ok(response) => {
-                    let s = response.text().unwrap();
+                    let s = response.text().unwrap_or_else(|err| format!("error receiving body: {err:?}"));
                     println!("Received {s}");
                     if s == until {
                         println!("Poll loop finished");
@@ -102,4 +102,27 @@ impl Guest for Component {
     fn get_count() -> u64 {
         with_state(|s| s.global)
     }
+
+    fn slow_body_stream() -> u64 {
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+        let client = Client::builder().build().unwrap();
+
+        let response: Response = client
+            .get(&format!("http://localhost:{port}/big-byte-array"))
+            .send()
+            .expect("Request failed");
+
+        let total = match response.bytes() {
+            Ok(bytes) => bytes.len() as u64,
+            Err(err) => {
+                println!("Failed to read response: {:?}", err);
+                0
+            }
+        };
+
+        total
+    }
 }
+
+bindings::export!(Component with_types_in bindings);

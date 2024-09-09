@@ -1,6 +1,20 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::common::{start, TestContext};
 use assert2::check;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 
 #[tokio::test]
@@ -16,7 +30,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/create-container",
+            "golem:it/api.{create-container}",
             vec![Value::String(format!(
                 "{component_id}-{worker_name}-container"
             ))],
@@ -27,7 +41,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/container-exists",
+            "golem:it/api.{container-exists}",
             vec![Value::String(format!(
                 "{component_id}-{worker_name}-container"
             ))],
@@ -53,7 +67,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created() {
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem:it/api/container-exists",
+            "golem:it/api.{container-exists}",
             vec![Value::String(format!(
                 "{component_id}-{worker_name}-container"
             ))],

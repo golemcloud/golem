@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ComponentStoreConfig {
     S3(ComponentStoreS3Config),
@@ -30,13 +30,13 @@ impl Default for ComponentStoreConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentStoreS3Config {
     pub bucket_name: String,
     pub object_prefix: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentStoreLocalConfig {
     pub root_path: String,
     pub object_prefix: String,

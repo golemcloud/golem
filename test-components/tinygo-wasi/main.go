@@ -2,22 +2,24 @@ package main
 
 import (
 	"fmt"
-	// "io/ioutil"
 	"math/rand"
+	"os"
 	"time"
 
-	"golem.com/tinygo_wasi/tinygo_wasi"
+	"github.com/golemcloud/golem-go/std"
+	"golem.com/tinygo_wasi/binding"
 )
 
 func init() {
-	a := TinygoWasiImpl{}
-	tinygo_wasi.SetTinygoWasi(a)
+	binding.SetBinding(&Impl{})
 }
 
-type TinygoWasiImpl struct {
+type Impl struct {
 }
 
-func (e TinygoWasiImpl) Example1(s string) int32 {
+func (i *Impl) Example1(s string) int32 {
+	std.Init(std.Packages{Os: true})
+
 	fmt.Println(s)
 
 	s1 := rand.NewSource(time.Now().UnixNano())
@@ -26,6 +28,10 @@ func (e TinygoWasiImpl) Example1(s string) int32 {
 	currentTime := time.Now()
 
 	fmt.Println("test", currentTime.Year(), v1)
+
+	fmt.Printf("args: %+v", os.Args)
+	fmt.Printf("env: %+v", os.Environ())
+
 	return v1
 }
 

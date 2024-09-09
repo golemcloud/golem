@@ -2,8 +2,13 @@ package rpc:caller;
 
 world caller {
   import rpc:counters-stub/stub-counters;
+  use rpc:counters-stub/stub-counters.{timeline-node};
 
   export test1: func() -> list<tuple<string, u64>>;
   export test2: func() -> u64;
   export test3: func() -> u64;
+  export test4: func() -> tuple<list<string>, list<tuple<string, string>>>;
+  export test5: func() -> list<u64>;
+
+  export bug-wasm-rpc-i32: func(in: timeline-node) -> timeline-node;
 }

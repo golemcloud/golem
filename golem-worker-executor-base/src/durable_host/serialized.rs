@@ -19,20 +19,18 @@ use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
-use wasmtime_wasi::preview2::bindings::sockets::ip_name_lookup::IpAddress;
-use wasmtime_wasi::preview2::bindings::{filesystem, sockets};
-use wasmtime_wasi::preview2::{FsError, SocketError, StreamError};
+use wasmtime_wasi::bindings::sockets::ip_name_lookup::IpAddress;
+use wasmtime_wasi::bindings::{filesystem, sockets};
+use wasmtime_wasi::{FsError, SocketError, StreamError};
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableDateTime {
-    seconds: u64,
-    nanoseconds: u32,
+    pub seconds: u64,
+    pub nanoseconds: u32,
 }
 
-impl From<wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime>
-    for SerializableDateTime
-{
-    fn from(value: wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime) -> Self {
+impl From<wasmtime_wasi::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
+    fn from(value: wasmtime_wasi::bindings::clocks::wall_clock::Datetime) -> Self {
         Self {
             seconds: value.seconds,
             nanoseconds: value.nanoseconds,
@@ -40,9 +38,7 @@ impl From<wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime>
     }
 }
 
-impl From<SerializableDateTime>
-    for wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime
-{
+impl From<SerializableDateTime> for wasmtime_wasi::bindings::clocks::wall_clock::Datetime {
     fn from(value: SerializableDateTime) -> Self {
         Self {
             seconds: value.seconds,
@@ -79,7 +75,7 @@ impl From<cap_std::time::SystemTime> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -446,7 +442,7 @@ impl From<SerializableError> for WorkerProxyError {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -516,7 +512,7 @@ impl From<SerializableIpAddress> for IpAddress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct SerializableIpAddresses(Vec<SerializableIpAddress>);
+pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {
     fn from(value: Vec<IpAddress>) -> Self {
@@ -530,7 +526,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,
@@ -544,6 +540,7 @@ mod tests {
     };
     use crate::error::GolemError;
     use crate::model::InterruptKind;
+    use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
     use proptest::collection::vec;
     use proptest::prelude::*;
@@ -551,15 +548,14 @@ mod tests {
     use std::ops::Add;
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
-    use wasmtime_wasi::preview2::bindings::sockets::network::IpAddress;
-    use wasmtime_wasi::preview2::bindings::{filesystem, sockets};
-    use wasmtime_wasi::preview2::{FsError, SocketError, StreamError};
+    use wasmtime_wasi::bindings::sockets::network::IpAddress;
+    use wasmtime_wasi::bindings::{filesystem, sockets};
+    use wasmtime_wasi::{FsError, SocketError, StreamError};
 
     fn datetime_strat(
-    ) -> impl Strategy<Value = wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime>
-    {
+    ) -> impl Strategy<Value = wasmtime_wasi::bindings::clocks::wall_clock::Datetime> {
         (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
-            wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime {
+            wasmtime_wasi::bindings::clocks::wall_clock::Datetime {
                 seconds,
                 nanoseconds,
             }
@@ -645,7 +641,7 @@ mod tests {
     fn promiseid_strat() -> impl Strategy<Value = PromiseId> {
         (workerid_strat(), any::<u64>()).prop_map(|(worker_id, oplog_idx)| PromiseId {
             worker_id,
-            oplog_idx,
+            oplog_idx: OplogIndex::from_u64(oplog_idx),
         })
     }
 
@@ -676,7 +672,7 @@ mod tests {
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),
             promiseid_strat().prop_map(|promise_id| GolemError::PromiseAlreadyCompleted { promise_id }),
             interrupt_kind_strat().prop_map(|kind| GolemError::Interrupted { kind }),
-            Just(GolemError::ParamTypeMismatch),
+            ".*".prop_map(|details| GolemError::ParamTypeMismatch { details }),
             Just(GolemError::NoValueInMessage),
             ".*".prop_map(|details| GolemError::ValueMismatch { details }),
             (".*", ".*").prop_map(|(expected, got)| GolemError::UnexpectedOplogEntry { expected, got }),
@@ -735,7 +731,7 @@ mod tests {
         #[test]
         fn roundtrip_wall_clock_datetime(value in datetime_strat()) {
             let serialized: SerializableDateTime = value.into();
-            let result: wasmtime_wasi::preview2::bindings::clocks::wall_clock::Datetime = serialized.into();
+            let result: wasmtime_wasi::bindings::clocks::wall_clock::Datetime = serialized.into();
             prop_assert_eq!(value.seconds, result.seconds);
             prop_assert_eq!(value.nanoseconds, result.nanoseconds);
         }

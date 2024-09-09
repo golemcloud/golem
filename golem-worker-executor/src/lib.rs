@@ -28,7 +28,6 @@ use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
 use golem_worker_executor_base::services::promise::PromiseService;
-use golem_worker_executor_base::services::recovery::RecoveryManagementDefault;
 use golem_worker_executor_base::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::shard::ShardService;
@@ -55,8 +54,8 @@ struct ServerBootstrap {}
 
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
-    fn create_active_workers(&self, _golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
-        Arc::new(ActiveWorkers::<Context>::unbounded())
+    fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
+        Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
     async fn create_services(
@@ -105,28 +104,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             events.clone(),
             additional_deps.clone(),
         ));
-        let recovery_management = Arc::new(RecoveryManagementDefault::new(
-            active_workers.clone(),
-            engine.clone(),
-            linker.clone(),
-            runtime.clone(),
-            component_service.clone(),
-            worker_service.clone(),
-            worker_enumeration_service.clone(),
-            running_worker_enumeration_service.clone(),
-            oplog_service.clone(),
-            promise_service.clone(),
-            scheduler_service.clone(),
-            key_value_service.clone(),
-            blob_store_service.clone(),
-            rpc.clone(),
-            worker_activator.clone(),
-            worker_proxy.clone(),
-            events.clone(),
-            golem_config.clone(),
-            additional_deps.clone(),
-        ));
-        rpc.set_recovery_management(recovery_management.clone());
 
         Ok(All::new(
             active_workers,
@@ -144,7 +121,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             key_value_service,
             blob_store_service,
             oplog_service,
-            recovery_management,
             rpc,
             scheduler_service,
             worker_activator.clone(),
@@ -155,17 +131,15 @@ impl Bootstrap<Context> for ServerBootstrap {
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
-        let mut linker =
-            create_linker::<Context, DurableWorkerCtx<Context>>(engine, |x| &mut x.durable_ctx)?;
-        golem::api::host::add_to_linker::<Context, DurableWorkerCtx<Context>>(&mut linker, |x| {
-            &mut x.durable_ctx
-        })?;
-        golem_wasm_rpc::golem::rpc::types::add_to_linker::<Context, DurableWorkerCtx<Context>>(
-            &mut linker,
-            |x| &mut x.durable_ctx,
-        )?;
+        let mut linker = create_linker(engine, get_durable_ctx)?;
+        golem::api::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
+}
+
+fn get_durable_ctx(ctx: &mut Context) -> &mut DurableWorkerCtx<Context> {
+    &mut ctx.durable_ctx
 }
 
 pub async fn run(

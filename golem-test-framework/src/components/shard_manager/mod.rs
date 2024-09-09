@@ -20,10 +20,10 @@ use async_trait::async_trait;
 use tonic::transport::Channel;
 use tracing::Level;
 
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client::ShardManagerServiceClient;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 
 use crate::components::redis::Redis;
-use crate::components::wait_for_startup_grpc;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
 
 pub mod docker;
 pub mod k8s;
@@ -53,14 +53,14 @@ pub trait ShardManager {
     }
 
     fn kill(&self);
-    async fn restart(&self);
+    async fn restart(&self, number_of_shards_override: Option<usize>);
 
-    fn blocking_restart(&self) {
+    fn blocking_restart(&self, number_of_shards_override: Option<usize>) {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(async move { self.restart().await });
+            .block_on(async move { self.restart(number_of_shards_override).await });
     }
 }
 
@@ -74,24 +74,40 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
 }
 
-fn env_vars(
-    http_port: u16,
-    grpc_port: u16,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    verbosity: Level,
-) -> HashMap<String, String> {
-    let log_level = verbosity.as_str().to_lowercase();
+#[async_trait]
+pub trait ShardManagerEnvVars {
+    async fn env_vars(
+        &self,
+        number_of_shards_override: Option<usize>,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String>;
+}
 
-    let env: &[(&str, &str)] = &[
-        ("RUST_LOG", &format!("{log_level},h2=warn,cranelift_codegen=warn,wasmtime_cranelift=warn,wasmtime_jit=warn")),
-        ("RUST_BACKTRACE", "1"),
-        ("REDIS__HOST", &redis.private_host()),
-        ("GOLEM__REDIS__HOST", &redis.private_host()),
-        ("GOLEM__REDIS__PORT", &redis.private_port().to_string()),
-        ("GOLEM__REDIS__KEY_PREFIX", redis.prefix()),
-        ("GOLEM_SHARD_MANAGER_PORT", &grpc_port.to_string()),
-        ("GOLEM__HTTP_PORT", &http_port.to_string()),
-    ];
+#[async_trait]
+impl ShardManagerEnvVars for GolemEnvVars {
+    async fn env_vars(
+        &self,
+        number_of_shards_override: Option<usize>,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+    ) -> HashMap<String, String> {
+        let mut builder = EnvVarBuilder::golem_service(verbosity)
+            .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
+            .with("GOLEM__HTTP_PORT", http_port.to_string())
+            .with("GOLEM__REDIS__HOST", redis.private_host())
+            .with_str("GOLEM__REDIS__KEY_PREFIX", redis.prefix())
+            .with("GOLEM__REDIS__PORT", redis.private_port().to_string())
+            .with("REDIS__HOST", redis.private_host());
 
-    HashMap::from_iter(env.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+        if let Some(number_of_shards) = number_of_shards_override {
+            builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+        }
+
+        builder.build()
+    }
 }

@@ -36,8 +36,6 @@ interface api {
   checkout: func() -> checkout-result;
 
   get-cart-contents: func() -> list<product-item>;
-
-  not-durable: func() -> ();
 }
 
 world shopping-cart {

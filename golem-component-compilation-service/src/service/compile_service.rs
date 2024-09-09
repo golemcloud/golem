@@ -1,5 +1,19 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use super::*;
-use crate::config::{CompileWorkerConfig, ComponentServiceConfig, UploadWorkerConfig};
+use crate::config::{CompileWorkerConfig, ComponentServiceConfig};
 use crate::model::*;
 use async_trait::async_trait;
 use golem_common::model::ComponentId;
@@ -24,7 +38,6 @@ pub struct ComponentCompilationServiceImpl {
 
 impl ComponentCompilationServiceImpl {
     pub fn new(
-        upload_worker: UploadWorkerConfig,
         compile_worker: CompileWorkerConfig,
         component_service: ComponentServiceConfig,
 
@@ -45,7 +58,7 @@ impl ComponentCompilationServiceImpl {
             compile_rx,
         );
 
-        UploadWorker::start(upload_worker, compiled_component_service.clone(), upload_rx);
+        UploadWorker::start(compiled_component_service.clone(), upload_rx);
 
         Self { queue: compile_tx }
     }

@@ -16,18 +16,21 @@ use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, UriBackConversion};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_api_grpc::proto::golem::worker::worker_service_client::WorkerServiceClient;
-use golem_api_grpc::proto::golem::worker::{
+use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
+use golem_api_grpc::proto::golem::worker::v1::{
     invoke_and_await_response, invoke_response, update_worker_response, worker_error,
-    CallingConvention, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeParameters,
-    InvokeRequest, InvokeResponse, UpdateMode, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
-use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, WorkerId};
+use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeParameters, UpdateMode};
+use golem_common::client::GrpcClient;
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -35,32 +38,35 @@ use uuid::Uuid;
 pub trait WorkerProxy {
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<WitValue, WorkerProxyError>;
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<(), WorkerProxyError>;
 
     async fn update(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         mode: UpdateMode,
-        account_id: &AccountId,
     ) -> Result<(), WorkerProxyError>;
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum WorkerProxyError {
     BadRequest(Vec<String>),
     Unauthorized(String),
@@ -135,14 +141,18 @@ impl From<GolemError> for WorkerProxyError {
 }
 
 pub struct RemoteWorkerProxy {
-    endpoint: Uri,
+    client: GrpcClient<WorkerServiceClient<Channel>>,
     access_token: Uuid,
 }
 
 impl RemoteWorkerProxy {
     pub fn new(endpoint: Uri, access_token: Uuid) -> Self {
         Self {
-            endpoint,
+            client: GrpcClient::new(
+                WorkerServiceClient::new,
+                endpoint.as_http_02(),
+                Default::default(), // TODO
+            ),
             access_token,
         }
     }
@@ -152,13 +162,17 @@ impl RemoteWorkerProxy {
 impl WorkerProxy for RemoteWorkerProxy {
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<WitValue, WorkerProxyError> {
-        debug!("Invoking remote worker {worker_id} function {function_name} with parameters {function_params:?}");
+        debug!(
+            "Invoking remote worker function {function_name} with parameters {function_params:?}"
+        );
 
         let proto_params = function_params
             .into_iter()
@@ -171,19 +185,24 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: InvokeAndAwaitResponse = client
-            .invoke_and_await(authorised_grpc_request(
-                InvokeAndAwaitRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    idempotency_key: idempotency_key.map(|k| k.into()),
-                    function: function_name,
-                    invoke_parameters,
-                    calling_convention: CallingConvention::Component as i32,
-                },
-                &self.access_token,
-            ))
+        let response: InvokeAndAwaitResponse = self
+            .client
+            .call(move |client| {
+                Box::pin(client.invoke_and_await(authorised_grpc_request(
+                    InvokeAndAwaitRequest {
+                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                        function: function_name.clone(),
+                        invoke_parameters: invoke_parameters.clone(),
+                        context: Some(InvocationContext {
+                            parent: Some(caller_worker_id.clone().into()),
+                            args: caller_args.clone(),
+                            env: caller_env.clone(),
+                        }),
+                    },
+                    &self.access_token,
+                )))
+            })
             .await?
             .into_inner();
 
@@ -210,13 +229,15 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        caller_worker_id: WorkerId,
+        caller_args: Vec<String>,
+        caller_env: HashMap<String, String>,
     ) -> Result<(), WorkerProxyError> {
-        debug!("Invoking remote worker {worker_id} function {function_name} with parameters {function_params:?} without awaiting for the result");
+        debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
         let proto_params = function_params
             .into_iter()
@@ -229,18 +250,24 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: InvokeResponse = client
-            .invoke(authorised_grpc_request(
-                InvokeRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    idempotency_key: idempotency_key.map(|k| k.into()),
-                    function: function_name,
-                    invoke_parameters,
-                },
-                &self.access_token,
-            ))
+        let response: InvokeResponse = self
+            .client
+            .call(move |client| {
+                Box::pin(client.invoke(authorised_grpc_request(
+                    InvokeRequest {
+                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                        function: function_name.clone(),
+                        invoke_parameters: invoke_parameters.clone(),
+                        context: Some(InvocationContext {
+                            parent: Some(caller_worker_id.clone().into()),
+                            args: caller_args.clone(),
+                            env: caller_env.clone(),
+                        }),
+                    },
+                    &self.access_token,
+                )))
+            })
             .await?
             .into_inner();
 
@@ -255,24 +282,24 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn update(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         mode: UpdateMode,
-        _account_id: &AccountId,
     ) -> Result<(), WorkerProxyError> {
-        debug!("Updating remote worker {worker_id} to version {target_version} in {mode:?} mode");
+        debug!("Updating remote worker to version {target_version} in {mode:?} mode");
 
-        let mut client = WorkerServiceClient::connect(self.endpoint.as_http_02()).await?;
-
-        let response: UpdateWorkerResponse = client
-            .update_worker(authorised_grpc_request(
-                UpdateWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    target_version,
-                    mode: mode as i32,
-                },
-                &self.access_token,
-            ))
+        let response: UpdateWorkerResponse = self
+            .client
+            .call(move |client| {
+                Box::pin(client.update_worker(authorised_grpc_request(
+                    UpdateWorkerRequest {
+                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        target_version,
+                        mode: mode as i32,
+                    },
+                    &self.access_token,
+                )))
+            })
             .await?
             .into_inner();
 
@@ -308,32 +335,35 @@ impl WorkerProxyMock {
 impl WorkerProxy for WorkerProxyMock {
     async fn invoke_and_await(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        _caller_worker_id: WorkerId,
+        _caller_args: Vec<String>,
+        _caller_env: HashMap<String, String>,
     ) -> Result<WitValue, WorkerProxyError> {
         unimplemented!()
     }
 
     async fn invoke(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        _caller_worker_id: WorkerId,
+        _caller_args: Vec<String>,
+        _caller_env: HashMap<String, String>,
     ) -> Result<(), WorkerProxyError> {
         unimplemented!()
     }
 
     async fn update(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _target_version: ComponentVersion,
         _mode: UpdateMode,
-        _account_id: &AccountId,
     ) -> Result<(), WorkerProxyError> {
         unimplemented!()
     }

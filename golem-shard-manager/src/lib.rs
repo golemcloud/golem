@@ -23,16 +23,22 @@ mod shard_manager_config;
 mod worker_executor;
 
 use std::env;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
+use crate::error::ShardManagerTraceErrorKind;
 use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
+use crate::http_server::HttpServerImpl;
+use crate::shard_manager_config::{make_config_loader, HealthCheckK8sConfig, HealthCheckMode};
 use error::ShardManagerError;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_server::{
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::{
     ShardManagerService, ShardManagerServiceServer,
 };
+
+use golem_common::recorded_grpc_api_request;
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use model::{Pod, RoutingTable};
 use persistence::{PersistenceService, PersistenceServiceDefault};
 use prometheus::{default_registry, Registry};
@@ -40,12 +46,9 @@ use shard_management::ShardManagement;
 use shard_manager_config::ShardManagerConfig;
 use tonic::transport::Server;
 use tonic::Response;
+use tracing::Instrument;
 use tracing::{debug, info, warn};
-use tracing_subscriber::EnvFilter;
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
-
-use crate::http_server::HttpServerImpl;
-use crate::shard_manager_config::HealthCheckMode;
 
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
@@ -89,9 +92,12 @@ impl ShardManagerServiceImpl {
 
     async fn register_internal(
         &self,
-        request: tonic::Request<golem::shardmanager::RegisterRequest>,
+        source_ip: Option<SocketAddr>,
+        request: golem::shardmanager::v1::RegisterRequest,
     ) -> Result<(), ShardManagerError> {
-        let pod = Pod::from_register_request(request)?;
+        let source_ip = source_ip.ok_or(ShardManagerError::NoSourceIpForPod)?.ip();
+
+        let pod = Pod::from_register_request(source_ip, request)?;
         info!("Shard Manager received request to register pod: {}", pod);
         self.shard_management.register_pod(pod).await;
         Ok(())
@@ -138,13 +144,21 @@ impl ShardManagerServiceImpl {
 impl ShardManagerService for ShardManagerServiceImpl {
     async fn get_routing_table(
         &self,
-        _request: tonic::Request<golem::shardmanager::GetRoutingTableRequest>,
-    ) -> Result<tonic::Response<golem::shardmanager::GetRoutingTableResponse>, tonic::Status> {
+        _request: tonic::Request<golem::shardmanager::v1::GetRoutingTableRequest>,
+    ) -> Result<tonic::Response<golem::shardmanager::v1::GetRoutingTableResponse>, tonic::Status>
+    {
+        let record = recorded_grpc_api_request!("get_routing_table",);
+
+        let response = self
+            .get_routing_table_internal()
+            .instrument(record.span.clone())
+            .await;
+
         Ok(Response::new(
-            golem::shardmanager::GetRoutingTableResponse {
+            golem::shardmanager::v1::GetRoutingTableResponse {
                 result: Some(
-                    golem::shardmanager::get_routing_table_response::Result::Success(
-                        self.get_routing_table_internal().await.into(),
+                    golem::shardmanager::v1::get_routing_table_response::Result::Success(
+                        response.into(),
                     ),
                 ),
             },
@@ -153,53 +167,57 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
     async fn register(
         &self,
-        request: tonic::Request<golem::shardmanager::RegisterRequest>,
-    ) -> Result<tonic::Response<golem::shardmanager::RegisterResponse>, tonic::Status> {
-        match self.register_internal(request).await {
-            Ok(_) => Ok(Response::new(golem::shardmanager::RegisterResponse {
-                result: Some(golem::shardmanager::register_response::Result::Success(
-                    golem::shardmanager::RegisterSuccess {
-                        number_of_shards: self.shard_manager_config.number_of_shards as u32,
-                    },
-                )),
-            })),
-            Err(error) => Ok(Response::new(golem::shardmanager::RegisterResponse {
-                result: Some(golem::shardmanager::register_response::Result::Failure(
-                    error.into(),
-                )),
-            })),
-        }
+        request: tonic::Request<golem::shardmanager::v1::RegisterRequest>,
+    ) -> Result<tonic::Response<golem::shardmanager::v1::RegisterResponse>, tonic::Status> {
+        let source_ip = request.remote_addr();
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "register",
+            source_ip = source_ip.map(|ip| ip.to_string()),
+            host = &request.host,
+            port = &request.port.to_string(),
+        );
+
+        let response = self
+            .register_internal(source_ip, request)
+            .instrument(record.span.clone())
+            .await;
+
+        let result = match response {
+            Ok(_) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
+                golem::shardmanager::v1::RegisterSuccess {
+                    number_of_shards: self.shard_manager_config.number_of_shards as u32,
+                },
+            )),
+            Err(error) => {
+                let error: golem::shardmanager::v1::ShardManagerError = error.into();
+                record.fail(
+                    golem::shardmanager::v1::register_response::Result::Failure(error.clone()),
+                    &ShardManagerTraceErrorKind(&error),
+                )
+            }
+        };
+
+        Ok(Response::new(golem::shardmanager::v1::RegisterResponse {
+            result: Some(result),
+        }))
     }
 }
 
 pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = ShardManagerConfig::new();
-    let registry = default_registry().clone();
+    match make_config_loader().load_or_dump_config() {
+        Some(config) => {
+            init_tracing_with_default_env_filter(&config.tracing);
+            let registry = default_registry().clone();
 
-    if config.enable_json_log {
-        tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            // .with_span_events(FmtSpan::FULL) // NOTE: enable to see span events
-            .with_env_filter(EnvFilter::from_default_env())
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .with_ansi(true)
-            .init();
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async_main(&config, registry))
+        }
+        None => Ok(()),
     }
-
-    // NOTE: to enable tokio-console, comment the lines above and uncomment the lines below,
-    // and compile with RUSTFLAGS="--cfg tokio_unstable" cargo build
-    // TODO: make tracing subscription configurable
-    // console_subscriber::init();
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async_main(&config, registry))
 }
 
 async fn async_main(
@@ -247,12 +265,12 @@ async fn async_main(
 
     let health_check: Arc<dyn HealthCheck + Send + Sync> =
         match &shard_manager_config.health_check.mode {
-            HealthCheckMode::Grpc => Arc::new(GrpcHealthCheck::new(
+            HealthCheckMode::Grpc(_) => Arc::new(GrpcHealthCheck::new(
                 worker_executors.clone(),
                 shard_manager_config.worker_executors.retries.clone(),
             )),
             #[cfg(feature = "kubernetes")]
-            HealthCheckMode::K8s { namespace } => Arc::new(
+            HealthCheckMode::K8s(HealthCheckK8sConfig { namespace }) => Arc::new(
                 crate::healthcheck::kubernetes::KubernetesHealthCheck::new(
                     namespace.clone(),
                     shard_manager_config.worker_executors.retries.clone(),
@@ -272,10 +290,7 @@ async fn async_main(
 
     let service = ShardManagerServiceServer::new(shard_manager);
 
-    // TODO: configurable limits
     Server::builder()
-        .concurrency_limit_per_connection(1024)
-        .max_concurrent_streams(Some(1024))
         .add_service(reflection_service)
         .add_service(service)
         .add_service(health_service)

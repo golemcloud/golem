@@ -13,159 +13,204 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::ops::Add;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use chrono::{DateTime, TimeZone, Utc};
+use tokio::task::JoinHandle;
+use tracing::{error, span, warn, Instrument, Level};
+
+use golem_common::model::{ScheduleId, ScheduledAction};
+
 use crate::metrics::promises::record_scheduled_promise_completed;
+use crate::services::oplog::{MultiLayerOplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
-use async_trait::async_trait;
-use bytes::Bytes;
-use chrono::{DateTime, TimeZone, Utc};
-use golem_common::model::{PromiseId, ScheduleId};
-use golem_common::redis::RedisPool;
-use tokio::task::JoinHandle;
-use tracing::error;
+use crate::storage::keyvalue::{
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 
 #[async_trait]
 pub trait SchedulerService {
-    async fn schedule(&self, time: DateTime<Utc>, promise_id: PromiseId) -> ScheduleId;
+    async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId;
 
     async fn cancel(&self, id: ScheduleId);
 }
 
 #[derive(Clone)]
 pub struct SchedulerServiceDefault {
-    redis: RedisPool,
+    key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     shard_service: Arc<dyn ShardService + Send + Sync>,
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
-}
-
-const HOUR_IN_MILLIS: i64 = 1000 * 60 * 60;
-
-fn split_time<Tz: TimeZone>(time: DateTime<Tz>) -> (i64, f64) {
-    let millis = time.timestamp_millis();
-    let hours_since_epoch = millis / HOUR_IN_MILLIS;
-    let remainder = (millis % HOUR_IN_MILLIS) as f64;
-    (hours_since_epoch, remainder)
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
 }
 
 impl SchedulerServiceDefault {
     pub fn new(
-        redis: RedisPool,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService + Send + Sync>,
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
-            redis,
+            key_value_storage,
             background_handle: Arc::new(Mutex::new(None)),
             shard_service,
             promise_service,
+            oplog_service,
             worker_activator,
         };
         let svc = Arc::new(svc);
-        let svc_clone = svc.clone();
-        let background_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(process_interval).await;
-                let r = svc_clone.process(Utc::now()).await;
-                if let Err(err) = r {
-                    error!("Error in scheduler background task: {}", err);
+        let background_handle = {
+            let svc = svc.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(process_interval).await;
+                    if svc.shard_service.is_ready() {
+                        let r = svc.process(Utc::now()).await;
+                        if let Err(err) = r {
+                            error!(err, "Error in scheduler background task");
+                        }
+                    } else {
+                        warn!("Skipping schedule, shard service is not ready")
+                    }
                 }
-            }
-        });
+            })
+        };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
 
         svc
     }
 
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
-        let (hours_since_epoch, remainder) = split_time(now);
+        let (hours_since_epoch, remainder) = Self::split_time(now);
         let previous_hours_since_epoch = hours_since_epoch - 1;
 
-        let previous_hour_key = get_schedule_redis_key_from_timestamp(previous_hours_since_epoch);
-        let current_hour_key = get_schedule_redis_key_from_timestamp(hours_since_epoch);
+        let previous_hour_key = Self::schedule_key_from_timestamp(previous_hours_since_epoch);
+        let current_hour_key = Self::schedule_key_from_timestamp(hours_since_epoch);
 
-        let all_from_prev_hour_raw: Vec<Bytes> = self
-            .redis
-            .with("scheduler", "process")
-            .zrange(&previous_hour_key, 0, -1, None, false, None, false)
-            .await
-            .map_err(|redis_err| format!("{redis_err}"))?;
+        let all_from_prev_hour: Vec<(f64, ScheduledAction)> = self
+            .key_value_storage
+            .with_entity("scheduler", "process", "scheduled_action")
+            .get_sorted_set(KeyValueStorageNamespace::Schedule, &previous_hour_key)
+            .await?;
 
-        let all_from_prev_hour: Vec<(&str, PromiseId)> = all_from_prev_hour_raw
-            .iter()
-            .map(|serialized| {
-                (
-                    previous_hour_key.as_str(),
-                    self.redis
-                        .deserialize(serialized)
-                        .expect("failed to deserialize worker id"),
-                )
-            })
-            .collect();
-
-        let all_from_this_hour_raw: Vec<Bytes> = self
-            .redis
-            .with("scheduler", "process")
-            .zrangebyscore(&current_hour_key, 0.0, remainder, false, None)
-            .await
-            .map_err(|redis_err| format!("{redis_err}"))?;
-
-        let mut all_from_this_hour: Vec<(&str, PromiseId)> = all_from_this_hour_raw
-            .iter()
-            .map(|serialized| {
-                (
-                    current_hour_key.as_str(),
-                    self.redis
-                        .deserialize(serialized)
-                        .expect("failed to deserialize worker id"),
-                )
-            })
-            .collect();
-
-        let mut all = all_from_prev_hour;
-        all.append(&mut all_from_this_hour);
-        let matching: Vec<(&str, PromiseId)> = all
+        let mut all: Vec<(&str, ScheduledAction)> = all_from_prev_hour
             .into_iter()
-            .filter(|(_, promise_id)| {
+            .map(|(_score, action)| (previous_hour_key.as_str(), action))
+            .collect();
+
+        let all_from_this_hour: Vec<(f64, ScheduledAction)> = self
+            .key_value_storage
+            .with_entity("scheduler", "process", "scheduled_action")
+            .query_sorted_set(
+                KeyValueStorageNamespace::Schedule,
+                &current_hour_key,
+                0.0,
+                remainder,
+            )
+            .await?;
+
+        all.extend(
+            all_from_this_hour
+                .into_iter()
+                .map(|(_score, action)| (current_hour_key.as_str(), action)),
+        );
+
+        let matching: Vec<(&str, ScheduledAction)> = all
+            .into_iter()
+            .filter(|(_, action)| {
                 self.shard_service
-                    .check_worker(&promise_id.worker_id)
+                    .check_worker(&action.owned_worker_id().worker_id)
                     .is_ok()
             })
             .collect::<Vec<_>>();
 
-        let mut worker_ids = HashSet::new();
-        for (key, promise_id) in matching {
-            worker_ids.insert(promise_id.worker_id.clone());
-            self.redis
-                .with("scheduler", "process")
-                .zrem(
-                    key,
-                    self.redis
-                        .serialize(&promise_id)
-                        .expect("failed to serialize promise id"),
-                )
-                .await
-                .map_err(|redis_err| format!("{redis_err}"))?;
-            self.promise_service
-                .complete(promise_id, vec![])
-                .await
-                .map_err(|golem_err| format!("{golem_err}"))?;
+        let mut owned_worker_ids = HashSet::new();
+        for (key, action) in matching {
+            owned_worker_ids.insert(action.owned_worker_id().clone());
+            self.key_value_storage
+                .with_entity("scheduler", "process", "scheduled_action")
+                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
+                .await?;
 
-            record_scheduled_promise_completed();
+            match action {
+                ScheduledAction::CompletePromise { promise_id, .. } => {
+                    self.promise_service
+                        .complete(promise_id, vec![])
+                        .await
+                        .map_err(|golem_err| format!("{golem_err}"))?;
+
+                    record_scheduled_promise_completed();
+                }
+                ScheduledAction::ArchiveOplog {
+                    owned_worker_id,
+                    last_oplog_index,
+                    next_after,
+                } => {
+                    if self.oplog_service.exists(&owned_worker_id).await {
+                        let current_last_index =
+                            self.oplog_service.get_last_index(&owned_worker_id).await;
+                        if current_last_index == last_oplog_index {
+                            let oplog = self.oplog_service.open(&owned_worker_id).await;
+                            if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                if more {
+                                    self.schedule(
+                                        now.add(next_after),
+                                        ScheduledAction::ArchiveOplog {
+                                            owned_worker_id,
+                                            last_oplog_index,
+                                            next_after,
+                                        },
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+
+                        // TODO: metrics
+                    }
+                }
+            }
         }
 
-        for worker_id in worker_ids {
-            self.worker_activator.activate_worker(&worker_id).await;
+        for owned_worker_id in owned_worker_ids {
+            let span = span!(
+                Level::INFO,
+                "scheduler",
+                worker_id = owned_worker_id.worker_id.to_string()
+            );
+            self.worker_activator
+                .activate_worker(&owned_worker_id)
+                .instrument(span)
+                .await;
         }
 
         Ok(())
+    }
+
+    const HOUR_IN_MILLIS: i64 = 1000 * 60 * 60;
+
+    fn split_time<Tz: TimeZone>(time: DateTime<Tz>) -> (i64, f64) {
+        let millis = time.timestamp_millis();
+        let hours_since_epoch = millis / Self::HOUR_IN_MILLIS;
+        let remainder = (millis % Self::HOUR_IN_MILLIS) as f64;
+        (hours_since_epoch, remainder)
+    }
+
+    fn schedule_key(id: &ScheduleId) -> String {
+        Self::schedule_key_from_timestamp(id.timestamp)
+    }
+
+    fn schedule_key_from_timestamp(timestamp: i64) -> String {
+        format!("worker:schedule:{}", timestamp)
     }
 }
 
@@ -179,56 +224,46 @@ impl Drop for SchedulerServiceDefault {
 
 #[async_trait]
 impl SchedulerService for SchedulerServiceDefault {
-    async fn schedule(&self, time: DateTime<Utc>, promise_id: PromiseId) -> ScheduleId {
-        let (hours_since_epoch, remainder) = split_time(time);
+    async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
+        let (hours_since_epoch, remainder) = Self::split_time(time);
+
         let id = ScheduleId {
             timestamp: hours_since_epoch,
-            promise_id: promise_id.clone(),
+            action: action.clone(),
         };
-        let key = get_schedule_redis_key(&id);
-        let value = self
-            .redis
-            .serialize(&promise_id)
-            .expect("failed to serialize promise id");
 
-        let _: u32 = self
-            .redis
-            .with("scheduler", "schedule")
-            .zadd(key, None, None, false, false, (remainder, value))
+        self.key_value_storage
+            .with_entity("scheduler", "schedule", "scheduled_action")
+            .add_to_sorted_set(
+                KeyValueStorageNamespace::Schedule,
+                &Self::schedule_key(&id),
+                remainder,
+                &action,
+            )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to add schedule for promise id {promise_id} in Redis: {err}")
+                panic!("failed to add schedule for action {action} in KV storage: {err}")
             });
 
         id
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        let key = get_schedule_redis_key(&id);
-        let value = self
-            .redis
-            .serialize(&id.promise_id)
-            .expect("failed to serialize promise id");
-        let _: u32 = self
-            .redis
-            .with("scheduler", "cancel")
-            .zrem(key, value)
+        self.key_value_storage
+            .with_entity("scheduler", "cancel", "scheduled_action")
+            .remove_from_sorted_set(
+                KeyValueStorageNamespace::Schedule,
+                &Self::schedule_key(&id),
+                &id.action,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "failed to remove schedule for promise id {} from Redis: {err}",
-                    id.promise_id
+                    "failed to remove schedule for action {} from KV storage: {err}",
+                    id.action
                 )
             });
     }
-}
-
-fn get_schedule_redis_key(id: &ScheduleId) -> String {
-    get_schedule_redis_key_from_timestamp(id.timestamp)
-}
-
-fn get_schedule_redis_key_from_timestamp(timestamp: i64) -> String {
-    format!("instance:schedule:{}", timestamp)
 }
 
 #[cfg(any(feature = "mocks", test))]
@@ -251,7 +286,7 @@ impl SchedulerServiceMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl SchedulerService for SchedulerServiceMock {
-    async fn schedule(&self, _time: DateTime<Utc>, _promise_id: PromiseId) -> ScheduleId {
+    async fn schedule(&self, _time: DateTime<Utc>, _action: ScheduledAction) -> ScheduleId {
         unimplemented!()
     }
 
@@ -262,159 +297,37 @@ impl SchedulerService for SchedulerServiceMock {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::{max, min};
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
     use std::str::FromStr;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::services::promise::PromiseServiceMock;
-    use crate::services::shard::ShardServiceMock;
-    use crate::services::worker_activator::WorkerActivatorMock;
     use bincode::Encode;
-    use bytes::Bytes;
+
     use chrono::DateTime;
-    use fred::error::RedisError;
-    use fred::mocks::{MockCommand, Mocks};
-    use fred::prelude::RedisValue;
-    use golem_common::model::{ComponentId, PromiseId, WorkerId};
-    use golem_common::redis::RedisPool;
+
     use uuid::Uuid;
 
+    use crate::services::oplog::mock::OplogServiceMock;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{AccountId, ComponentId, PromiseId, ScheduledAction, WorkerId};
+
+    use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
+    use crate::services::shard::ShardServiceMock;
+    use crate::services::worker_activator::WorkerActivatorMock;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 
-    #[derive(Debug)]
-    pub struct RedisMock {
-        commands: Mutex<VecDeque<MockCommand>>,
-        data: Mutex<HashMap<String, Vec<(f64, Bytes)>>>,
-    }
-
-    impl RedisMock {
-        pub fn new() -> Self {
-            RedisMock {
-                commands: Mutex::new(VecDeque::new()),
-                data: Mutex::new(HashMap::new()),
-            }
-        }
-
-        /// Drain and return the internal command buffer.
-        pub fn take(&self) -> Vec<MockCommand> {
-            self.commands.lock().unwrap().drain(..).collect()
-        }
-
-        /// Push a new command onto the back of the internal buffer.
-        pub fn push_back(&self, command: MockCommand) {
-            self.commands.lock().unwrap().push_back(command);
-        }
-
-        pub fn result(&self) -> HashMap<String, Vec<(f64, Bytes)>> {
-            self.data.lock().unwrap().clone()
-        }
-
-        fn zadd(&self, args: Vec<RedisValue>) -> Result<RedisValue, RedisError> {
-            let key = args.first().unwrap().as_string().unwrap();
-            let score = args.get(1).unwrap().as_f64().unwrap();
-            let value = args.get(2).unwrap().as_bytes().unwrap().to_vec();
-
-            self.data
-                .lock()
-                .unwrap()
-                .entry(key)
-                .or_default()
-                .push((score, Bytes::from(value)));
-            Ok(RedisValue::Integer(0))
-        }
-
-        fn zrem(&self, args: Vec<RedisValue>) -> Result<RedisValue, RedisError> {
-            let key = args.first().unwrap().as_string().unwrap();
-            let value = args.get(1).unwrap().as_bytes().unwrap();
-            self.data.lock().unwrap().entry(key).and_modify(|v| {
-                v.retain(|(_, v)| *v != value);
-            });
-            Ok(RedisValue::Integer(0))
-        }
-
-        fn zrange(&self, args: Vec<RedisValue>) -> Result<RedisValue, RedisError> {
-            let key = args.first().unwrap().as_string().unwrap();
-            let from = args.get(1).unwrap().as_i64().unwrap() as usize;
-            let to = args.get(2).unwrap().as_i64().unwrap();
-            let empty = vec![];
-            let binding = self.data.lock().unwrap();
-            let all_items = binding.get(&key).unwrap_or(&empty);
-            let to = min(
-                all_items.len(),
-                if to < 0 {
-                    max(0, all_items.len() as i64 + to + 1) as usize
-                } else {
-                    to as usize
-                },
-            );
-            // let result: Vec<RedisValue> =
-            // all_items[from..to].iter().map(|(_, v)| RedisValue::Bytes(Bytes::copy_from_slice(v))).collect();
-            let result: Vec<RedisValue> = all_items[from..to]
-                .iter()
-                .map(|(_, v)| RedisValue::Bytes(v.clone()))
-                .collect();
-            Ok(RedisValue::Array(result))
-        }
-
-        fn zrangebyscore(&self, args: Vec<RedisValue>) -> Result<RedisValue, RedisError> {
-            let key = args.first().unwrap().as_string().unwrap();
-            let from = args.get(1).unwrap().as_f64().unwrap();
-            let to = args.get(2).unwrap().as_f64().unwrap();
-            let empty = vec![];
-            let binding = self.data.lock().unwrap();
-            let all_items = binding.get(&key).unwrap_or(&empty);
-            let mut result = Vec::new();
-            for (score, value) in all_items {
-                if score >= &from && score <= &to {
-                    result.push(value.as_ref().into());
-                }
-            }
-            Ok(RedisValue::Array(result))
-        }
-    }
-
-    impl Mocks for RedisMock {
-        fn process_command(&self, command: MockCommand) -> Result<RedisValue, RedisError> {
-            self.push_back(command.clone());
-            match &*command.cmd {
-                "ZADD" => self.zadd(command.args),
-                "ZREM" => self.zrem(command.args),
-                "ZRANGE" => self.zrange(command.args),
-                "ZRANGEBYSCORE" => self.zrangebyscore(command.args),
-                _ => Ok(RedisValue::Queued),
-            }
-        }
-    }
-
-    fn serialized_data<T: Encode>(entry: &T) -> RedisValue {
-        serialized_bytes(entry).into()
-    }
-
-    fn serialized_bytes<T: Encode>(entry: &T) -> Bytes {
-        golem_common::serialization::serialize(entry).expect("failed to serialize entry")
-    }
-
-    #[cfg(test)]
-    pub async fn mocked(mocks: Arc<dyn Mocks>) -> RedisPool {
-        let config = fred::prelude::RedisConfig {
-            mocks: Some(mocks),
-            ..fred::prelude::RedisConfig::default()
-        };
-        let pool = fred::prelude::RedisPool::new(config, None, None, None, 1).unwrap();
-        let pool = RedisPool::new(pool, "".to_string());
-        pool.with("scheduler", "mocked")
-            .ensure_connected()
-            .await
-            .unwrap();
-
-        pool
+    fn serialized_bytes<T: Encode>(entry: &T) -> Vec<u8> {
+        golem_common::serialization::serialize(entry)
+            .expect("failed to serialize entry")
+            .to_vec()
     }
 
     #[tokio::test]
     pub async fn promises_added_to_expected_buckets() {
-        let c1: ComponentId = ComponentId(Uuid::new_v4());
+        let uuid = Uuid::new_v4();
+        let c1: ComponentId = ComponentId(uuid);
         let i1: WorkerId = WorkerId {
             component_id: c1.clone(),
             worker_name: "inst1".to_string(),
@@ -424,73 +337,105 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
-        let buffer = Arc::new(RedisMock::new());
-        let pool = mocked(buffer.clone()).await;
+        let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
-            pool,
+            kvs.clone(),
             shard_service,
             promise_service,
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    account_id: account_id.clone(),
+                    promise_id: p1.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
 
-        let cmds = buffer.take();
-        let uuid = c1.0.to_string();
-        assert_eq!(cmds, vec![
-            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 300000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
-            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469329".as_bytes().into(), 3540000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}")))] },
-            MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 301000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
-        ]);
-
-        let result = buffer.result();
+        let result = kvs
+            .sorted_sets()
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<_, _>>();
         assert_eq!(
             result,
-            HashMap::from(
-                [
-                    ("instance:schedule:469329".to_string(), vec![
-                        (3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))]),
-                    ("instance:schedule:469330".to_string(), vec![
-                        (300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string()))),
-                        (301000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}").to_string())))])
-                ]
-            )
+            HashMap::from_iter(vec![
+                (
+                    "Schedule/worker:schedule:469329".to_string(),
+                    vec![(
+                        3540000.0,
+                        serialized_bytes(&ScheduledAction::CompletePromise {
+                            promise_id: p2,
+                            account_id: account_id.clone()
+                        })
+                    )]
+                ),
+                (
+                    "Schedule/worker:schedule:469330".to_string(),
+                    vec![
+                        (
+                            300000.0,
+                            serialized_bytes(&ScheduledAction::CompletePromise {
+                                promise_id: p1,
+                                account_id: account_id.clone()
+                            })
+                        ),
+                        (
+                            301000.0,
+                            serialized_bytes(&ScheduledAction::CompletePromise {
+                                promise_id: p3,
+                                account_id: account_id.clone()
+                            })
+                        )
+                    ]
+                )
+            ])
         );
     }
 
@@ -506,116 +451,90 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
-        let buffer = Arc::new(RedisMock::new());
-        let pool = mocked(buffer.clone()).await;
+        let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
-            pool,
+            kvs.clone(),
             shard_service,
             promise_service,
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
 
         svc.cancel(s2).await;
         svc.cancel(s3).await;
 
-        let cmds = buffer.take();
-        let uuid = c1.0.to_string();
-
-        assert_eq!(
-            cmds,
-            vec![
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        300000.0.into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        3540000.0.into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}"))),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        301000.0.into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}"))),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}"))),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}"))),
-                    ],
-                },
-            ]
-        );
-
-        let result = buffer.result();
+        let result = kvs
+            .sorted_sets()
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<_, _>>();
         assert_eq!(
             result,
-            HashMap::from(
-                [
-                    ("instance:schedule:469329".to_string(), vec![]),
-                    ("instance:schedule:469330".to_string(), vec![(300000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}").to_string())))])
-                ]
-            )
+            HashMap::from([
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                (
+                    "Schedule/worker:schedule:469330".to_string(),
+                    vec![(
+                        300000.0,
+                        serialized_bytes(&ScheduledAction::CompletePromise {
+                            promise_id: p1,
+                            account_id: account_id.clone()
+                        })
+                    )]
+                )
+            ])
         );
     }
 
@@ -631,50 +550,64 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
-        let buffer = Arc::new(RedisMock::new());
-        let pool = mocked(buffer.clone()).await;
+        let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
-            pool,
+            kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
 
@@ -682,30 +615,24 @@ mod tests {
             .await
             .unwrap();
 
-        let cmds = buffer.take();
-        let uuid = c1.0.to_string();
-        assert_eq!(
-            cmds,
-            vec![
-                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 300000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
-                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 3540000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}")))] },
-                MockCommand { cmd: "ZADD".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 661000.0.into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
-                MockCommand { cmd: "ZRANGE".into(), subcommand: None, args: vec!["instance:schedule:469329".as_bytes().into(), 0.into(), (-1).into()] },
-                MockCommand { cmd: "ZRANGEBYSCORE".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), 0.0.into(), 900000.0.into()] },
-                MockCommand { cmd: "ZREM".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":101}}")))] },
-                MockCommand { cmd: "ZREM".into(), subcommand: None, args: vec!["instance:schedule:469330".as_bytes().into(), serialized_data(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst2\"}},\"oplog_idx\":1000}}")))] },
-            ]
-        );
-
-        let result = buffer.result();
+        let result = kvs
+            .sorted_sets()
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<_, _>>();
         // The only item remaining is the one in the future
         assert_eq!(
             result,
-            HashMap::from(
-                [
-                    ("instance:schedule:469330".to_string(), vec![(3540000.0, serialized_bytes(&PromiseId::from_json_string(&format!("{{\"instance_id\":{{\"component_id\":\"{uuid}\",\"worker_name\":\"inst1\"}},\"oplog_idx\":123}}").to_string())))])
-                ]
-            )
+            HashMap::from([(
+                "Schedule/worker:schedule:469330".to_string(),
+                vec![(
+                    3540000.0,
+                    serialized_bytes(&ScheduledAction::CompletePromise {
+                        promise_id: p2.clone(),
+                        account_id: account_id.clone()
+                    })
+                )]
+            )])
         );
 
         let completed_promises = promise_service.all_completed().await;
@@ -727,50 +654,64 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
 
-        let buffer = Arc::new(RedisMock::new());
-        let pool = mocked(buffer.clone()).await;
+        let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
-            pool,
+            kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
 
@@ -778,90 +719,17 @@ mod tests {
             .await
             .unwrap();
 
-        let cmds = buffer.take();
-
-        assert_eq!(
-            cmds,
-            vec![
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        300000.0.into(),
-                        serialized_data(&p1),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        3540000.0.into(),
-                        serialized_data(&p2),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        661000.0.into(),
-                        serialized_data(&p3),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZRANGE".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        0.into(),
-                        (-1).into(),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZRANGEBYSCORE".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        0.0.into(),
-                        900000.0.into(),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&p2),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&p1),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&p3),
-                    ],
-                },
-            ]
-        );
-
-        let result = buffer.result();
+        let result = kvs
+            .sorted_sets()
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<_, _>>();
         // The only item remaining is the one in the future
         assert_eq!(
             result,
             HashMap::from([
-                ("instance:schedule:469329".to_string(), vec![]),
-                ("instance:schedule:469330".to_string(), vec![])
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                ("Schedule/worker:schedule:469330".to_string(), vec![])
             ])
         );
 
@@ -884,60 +752,77 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
         let p4: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 111,
+            oplog_idx: OplogIndex::from_u64(111),
         };
 
-        let buffer = Arc::new(RedisMock::new());
-        let pool = mocked(buffer.clone()).await;
+        let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
-            pool,
+            kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s4 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
-                p4.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p4.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
 
@@ -945,107 +830,17 @@ mod tests {
             .await
             .unwrap();
 
-        let cmds = buffer.take();
-
-        assert_eq!(
-            cmds,
-            vec![
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        300000.0.into(),
-                        serialized_data(&p1),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        3540000.0.into(),
-                        serialized_data(&p2),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        661000.0.into(),
-                        serialized_data(&p3),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        2820000.0.into(),
-                        serialized_data(&p4),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZRANGE".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        0.into(),
-                        (-1).into(),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZRANGEBYSCORE".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        0.0.into(),
-                        900000.0.into(),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&p2),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&p4),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&p1),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&p3),
-                    ],
-                },
-            ]
-        );
-
-        let result = buffer.result();
+        let result = kvs
+            .sorted_sets()
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<_, _>>();
         // The only item remaining is the one in the future
         assert_eq!(
             result,
             HashMap::from([
-                ("instance:schedule:469329".to_string(), vec![]),
-                ("instance:schedule:469330".to_string(), vec![])
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                ("Schedule/worker:schedule:469330".to_string(), vec![])
             ])
         );
 
@@ -1069,49 +864,64 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
+        let account_id = AccountId {
+            value: "test-account".to_string(),
+        };
+
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 101,
+            oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
             worker_id: i1.clone(),
-            oplog_idx: 123,
+            oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
             worker_id: i2.clone(),
-            oplog_idx: 1000,
+            oplog_idx: OplogIndex::from_u64(1000),
         };
-        let buffer = Arc::new(RedisMock::new());
-        let pool = mocked(buffer.clone()).await;
+
+        let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
         let shard_service = Arc::new(ShardServiceMock::new());
         let promise_service = Arc::new(PromiseServiceMock::new());
         let worker_activator = Arc::new(WorkerActivatorMock::new());
+        let oplog_service = Arc::new(OplogServiceMock::new());
 
         let svc = SchedulerServiceDefault::new(
-            pool,
+            kvs.clone(),
             shard_service,
             promise_service.clone(),
             worker_activator,
+            oplog_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                p1.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p1.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s2 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                p2.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p2.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
         let _s3 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
-                p3.clone(),
+                ScheduledAction::CompletePromise {
+                    promise_id: p3.clone(),
+                    account_id: account_id.clone(),
+                },
             )
             .await;
 
@@ -1119,90 +929,17 @@ mod tests {
             .await
             .unwrap();
 
-        let cmds = buffer.take();
-
-        assert_eq!(
-            cmds,
-            vec![
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        300000.0.into(),
-                        serialized_data(&p1),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        3540000.0.into(),
-                        serialized_data(&p2),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZADD".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        2820000.0.into(),
-                        serialized_data(&p3),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZRANGE".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        0.into(),
-                        (-1).into(),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZRANGEBYSCORE".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        0.0.into(),
-                        900000.0.into(),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&p2),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469329".as_bytes().into(),
-                        serialized_data(&p3),
-                    ],
-                },
-                MockCommand {
-                    cmd: "ZREM".into(),
-                    subcommand: None,
-                    args: vec![
-                        "instance:schedule:469330".as_bytes().into(),
-                        serialized_data(&p1),
-                    ],
-                },
-            ]
-        );
-
-        let result = buffer.result();
+        let result = kvs
+            .sorted_sets()
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<_, _>>();
         // The only item remaining is the one in the future
         assert_eq!(
             result,
             HashMap::from([
-                ("instance:schedule:469329".to_string(), vec![]),
-                ("instance:schedule:469330".to_string(), vec![])
+                ("Schedule/worker:schedule:469329".to_string(), vec![]),
+                ("Schedule/worker:schedule:469330".to_string(), vec![])
             ])
         );
 

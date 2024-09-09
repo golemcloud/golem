@@ -12,27 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::shard_manager::{env_vars, wait_for_startup, ShardManager};
-use crate::components::ChildProcessLogger;
-use async_trait::async_trait;
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tracing::info;
 use tracing::Level;
+
+use crate::components::redis::Redis;
+use crate::components::shard_manager::{wait_for_startup, ShardManager, ShardManagerEnvVars};
+use crate::components::{ChildProcessLogger, GolemEnvVars};
 
 pub struct SpawnedShardManager {
     http_port: u16,
     grpc_port: u16,
+    number_of_shards_override: std::sync::RwLock<Option<usize>>,
     child: Arc<Mutex<Option<Child>>>,
     logger: Arc<Mutex<Option<ChildProcessLogger>>>,
     executable: PathBuf,
     working_directory: PathBuf,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
+    env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
     verbosity: Level,
     out_level: Level,
     err_level: Level,
@@ -42,6 +44,7 @@ impl SpawnedShardManager {
     pub async fn new(
         executable: &Path,
         working_directory: &Path,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -49,15 +52,44 @@ impl SpawnedShardManager {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-shard-manager process");
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            executable,
+            working_directory,
+            number_of_shards_override,
+            http_port,
+            grpc_port,
+            redis,
+            verbosity,
+            out_level,
+            err_level,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ShardManagerEnvVars + Send + Sync + 'static>,
+        executable: &Path,
+        working_directory: &Path,
+        number_of_shards_override: Option<usize>,
+        http_port: u16,
+        grpc_port: u16,
+        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        info!("Starting golem-shard-manager process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-shard-manager at {executable:?}");
         }
 
         let (child, logger) = Self::start(
+            env_vars.as_ref(),
             executable,
             working_directory,
+            number_of_shards_override,
             http_port,
             grpc_port,
             redis.clone(),
@@ -70,11 +102,13 @@ impl SpawnedShardManager {
         Self {
             http_port,
             grpc_port,
+            number_of_shards_override: std::sync::RwLock::new(number_of_shards_override),
             child: Arc::new(Mutex::new(Some(child))),
             logger: Arc::new(Mutex::new(Some(logger))),
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
             redis,
+            env_vars,
             verbosity,
             out_level,
             err_level,
@@ -82,8 +116,10 @@ impl SpawnedShardManager {
     }
 
     async fn start(
+        env_vars: &(dyn ShardManagerEnvVars + Send + Sync + 'static),
         executable: &Path,
         working_directory: &Path,
+        number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
         redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -93,7 +129,17 @@ impl SpawnedShardManager {
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(http_port, grpc_port, redis, verbosity))
+            .envs(
+                env_vars
+                    .env_vars(
+                        number_of_shards_override,
+                        http_port,
+                        grpc_port,
+                        redis,
+                        verbosity,
+                    )
+                    .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -135,12 +181,20 @@ impl ShardManager for SpawnedShardManager {
         let _logger = self.logger.lock().unwrap().take();
     }
 
-    async fn restart(&self) {
+    async fn restart(&self, number_of_shards_override: Option<usize>) {
         info!("Restarting golem-shard-manager");
 
+        if let Some(number_of_shards) = number_of_shards_override {
+            *self.number_of_shards_override.write().unwrap() = Some(number_of_shards);
+        }
+        let number_of_shards_override: Option<usize> =
+            *self.number_of_shards_override.read().unwrap();
+
         let (child, logger) = Self::start(
+            self.env_vars.as_ref(),
             &self.executable,
             &self.working_directory,
+            number_of_shards_override,
             self.http_port,
             self.grpc_port,
             self.redis.clone(),

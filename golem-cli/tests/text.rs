@@ -5,7 +5,8 @@ use crate::cli::{Cli, CliLive};
 use crate::worker::make_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{ApiDeployment, HttpApiDefinition, WorkerId};
+use golem_client::model::{ApiDeployment, HttpApiDefinition};
+use golem_common::uri::oss::urn::WorkerUrn;
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -29,6 +30,11 @@ fn make(
             format!("text_component_update{suffix}"),
             ctx.clone(),
             text_component_update,
+        ),
+        Trial::test_in_context(
+            format!("text_component_get{suffix}"),
+            ctx.clone(),
+            text_component_get,
         ),
         Trial::test_in_context(
             format!("text_component_list{suffix}"),
@@ -107,14 +113,18 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     let mut short_args = make(
         "_short",
         "CLI_short",
-        CliLive::make(deps.clone()).unwrap().with_short_args(),
+        CliLive::make("text_short", deps.clone())
+            .unwrap()
+            .with_short_args(),
         deps.clone(),
     );
 
     let mut long_args = make(
         "_long",
         "CLI_long",
-        CliLive::make(deps.clone()).unwrap().with_long_args(),
+        CliLive::make("text_long", deps.clone())
+            .unwrap()
+            .with_long_args(),
         deps,
     );
 
@@ -143,9 +153,10 @@ fn text_component_add(
 
     let lines = component_res.lines().collect::<Vec<_>>();
 
-    let regex_header =
-        Regex::new("New component created with ID ([^ ]+), version 0, and size of ([0-9]+) bytes.")
-            .unwrap();
+    let regex_header = Regex::new(
+        "New component created with URN ([^ ]+), version 0, and size of ([0-9]+) bytes.",
+    )
+    .unwrap();
     assert!(regex_header.is_match(lines.first().unwrap()));
 
     assert_eq!(
@@ -155,11 +166,11 @@ fn text_component_add(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -186,8 +197,8 @@ fn text_component_update(
     let update_res = cli.with_format(Format::Text).run_string(&[
         "component",
         "update",
-        &cfg.arg('C', "component-id"),
-        &component.component_id,
+        &cfg.arg('C', "component"),
+        &component.component_urn.to_string(),
         env_service.to_str().unwrap(),
     ])?;
 
@@ -196,8 +207,8 @@ fn text_component_update(
     assert_eq!(
         *lines.first().unwrap(),
         format!(
-            "Updated component with ID {}. New version: 1. Component size is 72309 bytes.",
-            component.component_id
+            "Updated component with URN {}. New version: 1. Component size is 71828 bytes.",
+            component.component_urn
         )
     );
     assert_eq!(
@@ -207,11 +218,62 @@ fn text_component_update(
     assert_eq!(*lines.get(2).unwrap(), "Exports:");
     assert_eq!(
         *lines.get(3).unwrap(),
-        "\tgolem:it/api/get-environment() -> result<list<tuple<string, string>>, string>"
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
     );
     assert_eq!(
         *lines.get(4).unwrap(),
-        "\tgolem:it/api/get-arguments() -> result<list<string>, string>"
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
+    );
+
+    Ok(())
+}
+
+fn text_component_get(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    let component_name = format!("{name} text component get");
+    let env_service = deps.component_directory().join("environment-service.wasm");
+    let cfg = &cli.config;
+    let component: ComponentView = cli.run(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+        env_service.to_str().unwrap(),
+    ])?;
+
+    let get_res = cli.with_format(Format::Text).run_string(&[
+        "component",
+        "get",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+    ])?;
+
+    let lines = get_res.lines().collect::<Vec<_>>();
+
+    assert_eq!(
+        *lines.first().unwrap(),
+        format!(
+            "Component with URN {}. Version: 0. Component size is 71828 bytes.",
+            component.component_urn
+        )
+    );
+    assert_eq!(
+        *lines.get(1).unwrap(),
+        format!("Component name: {component_name}.")
+    );
+    assert_eq!(*lines.get(2).unwrap(), "Exports:");
+    assert_eq!(
+        *lines.get(3).unwrap(),
+        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
+    );
+    assert_eq!(
+        *lines.get(4).unwrap(),
+        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
     );
 
     Ok(())
@@ -244,13 +306,13 @@ fn text_component_list(
 
     let expected = formatdoc!(
         "
-        +--------------------------------------+-------------------------------+---------+-------+---------------+
-        | ID                                   | Name                          | Version | Size  | Exports count |
-        +--------------------------------------+-------------------------------+---------+-------+---------------+
-        | {} | {} |       0 | 72309 |             2 |
-        +--------------------------------------+-------------------------------+---------+-------+---------------+
+        +----------------------------------------------------+-------------------------------+---------+-------+---------------+
+        | URN                                                | Name                          | Version | Size  | Exports count |
+        +----------------------------------------------------+-------------------------------+---------+-------+---------------+
+        | {} | {} |       0 | 71828 |             2 |
+        +----------------------------------------------------+-------------------------------+---------+-------+---------------+
         ",
-        component.component_id,
+        component.component_urn,
         component_name,
     );
 
@@ -266,7 +328,8 @@ fn text_worker_add(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component(deps, &format!("{name} text worker add"), &cli)?.component_id;
+    let component_urn =
+        make_component(deps, &format!("{name} text worker add"), &cli)?.component_urn;
     let worker_name = format!("{name}_worker_add");
     let cfg = &cli.config;
     let res = cli.with_format(Format::Text).run_string(&[
@@ -274,8 +337,8 @@ fn text_worker_add(
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
     ])?;
 
     let regex_res =
@@ -287,7 +350,7 @@ fn text_worker_add(
 
     assert_eq!(
         matched.as_ref().unwrap().get(1).unwrap().as_str(),
-        component_id
+        component_urn.to_string()
     );
     assert_eq!(
         matched.as_ref().unwrap().get(2).unwrap().as_str(),
@@ -304,17 +367,17 @@ fn text_worker_invoke_and_await(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.component_id;
+    let component_urn =
+        make_component(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.component_urn;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
         &cfg.arg('e', "env"),
         "TEST_ENV=test-value",
         "test-arg",
@@ -322,12 +385,12 @@ fn text_worker_invoke_and_await(
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "invoke-and-await",
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
         &cfg.arg('w', "worker-name"),
         &worker_name,
         &cfg.arg('f', "function"),
-        "golem:it/api/get-arguments",
+        "golem:it/api.{get-arguments}",
     ])?;
 
     let lines = res.lines().collect::<Vec<_>>();
@@ -348,16 +411,17 @@ fn text_worker_get(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id = make_component(deps, &format!("{name} text worker get"), &cli)?.component_id;
+    let component_urn =
+        make_component(deps, &format!("{name} text worker get"), &cli)?.component_urn;
     let worker_name = format!("{name}_worker_get");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
     ])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -365,18 +429,20 @@ fn text_worker_get(
         "get",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
     ])?;
 
     let expected = formatdoc!(
         r#"
-            Worker "{worker_name}" of component {component_id} with component version 0.
+            Worker "{worker_name}" of component {component_urn} with component version 0.
+            URN: urn:worker:{}/{worker_name}.
             Status: Idle.
             Startup arguments: .
             Environment variables: .
             Retry count: 0.
-            "#
+            "#,
+        component_urn.id.0
     );
 
     assert_eq!(res, expected);
@@ -391,38 +457,38 @@ fn text_worker_list(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_id =
-        make_component(deps, &format!("{name} text worker list"), &cli)?.component_id;
+    let component_urn =
+        make_component(deps, &format!("{name} text worker list"), &cli)?.component_urn;
     let worker_name = format!("{name:_<9}_worker_list");
     let cfg = &cli.config;
-    let _: WorkerId = cli.run(&[
+    let _: WorkerUrn = cli.run(&[
         "worker",
         "add",
         &cfg.arg('w', "worker-name"),
         &worker_name,
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
     ])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "worker",
         "list",
-        &cfg.arg('C', "component-id"),
-        &component_id,
+        &cfg.arg('C', "component"),
+        &component_urn.to_string(),
         &cfg.arg('f', "filter"),
         &format!("name = {worker_name}"),
-        &cfg.arg('p', "precise"),
+        "--precise",
         "true",
     ])?;
 
     let expected =
         formatdoc!(
             "
-            +--------------------------------------+-----------------------+--------+-------------------+
-            | Component                            | Name                  | Status | Component version |
-            +--------------------------------------+-----------------------+--------+-------------------+
-            | {component_id} | {worker_name} |   Idle |                 0 |
-            +--------------------------------------+-----------------------+--------+-------------------+
+            +----------------------------------------------------+-----------------------+--------+-------------------+
+            | Component                                          | Name                  | Status | Component version |
+            +----------------------------------------------------+-----------------------+--------+-------------------+
+            | {component_urn} | {worker_name} |   Idle |                 0 |
+            +----------------------------------------------------+-----------------------+--------+-------------------+
             "
         );
 
@@ -442,20 +508,26 @@ fn text_example_list(
     let res = cli.with_format(Format::Text).run_string(&[
         "list-examples",
         &cfg.arg('l', "language"),
-        "C#",
+        "zig",
     ])?;
 
     let expected = formatdoc!(
         "
-            +------------+----------+-------+--------------------+
-            | Name       | Language | Tier  | Description        |
-            +------------+----------+-------+--------------------+
-            | cs-minimal | C#       | tier3 | A simple stateless |
-            |            |          |       | Golem function     |
-            |            |          |       | written in C# with |
-            |            |          |       | no dependencies on |
-            |            |          |       | external services  |
-            +------------+----------+-------+--------------------+
+            +---------------------+----------+-------+----------------------+
+            | Name                | Language | Tier  | Description          |
+            +---------------------+----------+-------+----------------------+
+            | zig-default         | Zig      | tier1 | A stateful Golem     |
+            |                     |          |       | worker written in    |
+            |                     |          |       | Zig with full access |
+            |                     |          |       | to WASI and the      |
+            |                     |          |       | Golem runtime APIs   |
+            +---------------------+----------+-------+----------------------+
+            | zig-default-minimal | Zig      | tier1 | A simple stateful    |
+            |                     |          |       | Golem worker written |
+            |                     |          |       | in Zig with no       |
+            |                     |          |       | dependencies on      |
+            |                     |          |       | external services    |
+            +---------------------+----------+-------+----------------------+
             "
     );
 
@@ -473,7 +545,9 @@ fn text_api_definition_import(
 ) -> Result<(), Failed> {
     let component_name = format!("text_api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let path = make_open_api_file(&component_name, &component.component_id)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let component_version = component.component_version;
+    let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
@@ -481,20 +555,19 @@ fn text_api_definition_import(
         path.to_str().unwrap(),
     ])?;
 
-    let component_end = &component.component_id[component.component_id.len() - 7..];
+    let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition imported with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -510,7 +583,8 @@ fn text_api_definition_add(
 ) -> Result<(), Failed> {
     let component_name = format!("text_api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -519,20 +593,19 @@ fn text_api_definition_add(
         path.to_str().unwrap(),
     ])?;
 
-    let component_end = &component.component_id[component.component_id.len() - 7..];
+    let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition created with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -548,7 +621,8 @@ fn text_api_definition_update(
 ) -> Result<(), Failed> {
     let component_name = format!("text_api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -558,20 +632,19 @@ fn text_api_definition_update(
         path.to_str().unwrap(),
     ])?;
 
-    let component_end = &component.component_id[component.component_id.len() - 7..];
+    let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition updated with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -587,7 +660,8 @@ fn text_api_definition_list(
 ) -> Result<(), Failed> {
     let component_name = format!("text_api_definition_list{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
@@ -624,7 +698,8 @@ fn text_api_definition_get(
 ) -> Result<(), Failed> {
     let component_name = format!("text_api_definition_get{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -640,20 +715,19 @@ fn text_api_definition_get(
         "0.1.0",
     ])?;
 
-    let component_end = &component.component_id[component.component_id.len() - 7..];
+    let component_end = &component_id[component_id.len() - 12..];
 
-    let expected =
-        formatdoc!(
-            "
+    let expected = formatdoc!(
+        "
             API Definition with ID {component_name} and version 0.1.0.
             Routes:
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Method | Path                         | Component | Worker                         | Function                       |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
-            | Get    | /{{user-id}}/get-cart-contents |  *{component_end} | worker-${{request.path.user-id}} | golem:it/api/get-cart-contents |
-            +--------+------------------------------+-----------+--------------------------------+--------------------------------+
+            +--------+------------------------------+---------------+-------------+
+            | Method | Path                         | Component URN | Worker Name |
+            +--------+------------------------------+---------------+-------------+
+            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
+            +--------+------------------------------+---------------+-------------+
             "
-        );
+    );
 
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
@@ -678,10 +752,8 @@ fn text_api_deployment_deploy(
     let res = cli.with_format(Format::Text).run_string(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", &definition.id, &definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),
@@ -719,10 +791,8 @@ fn text_api_deployment_get(
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", &definition.id, &definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),
@@ -766,10 +836,8 @@ fn text_api_deployment_list(
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
-        &cfg.arg('i', "id"),
-        &definition.id,
-        &cfg.arg('V', "version"),
-        &definition.version,
+        &cfg.arg('d', "definition"),
+        &format!("{}/{}", &definition.id, &definition.version),
         &cfg.arg('H', "host"),
         &host,
         &cfg.arg('s', "subdomain"),

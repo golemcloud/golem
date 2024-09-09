@@ -15,17 +15,18 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::{ResourceTable, StreamError};
+use wasmtime_wasi::{ResourceTable, StreamError};
 
+use crate::durable_host::http::{end_http_request, end_http_request_sync};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::serialized::SerializableStreamError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::error::GolemError;
 use crate::metrics::wasm::record_host_function_call;
-use crate::model::PersistenceLevel;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::WrappedFunctionType;
-use wasmtime_wasi::preview2::bindings::wasi::io::streams::{
+use golem_common::model::oplog::{OplogIndex, WrappedFunctionType};
+use golem_common::model::WorkerEvent;
+use wasmtime_wasi::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
@@ -37,11 +38,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "read");
-        if is_incoming_http_body_stream(&self.table, &self_) {
-            Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
+        if is_incoming_http_body_stream(self.table(), &self_) {
+            let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
+            let result = Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::read",
                 |ctx| {
                     Box::pin(async move {
@@ -49,7 +54,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::read(&mut self.as_wasi_view(), self_, len).await
         }
@@ -60,11 +67,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<Vec<u8>, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "blocking_read");
-        if is_incoming_http_body_stream(&self.table, &self_) {
-            Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
+        if is_incoming_http_body_stream(self.table(), &self_) {
+            let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
+            let result = Durability::<Ctx, Vec<u8>, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::blocking_read",
                 |ctx| {
                     Box::pin(async move {
@@ -72,18 +83,24 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::blocking_read(&mut self.as_wasi_view(), self_, len).await
         }
     }
 
     async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "skip");
-        if is_incoming_http_body_stream(&self.table, &self_) {
-            Durability::<Ctx, u64, SerializableStreamError>::wrap(
+        if is_incoming_http_body_stream(self.table(), &self_) {
+            let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
+            let result = Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::skip",
                 |ctx| {
                     Box::pin(async move {
@@ -91,7 +108,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::skip(&mut self.as_wasi_view(), self_, len).await
         }
@@ -102,11 +121,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::input_stream", "blocking_skip");
-        if is_incoming_http_body_stream(&self.table, &self_) {
-            Durability::<Ctx, u64, SerializableStreamError>::wrap(
+        if is_incoming_http_body_stream(self.table(), &self_) {
+            let handle = self_.rep();
+            let begin_idx = get_http_request_begin_idx(self, handle)?;
+
+            let result = Durability::<Ctx, u64, SerializableStreamError>::wrap(
                 self,
-                WrappedFunctionType::ReadRemote,
+                WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                 "http::types::incoming_body_stream::blocking_skip",
                 |ctx| {
                     Box::pin(async move {
@@ -114,7 +137,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     })
                 },
             )
-            .await
+            .await;
+            end_http_request_if_closed(self, handle, &result).await?;
+            result
         } else {
             HostInputStream::blocking_skip(&mut self.as_wasi_view(), self_, len).await
         }
@@ -127,6 +152,16 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<InputStream>) -> anyhow::Result<()> {
         record_host_function_call("io::streams::input_stream", "drop");
+
+        if is_incoming_http_body_stream(self.table(), &rep) {
+            let handle = rep.rep();
+            if let Some(state) = self.state.open_http_requests.get(&handle) {
+                if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
+                    end_http_request_sync(self, handle)?;
+                }
+            }
+        }
+
         HostInputStream::drop(&mut self.as_wasi_view(), rep)
     }
 }
@@ -138,35 +173,29 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         HostOutputStream::check_write(&mut self.as_wasi_view(), self_)
     }
 
-    fn write(
+    async fn write(
         &mut self,
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "write");
 
-        let event_service = &self.public_state.event_service;
-
-        let mut is_std = false;
-        let is_live = self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing;
-        let output = self.table.get(&self_)?;
-        if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            if is_live {
-                event_service.emit_stdout(contents.clone());
-            }
-            is_std = true;
+        let output = self.table().get(&self_)?;
+        let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
+            Some(WorkerEvent::stdout(contents.clone()))
         } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            if is_live {
-                event_service.emit_stderr(contents.clone());
-            }
-            is_std = true;
-        }
-
-        if !is_std || is_live {
-            HostOutputStream::write(&mut self.as_wasi_view(), self_, contents)
+            Some(WorkerEvent::stderr(contents.clone()))
         } else {
-            Ok(())
+            None
+        };
+
+        if let Some(event) = event {
+            self.emit_log_event(event).await;
+            Ok::<(), StreamError>(())
+        } else {
+            // Non-stdout writes are non persistent and always executed
+            HostOutputStream::write(&mut self.as_wasi_view(), self_, contents).await
         }
     }
 
@@ -175,40 +204,20 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
-        record_host_function_call("io::streams::output_stream", "blocking_write_and_flush");
-
-        let event_service = &self.public_state.event_service;
-
-        let mut is_std = false;
-        let is_live = self.state.is_live()
-            || self.state.persistence_level == PersistenceLevel::PersistNothing;
-        let output = self.table.get(&self_)?;
-        if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            if is_live {
-                event_service.emit_stdout(contents.clone());
-            }
-            is_std = true;
-        } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            if is_live {
-                event_service.emit_stderr(contents.clone());
-            }
-            is_std = true;
-        }
-
-        if !is_std || is_live {
-            HostOutputStream::blocking_write_and_flush(&mut self.as_wasi_view(), self_, contents)
-                .await
-        } else {
-            Ok(())
-        }
+        let self2 = Resource::new_borrow(self_.rep());
+        self.write(self_, contents).await?;
+        self.blocking_flush(self2).await?;
+        Ok(())
     }
 
-    fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+    async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "flush");
-        HostOutputStream::flush(&mut self.as_wasi_view(), self_)
+        HostOutputStream::flush(&mut self.as_wasi_view(), self_).await
     }
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "blocking_flush");
         HostOutputStream::blocking_flush(&mut self.as_wasi_view(), self_).await
     }
@@ -218,9 +227,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         HostOutputStream::subscribe(&mut self.as_wasi_view(), self_)
     }
 
-    fn write_zeroes(&mut self, self_: Resource<OutputStream>, len: u64) -> Result<(), StreamError> {
+    async fn write_zeroes(
+        &mut self,
+        self_: Resource<OutputStream>,
+        len: u64,
+    ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "write_zeroeas");
-        HostOutputStream::write_zeroes(&mut self.as_wasi_view(), self_, len)
+        HostOutputStream::write_zeroes(&mut self.as_wasi_view(), self_, len).await
     }
 
     async fn blocking_write_zeroes_and_flush(
@@ -228,6 +242,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         len: u64,
     ) -> Result<(), StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call(
             "io::streams::output_stream",
             "blocking_write_zeroes_and_flush",
@@ -242,6 +257,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         src: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "splice");
         HostOutputStream::splice(&mut self.as_wasi_view(), self_, src, len).await
     }
@@ -252,6 +268,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         src: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
+        let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::streams::output_stream", "blocking_splice");
         HostOutputStream::blocking_splice(&mut self.as_wasi_view(), self_, src, len).await
     }
@@ -267,8 +284,130 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_stream_error(
         &mut self,
         err: StreamError,
-    ) -> anyhow::Result<wasmtime_wasi::preview2::bindings::wasi::io::streams::StreamError> {
+    ) -> anyhow::Result<wasmtime_wasi::bindings::io::streams::StreamError> {
         Host::convert_stream_error(&mut self.as_wasi_view(), err)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostInputStream for &mut DurableWorkerCtx<Ctx> {
+    async fn read(
+        &mut self,
+        self_: Resource<InputStream>,
+        len: u64,
+    ) -> Result<Vec<u8>, StreamError> {
+        (*self).read(self_, len).await
+    }
+
+    async fn blocking_read(
+        &mut self,
+        self_: Resource<InputStream>,
+        len: u64,
+    ) -> Result<Vec<u8>, StreamError> {
+        (*self).blocking_read(self_, len).await
+    }
+
+    async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
+        (*self).skip(self_, len).await
+    }
+
+    async fn blocking_skip(
+        &mut self,
+        self_: Resource<InputStream>,
+        len: u64,
+    ) -> Result<u64, StreamError> {
+        (*self).blocking_skip(self_, len).await
+    }
+
+    fn subscribe(&mut self, self_: Resource<InputStream>) -> anyhow::Result<Resource<Pollable>> {
+        HostInputStream::subscribe(*self, self_)
+    }
+
+    fn drop(&mut self, rep: Resource<InputStream>) -> anyhow::Result<()> {
+        HostInputStream::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostOutputStream for &mut DurableWorkerCtx<Ctx> {
+    fn check_write(&mut self, self_: Resource<OutputStream>) -> Result<u64, StreamError> {
+        (*self).check_write(self_)
+    }
+
+    async fn write(
+        &mut self,
+        self_: Resource<OutputStream>,
+        contents: Vec<u8>,
+    ) -> Result<(), StreamError> {
+        (*self).write(self_, contents).await
+    }
+
+    async fn blocking_write_and_flush(
+        &mut self,
+        self_: Resource<OutputStream>,
+        contents: Vec<u8>,
+    ) -> Result<(), StreamError> {
+        (*self).blocking_write_and_flush(self_, contents).await
+    }
+
+    async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        (*self).flush(self_).await
+    }
+
+    async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
+        (*self).blocking_flush(self_).await
+    }
+
+    fn subscribe(&mut self, self_: Resource<OutputStream>) -> anyhow::Result<Resource<Pollable>> {
+        HostOutputStream::subscribe(*self, self_)
+    }
+
+    async fn write_zeroes(
+        &mut self,
+        self_: Resource<OutputStream>,
+        len: u64,
+    ) -> Result<(), StreamError> {
+        (*self).write_zeroes(self_, len).await
+    }
+
+    async fn blocking_write_zeroes_and_flush(
+        &mut self,
+        self_: Resource<OutputStream>,
+        len: u64,
+    ) -> Result<(), StreamError> {
+        (*self).blocking_write_zeroes_and_flush(self_, len).await
+    }
+
+    async fn splice(
+        &mut self,
+        self_: Resource<OutputStream>,
+        src: Resource<InputStream>,
+        len: u64,
+    ) -> Result<u64, StreamError> {
+        (*self).splice(self_, src, len).await
+    }
+
+    async fn blocking_splice(
+        &mut self,
+        self_: Resource<OutputStream>,
+        src: Resource<InputStream>,
+        len: u64,
+    ) -> Result<u64, StreamError> {
+        (*self).blocking_splice(self_, src, len).await
+    }
+
+    fn drop(&mut self, rep: Resource<OutputStream>) -> anyhow::Result<()> {
+        HostOutputStream::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {
+    fn convert_stream_error(
+        &mut self,
+        err: StreamError,
+    ) -> anyhow::Result<wasmtime_wasi::bindings::io::streams::StreamError> {
+        (*self).convert_stream_error(err)
     }
 }
 
@@ -293,4 +432,40 @@ impl From<GolemError> for StreamError {
     fn from(value: GolemError) -> Self {
         StreamError::Trap(anyhow!(value))
     }
+}
+
+async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+    result: &Result<T, StreamError>,
+) -> Result<(), GolemError> {
+    if matches!(result, Err(StreamError::Closed)) {
+        if let Some(state) = ctx.state.open_http_requests.get(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
+                end_http_request(ctx, handle).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn get_http_request_begin_idx<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> Result<OplogIndex, StreamError> {
+    let request_state = ctx.state.open_http_requests.get(&handle).ok_or_else(|| {
+        StreamError::Trap(anyhow!(
+            "No matching HTTP request is associated with resource handle"
+        ))
+    })?;
+    let begin_idx = *ctx
+        .state
+        .open_function_table
+        .get(&request_state.root_handle)
+        .ok_or_else(|| {
+            StreamError::Trap(anyhow!(
+                "No matching BeginRemoteWrite index was found for the open HTTP request"
+            ))
+        })?;
+    Ok(begin_idx)
 }

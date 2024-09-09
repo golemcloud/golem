@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+import "golem/common/error_body.proto";
+
+package golem.shardmanager.v1;
+
+message ShardManagerError {
+  oneof error {
+    golem.common.ErrorBody invalid_request = 1;
+    golem.common.ErrorBody timeout = 2;
+    golem.common.ErrorBody unknown = 3;
+  }
+}

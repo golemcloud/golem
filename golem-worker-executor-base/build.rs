@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(target_file, preview2_mod_gen(&golem_wit_root)).unwrap();
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=Cargo.toml");
 
     Ok(())
 }
@@ -19,7 +20,23 @@ fn find_package_root(name: &str) -> String {
         .manifest_path("./Cargo.toml")
         .exec()
         .unwrap();
-    let package = metadata.packages.iter().find(|p| p.name == name).unwrap();
+
+    let package = metadata
+        .packages
+        .into_iter()
+        .fold(None, |acc, p| {
+            if p.name == name {
+                match acc {
+                    None => Some(p),
+                    Some(cp) if cp.version < p.version => Some(p),
+                    _ => acc,
+                }
+            } else {
+                acc
+            }
+        })
+        .unwrap();
+
     package.manifest_path.parent().unwrap().to_string()
 }
 
@@ -43,6 +60,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
         ",
         tracing: false,
         async: true,
+        trappable_imports: true,
         with: {{
             "wasi:io/streams/input-stream": InputStream,
             "wasi:io/streams/output-stream": OutputStream,
@@ -56,7 +74,8 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
             "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
             "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
-        }}
+        }},
+        skip_mut_forwarding_impls: true,
     }});
         "#
     )

@@ -12,18 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Deserialize;
+use golem_service_base::model::Empty;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-#[derive(Default)]
 pub enum ComponentCompilationConfig {
     Enabled(ComponentCompilationEnabledConfig),
-    #[default]
-    Disabled,
+    Disabled(Empty),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Default for ComponentCompilationConfig {
+    fn default() -> Self {
+        Self::Enabled(ComponentCompilationEnabledConfig {
+            host: "localhost".to_string(),
+            port: 9091,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentCompilationEnabledConfig {
     pub host: String,
     pub port: u16,

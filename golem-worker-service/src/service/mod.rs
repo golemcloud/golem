@@ -1,22 +1,24 @@
-pub mod api_definition_lookup_impl;
 pub mod component;
 pub mod worker;
 
-use crate::service::api_definition_lookup_impl::CustomRequestDefinitionLookupDefault;
-use crate::worker_bridge_request_executor::WorkerRequestToHttpResponse;
+use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
-use golem_worker_service_base::api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::api_definition::http::{
+    CompiledHttpApiDefinition, HttpApiDefinition,
+};
 
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::auth::{CommonNamespace, EmptyAuthCtx};
 use golem_worker_service_base::http::InputHttpRequest;
-use golem_worker_service_base::repo::api_definition_repo::{
-    ApiDefinitionRepo, InMemoryRegistry, RedisApiRegistry,
-};
+
+use golem_worker_service_base::repo::api_definition;
+use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionService, ApiDefinitionServiceDefault,
+    ApiDefinitionService, ApiDefinitionServiceDefault, ApiDefinitionServiceNoop,
 };
-use golem_worker_service_base::service::api_definition_lookup::ApiDefinitionLookup;
+use golem_worker_service_base::service::api_definition_lookup::{
+    ApiDefinitionsLookup, HttpApiDefinitionLookup,
+};
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::component::{ComponentServiceNoop, RemoteComponentService};
@@ -28,33 +30,32 @@ use golem_worker_service_base::service::worker::{
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
-use golem_worker_service_base::repo::api_deployment_repo::{
-    ApiDeploymentRepo, InMemoryDeployment, RedisApiDeploy,
-};
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
+use golem_common::config::RetryConfig;
+
 use golem_worker_service_base::service::api_deployment::{
-    ApiDeploymentService, ApiDeploymentServiceDefault,
+    ApiDeploymentService, ApiDeploymentServiceDefault, ApiDeploymentServiceNoop,
 };
-use poem::Response;
 use std::sync::Arc;
-use tracing::error;
+use std::time::Duration;
+
+use golem_common::config::DbConfig;
+use golem_service_base::db;
 
 #[derive(Clone)]
 pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
     pub definition_service: Arc<
-        dyn ApiDefinitionService<
-                EmptyAuthCtx,
-                CommonNamespace,
-                HttpApiDefinition,
-                RouteValidationError,
-            > + Sync
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+            + Sync
             + Send,
     >,
-    pub deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send>,
+    pub deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
-        Arc<dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send>,
-    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send>,
+        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
+    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -70,13 +71,18 @@ impl Services {
             ),
         );
 
-        let worker_executor_grpc_clients: Arc<
-            dyn golem_service_base::worker_executor_clients::WorkerExecutorClients + Sync + Send,
-        > = Arc::new(
-            golem_service_base::worker_executor_clients::WorkerExecutorClientsDefault::new(
-                config.worker_executor_client_cache.max_capacity,
-                config.worker_executor_client_cache.time_to_idle,
-            ),
+        let worker_executor_grpc_clients = MultiTargetGrpcClient::new(
+            WorkerExecutorClient::new,
+            GrpcClientConfig {
+                retries_on_unavailable: RetryConfig {
+                    max_attempts: 0, // we want to invalidate the routing table asap
+                    min_delay: Duration::from_millis(100),
+                    max_delay: Duration::from_secs(2),
+                    multiplier: 2.0,
+                    max_jitter_factor: Some(0.15),
+                },
+                connect_timeout: Duration::from_secs(10),
+            },
         );
 
         let component_service: component::ComponentService = {
@@ -89,58 +95,73 @@ impl Services {
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
             worker_executor_grpc_clients.clone(),
+            config.worker_executor_retries.clone(),
             component_service.clone(),
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
-            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
+        );
 
-        let definition_repo: Arc<
-            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
-        > = Arc::new(RedisApiRegistry::new(&config.redis).await.map_err(|e| {
-            error!("RedisApiRegistry - init error: {}", e);
-            format!("RedisApiRegistry - init error: {}", e)
-        })?);
-
-        let deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send> =
-            Arc::new(RedisApiDeploy::new(&config.redis).await.map_err(|e| {
-                error!("RedisApiDeploymentRepo - init error: {}", e);
-                format!("RedisApiDeploymentRepo - init error: {}", e)
-            })?);
-
-        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceDefault::new(
-                deployment_repo.clone(),
-                definition_repo.clone(),
-            ));
-
-        let definition_lookup_service = Arc::new(CustomRequestDefinitionLookupDefault::new(
-            definition_repo.clone(),
-            deployment_repo.clone(),
-        ));
+        let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
+            DbConfig::Postgres(c) => {
+                let db_pool = db::create_postgres_pool(&c)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+                    Arc::new(api_definition::DbApiDefinitionRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+                    Arc::new(api_deployment::DbApiDeploymentRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                (api_definition_repo, api_deployment_repo)
+            }
+            DbConfig::Sqlite(c) => {
+                let db_pool = db::create_sqlite_pool(&c)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send> =
+                    Arc::new(api_definition::DbApiDefinitionRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
+                    Arc::new(api_deployment::DbApiDeploymentRepo::new(
+                        db_pool.clone().into(),
+                    ));
+                (api_definition_repo, api_deployment_repo)
+            }
+        };
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<
-                    EmptyAuthCtx,
-                    CommonNamespace,
-                    HttpApiDefinition,
-                    RouteValidationError,
-                > + Sync
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
-            definition_repo.clone(),
+            api_definition_repo.clone(),
+            api_deployment_repo.clone(),
             api_definition_validator_service.clone(),
         ));
+
+        let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
+            Arc::new(ApiDeploymentServiceDefault::new(
+                api_deployment_repo.clone(),
+                api_definition_repo.clone(),
+            ));
+
+        let http_definition_lookup_service =
+            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
 
         Ok(Services {
             worker_service,
             definition_service,
             deployment_service,
-            http_definition_lookup_service: definition_lookup_service,
+            http_definition_lookup_service,
             worker_to_http_service,
             component_service,
             api_definition_validator_service,
@@ -148,7 +169,8 @@ impl Services {
     }
 
     pub fn noop() -> Services {
-        let component_service: component::ComponentService = Arc::new(ComponentServiceNoop {});
+        let component_service: component::ComponentService =
+            Arc::new(ComponentServiceNoop::default());
 
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceNoOp {
             metadata: WorkerRequestMetadata {
@@ -157,46 +179,33 @@ impl Services {
             },
         });
 
-        let definition_repo: Arc<
-            dyn ApiDefinitionRepo<CommonNamespace, HttpApiDefinition> + Sync + Send,
-        > = Arc::new(InMemoryRegistry::default());
-
-        let deployment_repo: Arc<dyn ApiDeploymentRepo<CommonNamespace> + Sync + Send> =
-            Arc::new(InMemoryDeployment::default());
-
-        let definition_lookup_service: Arc<
-            dyn ApiDefinitionLookup<InputHttpRequest, HttpApiDefinition> + Sync + Send,
-        > = Arc::new(CustomRequestDefinitionLookupDefault::new(
-            definition_repo.clone(),
-            deployment_repo.clone(),
-        ));
-
-        let deployment_service: Arc<dyn ApiDeploymentService<CommonNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceDefault::new(
-                deployment_repo.clone(),
-                definition_repo.clone(),
-            ));
-
         let api_definition_validator_service: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
                 + Sync
                 + Send,
-        > = Arc::new(ApiDefinitionValidatorNoop {});
+        > = Arc::new(ApiDefinitionValidatorNoop::default());
 
-        let definition_service = Arc::new(ApiDefinitionServiceDefault::new(
-            component_service.clone(),
-            Arc::new(InMemoryRegistry::default()),
-            api_definition_validator_service.clone(),
-        ));
+        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
+        );
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor<Response> + Sync + Send> =
-            Arc::new(WorkerRequestToHttpResponse::new(worker_service.clone()));
+        let definition_service: Arc<
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+                + Sync
+                + Send,
+        > = Arc::new(ApiDefinitionServiceNoop::default());
+
+        let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
+            Arc::new(ApiDeploymentServiceNoop::default());
+
+        let http_definition_lookup_service =
+            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
 
         Services {
             worker_service,
             definition_service,
             deployment_service,
-            http_definition_lookup_service: definition_lookup_service,
+            http_definition_lookup_service,
             worker_to_http_service,
             component_service,
             api_definition_validator_service,

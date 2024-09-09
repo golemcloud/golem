@@ -12,28 +12,92 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::RoutingTable;
+use std::fmt::Display;
+use std::ops::Deref;
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::shard_manager_service_client;
-use golem_common::cache::*;
 use serde::Deserialize;
-use url::Url;
+use serde::Serialize;
+use tokio::sync::RwLock;
+use tokio::time::Instant;
+use tonic::transport::Channel;
+use tonic::Status;
+
+use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
+use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
+use golem_common::cache::*;
+use golem_common::client::GrpcClient;
+use golem_common::model::RoutingTable;
+use golem_common::retriable_error::IsRetriableError;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
-    Unexpected(String),
+    ShardManagerGrpcError(Status),
+    ShardManagerError(ShardManagerError),
+    NoResult,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl Display for RoutingTableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            RoutingTableError::ShardManagerGrpcError(status) => {
+                write!(
+                    f,
+                    "Shard Manager gRPC error: {} {}",
+                    status.code(),
+                    status.message()
+                )
+            }
+            RoutingTableError::ShardManagerError(error) => {
+                let detail = match &error.error {
+                    Some(error) => match error {
+                        Error::InvalidRequest(e) => format!("Invalid Request: {}", e.error),
+                        Error::Timeout(e) => format!("Timeout: {}", e.error),
+                        Error::Unknown(e) => format!("Unknown: {}", e.error),
+                    },
+                    None => "Unknown".to_string(),
+                };
+
+                write!(f, "Shard Manager error: {}", detail)
+            }
+            RoutingTableError::NoResult => write!(f, "No Result"),
+        }
+    }
+}
+
+impl IsRetriableError for RoutingTableError {
+    fn is_retriable(&self) -> bool {
+        match &self {
+            RoutingTableError::ShardManagerGrpcError(status) => status.is_retriable(),
+            RoutingTableError::ShardManagerError(error) => match &error.error {
+                Some(error) => match error {
+                    Error::InvalidRequest(_) => false,
+                    Error::Timeout(_) => true,
+                    Error::Unknown(_) => true,
+                },
+                None => true,
+            },
+            RoutingTableError::NoResult => true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RoutingTableConfig {
     host: String,
     port: u16,
+    #[serde(with = "humantime_serde")]
+    invalidation_min_delay: Duration,
 }
 
 impl RoutingTableConfig {
-    pub fn url(&self) -> Url {
-        Url::parse(&format!("http://{}:{}", self.host, self.port))
+    pub fn url(&self) -> http_02::Uri {
+        format!("http://{}:{}", self.host, self.port)
+            .parse()
             .expect("Failed to parse shard manager URL")
     }
 }
@@ -42,38 +106,47 @@ impl Default for RoutingTableConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 9001,
+            port: 9002,
+            invalidation_min_delay: Duration::from_millis(500),
         }
-    }
-}
-
-impl RoutingTableError {
-    pub fn unexpected(details: impl Into<String>) -> Self {
-        RoutingTableError::Unexpected(details.into())
     }
 }
 
 #[async_trait]
 pub trait RoutingTableService {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError>;
-    async fn invalidate_routing_table(&self);
+    // Returns false in case of skipped (throttled) invalidation
+    async fn try_invalidate_routing_table(&self) -> bool;
+}
+
+pub trait HasRoutingTableService {
+    fn routing_table_service(&self) -> &Arc<dyn RoutingTableService + Send + Sync>;
 }
 
 pub struct RoutingTableServiceDefault {
+    config: RoutingTableConfig,
     cache: Cache<(), (), RoutingTable, RoutingTableError>,
-    routing_table_config: RoutingTableConfig,
+    last_invalidated_at: RwLock<Option<Instant>>,
+    client: GrpcClient<ShardManagerServiceClient<Channel>>,
 }
 
 impl RoutingTableServiceDefault {
-    pub fn new(routing_table_config: RoutingTableConfig) -> Self {
+    pub fn new(config: RoutingTableConfig) -> Self {
+        let client = GrpcClient::new(
+            ShardManagerServiceClient::new,
+            config.url(),
+            Default::default(), // TODO
+        );
         Self {
+            config,
             cache: Cache::new(
                 Some(1),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "routing_table",
             ),
-            routing_table_config,
+            last_invalidated_at: RwLock::new(None),
+            client,
         }
     }
 }
@@ -81,40 +154,34 @@ impl RoutingTableServiceDefault {
 #[async_trait]
 impl RoutingTableService for RoutingTableServiceDefault {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError> {
-        let uri: http_02::Uri = self.routing_table_config.url().to_string().parse().unwrap();
+        let client = self.client.clone();
         self.cache
             .get_or_insert_simple(&(), || {
                 Box::pin(async move {
-                    let mut shard_manager_client =
-                        shard_manager_service_client::ShardManagerServiceClient::connect(uri)
-                            .await
-                            .map_err(|err| {
-                                RoutingTableError::unexpected(format!("Connecting to shard manager failed with {}", err))
-                            })?;
-                    let response = shard_manager_client
-                        .get_routing_table(shardmanager::GetRoutingTableRequest {})
+                    let response = client
+                        .call(|client| {
+                            Box::pin(
+                                client
+                                    .get_routing_table(shardmanager::v1::GetRoutingTableRequest {}),
+                            )
+                        })
                         .await
-                        .map_err(|err| {
-                            RoutingTableError::unexpected(format!(
-                                "Getting routing table from shard manager failed with {}",
-                                err
-                            ))
-                        })?;
+                        .map_err(RoutingTableError::ShardManagerGrpcError)?;
                     match response.into_inner() {
-                        shardmanager::GetRoutingTableResponse {
+                        shardmanager::v1::GetRoutingTableResponse {
                             result:
-                            Some(shardmanager::get_routing_table_response::Result::Success(routing_table)),
+                                Some(shardmanager::v1::get_routing_table_response::Result::Success(
+                                    routing_table,
+                                )),
                         } => Ok(routing_table.into()),
-                        shardmanager::GetRoutingTableResponse {
-                            result: Some(shardmanager::get_routing_table_response::Result::Failure(failure)),
-                        } => Err(RoutingTableError::unexpected(format!(
-                            "Getting routing table from shard manager failed with shard manager error {:?}",
-                            failure
-                        ))),
-                        shardmanager::GetRoutingTableResponse { result: None } => {
-                            Err(RoutingTableError::unexpected(
-                                "Getting routing table from shard manager failed with unknown error",
-                            ))
+                        shardmanager::v1::GetRoutingTableResponse {
+                            result:
+                                Some(shardmanager::v1::get_routing_table_response::Result::Failure(
+                                    failure,
+                                )),
+                        } => Err(RoutingTableError::ShardManagerError(failure)),
+                        shardmanager::v1::GetRoutingTableResponse { result: None } => {
+                            Err(RoutingTableError::NoResult)
                         }
                     }
                 })
@@ -122,8 +189,28 @@ impl RoutingTableService for RoutingTableServiceDefault {
             .await
     }
 
-    async fn invalidate_routing_table(&self) {
+    async fn try_invalidate_routing_table(&self) -> bool {
+        let now = Instant::now();
+
+        let skip_invalidate = |last_invalidated_at: &Option<Instant>| {
+            matches!(
+                last_invalidated_at,
+                Some(last_invalidated_at)
+                    if now.saturating_duration_since(last_invalidated_at.to_owned()) < self.config.invalidation_min_delay
+            )
+        };
+
+        if skip_invalidate(self.last_invalidated_at.read().await.deref()) {
+            return false;
+        }
+
+        let mut last_invalidated_at = self.last_invalidated_at.write().await;
+        if skip_invalidate(last_invalidated_at.deref()) {
+            return false;
+        }
         self.cache.remove(&());
+        *last_invalidated_at = Some(Instant::now());
+        true
     }
 }
 
@@ -132,10 +219,10 @@ pub struct RoutingTableServiceNoop {}
 #[async_trait]
 impl RoutingTableService for RoutingTableServiceNoop {
     async fn get_routing_table(&self) -> Result<RoutingTable, RoutingTableError> {
-        Err(RoutingTableError::unexpected(
-            "Routing table service is not configured",
-        ))
+        Err(RoutingTableError::NoResult)
     }
 
-    async fn invalidate_routing_table(&self) {}
+    async fn try_invalidate_routing_table(&self) -> bool {
+        return false;
+    }
 }

@@ -1,5 +1,0 @@
-package golem:it;
-
-world zig1 {
-  export run: func() -> ();
-}

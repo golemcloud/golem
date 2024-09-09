@@ -12,56 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use golem_wasm_rpc::{Value, WitValue};
-use serde::{Deserialize, Serialize};
+use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
 
-use golem_common::model::{AccountId, IdempotencyKey, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::events::Events;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, recovery,
-    scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration,
-    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
-    HasKeyValueService, HasOplogService, HasPromiseService, HasRecoveryManagement, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
+    shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
+    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
+    HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService,
 };
-use crate::worker::{invoke, invoke_and_await, Worker};
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
 #[async_trait]
 pub trait Rpc {
-    async fn create_demand(&self, worker_id: &WorkerId) -> Box<dyn RpcDemand>;
+    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand>;
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError>;
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<(), RpcError>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },
@@ -168,47 +173,55 @@ impl Drop for LoggingDemand {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
-    async fn create_demand(&self, worker_id: &WorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(worker_id.clone());
+    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+        let demand = LoggingDemand::new(owned_worker_id.worker_id());
         Box::new(demand)
     }
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError> {
         Ok(self
             .worker_proxy
             .invoke_and_await(
-                worker_id,
+                owned_worker_id,
                 idempotency_key,
                 function_name,
                 function_params,
-                account_id,
+                self_worker_id.clone(),
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
             )
             .await?)
     }
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
         Ok(self
             .worker_proxy
             .invoke(
-                worker_id,
+                owned_worker_id,
                 idempotency_key,
                 function_name,
                 function_params,
-                account_id,
+                self_worker_id.clone(),
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
             )
             .await?)
     }
@@ -232,7 +245,6 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-    recovery_management: Arc<Mutex<Option<Arc<dyn recovery::RecoveryManagement + Send + Sync>>>>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     events: Arc<Events>,
@@ -258,7 +270,6 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
             oplog_service: self.oplog_service.clone(),
-            recovery_management: self.recovery_management.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
@@ -357,17 +368,6 @@ impl<Ctx: WorkerCtx> HasOplogService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasRecoveryManagement for DirectWorkerInvocationRpc<Ctx> {
-    fn recovery_management(&self) -> Arc<dyn recovery::RecoveryManagement + Send + Sync> {
-        self.recovery_management
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> HasRpc for DirectWorkerInvocationRpc<Ctx> {
     fn rpc(&self) -> Arc<dyn Rpc + Send + Sync> {
         Arc::new(self.clone())
@@ -383,6 +383,12 @@ impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasShardService for DirectWorkerInvocationRpc<Ctx> {
     fn shard_service(&self) -> Arc<dyn shard::ShardService + Send + Sync> {
         self.shard_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasShardManagerService for DirectWorkerInvocationRpc<Ctx> {
+    fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService + Send + Sync> {
+        self.shard_manager_service.clone()
     }
 }
 
@@ -442,68 +448,72 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             key_value_service,
             blob_store_service,
             oplog_service,
-            recovery_management: Arc::new(Mutex::new(None)),
             scheduler_service,
             worker_activator,
             events,
             extra_deps,
         }
     }
-
-    pub fn set_recovery_management(
-        &self,
-        recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
-    ) {
-        *self.recovery_management.lock().unwrap() = Some(recovery_management);
-    }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn create_demand(&self, worker_id: &WorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(worker_id.clone());
+    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+        let demand = LoggingDemand::new(owned_worker_id.worker_id());
         Box::new(demand)
     }
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
-        if self.shard_service().check_worker(worker_id).is_ok() {
-            debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?}");
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id)
+            .is_ok()
+        {
+            debug!("Invoking local worker function {function_name} with parameters {function_params:?}");
 
             let input_values = function_params
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker =
-                Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
-                    .await?;
-
-            let result_values = invoke_and_await(
-                worker,
-                idempotency_key,
-                golem_common::model::CallingConvention::Component,
-                function_name,
-                input_values,
+            let worker = Worker::get_or_create_running(
+                self,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                None,
+                Some(self_worker_id.clone()),
             )
             .await?;
-            Ok(Value::Tuple(result_values).into())
+
+            let result_values = worker
+                .invoke_and_await(idempotency_key, function_name, input_values)
+                .await?;
+
+            let result_value = golem_wasm_rpc::Value::try_from(result_values).unwrap();
+
+            Ok(result_value.into())
         } else {
             self.remote_rpc
                 .invoke_and_await(
-                    worker_id,
+                    owned_worker_id,
                     Some(idempotency_key),
                     function_name,
                     function_params,
-                    account_id,
+                    self_worker_id,
+                    self_args,
+                    self_env,
                 )
                 .await
         }
@@ -511,43 +521,52 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        account_id: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
-        if self.shard_service().check_worker(worker_id).is_ok() {
-            debug!("Invoking local worker {worker_id} function {function_name} with parameters {function_params:?} without awaiting for the result");
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id())
+            .is_ok()
+        {
+            debug!("Invoking local worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
             let input_values = function_params
                 .into_iter()
                 .map(|wit_value| wit_value.into())
                 .collect();
 
-            let worker =
-                Worker::get_or_create(self, worker_id, None, None, None, account_id.clone())
-                    .await?;
-
-            invoke(
-                worker,
-                idempotency_key,
-                golem_common::model::CallingConvention::Component,
-                function_name,
-                input_values,
+            let worker = Worker::get_or_create_running(
+                self,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                None,
+                Some(self_worker_id.clone()),
             )
             .await?;
+
+            worker
+                .invoke(idempotency_key, function_name, input_values)
+                .await?;
             Ok(())
         } else {
             self.remote_rpc
                 .invoke(
-                    worker_id,
+                    owned_worker_id,
                     Some(idempotency_key),
                     function_name,
                     function_params,
-                    account_id,
+                    self_worker_id,
+                    self_args,
+                    self_env,
                 )
                 .await
         }
@@ -576,28 +595,32 @@ impl RpcMock {
 #[cfg(any(feature = "mocks", test))]
 #[async_trait]
 impl Rpc for RpcMock {
-    async fn create_demand(&self, _worker_id: &WorkerId) -> Box<dyn RpcDemand> {
+    async fn create_demand(&self, _owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
         Box::new(())
     }
 
     async fn invoke_and_await(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        _self_worker_id: &WorkerId,
+        _self_args: &[String],
+        _self_env: &[(String, String)],
     ) -> Result<WitValue, RpcError> {
         unimplemented!()
     }
 
     async fn invoke(
         &self,
-        _worker_id: &WorkerId,
+        _owned_worker_id: &OwnedWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _function_params: Vec<WitValue>,
-        _account_id: &AccountId,
+        _self_worker_id: &WorkerId,
+        _self_args: &[String],
+        _self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
         unimplemented!()
     }

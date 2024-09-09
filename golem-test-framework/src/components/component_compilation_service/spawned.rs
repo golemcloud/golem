@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::components::component_compilation_service::{
-    env_vars, wait_for_startup, ComponentCompilationService,
+    wait_for_startup, ComponentCompilationService, ComponentCompilationServiceEnvVars,
 };
-use crate::components::ChildProcessLogger;
+use crate::components::{ChildProcessLogger, GolemEnvVars};
 use async_trait::async_trait;
 
 use std::path::Path;
@@ -45,7 +45,32 @@ impl SpawnedComponentCompilationService {
         out_level: Level,
         err_level: Level,
     ) -> Self {
-        println!("Starting golem-component-compilation-service process");
+        Self::new_base(
+            Box::new(GolemEnvVars()),
+            executable,
+            working_directory,
+            http_port,
+            grpc_port,
+            component_service,
+            verbosity,
+            out_level,
+            err_level,
+        )
+        .await
+    }
+
+    pub async fn new_base(
+        env_vars: Box<dyn ComponentCompilationServiceEnvVars + Send + Sync + 'static>,
+        executable: &Path,
+        working_directory: &Path,
+        http_port: u16,
+        grpc_port: u16,
+        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        info!("Starting golem-component-compilation-service process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-component-compilation-service at {executable:?}");
@@ -53,7 +78,11 @@ impl SpawnedComponentCompilationService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(env_vars(http_port, grpc_port, component_service, verbosity))
+            .envs(
+                env_vars
+                    .env_vars(http_port, grpc_port, component_service, verbosity)
+                    .await,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

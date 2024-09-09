@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-#[cfg(any(feature = "mocks", test))]
-use std::time::Duration;
-
 use crate::services::worker_activator::WorkerActivator;
+use std::sync::Arc;
 
 use crate::services::events::Events;
-use tokio::runtime::Handle;
-
 use crate::workerctx::WorkerCtx;
+use tokio::runtime::Handle;
 
 pub mod active_workers;
 pub mod blob_store;
@@ -29,11 +25,9 @@ pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod golem_config;
-pub mod invocation_queue;
 pub mod key_value;
 pub mod oplog;
 pub mod promise;
-pub mod recovery;
 pub mod rpc;
 pub mod scheduler;
 pub mod shard;
@@ -104,10 +98,6 @@ pub trait HasOplogService {
     fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync>;
 }
 
-pub trait HasRecoveryManagement {
-    fn recovery_management(&self) -> Arc<dyn recovery::RecoveryManagement + Send + Sync>;
-}
-
 pub trait HasRpc {
     fn rpc(&self) -> Arc<dyn rpc::Rpc + Send + Sync>;
 }
@@ -120,8 +110,8 @@ pub trait HasExtraDeps<Ctx: WorkerCtx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps;
 }
 
-pub trait HasInvocationQueue<Ctx: WorkerCtx> {
-    fn invocation_queue(&self) -> Arc<invocation_queue::InvocationQueue<Ctx>>;
+pub trait HasWorker<Ctx: WorkerCtx> {
+    fn worker(&self) -> Arc<crate::worker::Worker<Ctx>>;
 }
 
 pub trait HasOplog {
@@ -153,12 +143,13 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasKeyValueService
     + HasBlobStoreService
     + HasOplogService
-    + HasRecoveryManagement
     + HasRpc
     + HasSchedulerService
     + HasWorkerActivator
     + HasWorkerProxy
     + HasEvents
+    + HasShardManagerService
+    + HasShardService
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -177,12 +168,13 @@ impl<
             + HasKeyValueService
             + HasBlobStoreService
             + HasOplogService
-            + HasRecoveryManagement
             + HasRpc
             + HasSchedulerService
             + HasWorkerActivator
             + HasWorkerProxy
             + HasEvents
+            + HasShardManagerService
+            + HasShardService
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -208,7 +200,6 @@ pub struct All<Ctx: WorkerCtx> {
     key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
     oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-    recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
     rpc: Arc<dyn rpc::Rpc + Send + Sync>,
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
@@ -235,7 +226,6 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             key_value_service: self.key_value_service.clone(),
             blob_store_service: self.blob_store_service.clone(),
             oplog_service: self.oplog_service.clone(),
-            recovery_management: self.recovery_management.clone(),
             rpc: self.rpc.clone(),
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
@@ -268,7 +258,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         key_value_service: Arc<dyn key_value::KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService + Send + Sync>,
         oplog_service: Arc<dyn oplog::OplogService + Send + Sync>,
-        recovery_management: Arc<dyn recovery::RecoveryManagement + Send + Sync>,
         rpc: Arc<dyn rpc::Rpc + Send + Sync>,
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
@@ -292,7 +281,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             key_value_service,
             blob_store_service,
             oplog_service,
-            recovery_management,
             rpc,
             scheduler_service,
             worker_activator,
@@ -304,10 +292,8 @@ impl<Ctx: WorkerCtx> All<Ctx> {
 
     #[cfg(any(feature = "mocks", test))]
     pub async fn mocked(mocked_extra_deps: Ctx::ExtraDeps) -> Self {
-        let active_workers = Arc::new(active_workers::ActiveWorkers::bounded(
-            100,
-            0.01,
-            Duration::from_secs(60),
+        let active_workers = Arc::new(active_workers::ActiveWorkers::new(
+            &crate::services::golem_config::MemoryConfig::default(),
         ));
         let engine = Arc::new(wasmtime::Engine::default());
         let linker = Arc::new(wasmtime::component::Linker::new(&engine));
@@ -322,15 +308,19 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         let golem_config = Arc::new(golem_config::GolemConfig::default());
         let shard_service = Arc::new(shard::ShardServiceDefault::new());
         let shard_manager_service = Arc::new(shard_manager::ShardManagerServiceSingleShard::new());
-        let key_value_service = Arc::new(key_value::KeyValueServiceInMemory::new());
-        let blob_store_service = Arc::new(blob_store::BlobStoreServiceInMemory::new());
-        let oplog_service = Arc::new(oplog::OplogServiceMock::new());
-        let recovery_management = Arc::new(recovery::RecoveryManagementMock::new());
+        let key_value_service = Arc::new(key_value::DefaultKeyValueService::new(Arc::new(
+            crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new(),
+        )));
+        let blob_storage = Arc::new(crate::storage::blob::memory::InMemoryBlobStorage::new());
+        let blob_store_service = Arc::new(blob_store::DefaultBlobStoreService::new(
+            blob_storage.clone(),
+        ));
+        let oplog_service = Arc::new(oplog::mock::OplogServiceMock::new());
         let rpc = Arc::new(rpc::RpcMock::new());
         let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
         let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
         let worker_proxy = Arc::new(worker_proxy::WorkerProxyMock::new());
-        let events = Arc::new(Events::new());
+        let events = Arc::new(Events::new(32768));
         Self {
             active_workers,
             engine,
@@ -347,7 +337,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             key_value_service,
             blob_store_service,
             oplog_service,
-            recovery_management,
             rpc,
             scheduler_service,
             worker_activator,
@@ -355,6 +344,32 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             events,
             extra_deps: mocked_extra_deps,
         }
+    }
+
+    pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
+        All::new(
+            this.active_workers(),
+            this.engine(),
+            this.linker(),
+            this.runtime(),
+            this.component_service(),
+            this.shard_manager_service(),
+            this.worker_service(),
+            this.worker_enumeration_service(),
+            this.running_worker_enumeration_service(),
+            this.promise_service(),
+            this.config(),
+            this.shard_service(),
+            this.key_value_service(),
+            this.blob_store_service(),
+            this.oplog_service(),
+            this.rpc(),
+            this.scheduler_service(),
+            this.worker_activator(),
+            this.worker_proxy(),
+            this.events(),
+            this.extra_deps(),
+        )
     }
 }
 
@@ -459,12 +474,6 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasBlobStoreService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogService for T {
     fn oplog_service(&self) -> Arc<dyn oplog::OplogService + Send + Sync> {
         self.all().oplog_service.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasRecoveryManagement for T {
-    fn recovery_management(&self) -> Arc<dyn recovery::RecoveryManagement + Send + Sync> {
-        self.all().recovery_management.clone()
     }
 }
 

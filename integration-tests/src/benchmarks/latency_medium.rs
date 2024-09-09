@@ -13,42 +13,87 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use integration_tests::benchmarks::{run_benchmark, run_echo, setup, warmup_echo, Context};
+use golem_wasm_rpc::Value;
+use integration_tests::benchmarks::{
+    benchmark_invocations, delete_workers, run_benchmark, setup_benchmark, setup_simple_iteration,
+    warmup_workers, SimpleBenchmarkContext, SimpleIterationContext,
+};
 
 struct WorkerLatencyMedium {
-    params: CliParams,
     config: RunConfig,
 }
 
 #[async_trait]
 impl Benchmark for WorkerLatencyMedium {
-    type IterationContext = Context;
+    type BenchmarkContext = SimpleBenchmarkContext;
+    type IterationContext = SimpleIterationContext;
 
     fn name() -> &'static str {
         "latency-medium"
     }
 
-    async fn create(params: CliParams, config: RunConfig) -> Self {
-        Self { params, config }
+    async fn create_benchmark_context(
+        params: CliParams,
+        cluster_size: usize,
+    ) -> Self::BenchmarkContext {
+        setup_benchmark(params, cluster_size).await
     }
 
-    async fn setup_iteration(&self) -> Self::IterationContext {
-        setup(self.params.clone(), self.config.clone(), "js-echo", true).await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
+        benchmark_context.deps.kill_all()
     }
 
-    async fn warmup(&self, context: &Self::IterationContext) {
-        warmup_echo(context).await
+    async fn create(_params: CliParams, config: RunConfig) -> Self {
+        Self { config }
     }
 
-    async fn run(&self, context: &Self::IterationContext, recorder: BenchmarkRecorder) {
-        run_echo(self.config.length, context, recorder).await
+    async fn setup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+    ) -> Self::IterationContext {
+        setup_simple_iteration(benchmark_context, self.config.clone(), "js-echo", true).await
     }
 
-    async fn cleanup_iteration(&self, context: Self::IterationContext) {
-        context.deps.kill_all();
+    async fn warmup(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+    ) {
+        warmup_workers(
+            &benchmark_context.deps,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+        )
+        .await
+    }
+
+    async fn run(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: &Self::IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
+        benchmark_invocations(
+            &benchmark_context.deps,
+            recorder,
+            self.config.length,
+            &context.worker_ids,
+            "golem:it/api.{echo}",
+            vec![Value::String("hello".to_string())],
+            "",
+        )
+        .await
+    }
+
+    async fn cleanup_iteration(
+        &self,
+        benchmark_context: &Self::BenchmarkContext,
+        context: Self::IterationContext,
+    ) {
+        delete_workers(&benchmark_context.deps, &context.worker_ids).await
     }
 }
 

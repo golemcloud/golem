@@ -1,12 +1,33 @@
 openapi: 3.0.0
 info:
   title: Golem API
-  version: '2.0'
+  version: '1.0'
 paths:
-  /v2/components/{component_id}/workers:
+  /v1/components/{component_id}/workers:
     get:
       tags:
       - Worker
+      summary: Get metadata of multiple workers
+      description: |-
+        ### Filters
+
+        | Property    | Comparator             | Description                    | Example                         |
+        |-------------|------------------------|--------------------------------|----------------------------------|
+        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
+        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
+        | status      | FilterComparator       | Status of worker               | `status = Running`               |
+        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
+        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
+
+
+        ### Comparators
+
+        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
       operationId: get_workers_metadata
       parameters:
       - in: path
@@ -31,8 +52,7 @@ paths:
         name: cursor
         deprecated: false
         schema:
-          type: integer
-          format: uint64
+          type: string
         explode: true
         style: form
       - in: query
@@ -96,6 +116,14 @@ paths:
     post:
       tags:
       - Worker
+      summary: Launch a new worker.
+      description: |-
+        Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
+
+        The parameters in the request are the following:
+        - `name` is the name of the created worker. This has to be unique, but only for a given component
+        - `args` is a list of strings which appear as command line arguments for the worker
+        - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
       operationId: launch_new_worker
       parameters:
       - in: path
@@ -156,10 +184,27 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}:
+  /v1/components/{component_id}/workers/{worker_name}:
     get:
       tags:
       - Worker
+      summary: Get metadata of a worker
+      description: |-
+        Returns metadata about an existing worker:
+        - `workerId` is a combination of the used component and the worker's user specified name
+        - `accountId` the account the worker is created by
+        - `args` is the provided command line arguments passed to the worker
+        - `env` is the provided map of environment variables passed to the worker
+        - `componentVersion` is the version of the component used by the worker
+        - `retryCount` is the number of retries the worker did in case of a failure
+        - `status` is the worker's current status, one of the following:
+        - `Running` if the worker is currently executing
+        - `Idle` if the worker is waiting for an invocation
+        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+        - `Interrupted` if the worker was interrupted by the user
+        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+        - `Failed` if the worker failed and there are no more retries scheduled for it
+        - `Exited` if the worker explicitly exited using the exit WASI function
       operationId: get_worker_metadata
       parameters:
       - in: path
@@ -225,6 +270,8 @@ paths:
     delete:
       tags:
       - Worker
+      summary: Delete a worker
+      description: Interrupts and deletes an existing worker.
       operationId: delete_worker
       parameters:
       - in: path
@@ -287,10 +334,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/invoke-and-await:
+  /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
+      summary: Invoke a function and await it's resolution
+      description: Supply the parameters in the request body as JSON.
       operationId: invoke_and_await_function
       parameters:
       - in: path
@@ -323,13 +372,6 @@ paths:
         deprecated: false
         schema:
           type: string
-        explode: true
-        style: form
-      - in: query
-        name: calling-convention
-        deprecated: false
-        schema:
-          $ref: '#/components/schemas/CallingConvention'
         explode: true
         style: form
       requestBody:
@@ -381,10 +423,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/invoke:
+  /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
+      summary: Invoke a function
+      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
       operationId: invoke_function
       parameters:
       - in: path
@@ -468,10 +512,15 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/complete:
+  /v1/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
       - Worker
+      summary: Complete a promise
+      description: |-
+        Completes a promise with a given custom array of bytes.
+        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The data field is sent back to the worker and it has no predefined meaning.
       operationId: complete_promise
       parameters:
       - in: path
@@ -540,10 +589,16 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/interrupt:
+  /v1/components/{component_id}/workers/{worker_name}/interrupt:
     post:
       tags:
       - Worker
+      summary: Interrupt a worker
+      description: |-
+        Interrupts the execution of a worker.
+        The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+        An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+        For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
       operationId: interrupt_worker
       parameters:
       - in: path
@@ -613,10 +668,31 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/find:
+  /v1/components/{component_id}/workers/find:
     post:
       tags:
       - Worker
+      summary: Advanced search for workers
+      description: |-
+        ### Filter types
+        | Type      | Comparator             | Description                    | Example                                                                                       |
+        |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+        | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
+        | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
+        | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
+        | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
+        | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
+        | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
+        | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
+        | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
+
+        ### Comparators
+        - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+        - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+        Returns metadata about an existing component workers:
+        - `workers` list of workers metadata
+        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
       operationId: find_workers_metadata
       parameters:
       - in: path
@@ -677,10 +753,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/resume:
+  /v1/components/{component_id}/workers/{worker_name}/resume:
     post:
       tags:
       - Worker
+      summary: Resume a worker
       operationId: resume_worker
       parameters:
       - in: path
@@ -743,10 +820,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
-  /v2/components/{component_id}/workers/{worker_name}/update:
+  /v1/components/{component_id}/workers/{worker_name}/update:
     post:
       tags:
       - Worker
+      summary: Update a worker
       operationId: update_worker
       parameters:
       - in: path
@@ -819,6 +897,10 @@ paths:
     put:
       tags:
       - ApiDefinition
+      summary: Upload an OpenAPI definition
+      description: |-
+        Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+        API definition using it.
       operationId: import_open_api
       requestBody:
         content:
@@ -872,6 +954,10 @@ paths:
     get:
       tags:
       - ApiDefinition
+      summary: Get or list API definitions
+      description: |-
+        If `api_definition_id` is specified, returns a single API definition.
+        Otherwise lists all API definitions.
       operationId: list_definitions
       parameters:
       - in: query
@@ -929,12 +1015,16 @@ paths:
     post:
       tags:
       - ApiDefinition
+      summary: Create a new API definition
+      description: |-
+        Creates a new API definition described by Golem's API definition JSON document.
+        If an API definition of the same version already exists, its an error.
       operationId: create_definition
       requestBody:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/HttpApiDefinition'
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
       responses:
         '200':
@@ -983,6 +1073,8 @@ paths:
     get:
       tags:
       - ApiDefinition
+      summary: Get an API definition
+      description: An API definition is selected by its API definition ID and version.
       operationId: get_definition
       parameters:
       - in: path
@@ -1047,6 +1139,8 @@ paths:
     put:
       tags:
       - ApiDefinition
+      summary: Update an existing API definition.
+      description: Only draft API definitions can be updated.
       operationId: update_definition
       parameters:
       - in: path
@@ -1069,7 +1163,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/HttpApiDefinition'
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
       responses:
         '200':
@@ -1117,6 +1211,8 @@ paths:
     delete:
       tags:
       - ApiDefinition
+      summary: Delete an API definition
+      description: Deletes an API definition by its API definition ID and version.
       operationId: delete_definition
       parameters:
       - in: path
@@ -1182,12 +1278,14 @@ paths:
     post:
       tags:
       - ApiDeployment
+      summary: Creates or updates a deployment
+      description: Deploys a set of API definitions to a site (specific host and subdomain).
       operationId: deploy
       requestBody:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/ApiDeployment'
+              $ref: '#/components/schemas/ApiDeploymentRequest'
         required: true
       responses:
         '200':
@@ -1236,6 +1334,10 @@ paths:
     get:
       tags:
       - ApiDeployment
+      summary: Get one or more API deployments
+      description: |-
+        If `api-definition-id` is not set, it lists all API deployments.
+        If `api-definition-id` is set, returns a single API deployment.
       operationId: list_deployments
       parameters:
       - in: query
@@ -1295,6 +1397,8 @@ paths:
     get:
       tags:
       - ApiDeployment
+      summary: Get API deployment by site
+      description: Gets an API deployment by the host name (optionally with a subdomain) it is deployed to.
       operationId: get_deployment
       parameters:
       - in: path
@@ -1351,6 +1455,8 @@ paths:
     delete:
       tags:
       - ApiDeployment
+      summary: Delete API deployment by site
+      description: Deletes an API deployment by the host name (optionally with a subdomain) it is deployed to.
       operationId: delete_deployment
       parameters:
       - in: path
@@ -1428,10 +1534,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
-  /v2/components:
+  /v1/components:
     get:
       tags:
       - Component
+      summary: Get all components
+      description: Gets all components, optionally filtered by component name.
       operationId: get_components
       parameters:
       - in: query
@@ -1489,6 +1597,8 @@ paths:
     post:
       tags:
       - Component
+      summary: Create a new component
+      description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
       operationId: create_component
       requestBody:
         content:
@@ -1548,10 +1658,11 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/upload:
+  /v1/components/{component_id}/upload:
     put:
       tags:
       - Component
+      summary: Update a component
       operationId: update_component
       parameters:
       - in: path
@@ -1613,10 +1724,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/download:
+  /v1/components/{component_id}/download:
     get:
       tags:
       - Component
+      summary: Download a component
+      description: Downloads a specific version of the component's WASM.
       operationId: download_component
       parameters:
       - in: path
@@ -1680,10 +1793,21 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}:
+  /v1/components/{component_id}:
     get:
       tags:
       - Component
+      summary: Get the metadata for all component versions
+      description: |-
+        Each component can have multiple versions. Every time a new WASM is uploaded for a given component id, that creates a new version.
+        This endpoint returns a list of all versions for the component id provided as part of the URL. Each element of the response describes a single version of a component, but does not contain the binary (WASM) itself:
+
+        - `versionedComponentId` associates a specific version with the component id
+        - `componentName` is the human-readable name of the component
+        - `componentSize` is the WASM binary's size in bytes
+        - `metadata` contains information extracted from the WASM itself
+        - `metadata.exports` is a list of exported functions, including their parameter's and return value's types
+        - `metadata.producers` is a list of producer information added by tooling, each consisting of a list of fields associating one or more values to a given key. This contains information about what compilers and other WASM related tools were used to construct the Golem component.
       operationId: get_component_metadata_all_versions
       parameters:
       - in: path
@@ -1740,10 +1864,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/versions/{version}:
+  /v1/components/{component_id}/versions/{version}:
     get:
       tags:
       - Component
+      summary: Get the version of a given component
+      description: Gets the version of a component.
       operationId: get_component_metadata
       parameters:
       - in: path
@@ -1806,10 +1932,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v2/components/{component_id}/latest:
+  /v1/components/{component_id}/latest:
     get:
       tags:
       - Component
+      summary: Get the latest version of a given component
+      description: Gets the latest version of a component.
       operationId: get_latest_component_metadata
       parameters:
       - in: path
@@ -1866,18 +1994,361 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
-    ApiDeployment:
+    AnalysedResourceMode:
+      type: string
+      enum:
+      - Owned
+      - Borrowed
+    AnalysedType:
+      discriminator:
+        propertyName: type
+        mapping:
+          Variant: '#/components/schemas/AnalysedType_TypeVariant'
+          Result: '#/components/schemas/AnalysedType_TypeResult'
+          Option: '#/components/schemas/AnalysedType_TypeOption'
+          Enum: '#/components/schemas/AnalysedType_TypeEnum'
+          Flags: '#/components/schemas/AnalysedType_TypeFlags'
+          Record: '#/components/schemas/AnalysedType_TypeRecord'
+          Tuple: '#/components/schemas/AnalysedType_TypeTuple'
+          List: '#/components/schemas/AnalysedType_TypeList'
+          Str: '#/components/schemas/AnalysedType_TypeStr'
+          Chr: '#/components/schemas/AnalysedType_TypeChr'
+          F64: '#/components/schemas/AnalysedType_TypeF64'
+          F32: '#/components/schemas/AnalysedType_TypeF32'
+          U64: '#/components/schemas/AnalysedType_TypeU64'
+          S64: '#/components/schemas/AnalysedType_TypeS64'
+          U32: '#/components/schemas/AnalysedType_TypeU32'
+          S32: '#/components/schemas/AnalysedType_TypeS32'
+          U16: '#/components/schemas/AnalysedType_TypeU16'
+          S16: '#/components/schemas/AnalysedType_TypeS16'
+          U8: '#/components/schemas/AnalysedType_TypeU8'
+          S8: '#/components/schemas/AnalysedType_TypeS8'
+          Bool: '#/components/schemas/AnalysedType_TypeBool'
+          Handle: '#/components/schemas/AnalysedType_TypeHandle'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedType_TypeVariant'
+      - $ref: '#/components/schemas/AnalysedType_TypeResult'
+      - $ref: '#/components/schemas/AnalysedType_TypeOption'
+      - $ref: '#/components/schemas/AnalysedType_TypeEnum'
+      - $ref: '#/components/schemas/AnalysedType_TypeFlags'
+      - $ref: '#/components/schemas/AnalysedType_TypeRecord'
+      - $ref: '#/components/schemas/AnalysedType_TypeTuple'
+      - $ref: '#/components/schemas/AnalysedType_TypeList'
+      - $ref: '#/components/schemas/AnalysedType_TypeStr'
+      - $ref: '#/components/schemas/AnalysedType_TypeChr'
+      - $ref: '#/components/schemas/AnalysedType_TypeF64'
+      - $ref: '#/components/schemas/AnalysedType_TypeF32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU64'
+      - $ref: '#/components/schemas/AnalysedType_TypeS64'
+      - $ref: '#/components/schemas/AnalysedType_TypeU32'
+      - $ref: '#/components/schemas/AnalysedType_TypeS32'
+      - $ref: '#/components/schemas/AnalysedType_TypeU16'
+      - $ref: '#/components/schemas/AnalysedType_TypeS16'
+      - $ref: '#/components/schemas/AnalysedType_TypeU8'
+      - $ref: '#/components/schemas/AnalysedType_TypeS8'
+      - $ref: '#/components/schemas/AnalysedType_TypeBool'
+      - $ref: '#/components/schemas/AnalysedType_TypeHandle'
+    AnalysedType_TypeBool:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Bool
+            type: string
+            enum:
+            - Bool
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeBool'
+    AnalysedType_TypeChr:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Chr
+            type: string
+            enum:
+            - Chr
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeChr'
+    AnalysedType_TypeEnum:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Enum
+            type: string
+            enum:
+            - Enum
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeEnum'
+    AnalysedType_TypeF32:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: F32
+            type: string
+            enum:
+            - F32
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeF32'
+    AnalysedType_TypeF64:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: F64
+            type: string
+            enum:
+            - F64
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeF64'
+    AnalysedType_TypeFlags:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Flags
+            type: string
+            enum:
+            - Flags
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeFlags'
+    AnalysedType_TypeHandle:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Handle
+            type: string
+            enum:
+            - Handle
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeHandle'
+    AnalysedType_TypeList:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: List
+            type: string
+            enum:
+            - List
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeList'
+    AnalysedType_TypeOption:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Option
+            type: string
+            enum:
+            - Option
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeOption'
+    AnalysedType_TypeRecord:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Record
+            type: string
+            enum:
+            - Record
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeRecord'
+    AnalysedType_TypeResult:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Result
+            type: string
+            enum:
+            - Result
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeResult'
+    AnalysedType_TypeS16:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S16
+            type: string
+            enum:
+            - S16
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS16'
+    AnalysedType_TypeS32:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S32
+            type: string
+            enum:
+            - S32
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS32'
+    AnalysedType_TypeS64:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S64
+            type: string
+            enum:
+            - S64
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS64'
+    AnalysedType_TypeS8:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: S8
+            type: string
+            enum:
+            - S8
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeS8'
+    AnalysedType_TypeStr:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Str
+            type: string
+            enum:
+            - Str
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeStr'
+    AnalysedType_TypeTuple:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Tuple
+            type: string
+            enum:
+            - Tuple
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeTuple'
+    AnalysedType_TypeU16:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U16
+            type: string
+            enum:
+            - U16
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU16'
+    AnalysedType_TypeU32:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U32
+            type: string
+            enum:
+            - U32
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU32'
+    AnalysedType_TypeU64:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U64
+            type: string
+            enum:
+            - U64
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU64'
+    AnalysedType_TypeU8:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: U8
+            type: string
+            enum:
+            - U8
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeU8'
+    AnalysedType_TypeVariant:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Variant
+            type: string
+            enum:
+            - Variant
+        required:
+        - type
+      - $ref: '#/components/schemas/TypeVariant'
+    ApiDefinitionInfo:
       type: object
       properties:
-        apiDefinitionId:
+        id:
           type: string
         version:
           type: string
+      required:
+      - id
+      - version
+    ApiDeployment:
+      type: object
+      properties:
+        apiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiDefinitionInfo'
+        site:
+          $ref: '#/components/schemas/ApiSite'
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - apiDefinitions
+      - site
+    ApiDeploymentRequest:
+      type: object
+      properties:
+        apiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiDefinitionInfo'
         site:
           $ref: '#/components/schemas/ApiSite'
       required:
-      - apiDefinitionId
-      - version
+      - apiDefinitions
       - site
     ApiSite:
       type: object
@@ -1888,12 +2359,6 @@ components:
           type: string
       required:
       - host
-      - subdomain
-    CallingConvention:
-      type: string
-      enum:
-      - Component
-      - Stdio
     CompleteParameters:
       type: object
       properties:
@@ -1975,6 +2440,7 @@ components:
           PreviousInvocationExited: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
+          ShardingNotReady: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
       type: object
       oneOf:
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
@@ -1999,6 +2465,7 @@ components:
       - $ref: '#/components/schemas/GolemError_GolemErrorPreviousInvocationExited'
       - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
+      - $ref: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
     GolemErrorBody:
       type: object
       properties:
@@ -2079,6 +2546,11 @@ components:
       type: object
     GolemErrorParamTypeMismatch:
       type: object
+      properties:
+        details:
+          type: string
+      required:
+      - details
     GolemErrorPreviousInvocationExited:
       type: object
     GolemErrorPreviousInvocationFailed:
@@ -2116,6 +2588,8 @@ components:
           type: string
       required:
       - details
+    GolemErrorShardingNotReady:
+      type: object
     GolemErrorUnexpectedOplogEntry:
       type: object
       properties:
@@ -2171,6 +2645,8 @@ components:
           type:
             example: ComponentDownloadFailed
             type: string
+            enum:
+            - ComponentDownloadFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorComponentDownloadFailed'
@@ -2181,6 +2657,8 @@ components:
           type:
             example: ComponentParseFailed
             type: string
+            enum:
+            - ComponentParseFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorComponentParseFailed'
@@ -2191,6 +2669,8 @@ components:
           type:
             example: FailedToResumeWorker
             type: string
+            enum:
+            - FailedToResumeWorker
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
@@ -2201,6 +2681,8 @@ components:
           type:
             example: GetLatestVersionOfComponentFailed
             type: string
+            enum:
+            - GetLatestVersionOfComponentFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
@@ -2211,6 +2693,8 @@ components:
           type:
             example: Interrupted
             type: string
+            enum:
+            - Interrupted
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInterrupted'
@@ -2221,6 +2705,8 @@ components:
           type:
             example: InvalidAccount
             type: string
+            enum:
+            - InvalidAccount
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInvalidAccount'
@@ -2231,6 +2717,8 @@ components:
           type:
             example: InvalidRequest
             type: string
+            enum:
+            - InvalidRequest
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInvalidRequest'
@@ -2241,6 +2729,8 @@ components:
           type:
             example: InvalidShardId
             type: string
+            enum:
+            - InvalidShardId
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorInvalidShardId'
@@ -2251,6 +2741,8 @@ components:
           type:
             example: NoValueInMessage
             type: string
+            enum:
+            - NoValueInMessage
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorNoValueInMessage'
@@ -2261,6 +2753,8 @@ components:
           type:
             example: ParamTypeMismatch
             type: string
+            enum:
+            - ParamTypeMismatch
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorParamTypeMismatch'
@@ -2271,6 +2765,8 @@ components:
           type:
             example: PreviousInvocationExited
             type: string
+            enum:
+            - PreviousInvocationExited
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationExited'
@@ -2281,6 +2777,8 @@ components:
           type:
             example: PreviousInvocationFailed
             type: string
+            enum:
+            - PreviousInvocationFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPreviousInvocationFailed'
@@ -2291,6 +2789,8 @@ components:
           type:
             example: PromiseAlreadyCompleted
             type: string
+            enum:
+            - PromiseAlreadyCompleted
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPromiseAlreadyCompleted'
@@ -2301,6 +2801,8 @@ components:
           type:
             example: PromiseDropped
             type: string
+            enum:
+            - PromiseDropped
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPromiseDropped'
@@ -2311,6 +2813,8 @@ components:
           type:
             example: PromiseNotFound
             type: string
+            enum:
+            - PromiseNotFound
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorPromiseNotFound'
@@ -2321,9 +2825,23 @@ components:
           type:
             example: RuntimeError
             type: string
+            enum:
+            - RuntimeError
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorRuntimeError'
+    GolemError_GolemErrorShardingNotReady:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ShardingNotReady
+            type: string
+            enum:
+            - ShardingNotReady
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorShardingNotReady'
     GolemError_GolemErrorUnexpectedOplogEntry:
       allOf:
       - type: object
@@ -2331,6 +2849,8 @@ components:
           type:
             example: UnexpectedOplogEntry
             type: string
+            enum:
+            - UnexpectedOplogEntry
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorUnexpectedOplogEntry'
@@ -2341,6 +2861,8 @@ components:
           type:
             example: Unknown
             type: string
+            enum:
+            - Unknown
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorUnknown'
@@ -2351,6 +2873,8 @@ components:
           type:
             example: ValueMismatch
             type: string
+            enum:
+            - ValueMismatch
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorValueMismatch'
@@ -2361,6 +2885,8 @@ components:
           type:
             example: WorkerAlreadyExists
             type: string
+            enum:
+            - WorkerAlreadyExists
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerAlreadyExists'
@@ -2371,6 +2897,8 @@ components:
           type:
             example: WorkerCreationFailed
             type: string
+            enum:
+            - WorkerCreationFailed
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerCreationFailed'
@@ -2381,35 +2909,50 @@ components:
           type:
             example: WorkerNotFound
             type: string
+            enum:
+            - WorkerNotFound
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
     GolemWorkerBinding:
       type: object
       properties:
-        component:
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        workerName:
           type: string
-          format: uuid
-        workerId:
-          type: string
-        functionName:
-          type: string
-        functionParams:
-          type: array
-          items:
-            type: string
         idempotencyKey:
           type: string
         response:
           type: string
       required:
-      - component
-      - workerId
-      - functionName
-      - functionParams
+      - componentId
+      - workerName
+      - response
     HealthcheckResponse:
       type: object
     HttpApiDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+        draft:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - version
+      - routes
+      - draft
+    HttpApiDefinitionRequest:
       type: object
       properties:
         id:
@@ -2427,12 +2970,27 @@ components:
       - version
       - routes
       - draft
+    IndexedWorkerMetadata:
+      type: object
+      properties:
+        resourceName:
+          type: string
+        resourceParams:
+          type: array
+          items:
+            type: string
+      required:
+      - resourceName
+      - resourceParams
     InterruptResponse:
       type: object
     InvokeParameters:
       type: object
       properties:
-        params: {}
+        params:
+          type: array
+          items:
+            $ref: '#/components/schemas/TypeAnnotatedValue'
       required:
       - params
     InvokeResponse:
@@ -2440,7 +2998,8 @@ components:
     InvokeResult:
       type: object
       properties:
-        result: {}
+        result:
+          $ref: '#/components/schemas/TypeAnnotatedValue'
       required:
       - result
     MessagesErrorsBody:
@@ -2464,6 +3023,25 @@ components:
       - Options
       - Trace
       - Head
+    NameOptionTypePair:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+    NameTypePair:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+      - typ
     PendingUpdate:
       type: object
       properties:
@@ -2487,6 +3065,16 @@ components:
       required:
       - workerId
       - oplogIdx
+    ResourceMetadata:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        indexed:
+          $ref: '#/components/schemas/IndexedWorkerMetadata'
+      required:
+      - createdAt
     ResumeResponse:
       type: object
     Route:
@@ -2510,8 +3098,7 @@ components:
         path:
           type: string
         component:
-          type: string
-          format: uuid
+          $ref: '#/components/schemas/VersionedComponentId'
         detail:
           type: string
       required:
@@ -2519,6 +3106,18 @@ components:
       - path
       - component
       - detail
+    ScanCursor:
+      type: object
+      properties:
+        cursor:
+          type: integer
+          format: uint64
+        layer:
+          type: integer
+          format: uint64
+      required:
+      - cursor
+      - layer
     ShardId:
       type: object
       properties:
@@ -2546,6 +3145,118 @@ components:
       required:
       - timestamp
       - targetVersion
+    TypeAnnotatedValue:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - typ
+      - value
+    TypeBool:
+      type: object
+    TypeChr:
+      type: object
+    TypeEnum:
+      type: object
+      properties:
+        cases:
+          type: array
+          items:
+            type: string
+      required:
+      - cases
+    TypeF32:
+      type: object
+    TypeF64:
+      type: object
+    TypeFlags:
+      type: object
+      properties:
+        names:
+          type: array
+          items:
+            type: string
+      required:
+      - names
+    TypeHandle:
+      type: object
+      properties:
+        resource_id:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AnalysedResourceMode'
+      required:
+      - resource_id
+      - mode
+    TypeList:
+      type: object
+      properties:
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - inner
+    TypeOption:
+      type: object
+      properties:
+        inner:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - inner
+    TypeRecord:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameTypePair'
+      required:
+      - fields
+    TypeResult:
+      type: object
+      properties:
+        ok:
+          $ref: '#/components/schemas/AnalysedType'
+        err:
+          $ref: '#/components/schemas/AnalysedType'
+    TypeS16:
+      type: object
+    TypeS32:
+      type: object
+    TypeS64:
+      type: object
+    TypeS8:
+      type: object
+    TypeStr:
+      type: object
+    TypeTuple:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedType'
+      required:
+      - items
+    TypeU16:
+      type: object
+    TypeU32:
+      type: object
+    TypeU64:
+      type: object
+    TypeU8:
+      type: object
+    TypeVariant:
+      type: object
+      properties:
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameOptionTypePair'
+      required:
+      - cases
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -2565,6 +3276,8 @@ components:
           type:
             example: failedUpdate
             type: string
+            enum:
+            - failedUpdate
         required:
         - type
       - $ref: '#/components/schemas/FailedUpdate'
@@ -2575,6 +3288,8 @@ components:
           type:
             example: pendingUpdate
             type: string
+            enum:
+            - pendingUpdate
         required:
         - type
       - $ref: '#/components/schemas/PendingUpdate'
@@ -2585,6 +3300,8 @@ components:
           type:
             example: successfulUpdate
             type: string
+            enum:
+            - successfulUpdate
         required:
         - type
       - $ref: '#/components/schemas/SuccessfulUpdate'
@@ -2719,6 +3436,8 @@ components:
           type:
             example: And
             type: string
+            enum:
+            - And
         required:
         - type
       - $ref: '#/components/schemas/WorkerAndFilter'
@@ -2729,6 +3448,8 @@ components:
           type:
             example: CreatedAt
             type: string
+            enum:
+            - CreatedAt
         required:
         - type
       - $ref: '#/components/schemas/WorkerCreatedAtFilter'
@@ -2739,6 +3460,8 @@ components:
           type:
             example: Env
             type: string
+            enum:
+            - Env
         required:
         - type
       - $ref: '#/components/schemas/WorkerEnvFilter'
@@ -2749,6 +3472,8 @@ components:
           type:
             example: Name
             type: string
+            enum:
+            - Name
         required:
         - type
       - $ref: '#/components/schemas/WorkerNameFilter'
@@ -2759,6 +3484,8 @@ components:
           type:
             example: Not
             type: string
+            enum:
+            - Not
         required:
         - type
       - $ref: '#/components/schemas/WorkerNotFilter'
@@ -2769,6 +3496,8 @@ components:
           type:
             example: Or
             type: string
+            enum:
+            - Or
         required:
         - type
       - $ref: '#/components/schemas/WorkerOrFilter'
@@ -2779,6 +3508,8 @@ components:
           type:
             example: Status
             type: string
+            enum:
+            - Status
         required:
         - type
       - $ref: '#/components/schemas/WorkerStatusFilter'
@@ -2789,6 +3520,8 @@ components:
           type:
             example: Version
             type: string
+            enum:
+            - Version
         required:
         - type
       - $ref: '#/components/schemas/WorkerVersionFilter'
@@ -2836,6 +3569,16 @@ components:
           format: date-time
         lastError:
           type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        ownedResources:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ResourceMetadata'
       required:
       - workerId
       - args
@@ -2846,6 +3589,9 @@ components:
       - pendingInvocationCount
       - updates
       - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - ownedResources
     WorkerNameFilter:
       type: object
       properties:
@@ -2889,6 +3635,8 @@ components:
           type:
             example: Messages
             type: string
+            enum:
+            - Messages
         required:
         - type
       - $ref: '#/components/schemas/MessagesErrorsBody'
@@ -2899,6 +3647,8 @@ components:
           type:
             example: Validation
             type: string
+            enum:
+            - Validation
         required:
         - type
       - $ref: '#/components/schemas/ValidationErrorsBody'
@@ -2949,8 +3699,7 @@ components:
         filter:
           $ref: '#/components/schemas/WorkerFilter'
         cursor:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ScanCursor'
         count:
           type: integer
           format: uint64
@@ -2964,19 +3713,96 @@ components:
           items:
             $ref: '#/components/schemas/WorkerMetadata'
         cursor:
-          type: integer
-          format: uint64
+          $ref: '#/components/schemas/ScanCursor'
       required:
       - workers
+    AnalysedExport:
+      discriminator:
+        propertyName: type
+        mapping:
+          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
+          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
+      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
+    AnalysedExport_AnalysedFunction:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Function
+            type: string
+            enum:
+            - Function
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedFunction'
+    AnalysedExport_AnalysedInstance:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Instance
+            type: string
+            enum:
+            - Instance
+        required:
+        - type
+      - $ref: '#/components/schemas/AnalysedInstance'
+    AnalysedFunction:
+      type: object
+      properties:
+        name:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunctionParameter'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunctionResult'
+      required:
+      - name
+      - parameters
+      - results
+    AnalysedFunctionParameter:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - name
+      - typ
+    AnalysedFunctionResult:
+      type: object
+      properties:
+        name:
+          type: string
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - typ
+    AnalysedInstance:
+      type: object
+      properties:
+        name:
+          type: string
+        functions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysedFunction'
+      required:
+      - name
+      - functions
     Component:
       type: object
       properties:
         versionedComponentId:
           $ref: '#/components/schemas/VersionedComponentId'
-        userComponentId:
-          $ref: '#/components/schemas/UserComponentId'
-        protectedComponentId:
-          $ref: '#/components/schemas/ProtectedComponentId'
         componentName:
           type: string
         componentSize:
@@ -2984,10 +3810,11 @@ components:
           format: uint64
         metadata:
           $ref: '#/components/schemas/ComponentMetadata'
+        createdAt:
+          type: string
+          format: date-time
       required:
       - versionedComponentId
-      - userComponentId
-      - protectedComponentId
       - componentName
       - componentSize
       - metadata
@@ -2997,111 +3824,32 @@ components:
         exports:
           type: array
           items:
-            $ref: '#/components/schemas/Export'
+            $ref: '#/components/schemas/AnalysedExport'
         producers:
           type: array
           items:
             $ref: '#/components/schemas/Producers'
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinearMemory'
       required:
       - exports
       - producers
-    Export:
-      discriminator:
-        propertyName: type
-        mapping:
-          Instance: '#/components/schemas/Export_ExportInstance'
-          Function: '#/components/schemas/Export_ExportFunction'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/Export_ExportInstance'
-      - $ref: '#/components/schemas/Export_ExportFunction'
-    ExportFunction:
+      - memories
+    LinearMemory:
       type: object
       properties:
-        name:
-          type: string
-        parameters:
-          type: array
-          items:
-            $ref: '#/components/schemas/FunctionParameter'
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/FunctionResult'
+        initial:
+          description: Initial size of the linear memory in bytes
+          type: integer
+          format: uint64
+        maximum:
+          description: Optional maximal size of the linear memory in bytes
+          type: integer
+          format: uint64
       required:
-      - name
-      - parameters
-      - results
-    ExportInstance:
-      type: object
-      properties:
-        name:
-          type: string
-        functions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ExportFunction'
-      required:
-      - name
-      - functions
-    Export_ExportFunction:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Function
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/ExportFunction'
-    Export_ExportInstance:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Instance
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/ExportInstance'
-    FunctionParameter:
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-      required:
-      - name
-      - typ
-    FunctionResult:
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-      required:
-      - typ
-    NameOptionTypePair:
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-      required:
-      - name
-    NameTypePair:
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/Type'
-      required:
-      - name
-      - typ
+      - initial
     ProducerField:
       type: object
       properties:
@@ -3123,398 +3871,6 @@ components:
             $ref: '#/components/schemas/ProducerField'
       required:
       - fields
-    ProtectedComponentId:
-      type: object
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-      required:
-      - versionedComponentId
-    ResourceMode:
-      type: string
-      enum:
-      - Borrowed
-      - Owned
-    Type:
-      discriminator:
-        propertyName: type
-        mapping:
-          Variant: '#/components/schemas/Type_TypeVariant'
-          Result: '#/components/schemas/Type_TypeResult'
-          Option: '#/components/schemas/Type_TypeOption'
-          Enum: '#/components/schemas/Type_TypeEnum'
-          Flags: '#/components/schemas/Type_TypeFlags'
-          Record: '#/components/schemas/Type_TypeRecord'
-          Tuple: '#/components/schemas/Type_TypeTuple'
-          List: '#/components/schemas/Type_TypeList'
-          Str: '#/components/schemas/Type_TypeStr'
-          Chr: '#/components/schemas/Type_TypeChr'
-          F64: '#/components/schemas/Type_TypeF64'
-          F32: '#/components/schemas/Type_TypeF32'
-          U64: '#/components/schemas/Type_TypeU64'
-          S64: '#/components/schemas/Type_TypeS64'
-          U32: '#/components/schemas/Type_TypeU32'
-          S32: '#/components/schemas/Type_TypeS32'
-          U16: '#/components/schemas/Type_TypeU16'
-          S16: '#/components/schemas/Type_TypeS16'
-          U8: '#/components/schemas/Type_TypeU8'
-          S8: '#/components/schemas/Type_TypeS8'
-          Bool: '#/components/schemas/Type_TypeBool'
-          Handle: '#/components/schemas/Type_TypeHandle'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/Type_TypeVariant'
-      - $ref: '#/components/schemas/Type_TypeResult'
-      - $ref: '#/components/schemas/Type_TypeOption'
-      - $ref: '#/components/schemas/Type_TypeEnum'
-      - $ref: '#/components/schemas/Type_TypeFlags'
-      - $ref: '#/components/schemas/Type_TypeRecord'
-      - $ref: '#/components/schemas/Type_TypeTuple'
-      - $ref: '#/components/schemas/Type_TypeList'
-      - $ref: '#/components/schemas/Type_TypeStr'
-      - $ref: '#/components/schemas/Type_TypeChr'
-      - $ref: '#/components/schemas/Type_TypeF64'
-      - $ref: '#/components/schemas/Type_TypeF32'
-      - $ref: '#/components/schemas/Type_TypeU64'
-      - $ref: '#/components/schemas/Type_TypeS64'
-      - $ref: '#/components/schemas/Type_TypeU32'
-      - $ref: '#/components/schemas/Type_TypeS32'
-      - $ref: '#/components/schemas/Type_TypeU16'
-      - $ref: '#/components/schemas/Type_TypeS16'
-      - $ref: '#/components/schemas/Type_TypeU8'
-      - $ref: '#/components/schemas/Type_TypeS8'
-      - $ref: '#/components/schemas/Type_TypeBool'
-      - $ref: '#/components/schemas/Type_TypeHandle'
-    TypeBool:
-      type: object
-    TypeChr:
-      type: object
-    TypeEnum:
-      type: object
-      properties:
-        cases:
-          type: array
-          items:
-            type: string
-      required:
-      - cases
-    TypeF32:
-      type: object
-    TypeF64:
-      type: object
-    TypeFlags:
-      type: object
-      properties:
-        cases:
-          type: array
-          items:
-            type: string
-      required:
-      - cases
-    TypeHandle:
-      type: object
-      properties:
-        resource_id:
-          type: integer
-          format: uint64
-        mode:
-          $ref: '#/components/schemas/ResourceMode'
-      required:
-      - resource_id
-      - mode
-    TypeList:
-      type: object
-      properties:
-        inner:
-          $ref: '#/components/schemas/Type'
-      required:
-      - inner
-    TypeOption:
-      type: object
-      properties:
-        inner:
-          $ref: '#/components/schemas/Type'
-      required:
-      - inner
-    TypeRecord:
-      type: object
-      properties:
-        cases:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameTypePair'
-      required:
-      - cases
-    TypeResult:
-      type: object
-      properties:
-        ok:
-          $ref: '#/components/schemas/Type'
-        err:
-          $ref: '#/components/schemas/Type'
-    TypeS16:
-      type: object
-    TypeS32:
-      type: object
-    TypeS64:
-      type: object
-    TypeS8:
-      type: object
-    TypeStr:
-      type: object
-    TypeTuple:
-      type: object
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Type'
-      required:
-      - items
-    TypeU16:
-      type: object
-    TypeU32:
-      type: object
-    TypeU64:
-      type: object
-    TypeU8:
-      type: object
-    TypeVariant:
-      type: object
-      properties:
-        cases:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameOptionTypePair'
-      required:
-      - cases
-    Type_TypeBool:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Bool
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeBool'
-    Type_TypeChr:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Chr
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeChr'
-    Type_TypeEnum:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Enum
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeEnum'
-    Type_TypeF32:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: F32
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeF32'
-    Type_TypeF64:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: F64
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeF64'
-    Type_TypeFlags:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Flags
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeFlags'
-    Type_TypeHandle:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Handle
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeHandle'
-    Type_TypeList:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: List
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeList'
-    Type_TypeOption:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Option
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeOption'
-    Type_TypeRecord:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Record
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeRecord'
-    Type_TypeResult:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Result
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeResult'
-    Type_TypeS16:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S16
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS16'
-    Type_TypeS32:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S32
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS32'
-    Type_TypeS64:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S64
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS64'
-    Type_TypeS8:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S8
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS8'
-    Type_TypeStr:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Str
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeStr'
-    Type_TypeTuple:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Tuple
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeTuple'
-    Type_TypeU16:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U16
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU16'
-    Type_TypeU32:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U32
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU32'
-    Type_TypeU64:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U64
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU64'
-    Type_TypeU8:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U8
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU8'
-    Type_TypeVariant:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Variant
-            type: string
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeVariant'
-    UserComponentId:
-      type: object
-      properties:
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-      required:
-      - versionedComponentId
     VersionedName:
       type: object
       properties:

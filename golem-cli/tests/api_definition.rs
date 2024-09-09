@@ -1,7 +1,11 @@
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_component_from_file;
+use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
-use golem_client::model::{GolemWorkerBinding, HttpApiDefinition, MethodPattern, Route};
+use golem_client::model::{
+    GolemWorkerBinding, HttpApiDefinition, HttpApiDefinitionRequest, MethodPattern, Route,
+    VersionedComponentId,
+};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
@@ -65,14 +69,18 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     let mut short_args = make(
         "_short",
         "CLI_short",
-        CliLive::make(deps.clone()).unwrap().with_short_args(),
+        CliLive::make("api_definition_short", deps.clone())
+            .unwrap()
+            .with_short_args(),
         deps.clone(),
     );
 
     let mut long_args = make(
         "_long",
         "CLI_long",
-        CliLive::make(deps.clone()).unwrap().with_long_args(),
+        CliLive::make("api_definition_long", deps.clone())
+            .unwrap()
+            .with_long_args(),
         deps,
     );
 
@@ -102,9 +110,9 @@ fn make_file(id: &str, json: &serde_json::value::Value) -> Result<PathBuf, Faile
 fn golem_def_with_response(
     id: &str,
     component_id: &str,
-    response: Option<String>,
-) -> HttpApiDefinition {
-    HttpApiDefinition {
+    response: String,
+) -> HttpApiDefinitionRequest {
+    HttpApiDefinitionRequest {
         id: id.to_string(),
         version: "0.1.0".to_string(),
         draft: true,
@@ -112,10 +120,11 @@ fn golem_def_with_response(
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
             binding: GolemWorkerBinding {
-                component: Uuid::parse_str(component_id).unwrap(),
-                worker_id: "worker-${request.path.user-id}".to_string(),
-                function_name: "golem:it/api/get-cart-contents".to_string(),
-                function_params: vec![],
+                component_id: VersionedComponentId {
+                    component_id: Uuid::parse_str(component_id).unwrap(),
+                    version: 0,
+                },
+                worker_name: "foo".to_string(),
                 idempotency_key: None,
                 response,
             },
@@ -123,17 +132,26 @@ fn golem_def_with_response(
     }
 }
 
-pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinition {
-    golem_def_with_response(id, component_id, Some("${{headers: {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}".to_string()))
+pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
+    golem_def_with_response(
+        id,
+        component_id,
+        "${let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}}"
+            .to_string(),
+    )
 }
 
-pub fn make_golem_file(def: &HttpApiDefinition) -> Result<PathBuf, Failed> {
+pub fn make_golem_file(def: &HttpApiDefinitionRequest) -> Result<PathBuf, Failed> {
     let golem_json = serde_json::to_value(def)?;
 
     make_file(&def.id, &golem_json)
 }
 
-pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Failed> {
+pub fn make_open_api_file(
+    id: &str,
+    component_id: &str,
+    component_version: u64,
+) -> Result<PathBuf, Failed> {
     let open_api_json = json!(
       {
         "openapi": "3.0.0",
@@ -146,11 +164,10 @@ pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Faile
         "paths": {
             "/{user-id}/get-cart-contents": {
               "x-golem-worker-bridge": {
-                "worker-id": "worker-${request.path.user-id}",
-                "function-name": "golem:it/api/get-cart-contents",
-                "function-params": [],
+                "worker-name": "foo",
                 "component-id": component_id,
-                "response" : "${{headers : {ContentType: 'json', userid: 'foo'}, body: worker.response, status: 200}}"
+                "component-version": component_version,
+                "response" : "${let status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}}"
               },
               "get": {
                 "summary": "Get Cart Contents",
@@ -208,6 +225,19 @@ pub fn make_open_api_file(id: &str, component_id: &str) -> Result<PathBuf, Faile
     make_file(id, &open_api_json)
 }
 
+pub fn to_definition(
+    request: HttpApiDefinitionRequest,
+    created_at: Option<DateTime<Utc>>,
+) -> HttpApiDefinition {
+    HttpApiDefinition {
+        id: request.id,
+        version: request.version,
+        draft: request.draft,
+        routes: request.routes,
+        created_at,
+    }
+}
+
 fn api_definition_import(
     (deps, name, cli): (
         Arc<dyn TestDependencies + Send + Sync + 'static>,
@@ -217,11 +247,13 @@ fn api_definition_import(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let path = make_open_api_file(&component_name, &component.component_id)?;
+    let component_id = component.component_urn.id.0.to_string();
+    let component_version = component.component_version;
+    let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
 
-    let expected = golem_def(&component_name, &component.component_id);
+    let expected = to_definition(golem_def(&component_name, &component_id), res.created_at);
 
     assert_eq!(res, expected);
 
@@ -237,12 +269,14 @@ fn api_definition_add(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let res: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def, res.created_at);
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -256,16 +290,24 @@ fn api_definition_update(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
 
-    let def = golem_def(&component_name, &component.component_id);
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let updated = golem_def_with_response(&component_name, &component.component_id, Some("${{headers: {ContentType: 'json', userid: 'bar'}, body: worker.response, status: 200}}".to_string()));
+    let updated = golem_def_with_response(
+        &component_name,
+        &component_id,
+        "${let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"baz\", status: status}}"
+            .to_string(),
+    );
     let path = make_golem_file(&updated)?;
     let res: HttpApiDefinition = cli.run(&["api-definition", "update", path.to_str().unwrap()])?;
 
-    assert_eq!(res, updated);
+    let expected = to_definition(updated, res.created_at);
+
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -279,13 +321,14 @@ fn api_definition_update_immutable(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_update_immutable{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
+    let component_id = component.component_urn.id.0.to_string();
 
-    let mut def = golem_def(&component_name, &component.component_id);
+    let mut def = golem_def(&component_name, &component_id);
     def.draft = false;
     let path = make_golem_file(&def)?;
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let updated = golem_def_with_response(&component_name, &component.component_id, Some("${{headers: {ContentType: 'json', userid: 'bar'}, body: worker.response, status: 200}}".to_string()));
+    let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string());
     let path = make_golem_file(&updated)?;
     let res = cli.run_string(&["api-definition", "update", path.to_str().unwrap()]);
 
@@ -303,14 +346,20 @@ fn api_definition_list(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_list{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let res: Vec<HttpApiDefinition> = cli.run(&["api-definition", "list"])?;
 
-    assert!(res.contains(&def));
+    let found = res.into_iter().find(|d| {
+        let e = to_definition(def.clone(), d.created_at);
+        d == &e
+    });
+
+    assert!(found.is_some());
 
     Ok(())
 }
@@ -324,7 +373,8 @@ fn api_definition_list_versions(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_list_versions{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
@@ -338,7 +388,11 @@ fn api_definition_list_versions(
     ])?;
 
     assert_eq!(res.len(), 1);
-    assert_eq!(*res.first().unwrap(), def);
+
+    let res: HttpApiDefinition = res.first().unwrap().clone();
+    let expected = to_definition(def, res.created_at);
+
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -352,7 +406,8 @@ fn api_definition_get(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_get{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -368,7 +423,9 @@ fn api_definition_get(
         "0.1.0",
     ])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def, res.created_at);
+
+    assert_eq!(res, expected);
 
     Ok(())
 }
@@ -382,7 +439,8 @@ fn api_definition_delete(
 ) -> Result<(), Failed> {
     let component_name = format!("api_definition_delete{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
-    let def = golem_def(&component_name, &component.component_id);
+    let component_id = component.component_urn.id.0.to_string();
+    let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -398,7 +456,9 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    assert_eq!(res, def);
+    let expected = to_definition(def, res.created_at);
+
+    assert_eq!(res, expected);
 
     cli.run_unit(&[
         "api-definition",

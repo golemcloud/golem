@@ -98,7 +98,7 @@ fn read_body(incoming_response: &types::IncomingResponse) -> Vec<u8> {
 
     let mut eof = false;
     while !eof {
-        match response_body_stream.read(u64::MAX) {
+        match response_body_stream.blocking_read(u64::MAX) {
             Ok(mut body_chunk) => {
                 body.append(&mut body_chunk);
             }
@@ -169,3 +169,5 @@ fn get_incoming_response(
     };
     incoming_response
 }
+
+bindings::export!(Component with_types_in bindings);

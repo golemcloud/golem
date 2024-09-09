@@ -1,0 +1,255 @@
+syntax = "proto3";
+
+import public "golem/common/account_id.proto";
+import public "golem/common/empty.proto";
+import public "golem/worker/idempotency_key.proto";
+import public "golem/worker/invocation_context.proto";
+import public "golem/worker/log_event.proto";
+import public "golem/worker/promise_id.proto";
+import public "golem/common/resource_limits.proto";
+import public "golem/shardmanager/shard_id.proto";
+import public "golem/component/component_id.proto";
+import public "golem/worker/cursor.proto";
+import public "golem/worker/update_mode.proto";
+import public "golem/worker/worker_id.proto";
+import public "golem/worker/worker_metadata.proto";
+import public "golem/worker/worker_status.proto";
+import public "golem/worker/worker_filter.proto";
+import public "golem/worker/v1/worker_execution_error.proto";
+
+import public "wasm/rpc/val.proto";
+import public "wasm/rpc/type_annotated_value.proto";
+
+package golem.workerexecutor.v1;
+
+service WorkerExecutor {
+  rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
+  rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
+  rpc InvokeAndAwaitWorkerTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
+  rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
+  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
+  rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
+  rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
+  rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
+  rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
+  rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
+  rpc GetWorkerMetadata(GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+  rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
+  rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
+  rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
+  rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
+}
+
+message InvokeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message DeleteWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+}
+
+message DeleteWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CompletePromiseRequest {
+  golem.worker.PromiseId promise_id = 1;
+  bytes data = 2;
+  golem.common.AccountId account_id = 3;
+}
+
+message CompletePromiseResponse {
+  oneof result {
+    CompletePromiseSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CompletePromiseSuccess {
+  bool completed = 1;
+}
+
+message InterruptWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CreateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  uint64 component_version = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  golem.common.AccountId account_id = 5;
+  golem.common.ResourceLimits account_limits = 6;
+}
+
+message CreateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+
+message InvokeAndAwaitWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated wasm.rpc.Val input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.AccountId account_id = 6;
+  golem.common.ResourceLimits account_limits = 7;
+  optional golem.worker.InvocationContext context = 8;
+}
+
+
+message InvokeAndAwaitWorkerResponse {
+  oneof result {
+    InvokeAndAwaitWorkerSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAndAwaitWorkerResponseTyped {
+  oneof result {
+    InvokeAndAwaitWorkerSuccessTyped success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAndAwaitWorkerSuccess {
+  repeated wasm.rpc.Val output = 1;
+}
+
+message InvokeAndAwaitWorkerSuccessTyped {
+  wasm.rpc.TypeAnnotatedValue output = 1;
+}
+
+
+message InvokeWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string name = 2;
+  repeated wasm.rpc.Val input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.AccountId account_id = 5;
+  golem.common.ResourceLimits account_limits = 6;
+  optional golem.worker.InvocationContext context = 7;
+}
+
+message ConnectWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.ResourceLimits account_limits = 3;
+}
+
+message InterruptWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  bool recover_immediately = 2;
+  golem.common.AccountId account_id = 3;
+}
+
+message RevokeShardsRequest {
+  repeated golem.shardmanager.ShardId shard_ids = 1;
+}
+
+message RevokeShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message AssignShardsRequest {
+  repeated golem.shardmanager.ShardId shard_ids = 1;
+}
+
+message AssignShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkerMetadataRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+}
+
+message GetWorkerMetadataResponse {
+  oneof result {
+    golem.worker.WorkerMetadata success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message ResumeWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+}
+
+message ResumeWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetRunningWorkersMetadataRequest {
+  golem.component.ComponentId component_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+}
+
+
+message GetRunningWorkersMetadataResponse {
+  oneof result {
+    GetRunningWorkersMetadataSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetRunningWorkersMetadataSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+}
+
+message GetWorkersMetadataRequest {
+  golem.component.ComponentId component_id = 1;
+  golem.worker.WorkerFilter filter = 2;
+  golem.worker.Cursor cursor = 3;
+  uint64 count = 4;
+  bool precise = 5;
+  golem.common.AccountId account_id = 6;
+}
+
+message GetWorkersMetadataResponse {
+  oneof result {
+    GetWorkersMetadataSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkersMetadataSuccessResponse {
+  repeated golem.worker.WorkerMetadata workers = 1;
+  optional golem.worker.Cursor cursor = 2;
+}
+
+message UpdateWorkerRequest {
+  golem.worker.WorkerId worker_id = 1;
+  uint64 target_version = 2;
+  golem.worker.UpdateMode mode = 3;
+  golem.common.AccountId account_id = 4;
+}
+
+message UpdateWorkerResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
