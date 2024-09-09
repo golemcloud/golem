@@ -14,7 +14,7 @@
 
 use crate::clients::worker::WorkerClient;
 use crate::command::worker::WorkerConnectOptions;
-use crate::model::component::{function_params_types, show_exported_function, Component};
+use crate::model::component::{format_function_name, function_params_types, Component};
 use crate::model::conversions::{
     analysed_type_client_to_model, decode_type_annotated_value_json,
     encode_type_annotated_value_json,
@@ -703,7 +703,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             prefix: Option<&str>,
             function: &AnalysedFunction,
         ) -> Option<String> {
-            let function_name = show_exported_function(prefix, function);
+            let function_name = format_function_name(prefix, &function.name);
             if function_name == target_function_name {
                 Some(function_name)
             } else {

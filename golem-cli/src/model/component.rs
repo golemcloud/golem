@@ -198,7 +198,7 @@ fn custom_show_exported_function(prefix: Option<&str>, f: &AnalysedFunction) -> 
     }
 }
 
-fn format_function_name(prefix: Option<&str>, name: &str) -> String {
+pub fn format_function_name(prefix: Option<&str>, name: &str) -> String {
     match prefix {
         Some(prefix) => format!("{prefix}.{{{name}}}"),
         None => name.to_string(),
