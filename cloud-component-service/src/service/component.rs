@@ -72,8 +72,7 @@ impl From<BaseComponentError> for ComponentError {
 
 impl From<RepoError> for ComponentError {
     fn from(error: RepoError) -> Self {
-        let RepoError::Internal(error) = error;
-        ComponentError::Internal(anyhow::Error::msg(error))
+        ComponentError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 

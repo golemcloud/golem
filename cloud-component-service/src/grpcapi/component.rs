@@ -34,21 +34,25 @@ use tonic::{Request, Response, Status, Streaming};
 impl From<component::ComponentError> for ComponentError {
     fn from(value: component::ComponentError) -> Self {
         let error = match value {
-            component::ComponentError::Unauthorized(error) => {
-                component_error::Error::Unauthorized(ErrorBody { error })
+            component::ComponentError::Unauthorized(_) => {
+                component_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_string(),
+                })
             }
-            component::ComponentError::Internal(error) => {
+            component::ComponentError::Internal(_) => {
                 component_error::Error::InternalError(ErrorBody {
-                    error: error.to_string(),
+                    error: value.to_string(),
                 })
             }
-            component::ComponentError::ComponentProcessing(error) => {
+            component::ComponentError::ComponentProcessing(_) => {
                 component_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![error.to_string()],
+                    errors: vec![value.to_string()],
                 })
             }
-            component::ComponentError::LimitExceeded(error) => {
-                component_error::Error::LimitExceeded(ErrorBody { error })
+            component::ComponentError::LimitExceeded(_) => {
+                component_error::Error::LimitExceeded(ErrorBody {
+                    error: value.to_string(),
+                })
             }
             component::ComponentError::AlreadyExists(_) => {
                 component_error::Error::AlreadyExists(ErrorBody {

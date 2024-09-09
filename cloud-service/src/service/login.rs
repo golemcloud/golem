@@ -26,14 +26,14 @@ pub enum LoginError {
 }
 
 impl LoginError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<M>(error: M) -> Self
     where
         M: Display,
     {
         Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn external<M>(error: M) -> Self
+    fn external<M>(error: M) -> Self
     where
         M: Display,
     {

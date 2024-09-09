@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -26,24 +26,20 @@ pub enum AccountError {
 }
 
 impl AccountError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-
-    pub fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 }
 
 impl From<RepoError> for AccountError {
     fn from(error: RepoError) -> Self {
-        AccountError::internal(error)
+        AccountError::internal(error, "Repository error")
     }
 }
 
@@ -107,11 +103,13 @@ impl AccountServiceDefault {
     }
 
     async fn get_default_plan_id(&self) -> Result<PlanId, AccountError> {
-        self.plan_service
+        let plan_id = self
+            .plan_service
             .get_default_plan()
             .await
-            .map(|plan| plan.plan_id)
-            .map_err(|_| AccountError::internal("Get default plan failed. ".to_string()))
+            .map(|plan| plan.plan_id)?;
+
+        Ok(plan_id)
     }
 }
 
@@ -138,7 +136,8 @@ impl AccountService for AccountServiceDefault {
         {
             Ok(Some(account_record)) => Ok(account_record.into()),
             Ok(None) => Err(AccountError::internal(
-                "Duplicated account on fresh id.".to_string(),
+                format!("Duplicated account on fresh id: {}", id),
+                "Duplicated account",
             )),
             Err(err) => {
                 error!("DB call failed. {}", err);
@@ -207,7 +206,10 @@ impl AccountService for AccountServiceDefault {
             Ok(Some(account_record)) => {
                 match self.plan_service.get(&PlanId(account_record.plan_id)).await {
                     Ok(Some(plan)) => Ok(plan),
-                    Ok(None) => Err(AccountError::internal("Get plan failed.".to_string())),
+                    Ok(None) => Err(AccountError::internal(
+                        format!("Could not find plan with id: {}", account_record.plan_id),
+                        "Get plan failed.".to_string(),
+                    )),
                     Err(err) => {
                         error!("DB call failed. {:?}", err);
                         Err(err.into())
@@ -317,11 +319,21 @@ fn check_root(auth: &AccountAuthorisation) -> Result<(), AccountError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::auth::AccountAuthorisation;
+    use crate::repo::RepoError;
+    use crate::service::account::{check_authorized, check_root, AccountError};
+    use cloud_common::model::Role;
     use golem_common::model::AccountId;
 
-    use crate::auth::AccountAuthorisation;
-    use crate::service::account::{check_authorized, check_root};
-    use cloud_common::model::Role;
+    #[test]
+    pub fn test_repo_error_to_service_error() {
+        let repo_err = RepoError::Internal("some sql error".to_string());
+        let service_err: AccountError = repo_err.into();
+        assert_eq!(
+            service_err.to_string(),
+            "Internal error: Repository error".to_string()
+        );
+    }
 
     #[test]
     pub fn test_check_authorized() {

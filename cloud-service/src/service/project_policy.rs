@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,18 +15,9 @@ pub enum ProjectPolicyError {
     Internal(#[from] anyhow::Error),
 }
 
-impl ProjectPolicyError {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-}
-
 impl From<RepoError> for ProjectPolicyError {
     fn from(error: RepoError) -> Self {
-        ProjectPolicyError::internal(error)
+        ProjectPolicyError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 
@@ -65,10 +55,8 @@ impl ProjectPolicyService for ProjectPolicyServiceDefault {
     async fn create(&self, project_policy: &ProjectPolicy) -> Result<(), ProjectPolicyError> {
         info!("Create project policy {}", project_policy.id);
         let project_policy: ProjectPolicyRecord = project_policy.clone().into();
-        self.project_policy_repo
-            .create(&project_policy)
-            .await
-            .map_err(ProjectPolicyError::internal)
+        self.project_policy_repo.create(&project_policy).await?;
+        Ok(())
     }
 
     async fn get_all(
@@ -101,8 +89,8 @@ impl ProjectPolicyService for ProjectPolicyServiceDefault {
         info!("Deleting project policy {}", project_policy_id);
         self.project_policy_repo
             .delete(&project_policy_id.0)
-            .await
-            .map_err(ProjectPolicyError::internal)
+            .await?;
+        Ok(())
     }
 }
 

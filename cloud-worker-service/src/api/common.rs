@@ -217,13 +217,15 @@ impl From<ProjectError> for ApiEndpointError {
 impl From<RegisterDomainRouteError> for ApiEndpointError {
     fn from(value: RegisterDomainRouteError) -> Self {
         match value {
-            RegisterDomainRouteError::NotAvailable(error) => ApiEndpointError::BadRequest(Json(
+            RegisterDomainRouteError::NotAvailable(_) => ApiEndpointError::BadRequest(Json(
                 WorkerServiceErrorsBody::Messages(MessagesErrorsBody {
-                    errors: vec![error],
+                    errors: vec![value.to_string()],
                 }),
             )),
-            RegisterDomainRouteError::Internal(error) => {
-                ApiEndpointError::InternalError(Json(ErrorBody { error }))
+            RegisterDomainRouteError::Internal(_) => {
+                ApiEndpointError::InternalError(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
         }
     }
@@ -293,14 +295,14 @@ impl From<ApiDefinitionError> for ApiEndpointError {
 impl From<AuthServiceError> for ApiEndpointError {
     fn from(value: AuthServiceError) -> Self {
         match value {
-            AuthServiceError::Unauthorized(error) => {
-                ApiEndpointError::Unauthorized(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Forbidden(error) => {
-                ApiEndpointError::LimitExceeded(Json(ErrorBody { error }))
-            }
-            AuthServiceError::Internal(error) => ApiEndpointError::InternalError(Json(ErrorBody {
-                error: error.to_string(),
+            AuthServiceError::Unauthorized(_) => ApiEndpointError::Unauthorized(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Forbidden(_) => ApiEndpointError::LimitExceeded(Json(ErrorBody {
+                error: value.to_string(),
+            })),
+            AuthServiceError::Internal(_) => ApiEndpointError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
             })),
         }
     }

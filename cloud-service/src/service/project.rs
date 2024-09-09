@@ -25,21 +25,21 @@ pub enum ProjectError {
 }
 
 impl ProjectError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<M>(error: M) -> Self
     where
         M: Display,
     {
         Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
         Self::Unauthorized(error.to_string())
     }
 
-    pub fn limit_exceeded<M>(error: M) -> Self
+    fn limit_exceeded<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -49,7 +49,7 @@ impl ProjectError {
 
 impl From<RepoError> for ProjectError {
     fn from(error: RepoError) -> Self {
-        ProjectError::internal(error)
+        ProjectError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 
@@ -150,10 +150,8 @@ impl ProjectService for ProjectServiceDefault {
 
         if check_limit_result.in_limit() {
             let project: ProjectRecord = project.clone().into();
-            self.project_repo
-                .create(&project)
-                .await
-                .map_err(ProjectError::internal)
+            self.project_repo.create(&project).await?;
+            Ok(())
         } else {
             Err(ProjectError::limit_exceeded(format!(
                 "Project limit exceeded (limit: {})",
@@ -216,7 +214,7 @@ impl ProjectService for ProjectServiceDefault {
                 .get_own_default(account_id.value.as_str())
                 .await?;
             Ok(result
-                .ok_or(ProjectError::internal("Failed to create default project."))?
+                .ok_or(ProjectError::internal("Failed to create default project"))?
                 .into())
         }
     }
@@ -255,8 +253,7 @@ impl ProjectService for ProjectServiceDefault {
         let result = self
             .project_repo
             .get_own_count(account_id.value.as_str())
-            .await
-            .map_err(ProjectError::internal)?;
+            .await?;
         Ok(result)
     }
 

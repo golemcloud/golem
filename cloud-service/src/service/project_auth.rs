@@ -24,14 +24,14 @@ pub enum ProjectAuthorisationError {
 }
 
 impl ProjectAuthorisationError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<M>(error: M) -> Self
     where
         M: Display,
     {
         Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -41,7 +41,7 @@ impl ProjectAuthorisationError {
 
 impl From<RepoError> for ProjectAuthorisationError {
     fn from(error: RepoError) -> Self {
-        ProjectAuthorisationError::internal(error)
+        ProjectAuthorisationError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 

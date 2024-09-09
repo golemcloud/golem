@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
@@ -34,21 +34,24 @@ pub enum PlanLimitError {
 }
 
 impl PlanLimitError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
         Self::Unauthorized(error.to_string())
     }
 
-    pub fn limit_exceeded<M>(error: M) -> Self
+    fn limit_exceeded<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -58,7 +61,7 @@ impl PlanLimitError {
 
 impl From<RepoError> for PlanLimitError {
     fn from(error: RepoError) -> Self {
-        PlanLimitError::internal(error)
+        PlanLimitError::internal(error, "Repository error")
     }
 }
 
@@ -197,7 +200,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
         let num_projects = self.project_repo.get_own_count(&account_id.value).await?;
         let count: i64 = num_projects
             .try_into()
-            .map_err(|_| PlanLimitError::internal("Failed to convert projects count"))?;
+            .map_err(|e| PlanLimitError::internal(e, "Failed to convert projects count"))?;
 
         Ok(CheckLimitResult {
             account_id: account_id.clone(),

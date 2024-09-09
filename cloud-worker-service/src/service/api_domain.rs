@@ -3,13 +3,12 @@ extern crate rusoto_route53;
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use cloud_common::model::ProjectAction;
-use derive_more::Display;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_worker_service_base::repo::RepoError;
@@ -52,11 +51,14 @@ impl From<AuthServiceError> for ApiDomainServiceError {
 }
 
 impl ApiDomainServiceError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 
     pub fn unauthorized<M>(error: M) -> Self
@@ -85,7 +87,7 @@ impl From<RegisterDomainError> for ApiDomainServiceError {
     fn from(error: RegisterDomainError) -> Self {
         match error {
             RegisterDomainError::Internal(error) => {
-                ApiDomainServiceError::Internal(anyhow::Error::msg(error))
+                ApiDomainServiceError::internal(error, "Register domain error")
             }
             RegisterDomainError::NotAvailable(error) => {
                 ApiDomainServiceError::already_exists(error)
@@ -96,9 +98,7 @@ impl From<RegisterDomainError> for ApiDomainServiceError {
 
 impl From<RepoError> for ApiDomainServiceError {
     fn from(value: RepoError) -> Self {
-        match value {
-            RepoError::Internal(error) => ApiDomainServiceError::internal(error),
-        }
+        ApiDomainServiceError::internal(value, "Repository error")
     }
 }
 
@@ -174,9 +174,9 @@ impl ApiDomainService for ApiDomainServiceDefault {
         let current_registration = self.domain_repo.get(&payload.domain_name).await?;
 
         if let Some(current) = current_registration {
-            let current: AccountApiDomain = current
-                .try_into()
-                .map_err(ApiDomainServiceError::internal)?;
+            let current: AccountApiDomain = current.try_into().map_err(|e| {
+                ApiDomainServiceError::internal(e, "Failed to convert API Domain record")
+            })?;
 
             if current.account_id != account_id || current.domain.project_id != namespace.project_id
             {
@@ -242,10 +242,12 @@ impl ApiDomainService for ApiDomainServiceDefault {
                     "Domain registration - domain: {} - register error: {}",
                     payload.domain_name, e
                 );
-                ApiDomainServiceError::internal(e)
+                ApiDomainServiceError::from(e)
             })?;
 
-        let domain = record.try_into().map_err(ApiDomainServiceError::internal)?;
+        let domain = record.try_into().map_err(|e| {
+            ApiDomainServiceError::internal(e, "Failed to convert API Domain record")
+        })?;
 
         Ok(domain)
     }
@@ -270,7 +272,9 @@ impl ApiDomainService for ApiDomainServiceDefault {
             .iter()
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<ApiDomain>, _>>()
-            .map_err(ApiDomainServiceError::internal)?;
+            .map_err(|e| {
+                ApiDomainServiceError::internal(e, "Failed to convert API Domain record")
+            })?;
         Ok(values)
     }
 
@@ -292,11 +296,12 @@ impl ApiDomainService for ApiDomainServiceDefault {
 
         let data = self.domain_repo.get(domain_name).await?;
 
-        if let Some(domain) = data {
+        if let Some(record) = data {
             let account_id = namespace.account_id;
 
-            let domain: AccountApiDomain =
-                domain.try_into().map_err(ApiDomainServiceError::internal)?;
+            let domain: AccountApiDomain = record.try_into().map_err(|e| {
+                ApiDomainServiceError::internal(e, "Failed to convert API Domain record")
+            })?;
 
             if domain.account_id == account_id
                 && domain.domain.project_id == *project_id
@@ -345,15 +350,23 @@ impl ApiDomainService for ApiDomainServiceNoop {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Display)]
+#[derive(Debug, thiserror::Error)]
 pub enum RegisterDomainError {
+    #[error("Not available: {0}")]
     NotAvailable(String),
-    Internal(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl RegisterDomainError {
-    pub fn internal(error: Box<dyn Error>) -> Self {
-        RegisterDomainError::Internal(error.to_string())
+    fn internal<E, C>(error: E, context: C) -> Self
+    where
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
+    {
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 }
 
@@ -407,15 +420,19 @@ impl RegisterDomain for AwsRegisterDomain {
             .domain_records_config
             .is_domain_available_for_registration(&domain_config.domain_name)
         {
-            let client: Route53Client = self
-                .aws_config
-                .clone()
-                .try_into()
-                .map_err(RegisterDomainError::internal)?;
+            let client: Route53Client =
+                self.aws_config
+                    .clone()
+                    .try_into()
+                    .map_err(|e: Box<dyn Error>| {
+                        RegisterDomainError::internal(e.to_string(), "Client error")
+                    })?;
 
             register_hosted_zone(domain_config, client)
                 .await
-                .map_err(RegisterDomainError::internal)
+                .map_err(|e: Box<dyn Error>| {
+                    RegisterDomainError::internal(e.to_string(), "Register domain error")
+                })
         } else {
             Err(RegisterDomainError::NotAvailable(
                 "API domain is not available".to_string(),
@@ -429,14 +446,18 @@ impl RegisterDomain for AwsRegisterDomain {
             .domain_records_config
             .is_domain_available_for_registration(domain_name)
         {
-            let client: Route53Client = self
-                .aws_config
-                .clone()
-                .try_into()
-                .map_err(RegisterDomainError::internal)?;
+            let client: Route53Client =
+                self.aws_config
+                    .clone()
+                    .try_into()
+                    .map_err(|e: Box<dyn Error>| {
+                        RegisterDomainError::internal(e.to_string(), "Client error")
+                    })?;
             unregister_hosted_zone(domain_name, client)
                 .await
-                .map_err(RegisterDomainError::internal)
+                .map_err(|e: Box<dyn Error>| {
+                    RegisterDomainError::internal(e.to_string(), "Unregister domain error")
+                })
         } else {
             Err(RegisterDomainError::NotAvailable(
                 "API domain is not available".to_string(),
@@ -446,14 +467,18 @@ impl RegisterDomain for AwsRegisterDomain {
 
     async fn get(&self, domain_name: &str) -> Result<Option<Vec<String>>, RegisterDomainError> {
         info!("Get - domain name: {}", domain_name);
-        let client: Route53Client = self
-            .aws_config
-            .clone()
-            .try_into()
-            .map_err(RegisterDomainError::internal)?;
+        let client: Route53Client =
+            self.aws_config
+                .clone()
+                .try_into()
+                .map_err(|e: Box<dyn Error>| {
+                    RegisterDomainError::internal(e.to_string(), "Client error")
+                })?;
         get_name_servers(domain_name, client)
             .await
-            .map_err(RegisterDomainError::internal)
+            .map_err(|e: Box<dyn Error>| {
+                RegisterDomainError::internal(e.to_string(), "Get domain error")
+            })
     }
 }
 
@@ -633,15 +658,23 @@ impl RegisterDomain for InMemoryRegisterDomain {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Display)]
+#[derive(Debug, thiserror::Error)]
 pub enum RegisterDomainRouteError {
+    #[error("Not available: {0}")]
     NotAvailable(String),
-    Internal(String),
+    #[error("Internal error: {0}")]
+    Internal(#[from] anyhow::Error),
 }
 
 impl RegisterDomainRouteError {
-    pub fn internal(error: Box<dyn Error>) -> Self {
-        RegisterDomainRouteError::Internal(error.to_string())
+    fn internal<E, C>(error: E, context: C) -> Self
+    where
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
+    {
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 }
 
@@ -759,15 +792,19 @@ impl RegisterDomainRoute for AwsDomainRoute {
             ));
         }
 
-        let client: Route53Client = self
-            .aws_config
-            .clone()
-            .try_into()
-            .map_err(RegisterDomainRouteError::internal)?;
+        let client: Route53Client =
+            self.aws_config
+                .clone()
+                .try_into()
+                .map_err(|e: Box<dyn Error>| {
+                    RegisterDomainRouteError::internal(e.to_string(), "Client error")
+                })?;
 
         let hosted_zone = AwsRoute53HostedZone::with_client(&client, domain)
             .await
-            .map_err(RegisterDomainRouteError::internal)?;
+            .map_err(|e: Box<dyn Error>| {
+                RegisterDomainRouteError::internal(e.to_string(), "Register domain error")
+            })?;
 
         if !self
             .domain_records_config
@@ -803,7 +840,9 @@ impl RegisterDomainRoute for AwsDomainRoute {
         client
             .change_resource_record_sets(request)
             .await
-            .map_err(|e| RegisterDomainRouteError::internal(e.into()))?;
+            .map_err(|e| {
+                RegisterDomainRouteError::internal(e.to_string(), "Failed to register domain route")
+            })?;
 
         Ok(())
     }
@@ -820,15 +859,19 @@ impl RegisterDomainRoute for AwsDomainRoute {
 
         info!("Unregister - API site: {}", api_site);
 
-        let client: Route53Client = self
-            .aws_config
-            .clone()
-            .try_into()
-            .map_err(RegisterDomainRouteError::internal)?;
+        let client: Route53Client =
+            self.aws_config
+                .clone()
+                .try_into()
+                .map_err(|e: Box<dyn Error>| {
+                    RegisterDomainRouteError::internal(e.to_string(), "Client error")
+                })?;
 
         let hosted_zone = AwsRoute53HostedZone::with_client(&client, domain)
             .await
-            .map_err(RegisterDomainRouteError::internal)?;
+            .map_err(|e: Box<dyn Error>| {
+                RegisterDomainRouteError::internal(e.to_string(), "Unregister domain error")
+            })?;
 
         let change_batch = ChangeBatch {
             changes: vec![Change {
@@ -855,7 +898,12 @@ impl RegisterDomainRoute for AwsDomainRoute {
         client
             .change_resource_record_sets(request)
             .await
-            .map_err(|e| RegisterDomainRouteError::internal(e.into()))?;
+            .map_err(|e| {
+                RegisterDomainRouteError::internal(
+                    e.to_string(),
+                    "Failed to unregister domain route",
+                )
+            })?;
 
         Ok(())
     }
@@ -935,13 +983,15 @@ mod tests {
     use crate::aws_config::AwsConfig;
     use crate::config::DomainRecordsConfig;
     use crate::service::api_domain::{
-        get_name_servers, register_hosted_zone, unregister_hosted_zone, DomainConfig,
+        get_name_servers, register_hosted_zone, unregister_hosted_zone, ApiDomainServiceError,
+        DomainConfig,
     };
     use crate::service::api_domain::{
         AwsDomainRoute, AwsRoute53HostedZone, RegisterDomainRoute, RegisterDomainRouteNoop,
     };
     use golem_common::model::AccountId;
     use golem_common::model::ProjectId;
+    use golem_worker_service_base::repo::RepoError;
     use rusoto_core::Region;
     use rusoto_route53::Route53Client;
 
@@ -1073,5 +1123,15 @@ mod tests {
         dbg!("The result is {}", result.clone());
 
         assert!(result.name == "myapplication.com.");
+    }
+
+    #[test]
+    pub fn test_repo_error_to_service_error() {
+        let repo_err = RepoError::Internal("some sql error".to_string());
+        let service_err: ApiDomainServiceError = repo_err.into();
+        assert_eq!(
+            service_err.to_string(),
+            "Internal error: Repository error".to_string()
+        );
     }
 }

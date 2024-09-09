@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,17 +17,20 @@ pub enum PlanError {
 }
 
 impl PlanError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 }
 
 impl From<RepoError> for PlanError {
     fn from(error: RepoError) -> Self {
-        PlanError::internal(error)
+        PlanError::internal(error, "Repository error")
     }
 }
 
@@ -77,7 +80,10 @@ impl PlanService for PlanServiceDefault {
 
         match plan {
             Some(plan) => Ok(plan.into()),
-            None => Err(PlanError::internal("Could not find default plan")),
+            None => Err(PlanError::internal(
+                format!("Could not find default plan with id: {plan_id}"),
+                "Could not find default plan",
+            )),
         }
     }
 

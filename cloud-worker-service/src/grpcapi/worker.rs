@@ -409,17 +409,17 @@ impl GrpcWorkerService for WorkerGrpcApi {
 impl From<AuthServiceError> for GrpcWorkerError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
-            AuthServiceError::Unauthorized(error) => {
-                worker_error::Error::Unauthorized(ErrorBody { error })
-            }
-            AuthServiceError::Forbidden(error) => {
-                worker_error::Error::Unauthorized(ErrorBody { error })
-            }
+            AuthServiceError::Unauthorized(_) => worker_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
+            AuthServiceError::Forbidden(_) => worker_error::Error::Unauthorized(ErrorBody {
+                error: value.to_string(),
+            }),
             // TODO: this used to be unauthorized. How do we handle internal server errors?
-            AuthServiceError::Internal(details) => {
+            AuthServiceError::Internal(_) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: details.to_string(),
+                        details: value.to_string(),
                     })),
                 })
             }

@@ -64,12 +64,14 @@ type Result<T> = std::result::Result<T, ComponentError>;
 impl From<ComponentServiceError> for ComponentError {
     fn from(value: ComponentServiceError) -> Self {
         match value {
-            ComponentServiceError::Unauthorized(error) => {
-                ComponentError::Unauthorized(Json(ErrorBody { error }))
+            ComponentServiceError::Unauthorized(_) => {
+                ComponentError::Unauthorized(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
-            ComponentServiceError::ComponentProcessing(error) => {
+            ComponentServiceError::ComponentProcessing(_) => {
                 ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_string()],
+                    errors: vec![value.to_string()],
                 }))
             }
             ComponentServiceError::UnknownComponentId(_)
@@ -79,19 +81,19 @@ impl From<ComponentServiceError> for ComponentError {
                     errors: vec![value.to_string()],
                 }))
             }
-            ComponentServiceError::LimitExceeded(error) => {
-                ComponentError::LimitExceeded(Json(ErrorBody { error }))
+            ComponentServiceError::LimitExceeded(_) => {
+                ComponentError::LimitExceeded(Json(ErrorBody {
+                    error: value.to_string(),
+                }))
             }
             ComponentServiceError::AlreadyExists(_) => {
                 ComponentError::AlreadyExists(Json(ErrorBody {
                     error: value.to_string(),
                 }))
             }
-            ComponentServiceError::Internal(error) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_string(),
-                }))
-            }
+            ComponentServiceError::Internal(_) => ComponentError::InternalError(Json(ErrorBody {
+                error: value.to_string(),
+            })),
         }
     }
 }

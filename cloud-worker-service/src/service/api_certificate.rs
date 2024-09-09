@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -48,11 +48,14 @@ pub enum CertificateServiceError {
 }
 
 impl CertificateServiceError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 }
 
@@ -63,7 +66,7 @@ impl From<CertificateManagerError> for CertificateServiceError {
                 CertificateServiceError::CertificateNotAvailable(error)
             }
             CertificateManagerError::Internal(error) => {
-                CertificateServiceError::Internal(anyhow::Error::msg(error))
+                CertificateServiceError::internal(error, "Certificate manager error")
             }
         }
     }
@@ -81,9 +84,7 @@ impl From<AuthServiceError> for CertificateServiceError {
 
 impl From<RepoError> for CertificateServiceError {
     fn from(value: RepoError) -> Self {
-        match value {
-            RepoError::Internal(error) => CertificateServiceError::internal(error),
-        }
+        CertificateServiceError::internal(value, "Repository error")
     }
 }
 
@@ -180,9 +181,9 @@ impl CertificateService for CertificateServiceDefault {
 
         self.certificate_repo.create_or_update(&record).await?;
 
-        let certificate = record
-            .try_into()
-            .map_err(CertificateServiceError::internal)?;
+        let certificate = record.try_into().map_err(|e| {
+            CertificateServiceError::internal(e, "Failed to convert Certificate record")
+        })?;
 
         Ok(certificate)
     }
@@ -227,7 +228,9 @@ impl CertificateService for CertificateServiceDefault {
             .iter()
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<crate::model::Certificate>, _>>()
-            .map_err(CertificateServiceError::internal)?;
+            .map_err(|e| {
+                CertificateServiceError::internal(e, "Failed to convert Certificate record")
+            })?;
 
         Ok(values)
     }
@@ -806,8 +809,11 @@ async fn remove_certificate_from_load_balancer(
 mod tests {
     use crate::aws_config::AwsConfig;
     use crate::config::DomainRecordsConfig;
-    use crate::service::api_certificate::{AwsCertificateManager, CertificateManager};
+    use crate::service::api_certificate::{
+        AwsCertificateManager, CertificateManager, CertificateServiceError,
+    };
     use golem_common::model::AccountId;
+    use golem_worker_service_base::repo::RepoError;
 
     fn get_certificate_body() -> &'static str {
         r#"
@@ -907,5 +913,15 @@ rnhtC5zQq8F/lo4kJjmvwQ==
 
         println!("{:?}", delete_result);
         assert!(delete_result.is_ok());
+    }
+
+    #[test]
+    pub fn test_repo_error_to_service_error() {
+        let repo_err = RepoError::Internal("some sql error".to_string());
+        let service_err: CertificateServiceError = repo_err.into();
+        assert_eq!(
+            service_err.to_string(),
+            "Internal error: Repository error".to_string()
+        );
     }
 }

@@ -33,14 +33,7 @@ pub enum ProjectGrantError {
 }
 
 impl ProjectGrantError {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -50,7 +43,7 @@ impl ProjectGrantError {
 
 impl From<RepoError> for ProjectGrantError {
     fn from(error: RepoError) -> Self {
-        ProjectGrantError::internal(error)
+        ProjectGrantError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 
@@ -235,10 +228,8 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
                 .await?;
             }
             let project_grant: ProjectGrantRecord = project_grant.clone().into();
-            self.project_grant_repo
-                .create(&project_grant)
-                .await
-                .map_err(ProjectGrantError::internal)
+            self.project_grant_repo.create(&project_grant).await?;
+            Ok(())
         } else {
             Err(ProjectGrantError::ProjectNotFound(project_id))
         }

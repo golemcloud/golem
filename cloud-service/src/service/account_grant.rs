@@ -24,14 +24,7 @@ pub enum AccountGrantServiceError {
 }
 
 impl AccountGrantServiceError {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -41,7 +34,7 @@ impl AccountGrantServiceError {
 
 impl From<RepoError> for AccountGrantServiceError {
     fn from(error: RepoError) -> Self {
-        AccountGrantServiceError::internal(error)
+        AccountGrantServiceError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 

@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -32,14 +32,17 @@ pub enum TokenServiceError {
 }
 
 impl TokenServiceError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -49,7 +52,7 @@ impl TokenServiceError {
 
 impl From<RepoError> for TokenServiceError {
     fn from(error: RepoError) -> Self {
-        TokenServiceError::internal(error)
+        TokenServiceError::internal(error, "Repository error")
     }
 }
 
@@ -57,7 +60,9 @@ impl From<OAuth2TokenError> for TokenServiceError {
     fn from(error: OAuth2TokenError) -> Self {
         match error {
             OAuth2TokenError::AccountNotFound(id) => TokenServiceError::AccountNotFound(id),
-            OAuth2TokenError::TokenNotFound(_) => TokenServiceError::internal(error),
+            OAuth2TokenError::TokenNotFound(_) => {
+                TokenServiceError::Internal(anyhow::Error::msg(error))
+            }
             OAuth2TokenError::Internal(error) => TokenServiceError::Internal(error),
             OAuth2TokenError::Unauthorized(message) => TokenServiceError::Unauthorized(message),
         }
@@ -303,10 +308,13 @@ impl TokenService for TokenServiceDefault {
         self.check_authorization(account_id, auth)?;
         debug!("{} is authorised", account_id.value);
         match self.get_by_secret(secret).await? {
-            Some(token) => Err(TokenServiceError::internal(format!(
-                "Can't create known secret for account {} - already exists for account {}",
-                account_id.value, token.account_id.value
-            ))),
+            Some(token) => Err(TokenServiceError::internal(
+                format!(
+                    "Can't create known secret for account {} - already exists for account {}",
+                    account_id.value, token.account_id.value
+                ),
+                "Can't create known secret for account",
+            )),
             None => {
                 self.create_known_secret_unsafe(account_id, expires_at, secret, auth)
                     .await?;

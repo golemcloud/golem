@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -27,14 +27,17 @@ pub enum OAuth2TokenError {
 }
 
 impl OAuth2TokenError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -44,7 +47,7 @@ impl OAuth2TokenError {
 
 impl From<RepoError> for OAuth2TokenError {
     fn from(error: RepoError) -> Self {
-        OAuth2TokenError::internal(error)
+        OAuth2TokenError::internal(error, "Repository error")
     }
 }
 
@@ -108,10 +111,9 @@ impl OAuth2TokenService for OAuth2TokenServiceDefault {
 
         let record: OAuth2TokenRecord = token.clone().into();
 
-        self.oauth2_token_repo
-            .upsert(&record)
-            .await
-            .map_err(OAuth2TokenError::internal)
+        self.oauth2_token_repo.upsert(&record).await?;
+
+        Ok(())
     }
 
     async fn get(
@@ -131,7 +133,7 @@ impl OAuth2TokenService for OAuth2TokenServiceDefault {
         let result = result
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()
-            .map_err(OAuth2TokenError::internal)?;
+            .map_err(|e| OAuth2TokenError::internal(e, "Failed to convert OAuth2 Token record"))?;
 
         Ok(result)
     }

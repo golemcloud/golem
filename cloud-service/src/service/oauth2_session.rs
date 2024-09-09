@@ -1,9 +1,8 @@
+use crate::model::{EncodedOAuth2Session, OAuth2Session};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use std::fmt::Display;
-
-use crate::model::{EncodedOAuth2Session, OAuth2Session};
+use std::fmt::{Debug, Display};
 
 pub trait OAuth2SessionService {
     fn encode_session(
@@ -26,23 +25,14 @@ pub enum OAuth2SessionError {
 }
 
 impl OAuth2SessionError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-}
-
-impl From<serde_json::Error> for OAuth2SessionError {
-    fn from(error: serde_json::Error) -> Self {
-        OAuth2SessionError::internal(error)
-    }
-}
-
-impl From<jsonwebtoken::errors::Error> for OAuth2SessionError {
-    fn from(error: jsonwebtoken::errors::Error) -> Self {
-        OAuth2SessionError::internal(error)
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 }
 
@@ -99,7 +89,8 @@ impl OAuth2SessionService for OAuth2SessionServiceDefault {
     ) -> Result<EncodedOAuth2Session, OAuth2SessionError> {
         let header = Header::new(Algorithm::EdDSA);
         let claims = Claims::from(session.clone());
-        let encoded = encode(&header, &claims, &self.private_key)?;
+        let encoded = encode(&header, &claims, &self.private_key)
+            .map_err(|e| OAuth2SessionError::internal(e, "Failed to encode OAuth2 session"))?;
         Ok(EncodedOAuth2Session { value: encoded })
     }
 }

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use crate::model::{ExternalLogin, OAuth2Provider};
 
@@ -21,14 +21,17 @@ pub enum OAuth2ProviderClientError {
 }
 
 impl OAuth2ProviderClientError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<E, C>(error: E, context: C) -> Self
     where
-        M: Display,
+        E: Display + Debug + Send + Sync + 'static,
+        C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+        Self::Internal(anyhow::Error::msg(
+            anyhow::Error::msg(error).context(context),
+        ))
     }
 
-    pub fn external<M>(error: M) -> Self
+    fn external<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -38,7 +41,7 @@ impl OAuth2ProviderClientError {
 
 impl From<reqwest::Error> for OAuth2ProviderClientError {
     fn from(error: reqwest::Error) -> Self {
-        OAuth2ProviderClientError::internal(error)
+        OAuth2ProviderClientError::internal(error, "Github request error")
     }
 }
 
@@ -140,9 +143,10 @@ where
     } else {
         let full = response.bytes().await?;
         let json = serde_json::from_slice(&full).map_err(|e| {
-            OAuth2ProviderClientError::internal(format!(
-                "Failed to deserialize JSON {prefix}: {e}, Status: {status}",
-            ))
+            OAuth2ProviderClientError::internal(
+                format!("Failed to deserialize JSON {prefix}: {e}, Status: {status}",),
+                "Failed to deserialize Github response",
+            )
         })?;
         Ok(json)
     }

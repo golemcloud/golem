@@ -18,14 +18,7 @@ pub enum AccountSummaryServiceError {
 }
 
 impl AccountSummaryServiceError {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-
-    pub fn unauthorized<M>(error: M) -> Self
+    fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
     {
@@ -35,7 +28,7 @@ impl AccountSummaryServiceError {
 
 impl From<RepoError> for AccountSummaryServiceError {
     fn from(error: RepoError) -> Self {
-        AccountSummaryServiceError::internal(error)
+        AccountSummaryServiceError::Internal(anyhow::Error::msg(error).context("Repository error"))
     }
 }
 

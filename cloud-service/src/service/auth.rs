@@ -18,14 +18,14 @@ pub enum AuthServiceError {
 }
 
 impl AuthServiceError {
-    pub fn internal<M>(error: M) -> Self
+    fn internal<M>(error: M) -> Self
     where
         M: Display,
     {
         Self::Internal(anyhow::Error::msg(error.to_string()))
     }
 
-    pub fn invalid_token<M>(error: M) -> Self
+    fn invalid_token<M>(error: M) -> Self
     where
         M: Display,
     {

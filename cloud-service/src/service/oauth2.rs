@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,19 +16,10 @@ pub enum OAuth2Error {
     Internal(#[from] anyhow::Error),
 }
 
-impl OAuth2Error {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-}
-
 impl From<OAuth2GithubClientError> for OAuth2Error {
     fn from(err: OAuth2GithubClientError) -> Self {
         match err {
-            OAuth2GithubClientError::Unexpected(msg) => OAuth2Error::internal(msg),
+            OAuth2GithubClientError::Unexpected(error) => OAuth2Error::Internal(error),
         }
     }
 }
