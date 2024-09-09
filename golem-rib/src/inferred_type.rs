@@ -674,6 +674,8 @@ impl InferredType {
                     Ok(InferredType::Flags(a_flags.clone()))
                 }
                 (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
+                    dbg!(a_variants);
+                    dbg!(b_variants);
                     if a_variants != b_variants {
                         return Err(vec!["Enum variants do not match".to_string()]);
                     }

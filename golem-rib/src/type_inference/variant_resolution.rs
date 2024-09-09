@@ -88,7 +88,6 @@ mod internal {
         while let Some(expr) = queue.pop_back() {
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
-                    // Retrieve the possible no-arg variant from the registry
                     let key = RegistryKey::VariantName(variable_id.name().clone());
                     if let Some(RegistryValue::Value(analysed_type)) =
                         function_type_registry.types.get(&key)

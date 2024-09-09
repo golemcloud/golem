@@ -259,6 +259,12 @@ mod internal {
                             convert_to_analysed_type_for(expr, inferred_type)?,
                         ));
                     }
+                    CallType::EnumConstructor(enmum_name) => {
+                        instructions.push(RibIR::PushEnum(
+                            enmum_name.clone(),
+                            convert_to_analysed_type_for(expr, inferred_type)?,
+                        ));
+                    }
                 }
             }
 
