@@ -18,10 +18,11 @@ use crate::command::component::ComponentSubCommand;
 use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
-use crate::examples;
+use crate::diagnose::diagnose;
 use crate::model::{ComponentUriArg, Format, GolemError, GolemResult};
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
+use crate::{diagnose, examples};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
@@ -104,6 +105,13 @@ pub enum InitCommand<ProfileAdd: clap::Args> {
     Completion {
         #[arg(long = "generate", value_enum)]
         generator: clap_complete::Shell,
+    },
+
+    /// Diagnose required tooling
+    #[command()]
+    Diagnose {
+        #[command(flatten)]
+        command: diagnose::cli::Command,
     },
 }
 
@@ -195,6 +203,10 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }) => examples::process_list_examples(min_tier, language),
         InitCommand::Completion { generator } => {
             print_completion.print_completion(generator);
+            Ok(GolemResult::Str("".to_string()))
+        }
+        InitCommand::Diagnose { command } => {
+            diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
         #[cfg(feature = "stubgen")]
