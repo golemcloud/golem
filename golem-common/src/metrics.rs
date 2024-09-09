@@ -405,3 +405,81 @@ pub mod api {
         };
     }
 }
+
+pub mod sqlite {
+    use std::time::Duration;
+
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        static ref SQLITE_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
+            "sqlite_success_seconds",
+            "Duration of successful Sqlite calls",
+            &["svc", "api", "cmd"],
+            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref SQLITE_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "sqlite_failure_total",
+            "Number of failed Sqlite calls",
+            &["svc", "api", "cmd"]
+        )
+        .unwrap();
+        static ref SQLITE_SERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "sqlite_serialized_size_bytes",
+            "Size of serialized Sqlite entities",
+            &["svc", "entity"],
+            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref SQLITE_DESERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "sqlite_deserialized_size_bytes",
+            "Size of deserialized Sqlite entities",
+            &["svc", "entity"],
+            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+    }
+
+    pub fn record_sqlite_success(
+        svc_name: &'static str,
+        api_name: &'static str,
+        cmd_name: &'static str,
+        duration: Duration,
+    ) {
+        SQLITE_SUCCESS_SECONDS
+            .with_label_values(&[svc_name, api_name, cmd_name])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_sqlite_failure(
+        svc_name: &'static str,
+        api_name: &'static str,
+        cmd_name: &'static str,
+    ) {
+        SQLITE_FAILURE_TOTAL
+            .with_label_values(&[svc_name, api_name, cmd_name])
+            .inc();
+    }
+
+    pub fn record_sqlite_serialized_size(
+        svc_name: &'static str,
+        entity_name: &'static str,
+        size: usize,
+    ) {
+        SQLITE_SERIALIZED_SIZE_BYTES
+            .with_label_values(&[svc_name, entity_name])
+            .observe(size as f64);
+    }
+
+    pub fn record_sqlite_deserialized_size(
+        svc_name: &'static str,
+        entity_name: &'static str,
+        size: usize,
+    ) {
+        SQLITE_DESERIALIZED_SIZE_BYTES
+            .with_label_values(&[svc_name, entity_name])
+            .observe(size as f64);
+    }
+}

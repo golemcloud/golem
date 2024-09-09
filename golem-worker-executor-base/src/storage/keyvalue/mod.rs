@@ -14,6 +14,7 @@
 
 pub mod memory;
 pub mod redis;
+pub mod sqlite;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
