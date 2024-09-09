@@ -95,14 +95,12 @@ impl IndexedStorage for InMemoryIndexedStorage {
             let mut has_more = false;
             for entry in &self.data {
                 idx += 1;
-                if idx > cursor {
-                    if entry.key().starts_with(prefix) {
-                        result.push(entry.key()[composite_prefix.len()..].to_string());
+                if idx > cursor && entry.key().starts_with(prefix) {
+                    result.push(entry.key()[composite_prefix.len()..].to_string());
 
-                        if (result.len() as u64) == count {
-                            has_more = true;
-                            break;
-                        }
+                    if (result.len() as u64) == count {
+                        has_more = true;
+                        break;
                     }
                 }
             }
@@ -129,11 +127,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self.data.entry(composite_key.clone()).or_default();
-        if entry.contains_key(&id) {
-            return Err("Key already exists".to_string());
-        } else {
-            entry.insert(id, value.to_vec());
+        if let std::collections::btree_map::Entry::Vacant(e) = entry.entry(id) {
+            e.insert(value.to_vec());
             Ok(())
+        } else {
+            return Err("Key already exists".to_string());
         }
     }
 
