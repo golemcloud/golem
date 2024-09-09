@@ -6,23 +6,23 @@ import { Card, Cards } from "nextra/components"
 Golem is a durable computing platform that makes it simple to build and deploy
 highly reliable distributed systems.
 
-As a serverless platform, Golem allows you to deploy components of your 
-application, without having to write servers or implement protocols like HTTP, 
+As a serverless platform, Golem allows you to deploy components of your
+application, without having to write servers or implement protocols like HTTP,
 gRPC, or GraphQL.
 
-Without having to write any additional code, Golem provides you with the ability 
+Without having to write any additional code, Golem provides you with the ability
 to trigger the creation of workers from your components based on HTTP API calls.
 
-Although useful for building tooling or quick prototypes, the generic APIs that 
-Golem gives you to create and interact with your workers are usually not the 
-polished, engineered APIs that you want to expose to other organizations, 
+Although useful for building tooling or quick prototypes, the generic APIs that
+Golem gives you to create and interact with your workers are usually not the
+polished, engineered APIs that you want to expose to other organizations,
 developers of mobile or web applications, or other backend teams.
 
-To allow you to stand up a custom API for your components, Golem supports a 
-feature called _API Definitions_. API definitions give you the flexibility of 
+To allow you to stand up a custom API for your components, Golem supports a
+feature called _API Definitions_. API definitions give you the flexibility of
 having a precisely engineered API, but without any of the typical boilerplate.
 
-This page contains a high-level introduction to API definitions, with links to 
+This page contains a high-level introduction to API definitions, with links to
 technical reference material.
 
 # API Definitions
@@ -30,50 +30,50 @@ technical reference material.
 In Golem, an API Definition is similar to an OpenAPI specification for an API.
 Like OpenAPI specifications, API Definitions contain the following elements:
 
- - **Version**. The version defines the version of the API.
- - **Status**. The status defines whether the API is a draft, or whether it is 
-   published. Currently, published APIs may not be modified.
- - **Routes**. The routes are a list of individual HTTP endpoints.
+- **Version**. The version defines the version of the API.
+- **Status**. The status defines whether the API is a draft, or whether it is
+  published. Currently, published APIs may not be modified.
+- **Routes**. The routes are a list of individual HTTP endpoints.
 
-In an API definition, the routes define not just the structure of the overall 
+In an API definition, the routes define not just the structure of the overall
 HTTP, but also how invocation of these APIs triggers the creation and activation
 of workers.
 
 The next section introduces routes in more detail.
 
-## Routes 
+## Routes
 
 The elements of a route are as follows:
 
- - **Path**. The path of the route, such as `/users/{user-id}`. Paths may 
-   contain variables, which may be accessed inside the route binding. 
- - **Method**. The method of the route, such as GET, PUT, POST, or DELETE. 
- - **Binding**. The binding defines what worker will be created and invoked 
-   when the endpoint itself is invoked.
+- **Path**. The path of the route, such as `/users/{user-id}`. Paths may
+  contain variables, which may be accessed inside the route binding.
+- **Method**. The method of the route, such as GET, PUT, POST, or DELETE.
+- **Binding**. The binding defines what worker will be created and invoked
+  when the endpoint itself is invoked.
 
 In the following section, you will learn more about the binding.
 
-### Binding 
+### Binding
 
 The per-endpoint binding specifies the following elements:
 
- - **Component**. The component to use for the endpoint.
- - **Version**. The version of the component to use for the endpoint. 
- - **Worker**. The worker to invoke when the endpoint itself is invoked.
- - **Rib**. A small script that specifies how to adapt the input of the request,
-   including the body and headers, to the input of a function on a worker; and 
-   how to adapt the output of the function to the output of the response, 
-   including the body and headers. 
+- **Component**. The component to use for the endpoint.
+- **Version**. The version of the component to use for the endpoint.
+- **Worker**. The worker to invoke when the endpoint itself is invoked.
+- **Rib**. A small script that specifies how to adapt the input of the request,
+  including the body and headers, to the input of a function on a worker; and
+  how to adapt the output of the function to the output of the response,
+  including the body and headers.
 
-The script is written in [Rib](/docs/rib), which is a lightweight scripting 
+The script is written in [Rib](/docs/rib), which is a lightweight scripting
 languages that has first-class support for WASM component types.
 
 # Management
 
 There are a variety of ways to create and manage API Definition:
 
- - **Golem CLI**. The command-line interface lets you manage API definition.
- - **REST API**. The Golem REST API lets you manage API definition
+- **Golem CLI**. The command-line interface lets you manage API definition.
+- **REST API**. The Golem REST API lets you manage API definition
 
-Both the CLI and REST API let you import an existing OpenAPI definition, with 
+Both the CLI and REST API let you import an existing OpenAPI definition, with
 a custom per-endpoint extension that contains the binding.

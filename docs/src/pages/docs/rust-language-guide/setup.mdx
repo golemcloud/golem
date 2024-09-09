@@ -28,11 +28,8 @@ $ rustup target add wasm32-wasi
 To verify if this step was successful, run:
 
 ```shell
-$ rustc --print target-list | grep wasm32-wasi
+$ rustup target list --installed | grep wasm32-wasi
 wasm32-wasi
-wasm32-wasip1
-wasm32-wasip1-threads
-wasm32-wasip2
 ```
 
 ### Installing `cargo-component`

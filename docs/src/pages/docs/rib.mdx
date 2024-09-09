@@ -118,7 +118,7 @@ Another way to annotate type is
 
 ```
 let x: f64 = 1;
-````
+```
 
 This is a parsed as a number of type u64. Similarly `-1` is parsed as a number of type i64 and `1.1` is parsed as a number of type f64.
 
@@ -197,7 +197,6 @@ let k: (u8, u32, f32) = (1, 100, 20.1);
 k
 ```
 
-
 This is parsed as a tuple of values. Unlike `sequence`, the values in a tuple can be of different types.
 
 ```bash filename="Terminal" copy
@@ -274,7 +273,6 @@ x
 ```
 
 ### Invoke Worker Functions using Rib
-
 
 ```bash filename="Terminal" copy
 let worker_result = worker_function_name(request.body);
@@ -497,6 +495,7 @@ Or even as simple as:
   z
 
 ```
+
 The return value of the script is the last expression in the script, and is of the type boolean.
 
 ## Known issues and Limitations
@@ -506,7 +505,7 @@ We are making great improvements in this space and there will be constant releas
 
 Following are some known issues and how to fix them if you encounter them
 
-* Stack overflow when inlining record or nested complex expressions. The solution is to use let binding expressions and use variables instead of inlining records.
+- Stack overflow when inlining record or nested complex expressions. The solution is to use let binding expressions and use variables instead of inlining records.
 
 ```
 let d: str = request.path.id;
@@ -514,13 +513,15 @@ let x = { a: 1u32, b: 2u32, c: d };
 call(x)
 
 ```
-* Incomplete syntax errors. We are working on this. For the most part a syntax (parser errors) comes from the following:
-    * Missing semicolon at the end of the every Rib statement.
-    * Adding a semicolon at the end of the last line in your Rib script. Rib will fail to compile in this case.
-    * Missing closing curly braces.
-    * Missing closing square brackets
-    * Missing comma in sequence elements.
-    * Invalid function names.
 
-* Complex compiler error messages. We are working on this
-* Compiler errors occur when you don't specify the type of numbers. Example `1` will fail whil `1u8` will not. This is because Rib is typed and is trying to infer a proper WASM type. We will see how to improve this.
+- Incomplete syntax errors. We are working on this. For the most part a syntax (parser errors) comes from the following:
+
+  - Missing semicolon at the end of the every Rib statement.
+  - Adding a semicolon at the end of the last line in your Rib script. Rib will fail to compile in this case.
+  - Missing closing curly braces.
+  - Missing closing square brackets
+  - Missing comma in sequence elements.
+  - Invalid function names.
+
+- Complex compiler error messages. We are working on this
+- Compiler errors occur when you don't specify the type of numbers. Example `1` will fail whil `1u8` will not. This is because Rib is typed and is trying to infer a proper WASM type. We will see how to improve this.

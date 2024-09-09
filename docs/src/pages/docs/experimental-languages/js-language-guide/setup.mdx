@@ -1,7 +1,7 @@
 import { Callout } from "nextra/components"
 import { Steps } from "nextra/components"
 
-# Setup development environment for TypeScript
+## Setup development environment for JavaScript
 
 First install **Node.js** and **npm** to your system by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
 
@@ -14,3 +14,31 @@ The tool packages can be installed globally, but we recommend adding them to you
 Projects created with `golem-cli new` will reference the latest versions of the appropriate forked tools.
 
 In case you want setup you project manually, see the steps for using the [Golem JavaScript SDK](/docs/experimental-languages/js-language-guide/golem-js-sdk).
+
+## Install WebAssembly tooling for Worker to Worker communication
+
+Using [Worker to Worker communication](/docs/experimental-languages/js-language-guide/rpc) requires **Rust** and **WASM** tooling, because _golem RPC client stubs_ are generated and implemented as _Rust_ components.
+
+<Steps>
+
+### Install Rust
+
+Install rustup
+
+```bash copy
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Install the latest stable version of Rust
+
+```bash copy
+rustup install stable && rustup default stable
+```
+
+Add the WASI target
+
+```bash copy
+rustup target add wasm32-wasi
+```
+
+</Steps>
