@@ -81,32 +81,39 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         pattern: &str,
         cursor: ScanCursor,
-        _count: u64,
+        count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        // NOTE: not supporting cursor/count now
-        if cursor == 0 {
-            let mut result = Vec::new();
-            let composite_pattern = Self::composite_key(namespace, pattern);
+        let mut result = Vec::new();
+        let composite_pattern = Self::composite_key(namespace.clone(), pattern);
+        let composite_prefix = Self::composite_key(namespace, "");
 
-            if composite_pattern.ends_with('*')
-                && !composite_pattern[0..composite_pattern.len() - 1].contains('*')
-            {
-                let prefix = &composite_pattern[0..composite_pattern.len() - 1];
-                for entry in &self.data {
+        if composite_pattern.ends_with('*')
+            && !composite_pattern[0..composite_pattern.len() - 1].contains('*')
+        {
+            let prefix = &composite_pattern[0..composite_pattern.len() - 1];
+            let mut idx = 0;
+            let mut has_more = false;
+            for entry in &self.data {
+                idx += 1;
+                if idx > cursor {
                     if entry.key().starts_with(prefix) {
-                        result.push(entry.key().clone());
+                        result.push(entry.key()[composite_prefix.len()..].to_string());
+
+                        if (result.len() as u64) == count {
+                            has_more = true;
+                            break;
+                        }
                     }
                 }
+            }
 
-                Ok((ScanCursor::MAX, result))
+            if has_more {
+                Ok((idx, result))
             } else {
-                Err(
-                    "Pattern not supported by the in-memory indexed storage implementation"
-                        .to_string(),
-                )
+                Ok((0, result))
             }
         } else {
-            Ok((ScanCursor::MAX, Vec::new()))
+            Err("Pattern not supported by the in-memory indexed storage implementation".to_string())
         }
     }
 
@@ -122,8 +129,12 @@ impl IndexedStorage for InMemoryIndexedStorage {
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self.data.entry(composite_key.clone()).or_default();
-        entry.insert(id, value.to_vec());
-        Ok(())
+        if entry.contains_key(&id) {
+            return Err("Key already exists".to_string());
+        } else {
+            entry.insert(id, value.to_vec());
+            Ok(())
+        }
     }
 
     async fn length(
