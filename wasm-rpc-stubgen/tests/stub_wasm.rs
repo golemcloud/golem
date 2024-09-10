@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysisContext;
+use golem_wasm_ast::analysis::{
+    AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
+    AnalysedResourceMode, AnalysedType, AnalysisContext, NameOptionTypePair, NameTypePair,
+    TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
+    TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16,
+    TypeU32, TypeU64, TypeU8, TypeVariant,
+};
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc_stubgen::cargo::generate_cargo_toml;
@@ -25,7 +31,7 @@ use heck::ToSnakeCase;
 use std::path::Path;
 use tempfile::tempdir;
 
-///! Tests in this module are verifying the STUB WASM created by the stub generator,
+///! Tests in this module are verifying the STUB WASM created by the stub generator
 ///! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
 #[tokio::test]
@@ -78,7 +84,563 @@ async fn all_wit_types() {
     let state = AnalysisContext::new(stub_component);
     let stub_exports = state.get_top_level_exports().unwrap();
 
-    // [Instance(AnalysedInstance { name: "test:main-stub/stub-api", functions: [AnalysedFunction { name: "[method]future-get-bool-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(0), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-bool-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(0), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Bool(TypeBool) }) }] }, AnalysedFunction { name: "[method]future-identity-bool-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(2), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-bool-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(2), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Bool(TypeBool) }) }] }, AnalysedFunction { name: "[method]future-identity-s8-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(3), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-s8-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(3), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: S8(TypeS8) }) }] }, AnalysedFunction { name: "[method]future-identity-s16-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(4), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-s16-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(4), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: S16(TypeS16) }) }] }, AnalysedFunction { name: "[method]future-identity-s32-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(5), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-s32-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(5), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: S32(TypeS32) }) }] }, AnalysedFunction { name: "[method]future-identity-s64-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(6), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-s64-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(6), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: S64(TypeS64) }) }] }, AnalysedFunction { name: "[method]future-identity-u8-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(7), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-u8-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(7), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: U8(TypeU8) }) }] }, AnalysedFunction { name: "[method]future-identity-u16-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(8), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-u16-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(8), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: U16(TypeU16) }) }] }, AnalysedFunction { name: "[method]future-identity-u32-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(9), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-u32-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(9), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: U32(TypeU32) }) }] }, AnalysedFunction { name: "[method]future-identity-u64-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(10), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-u64-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(10), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: U64(TypeU64) }) }] }, AnalysedFunction { name: "[method]future-identity-f32-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(11), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-f32-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(11), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: F32(TypeF32) }) }] }, AnalysedFunction { name: "[method]future-identity-f64-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(12), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-f64-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(12), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: F64(TypeF64) }) }] }, AnalysedFunction { name: "[method]future-identity-char-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(13), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-char-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(13), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Chr(TypeChr) }) }] }, AnalysedFunction { name: "[method]future-identity-string-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(14), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-identity-string-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(14), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Str(TypeStr) }) }] }, AnalysedFunction { name: "[method]future-get-orders-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(15), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-orders-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(15), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }, NameTypePair { name: "items", typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "product-id", typ: Str(TypeStr) }, NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "price", typ: F32(TypeF32) }, NameTypePair { name: "quantity", typ: U32(TypeU32) }] }) }) }, NameTypePair { name: "total", typ: F32(TypeF32) }, NameTypePair { name: "timestamp", typ: U64(TypeU64) }] }) }) }) }] }, AnalysedFunction { name: "[method]future-apply-metadata-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(16), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-apply-metadata-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(16), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Option(TypeOption { inner: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }) }) }] }, AnalysedFunction { name: "[method]future-get-option-bool-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(17), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-option-bool-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(17), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Option(TypeOption { inner: Bool(TypeBool) }) }) }] }, AnalysedFunction { name: "[method]future-get-coordinates-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(18), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-coordinates-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(18), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }) }] }, AnalysedFunction { name: "[method]future-get-coordinates-alias-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(19), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-coordinates-alias-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(19), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }) }] }, AnalysedFunction { name: "[method]future-tuple-to-point-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(20), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-tuple-to-point-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(20), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Result(TypeResult { ok: Some(Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] })), err: Some(Str(TypeStr)) }) }) }] }, AnalysedFunction { name: "[method]future-pt-log-error-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(21), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-pt-log-error-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(21), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Result(TypeResult { ok: Some(Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] })), err: None }) }) }] }, AnalysedFunction { name: "[method]future-validate-pt-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(22), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-validate-pt-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(22), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Result(TypeResult { ok: None, err: Some(Str(TypeStr)) }) }) }] }, AnalysedFunction { name: "[method]future-print-checkout-result-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(23), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-print-checkout-result-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(23), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Str(TypeStr) }) }] }, AnalysedFunction { name: "[method]future-get-checkout-result-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(24), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-checkout-result-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(24), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Variant(TypeVariant { cases: [NameOptionTypePair { name: "error", typ: Some(Str(TypeStr)) }, NameOptionTypePair { name: "success", typ: Some(Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }] })) }, NameOptionTypePair { name: "unknown", typ: None }] }) }) }] }, AnalysedFunction { name: "[method]future-get-color-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(25), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-get-color-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(25), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Enum(TypeEnum { cases: ["red", "green", "blue"] }) }) }] }, AnalysedFunction { name: "[method]future-validate-permissions-result.subscribe", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(26), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(1), mode: Owned }) }] }, AnalysedFunction { name: "[method]future-validate-permissions-result.get", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(26), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }) }] }, AnalysedFunction { name: "[constructor]iface1", parameters: [AnalysedFunctionParameter { name: "location", typ: Record(TypeRecord { fields: [NameTypePair { name: "value", typ: Str(TypeStr) }] }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-no-op", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [] }, AnalysedFunction { name: "[method]iface1.no-op", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-get-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Bool(TypeBool) }] }, AnalysedFunction { name: "[method]iface1.get-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(0), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-set-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "b", typ: Bool(TypeBool) }], results: [] }, AnalysedFunction { name: "[method]iface1.set-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "b", typ: Bool(TypeBool) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-identity-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "b", typ: Bool(TypeBool) }], results: [AnalysedFunctionResult { name: None, typ: Bool(TypeBool) }] }, AnalysedFunction { name: "[method]iface1.identity-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "b", typ: Bool(TypeBool) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(2), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-s8", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S8(TypeS8) }], results: [AnalysedFunctionResult { name: None, typ: S8(TypeS8) }] }, AnalysedFunction { name: "[method]iface1.identity-s8", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S8(TypeS8) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(3), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-s16", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S16(TypeS16) }], results: [AnalysedFunctionResult { name: None, typ: S16(TypeS16) }] }, AnalysedFunction { name: "[method]iface1.identity-s16", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S16(TypeS16) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(4), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-s32", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S32(TypeS32) }], results: [AnalysedFunctionResult { name: None, typ: S32(TypeS32) }] }, AnalysedFunction { name: "[method]iface1.identity-s32", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S32(TypeS32) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(5), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-s64", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S64(TypeS64) }], results: [AnalysedFunctionResult { name: None, typ: S64(TypeS64) }] }, AnalysedFunction { name: "[method]iface1.identity-s64", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: S64(TypeS64) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(6), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-u8", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U8(TypeU8) }], results: [AnalysedFunctionResult { name: None, typ: U8(TypeU8) }] }, AnalysedFunction { name: "[method]iface1.identity-u8", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U8(TypeU8) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(7), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-u16", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U16(TypeU16) }], results: [AnalysedFunctionResult { name: None, typ: U16(TypeU16) }] }, AnalysedFunction { name: "[method]iface1.identity-u16", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U16(TypeU16) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(8), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-u32", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U32(TypeU32) }], results: [AnalysedFunctionResult { name: None, typ: U32(TypeU32) }] }, AnalysedFunction { name: "[method]iface1.identity-u32", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U32(TypeU32) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(9), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-u64", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U64(TypeU64) }], results: [AnalysedFunctionResult { name: None, typ: U64(TypeU64) }] }, AnalysedFunction { name: "[method]iface1.identity-u64", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: U64(TypeU64) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(10), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-f32", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: F32(TypeF32) }], results: [AnalysedFunctionResult { name: None, typ: F32(TypeF32) }] }, AnalysedFunction { name: "[method]iface1.identity-f32", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: F32(TypeF32) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(11), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-f64", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: F64(TypeF64) }], results: [AnalysedFunctionResult { name: None, typ: F64(TypeF64) }] }, AnalysedFunction { name: "[method]iface1.identity-f64", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: F64(TypeF64) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(12), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-char", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: Chr(TypeChr) }], results: [AnalysedFunctionResult { name: None, typ: Chr(TypeChr) }] }, AnalysedFunction { name: "[method]iface1.identity-char", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: Chr(TypeChr) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(13), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-identity-string", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: Str(TypeStr) }], results: [AnalysedFunctionResult { name: None, typ: Str(TypeStr) }] }, AnalysedFunction { name: "[method]iface1.identity-string", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "x", typ: Str(TypeStr) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(14), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-get-orders", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }, NameTypePair { name: "items", typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "product-id", typ: Str(TypeStr) }, NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "price", typ: F32(TypeF32) }, NameTypePair { name: "quantity", typ: U32(TypeU32) }] }) }) }, NameTypePair { name: "total", typ: F32(TypeF32) }, NameTypePair { name: "timestamp", typ: U64(TypeU64) }] }) }) }] }, AnalysedFunction { name: "[method]iface1.get-orders", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(15), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-set-orders", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "orders", typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }, NameTypePair { name: "items", typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "product-id", typ: Str(TypeStr) }, NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "price", typ: F32(TypeF32) }, NameTypePair { name: "quantity", typ: U32(TypeU32) }] }) }) }, NameTypePair { name: "total", typ: F32(TypeF32) }, NameTypePair { name: "timestamp", typ: U64(TypeU64) }] }) }) }], results: [] }, AnalysedFunction { name: "[method]iface1.set-orders", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "orders", typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }, NameTypePair { name: "items", typ: List(TypeList { inner: Record(TypeRecord { fields: [NameTypePair { name: "product-id", typ: Str(TypeStr) }, NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "price", typ: F32(TypeF32) }, NameTypePair { name: "quantity", typ: U32(TypeU32) }] }) }) }, NameTypePair { name: "total", typ: F32(TypeF32) }, NameTypePair { name: "timestamp", typ: U64(TypeU64) }] }) }) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-apply-metadata", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "metadata", typ: Option(TypeOption { inner: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }) }] }, AnalysedFunction { name: "[method]iface1.apply-metadata", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "metadata", typ: Option(TypeOption { inner: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(16), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-get-option-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Option(TypeOption { inner: Bool(TypeBool) }) }] }, AnalysedFunction { name: "[method]iface1.get-option-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(17), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-set-option-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "b", typ: Option(TypeOption { inner: Bool(TypeBool) }) }], results: [] }, AnalysedFunction { name: "[method]iface1.set-option-bool", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "b", typ: Option(TypeOption { inner: Bool(TypeBool) }) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-get-coordinates", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }] }, AnalysedFunction { name: "[method]iface1.get-coordinates", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(18), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-get-coordinates-alias", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }] }, AnalysedFunction { name: "[method]iface1.get-coordinates-alias", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(19), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-set-coordinates", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "c", typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }], results: [] }, AnalysedFunction { name: "[method]iface1.set-coordinates", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "c", typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-set-coordinates-alias", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "c", typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }], results: [] }, AnalysedFunction { name: "[method]iface1.set-coordinates-alias", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "c", typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-tuple-to-point", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "t", typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }, AnalysedFunctionParameter { name: "metadata", typ: Option(TypeOption { inner: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }) }], results: [AnalysedFunctionResult { name: None, typ: Result(TypeResult { ok: Some(Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] })), err: Some(Str(TypeStr)) }) }] }, AnalysedFunction { name: "[method]iface1.tuple-to-point", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "t", typ: Tuple(TypeTuple { items: [S32(TypeS32), S32(TypeS32)] }) }, AnalysedFunctionParameter { name: "metadata", typ: Option(TypeOption { inner: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(20), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-pt-log-error", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "r", typ: Result(TypeResult { ok: Some(Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] })), err: Some(Str(TypeStr)) }) }], results: [AnalysedFunctionResult { name: None, typ: Result(TypeResult { ok: Some(Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] })), err: None }) }] }, AnalysedFunction { name: "[method]iface1.pt-log-error", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "r", typ: Result(TypeResult { ok: Some(Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] })), err: Some(Str(TypeStr)) }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(21), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-validate-pt", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "pt", typ: Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] }) }], results: [AnalysedFunctionResult { name: None, typ: Result(TypeResult { ok: None, err: Some(Str(TypeStr)) }) }] }, AnalysedFunction { name: "[method]iface1.validate-pt", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "pt", typ: Record(TypeRecord { fields: [NameTypePair { name: "x", typ: S32(TypeS32) }, NameTypePair { name: "y", typ: S32(TypeS32) }, NameTypePair { name: "metadata", typ: Record(TypeRecord { fields: [NameTypePair { name: "name", typ: Str(TypeStr) }, NameTypePair { name: "origin", typ: Str(TypeStr) }, NameTypePair { name: "perms", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }) }] }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(22), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-print-checkout-result", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "r", typ: Variant(TypeVariant { cases: [NameOptionTypePair { name: "error", typ: Some(Str(TypeStr)) }, NameOptionTypePair { name: "success", typ: Some(Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }] })) }, NameOptionTypePair { name: "unknown", typ: None }] }) }], results: [AnalysedFunctionResult { name: None, typ: Str(TypeStr) }] }, AnalysedFunction { name: "[method]iface1.print-checkout-result", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "r", typ: Variant(TypeVariant { cases: [NameOptionTypePair { name: "error", typ: Some(Str(TypeStr)) }, NameOptionTypePair { name: "success", typ: Some(Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }] })) }, NameOptionTypePair { name: "unknown", typ: None }] }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(23), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-get-checkout-result", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Variant(TypeVariant { cases: [NameOptionTypePair { name: "error", typ: Some(Str(TypeStr)) }, NameOptionTypePair { name: "success", typ: Some(Record(TypeRecord { fields: [NameTypePair { name: "order-id", typ: Str(TypeStr) }] })) }, NameOptionTypePair { name: "unknown", typ: None }] }) }] }, AnalysedFunction { name: "[method]iface1.get-checkout-result", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(24), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-get-color", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Enum(TypeEnum { cases: ["red", "green", "blue"] }) }] }, AnalysedFunction { name: "[method]iface1.get-color", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(25), mode: Owned }) }] }, AnalysedFunction { name: "[method]iface1.blocking-set-color", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "c", typ: Enum(TypeEnum { cases: ["red", "green", "blue"] }) }], results: [] }, AnalysedFunction { name: "[method]iface1.set-color", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "c", typ: Enum(TypeEnum { cases: ["red", "green", "blue"] }) }], results: [] }, AnalysedFunction { name: "[method]iface1.blocking-validate-permissions", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "p", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }], results: [AnalysedFunctionResult { name: None, typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }] }, AnalysedFunction { name: "[method]iface1.validate-permissions", parameters: [AnalysedFunctionParameter { name: "self", typ: Handle(TypeHandle { resource_id: AnalysedResourceId(27), mode: Borrowed }) }, AnalysedFunctionParameter { name: "p", typ: Flags(TypeFlags { names: ["read", "write", "exec", "close"] }) }], results: [AnalysedFunctionResult { name: None, typ: Handle(TypeHandle { resource_id: AnalysedResourceId(26), mode: Owned }) }] }] })]
+    assert_eq!(stub_exports.len(), 1);
+    let AnalysedExport::Instance(exported_interface) = &stub_exports[0] else {
+        panic!("unexpected export type")
+    };
 
-    // TODO: verify that it has the expected stub interface
+    assert_eq!(exported_interface.name, "test:main-stub/stub-api");
+
+    for fun in &exported_interface.functions {
+        println!("Function: {}", fun.name);
+    }
+
+    assert_has_rpc_resource_constructor(exported_interface, "iface1");
+    assert_has_stub(exported_interface, "iface1", "no-op", vec![], None);
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-bool",
+        vec![],
+        Some(bool()),
+    );
+    assert_has_stub(exported_interface, "iface1", "set-bool", vec![bool()], None);
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-bool",
+        vec![bool()],
+        Some(bool()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-s8",
+        vec![s8()],
+        Some(s8()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-s16",
+        vec![s16()],
+        Some(s16()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-s32",
+        vec![s32()],
+        Some(s32()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-s64",
+        vec![s64()],
+        Some(s64()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-u8",
+        vec![u8()],
+        Some(u8()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-u16",
+        vec![u16()],
+        Some(u16()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-u32",
+        vec![u32()],
+        Some(u32()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-u64",
+        vec![u64()],
+        Some(u64()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-f32",
+        vec![f32()],
+        Some(f32()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-f64",
+        vec![f64()],
+        Some(f64()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-char",
+        vec![chr()],
+        Some(chr()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "identity-string",
+        vec![str()],
+        Some(str()),
+    );
+
+    let product_item = record(vec![
+        field("product-id", str()),
+        field("name", str()),
+        field("price", f32()),
+        field("quantity", u32()),
+    ]);
+    let order = record(vec![
+        field("order-id", str()),
+        field("items", list(product_item.clone())),
+        field("total", f32()),
+        field("timestamp", u64()),
+    ]);
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-orders",
+        vec![],
+        Some(list(order.clone())),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "set-orders",
+        vec![list(order.clone())],
+        None,
+    );
+
+    let permissions = flags(&["read", "write", "exec", "close"]);
+    let metadata = record(vec![
+        field("name", str()),
+        field("origin", str()),
+        field("perms", permissions.clone()),
+    ]);
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "apply-metadata",
+        vec![option(metadata.clone())],
+        Some(option(metadata.clone())),
+    );
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-option-bool",
+        vec![],
+        Some(option(bool())),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "set-option-bool",
+        vec![option(bool())],
+        None,
+    );
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-coordinates",
+        vec![],
+        Some(tuple(vec![s32(), s32()])),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "set-coordinates",
+        vec![tuple(vec![s32(), s32()])],
+        None,
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-coordinates-alias",
+        vec![],
+        Some(tuple(vec![s32(), s32()])),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "set-coordinates-alias",
+        vec![tuple(vec![s32(), s32()])],
+        None,
+    );
+
+    let point = record(vec![
+        field("x", s32()),
+        field("y", s32()),
+        field("metadata", metadata.clone()),
+    ]);
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "tuple-to-point",
+        vec![tuple(vec![s32(), s32()]), option(metadata.clone())],
+        Some(result(point.clone(), str())),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "pt-log-error",
+        vec![result(point.clone(), str())],
+        Some(result_ok(point.clone())),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "validate-pt",
+        vec![point.clone()],
+        Some(result_err(str())),
+    );
+
+    let order_confirmation = record(vec![field("order-id", str())]);
+    let checkout_result = variant(vec![
+        case("error", str()),
+        case("success", order_confirmation.clone()),
+        unit_case("unknown"),
+    ]);
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "print-checkout-result",
+        vec![checkout_result.clone()],
+        Some(str()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-checkout-result",
+        vec![],
+        Some(checkout_result.clone()),
+    );
+
+    let color = r#enum(&["red", "green", "blue"]);
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "get-color",
+        vec![],
+        Some(color.clone()),
+    );
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "set-color",
+        vec![color.clone()],
+        None,
+    );
+
+    assert_has_stub(
+        exported_interface,
+        "iface1",
+        "validate-permissions",
+        vec![permissions.clone()],
+        Some(permissions.clone()),
+    );
+}
+
+// TODO: move these helpers to golem-wasm-ast
+
+fn field(name: &str, typ: AnalysedType) -> NameTypePair {
+    NameTypePair {
+        name: name.to_string(),
+        typ,
+    }
+}
+
+fn case(name: &str, typ: AnalysedType) -> NameOptionTypePair {
+    NameOptionTypePair {
+        name: name.to_string(),
+        typ: Some(typ),
+    }
+}
+
+fn unit_case(name: &str) -> NameOptionTypePair {
+    NameOptionTypePair {
+        name: name.to_string(),
+        typ: None,
+    }
+}
+
+fn bool() -> AnalysedType {
+    AnalysedType::Bool(TypeBool)
+}
+
+fn s8() -> AnalysedType {
+    AnalysedType::S8(TypeS8)
+}
+
+fn s16() -> AnalysedType {
+    AnalysedType::S16(TypeS16)
+}
+
+fn s32() -> AnalysedType {
+    AnalysedType::S32(TypeS32)
+}
+
+fn s64() -> AnalysedType {
+    AnalysedType::S64(TypeS64)
+}
+
+fn u8() -> AnalysedType {
+    AnalysedType::U8(TypeU8)
+}
+
+fn u16() -> AnalysedType {
+    AnalysedType::U16(TypeU16)
+}
+
+fn u32() -> AnalysedType {
+    AnalysedType::U32(TypeU32)
+}
+
+fn u64() -> AnalysedType {
+    AnalysedType::U64(TypeU64)
+}
+
+fn f32() -> AnalysedType {
+    AnalysedType::F32(TypeF32)
+}
+
+fn f64() -> AnalysedType {
+    AnalysedType::F64(TypeF64)
+}
+
+fn chr() -> AnalysedType {
+    AnalysedType::Chr(TypeChr)
+}
+
+fn str() -> AnalysedType {
+    AnalysedType::Str(TypeStr)
+}
+
+fn list(inner: AnalysedType) -> AnalysedType {
+    AnalysedType::List(TypeList {
+        inner: Box::new(inner),
+    })
+}
+
+fn option(inner: AnalysedType) -> AnalysedType {
+    AnalysedType::Option(TypeOption {
+        inner: Box::new(inner),
+    })
+}
+
+fn flags(names: &[&str]) -> AnalysedType {
+    AnalysedType::Flags(TypeFlags {
+        names: names.iter().map(|n| n.to_string()).collect(),
+    })
+}
+
+fn r#enum(cases: &[&str]) -> AnalysedType {
+    AnalysedType::Enum(TypeEnum {
+        cases: cases.iter().map(|n| n.to_string()).collect(),
+    })
+}
+
+fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
+    AnalysedType::Tuple(TypeTuple { items })
+}
+
+fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
+    AnalysedType::Result(TypeResult {
+        ok: Some(Box::new(ok)),
+        err: Some(Box::new(err)),
+    })
+}
+
+fn result_ok(ok: AnalysedType) -> AnalysedType {
+    AnalysedType::Result(TypeResult {
+        ok: Some(Box::new(ok)),
+        err: None,
+    })
+}
+
+fn result_err(err: AnalysedType) -> AnalysedType {
+    AnalysedType::Result(TypeResult {
+        ok: None,
+        err: Some(Box::new(err)),
+    })
+}
+
+fn record(fields: Vec<NameTypePair>) -> AnalysedType {
+    AnalysedType::Record(TypeRecord { fields })
+}
+
+fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
+    AnalysedType::Variant(TypeVariant { cases })
+}
+
+fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, name: &str) {
+    let fun = exported_interface
+        .functions
+        .iter()
+        .find(|f| f.name == format!("[constructor]{name}"))
+        .expect(format!("missing constructor for {name}").as_str());
+
+    assert_eq!(fun.results.len(), 1);
+    assert!(matches!(
+        fun.results[0].typ,
+        AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Owned,
+            ..
+        })
+    ));
+    assert_eq!(
+        fun.parameters,
+        vec![AnalysedFunctionParameter {
+            name: "location".to_string(),
+            typ: AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "value".to_string(),
+                    typ: AnalysedType::Str(TypeStr)
+                }]
+            })
+        }]
+    );
+}
+
+fn assert_has_stub(
+    exported_interface: &AnalysedInstance,
+    resource_name: &str,
+    function_name: &str,
+    parameters: Vec<AnalysedType>,
+    return_type: Option<AnalysedType>,
+) {
+    let constructor = exported_interface
+        .functions
+        .iter()
+        .find(|f| f.name == format!("[constructor]{resource_name}"))
+        .expect(format!("missing constructor for {resource_name}").as_str());
+
+    let resource_id = match &constructor.results[0].typ {
+        AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Owned,
+            resource_id,
+        }) => resource_id.clone(),
+        _ => panic!("unexpected constructor return type"),
+    };
+
+    let async_fun_name = format!("[method]{resource_name}.{function_name}");
+    let blocking_fun_name = format!("[method]{resource_name}.blocking-{function_name}");
+
+    let async_fun = exported_interface
+        .functions
+        .iter()
+        .find(|f| f.name == async_fun_name)
+        .expect(format!("missing async function {async_fun_name}").as_str());
+    let blocking_fun = exported_interface
+        .functions
+        .iter()
+        .find(|f| f.name == blocking_fun_name)
+        .expect(format!("missing blocking function {blocking_fun_name}").as_str());
+
+    let async_parameter_types = async_fun
+        .parameters
+        .iter()
+        .map(|p| &p.typ)
+        .cloned()
+        .collect::<Vec<_>>();
+    let blocking_parameter_types = blocking_fun
+        .parameters
+        .iter()
+        .map(|p| &p.typ)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let parameters_with_self = vec![
+        vec![AnalysedType::Handle(TypeHandle {
+            resource_id,
+            mode: AnalysedResourceMode::Borrowed,
+        })],
+        parameters,
+    ]
+    .concat();
+
+    assert_eq!(async_parameter_types, parameters_with_self);
+    assert_eq!(blocking_parameter_types, parameters_with_self);
+
+    if let Some(return_type) = return_type {
+        assert_eq!(async_fun.results.len(), 1);
+        assert_eq!(blocking_fun.results.len(), 1);
+        assert_eq!(blocking_fun.results[0].typ, return_type);
+
+        let async_result_resource_id = match &async_fun.results[0].typ {
+            AnalysedType::Handle(TypeHandle {
+                mode: AnalysedResourceMode::Owned,
+                resource_id,
+            }) => resource_id.clone(),
+            _ => panic!("unexpected async result return type"),
+        };
+
+        assert_valid_polling_resource(&exported_interface, async_result_resource_id, return_type);
+    } else {
+        assert_eq!(async_fun.results.len(), 0);
+        assert_eq!(blocking_fun.results.len(), 0);
+    }
+}
+
+fn assert_valid_polling_resource(
+    exported_interface: &AnalysedInstance,
+    resource_id: AnalysedResourceId,
+    return_type: AnalysedType,
+) {
+    let resource_methods = exported_interface
+        .functions
+        .iter()
+        .filter(|r| r.is_method() && r.parameters.len() >= 1)
+        .filter(|r| {
+            r.parameters[0].typ
+                == AnalysedType::Handle(TypeHandle {
+                    resource_id: resource_id.clone(),
+                    mode: AnalysedResourceMode::Borrowed,
+                })
+        })
+        .collect::<Vec<_>>();
+
+    let subscribe_function = resource_methods
+        .iter()
+        .find(|f| f.name.ends_with(".subscribe"))
+        .expect("missing subscribe function");
+    let get_function = resource_methods
+        .iter()
+        .find(|f| f.name.ends_with(".get"))
+        .expect("missing get function");
+
+    assert_eq!(subscribe_function.results.len(), 1);
+    assert!(matches!(
+        subscribe_function.results[0].typ,
+        AnalysedType::Handle(TypeHandle {
+            mode: AnalysedResourceMode::Owned,
+            ..
+        })
+    ));
+
+    assert_eq!(get_function.results.len(), 1);
+    assert_eq!(
+        get_function.results[0].typ,
+        AnalysedType::Option(TypeOption {
+            inner: Box::new(return_type)
+        })
+    );
 }
