@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::BASE_DEPS;
-use golem_common::config::{DbSqliteConfig, RedisConfig};
+use golem_common::config::RedisConfig;
 use golem_common::model::AccountId;
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::redis::Redis;
@@ -23,6 +23,7 @@ use golem_worker_executor_base::storage::keyvalue::memory::InMemoryKeyValueStora
 use golem_worker_executor_base::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::sqlite::{SqliteKeyValueStorage, SqlitePool};
 use golem_worker_executor_base::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -95,12 +96,15 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
 }
 
 pub(crate) async fn sqlite_storage() -> impl GetKeyValueStorage {
-    let pool = SqlitePool::configured(&DbSqliteConfig {
-        database: "sqlite::memory:".to_string(),
-        max_connections: 10,
-    })
-    .await
-    .expect("Cannot connect to sqlite db");
+    let sqlx_pool_sqlite = SqlitePoolOptions::new()
+        .max_connections(10)
+        .connect("sqlite::memory:")
+        .await
+        .expect("Cannot create db options");
+
+    let pool = SqlitePool::new(sqlx_pool_sqlite)
+        .await
+        .expect("Cannot connect to sqlite db");
 
     let kvs = SqliteKeyValueStorage::new(pool);
     SqliteKeyValueStorageWrapper { kvs }

@@ -15,15 +15,16 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::DbSqliteConfig;
-use golem_common::metrics::sqlite::{record_sqlite_failure, record_sqlite_success};
+use golem_common::metrics::db::{record_db_failure, record_db_success};
 use sqlx::query::QueryAs;
-use sqlx::sqlite::SqliteRow;
 use sqlx::sqlite::{SqliteArguments, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteRow};
 use sqlx::FromRow;
 use sqlx::SqlitePool as SqlitePoolx;
 use sqlx::{Error, Sqlite};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
 use std::time::Instant;
 
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
@@ -296,18 +297,25 @@ pub struct SqlitePool {
 }
 
 impl SqlitePool {
-    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, anyhow::Error> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(config.max_connections)
-            .connect(&config.database)
-            .await?;
-
+    pub async fn new(pool: SqlitePoolx) -> Result<Self, anyhow::Error> {
         SqlitePool::init(&pool).await?;
-
         Ok(SqlitePool { pool })
     }
 
-    async fn init(pool: &SqlitePoolx) -> Result<(), Error> {
+    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, anyhow::Error> {
+        let conn_options = SqliteConnectOptions::new()
+            .filename(Path::new(config.database.as_str()))
+            .create_if_missing(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(config.max_connections)
+            .connect_with(conn_options)
+            .await?;
+
+        SqlitePool::new(pool).await
+    }
+
+    pub async fn init(pool: &SqlitePoolx) -> Result<(), Error> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS kv_storage (
@@ -452,7 +460,8 @@ impl SqliteLabelledApi {
         let end = Instant::now();
         match result {
             Ok(result) => {
-                record_sqlite_success(
+                record_db_success(
+                    "sqlite",
                     self.svc_name,
                     self.api_name,
                     cmd_name,
@@ -461,7 +470,7 @@ impl SqliteLabelledApi {
                 Ok(result)
             }
             Err(err) => {
-                record_sqlite_failure(self.svc_name, self.api_name, cmd_name);
+                record_db_failure("sqlite", self.svc_name, self.api_name, cmd_name);
                 Err(err)
             }
         }
