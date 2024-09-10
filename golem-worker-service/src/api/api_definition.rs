@@ -5,8 +5,8 @@ use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
-use golem_worker_service_base::api::HttpApiDefinition;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
+use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
 use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
@@ -47,7 +47,7 @@ impl RegisterApiDefinitionApi {
     async fn create_or_update_open_api(
         &self,
         Json(openapi): Json<JsonOpenApiDefinition>,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
@@ -61,10 +61,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
-                .try_into()
-                .map_err(ApiEndpointError::internal)
-                .map(Json)
+            Ok(Json(HttpApiDefinitionWithTypeInfo::from(result)))
         };
 
         record.result(response)
@@ -78,7 +75,7 @@ impl RegisterApiDefinitionApi {
     async fn create(
         &self,
         payload: Json<HttpApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "create_definition",
             api_definition_id = payload.0.id.to_string(),
@@ -97,10 +94,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
-                .try_into()
-                .map_err(ApiEndpointError::internal)
-                .map(Json)
+            Ok(Json(HttpApiDefinitionWithTypeInfo::from(result)))
         };
 
         record.result(response)
@@ -119,7 +113,7 @@ impl RegisterApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
         payload: Json<HttpApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "update_definition",
             api_definition_id = id.0.to_string(),
@@ -150,10 +144,7 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                golem_worker_service_base::api_definition::http::HttpApiDefinition::from(result)
-                    .try_into()
-                    .map_err(ApiEndpointError::internal)
-                    .map(Json)
+                Ok(Json(HttpApiDefinitionWithTypeInfo::from(result)))
             }
         };
 
@@ -172,7 +163,7 @@ impl RegisterApiDefinitionApi {
         &self,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "get_definition",
             api_definition_id = id.0.to_string(),
@@ -199,10 +190,8 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             )))?;
 
-            golem_worker_service_base::api_definition::http::HttpApiDefinition::from(definition)
-                .try_into()
-                .map_err(ApiEndpointError::internal)
-                .map(Json)
+            let result = HttpApiDefinitionWithTypeInfo::from(definition);
+            Ok(Json(result))
         };
 
         record.result(response)
@@ -254,7 +243,7 @@ impl RegisterApiDefinitionApi {
     async fn list(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
-    ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
+    ) -> Result<Json<Vec<HttpApiDefinitionWithTypeInfo>>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "list_definitions",
             api_definition_id = api_definition_id_query.0.as_ref().map(|id| id.to_string()),
@@ -275,12 +264,8 @@ impl RegisterApiDefinitionApi {
 
             let values = data
                 .into_iter()
-                .map(|d| {
-                    golem_worker_service_base::api_definition::http::HttpApiDefinition::from(d)
-                        .try_into()
-                })
-                .collect::<Result<Vec<HttpApiDefinition>, _>>()
-                .map_err(ApiEndpointError::internal)?;
+                .map(HttpApiDefinitionWithTypeInfo::from)
+                .collect::<Vec<HttpApiDefinitionWithTypeInfo>>();
 
             Ok(Json(values))
         };

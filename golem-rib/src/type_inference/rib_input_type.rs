@@ -16,10 +16,11 @@ use crate::Expr;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibInputType as ProtoRibInputType;
 use golem_wasm_ast::analysis::AnalysedType;
+use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct RibInputTypeInfo {
     pub types: HashMap<String, AnalysedType>,
 }

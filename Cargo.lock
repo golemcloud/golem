@@ -3645,6 +3645,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "poem-openapi",
  "semver",
  "serde 1.0.207",
  "serde_json",

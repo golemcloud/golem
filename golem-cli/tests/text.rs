@@ -5,7 +5,7 @@ use crate::cli::{Cli, CliLive};
 use crate::worker::make_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
-use golem_client::model::{ApiDeployment, HttpApiDefinition};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
 use golem_common::uri::oss::urn::WorkerUrn;
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
@@ -625,7 +625,8 @@ fn text_api_definition_update(
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
         "update",
@@ -665,7 +666,8 @@ fn text_api_definition_list(
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
@@ -702,7 +704,8 @@ fn text_api_definition_get(
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;
 
