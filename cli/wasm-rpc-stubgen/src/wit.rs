@@ -28,10 +28,13 @@ use wit_parser::{
     UnresolvedPackage, Variant,
 };
 
-pub fn generate_stub_wit(
-    def: &StubDefinition,
-    type_gen_strategy: StubTypeGen,
-) -> anyhow::Result<()> {
+pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
+    let type_gen_strategy = if def.always_inline_types {
+        StubTypeGen::InlineRootTypes
+    } else {
+        StubTypeGen::ImportRootTypes
+    };
+
     let out = get_stub_wit(def, type_gen_strategy)?;
     println!(
         "Generating stub WIT to {}",
