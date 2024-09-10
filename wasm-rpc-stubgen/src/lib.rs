@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod cargo;
-mod compilation;
-mod make;
-mod rust;
-mod stub;
-mod wit;
+pub mod cargo;
+pub mod compilation;
+pub mod make;
+pub mod rust;
+pub mod stub;
+pub mod wit;
 
 use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
@@ -195,14 +195,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     )
     .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
 
-    let type_gen_strategy = if args.always_inline_types {
-        StubTypeGen::InlineRootTypes
-    } else {
-        StubTypeGen::ImportRootTypes
-    };
-
-    generate_stub_wit(&stub_def, type_gen_strategy)
-        .context("Failed to generate the stub wit file")?;
+    generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
     copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .verify_target_wits()
@@ -226,14 +219,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     )
     .context("Failed to gather information for the stub generator")?;
 
-    let type_gen_strategy = if args.always_inline_types {
-        StubTypeGen::InlineRootTypes
-    } else {
-        StubTypeGen::ImportRootTypes
-    };
-
-    generate_stub_wit(&stub_def, type_gen_strategy)
-        .context("Failed to generate the stub wit file")?;
+    generate_stub_wit(&stub_def).context("Failed to generate the stub wit file")?;
     copy_wit_files(&stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .verify_target_wits()
