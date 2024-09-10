@@ -158,6 +158,35 @@ impl ApiDeploymentServiceDefault {
             definition_repo,
         }
     }
+
+    async fn set_undeployed_as_draft<Namespace>(
+        &self,
+        deployments: Vec<ApiDeploymentRecord>,
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        for deployment in deployments {
+            let existing_deployments = self
+                .deployment_repo
+                .get_by_id_and_version(
+                    deployment.namespace.as_str(),
+                    deployment.definition_id.as_str(),
+                    deployment.definition_version.as_str(),
+                )
+                .await?;
+
+            if existing_deployments.is_empty() {
+                self.definition_repo
+                    .set_draft(
+                        deployment.namespace.as_str(),
+                        deployment.definition_id.as_str(),
+                        deployment.definition_version.as_str(),
+                        true,
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -287,10 +316,11 @@ where
                 );
 
                 self.definition_repo
-                    .set_not_draft(
+                    .set_draft(
                         deployment.namespace.to_string().as_str(),
                         api_definition_key.id.0.as_str(),
                         api_definition_key.version.0.as_str(),
+                        false,
                     )
                     .await?;
             }
@@ -345,7 +375,10 @@ where
 
         if !remove_deployment_records.is_empty() {
             self.deployment_repo
-                .delete(remove_deployment_records)
+                .delete(remove_deployment_records.clone())
+                .await?;
+
+            self.set_undeployed_as_draft(remove_deployment_records)
                 .await?;
         }
 
@@ -503,10 +536,15 @@ where
 
             Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
-            self.deployment_repo
-                .delete(existing_deployment_records)
-                .await
-                .map_err(|e| e.into())
+            let result = self
+                .deployment_repo
+                .delete(existing_deployment_records.clone())
+                .await?;
+
+            self.set_undeployed_as_draft(existing_deployment_records)
+                .await?;
+
+            Ok(result)
         }
     }
 }
