@@ -231,8 +231,7 @@ impl RegisterApiDefinitionApi {
             let api_definition_id = id.0;
             let api_definition_version = version.0;
 
-            let deleted = self
-                .definition_service
+            self.definition_service
                 .delete(
                     &api_definition_id,
                     &api_definition_version,
@@ -242,11 +241,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            if deleted.is_some() {
-                Ok(Json("API definition deleted".to_string()))
-            } else {
-                Ok(Json("API definition not found".to_string()))
-            }
+            Ok(Json("API definition deleted".to_string()))
         };
         record.result(response)
     }
