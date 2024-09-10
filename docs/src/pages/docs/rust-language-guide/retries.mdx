@@ -17,8 +17,7 @@ First add it to the dependencies in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-golem-rust = { version = "0.4.0" }
-golem-rust-macro = { version = "0.4.0" }
+golem-rust = { version = "1.1.0" }
 ```
 
 Then use the `use_retry_policy` or `with_retry_policy` functions to temporarily change the retry policy, either until the returned guard is dropped (the `use_` variant) or for the provided closure (the `with_` variant).
