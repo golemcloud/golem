@@ -70,7 +70,7 @@ pub trait ApiDeploymentService<Namespace> {
         &self,
         namespace: &Namespace,
         site: &ApiSiteString,
-    ) -> Result<bool, ApiDeploymentError<Namespace>>;
+    ) -> Result<(), ApiDeploymentError<Namespace>>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -514,7 +514,7 @@ where
         &self,
         namespace: &Namespace,
         site: &ApiSiteString,
-    ) -> Result<bool, ApiDeploymentError<Namespace>> {
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %namespace, "Get API deployment");
         let existing_deployment_records = self
             .deployment_repo
@@ -536,15 +536,14 @@ where
 
             Err(ApiDeploymentError::ApiDeploymentConflict(site.clone()))
         } else {
-            let result = self
-                .deployment_repo
+            self.deployment_repo
                 .delete(existing_deployment_records.clone())
                 .await?;
 
             self.set_undeployed_as_draft(existing_deployment_records)
                 .await?;
 
-            Ok(result)
+            Ok(())
         }
     }
 }
@@ -596,8 +595,8 @@ impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
         &self,
         _namespace: &Namespace,
         _site: &ApiSiteString,
-    ) -> Result<bool, ApiDeploymentError<Namespace>> {
-        Ok(false)
+    ) -> Result<(), ApiDeploymentError<Namespace>> {
+        Ok(())
     }
 }
 
