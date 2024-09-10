@@ -420,6 +420,28 @@ mod tests {
             .await
             .unwrap();
         assert!(deployment.is_none());
+
+        let definition1 = definition_service
+            .get(
+                &def1.id,
+                &def1.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert!(definition1.is_some_and(|x| x.draft));
+
+        let definition2 = definition_service
+            .get(
+                &def2.id,
+                &def2.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert!(definition2.is_some_and(|x| x.draft));
     }
 
     async fn test_deployment_conflict(
