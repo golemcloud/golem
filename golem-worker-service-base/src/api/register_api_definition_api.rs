@@ -5,9 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
 
-use crate::api_definition::http::{AllPathPatterns, CompiledRoute, MethodPattern};
+use crate::api_definition::http::{
+    AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
+};
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
-use rib::Expr;
+use crate::worker_binding::CompiledGolemWorkerBinding;
+use rib::{Expr, RibInputTypeInfo};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -63,11 +66,58 @@ pub struct HttpApiDefinition {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+// HttpApiDefinitionWithTypeInfo is CompiledHttpApiDefinition minus rib-byte-code
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct HttpApiDefinitionWithTypeInfo {
+    pub id: ApiDefinitionId,
+    pub version: ApiVersion,
+    pub routes: Vec<RouteWithTypeInfo>,
+    #[serde(default)]
+    pub draft: bool,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<CompiledHttpApiDefinition> for HttpApiDefinitionWithTypeInfo {
+    fn from(value: CompiledHttpApiDefinition) -> Self {
+        let routes = value.routes.into_iter().map(|route| route.into()).collect();
+
+        Self {
+            id: value.id,
+            version: value.version,
+            routes,
+            draft: value.draft,
+            created_at: Some(value.created_at),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct Route {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GolemWorkerBinding,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct RouteWithTypeInfo {
+    pub method: MethodPattern,
+    pub path: String,
+    pub binding: GolemWorkerBindingWithTypeInfo,
+}
+
+impl From<CompiledRoute> for RouteWithTypeInfo {
+    fn from(value: CompiledRoute) -> Self {
+        let method = value.method;
+        let path = value.path.to_string();
+        let binding = value.binding.into();
+        Self {
+            method,
+            path,
+            binding,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -78,6 +128,42 @@ pub struct GolemWorkerBinding {
     pub worker_name: String,
     pub idempotency_key: Option<String>,
     pub response: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct GolemWorkerBindingWithTypeInfo {
+    pub component_id: VersionedComponentId,
+    pub worker_name: String,
+    pub idempotency_key: Option<String>,
+    pub response: String,
+    pub response_mapping_input: RibInputTypeInfo,
+    pub worker_name_input: RibInputTypeInfo,
+    pub idempotency_key_input: Option<RibInputTypeInfo>,
+}
+
+impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
+    fn from(value: CompiledGolemWorkerBinding) -> Self {
+        let worker_binding = value.clone();
+
+        GolemWorkerBindingWithTypeInfo {
+            component_id: worker_binding.component_id,
+            worker_name: worker_binding.worker_name_compiled.worker_name.to_string(),
+            idempotency_key: worker_binding.idempotency_key_compiled.map(
+                |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
+            ),
+            response: worker_binding
+                .response_compiled
+                .response_rib_expr
+                .to_string(),
+            response_mapping_input: worker_binding.response_compiled.rib_input,
+            worker_name_input: worker_binding.worker_name_compiled.rib_input,
+            idempotency_key_input: value
+                .idempotency_key_compiled
+                .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
+        }
+    }
 }
 
 impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {

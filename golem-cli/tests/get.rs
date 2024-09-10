@@ -20,7 +20,7 @@ use crate::cli::{Cli, CliLive};
 use crate::worker::make_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
-use golem_client::model::{ApiDeployment, HttpApiDefinition};
+use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
 use golem_common::uri::oss::url::{
     ApiDefinitionUrl, ApiDeploymentUrl, ComponentUrl, WorkerFunctionUrl, WorkerUrl,
 };
@@ -80,14 +80,15 @@ fn top_level_get_api_definition(
     let def = golem_def(component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let url = ApiDefinitionUrl {
         name: component_name.to_string(),
         version: "0.1.0".to_string(),
     };
 
-    let res: HttpApiDefinition = cli.run(&["get", &url.to_string()])?;
+    let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &url.to_string()])?;
 
     let expected = to_definition(def.clone(), res.created_at);
     assert_eq!(res, expected);
@@ -97,7 +98,7 @@ fn top_level_get_api_definition(
         version: "0.1.0".to_string(),
     };
 
-    let res: HttpApiDefinition = cli.run(&["get", &urn.to_string()])?;
+    let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &urn.to_string()])?;
     let expected = to_definition(def.clone(), res.created_at);
     assert_eq!(res, expected);
 

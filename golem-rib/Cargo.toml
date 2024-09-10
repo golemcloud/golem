@@ -15,11 +15,12 @@ bincode = { workspace = true }
 combine = "4.6.7"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
+poem-openapi = { workspace = true }
 semver = "1.0.23"
 serde = { workspace = true }
 serde_json = { workspace = true }
-wasm-wave = { workspace = true }
 tokio = {workspace = true}
+wasm-wave = { workspace = true }
 
 [lib]
 name = "rib"
