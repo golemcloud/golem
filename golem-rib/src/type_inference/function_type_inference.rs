@@ -35,7 +35,6 @@ pub fn infer_function_types(
                         } => {
                             if parameter_types.len() == args.len() {
                                 for (arg, param_type) in args.iter_mut().zip(parameter_types) {
-                                    dbg!(&arg, &param_type);
                                     internal::check_function_arguments(param_type, arg)?;
                                     arg.add_infer_type_mut(param_type.clone().into());
                                     arg.push_types_down()?

@@ -27,9 +27,7 @@ pub fn desugar_pattern_match(
         }
     }
 
-    let x = internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
-    dbg!(x.clone());
-    x
+    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
 }
 
 mod internal {

@@ -1192,10 +1192,12 @@ mod interpreter_tests {
 
         let expr = r#"
 
-           let x = (1u64, "bar", validate);
+           let record = { request : { path : { user : "foo" } }, y : "bar" };
+           let x = (1, "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
            foo(x);
-           x
-
+           match x {
+             (n1, txt, rec, process-user(x), register-user(n2), validate, prod, dev, test) => "success"
+           }
 
         "#;
 
@@ -1212,64 +1214,92 @@ mod interpreter_tests {
     mod internal {
         use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU64, TypeVariant};
 
+        pub(crate) fn get_analysed_type_variant() -> AnalysedType {
+            AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "register-user".to_string(),
+                        typ: Some(AnalysedType::U64(TypeU64))
+                    },
+
+                    NameOptionTypePair {
+                        name: "process-user".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr))
+                    },
+                    NameOptionTypePair {
+                        name: "validate".to_string(),
+                        typ: None
+                    }
+                ]
+            })
+        }
+
+        pub(crate) fn get_analysed_type_record() -> AnalysedType {
+            AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "request".to_string(),
+                        typ: AnalysedType::Record(TypeRecord {
+                            fields: vec![
+                                NameTypePair {
+                                    name: "path".to_string(),
+                                    typ: AnalysedType::Record(
+                                        TypeRecord {
+                                            fields: vec![
+                                                NameTypePair {
+                                                    name: "user".to_string(),
+                                                    typ: AnalysedType::Str(TypeStr)
+                                                }
+                                            ]
+                                        }
+                                    )
+                                }
+                            ]
+                        })
+                    },
+                    NameTypePair {
+                        name: "y".to_string(),
+                        typ: AnalysedType::Str(TypeStr)
+                    }
+                ]
+            })
+        }
+
+        pub(crate) fn get_analysed_type_result() -> AnalysedType {
+            AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr)))
+            })
+        }
+
+        pub(crate) fn get_analysed_type_enum() -> AnalysedType {
+            AnalysedType::Enum(TypeEnum {
+                 cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
+            })
+        }
+
+        pub(crate) fn get_analysed_typ_str() -> AnalysedType {
+            AnalysedType::Str(TypeStr)
+        }
+
+        pub(crate) fn get_analysed_typ_u64() -> AnalysedType {
+            AnalysedType::U64(TypeU64)
+        }
+
+
         pub(crate) fn get_analysed_type_tuple() -> AnalysedType {
             let tuple_type = TypeTuple {
                 items: vec![
-                    AnalysedType::U64(TypeU64),
-                    AnalysedType::Str(TypeStr),
-                    // AnalysedType::Result(TypeResult {
-                    //     ok: Some(Box::new(AnalysedType::U64(TypeU64))),
-                    //     err: Some(Box::new(AnalysedType::Str(TypeStr)))
-                    // }),
-                    // AnalysedType::Record(TypeRecord {
-                    //     fields: vec![
-                    //         NameTypePair {
-                    //             name: "request".to_string(),
-                    //             typ: AnalysedType::Record(TypeRecord {
-                    //                 fields: vec![
-                    //                     NameTypePair {
-                    //                         name: "path".to_string(),
-                    //                         typ: AnalysedType::Record(
-                    //                             TypeRecord {
-                    //                                 fields: vec![
-                    //                                     NameTypePair {
-                    //                                         name: "user".to_string(),
-                    //                                         typ: AnalysedType::Str(TypeStr)
-                    //                                     }
-                    //                                 ]
-                    //                             }
-                    //                         )
-                    //                     }
-                    //                 ]
-                    //             })
-                    //         },
-                    //         NameTypePair {
-                    //             name: "y".to_string(),
-                    //             typ: AnalysedType::Str(TypeStr)
-                    //         }
-                    //     ]
-                    // }),
-                    AnalysedType::Variant(TypeVariant {
-                        cases: vec![
-                            NameOptionTypePair {
-                                name: "register".to_string(),
-                                typ: Some(AnalysedType::U64(TypeU64))
-                            },
-
-                            NameOptionTypePair {
-                                name: "process".to_string(),
-                                typ: Some(AnalysedType::Str(TypeStr))
-                            },
-                            NameOptionTypePair {
-                                name: "validate".to_string(),
-                                typ: None
-                            }
-                        ]
-                    }),
-                    //
-                    // AnalysedType::Enum(TypeEnum {
-                    //      cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
-                    // })
+                    get_analysed_typ_u64(),
+                    get_analysed_typ_str(),
+                   // get_analysed_type_result(),
+                    get_analysed_type_record(),
+                    get_analysed_type_variant(),
+                    get_analysed_type_variant(),
+                    get_analysed_type_variant(),
+                    get_analysed_type_enum(),
+                    get_analysed_type_enum(),
+                    get_analysed_type_enum()
                 ]
             };
 

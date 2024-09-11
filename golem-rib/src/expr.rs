@@ -487,9 +487,14 @@ impl Expr {
         self.infer_all_identifiers()?;
         self.unify_types().unwrap_or(());
         self.push_types_down()?;
+        self.unify_types().unwrap_or(());
         self.infer_all_identifiers()?;
+        self.unify_types().unwrap_or(());
         self.pull_types_up()?;
+        self.unify_types().unwrap_or(());
         self.infer_global_inputs();
+        self.unify_types().unwrap_or(());
+
         Ok(())
     }
 

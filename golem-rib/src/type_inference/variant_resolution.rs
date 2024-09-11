@@ -89,13 +89,9 @@ mod internal {
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
                     let key = RegistryKey::VariantName(variable_id.name().clone());
-                    dbg!(function_type_registry.clone());
-                    dbg!(key.clone());
                     if let Some(RegistryValue::Value(analysed_type)) =
                         function_type_registry.types.get(&key)
                     {
-                        dbg!(variable_id.name().clone());
-
                         no_arg_variants.push(variable_id.name());
                         *inferred_type = inferred_type.merge(analysed_type.clone().into());
                     }
