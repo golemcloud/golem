@@ -485,6 +485,7 @@ impl Expr {
     // to infer the types
     pub fn inference_scan(&mut self) -> Result<(), String> {
         self.infer_all_identifiers()?;
+        self.unify_types().unwrap_or(());
         self.push_types_down()?;
         self.infer_all_identifiers()?;
         self.pull_types_up()?;

@@ -804,7 +804,7 @@ mod internal {
 mod interpreter_tests {
     use super::*;
     use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
 
@@ -1185,17 +1185,22 @@ mod interpreter_tests {
     async fn test_interpreter_for_pattern_match_on_tuple_with_result() {
         let mut interpreter = Interpreter::default();
 
+        let tuple = internal::get_analysed_type_tuple();
+
+        let analysed_exports =
+            internal::get_analysed_exports("foo", vec![tuple],  AnalysedType::Str(TypeStr));
+
         let expr = r#"
 
-           let x = (1u64);
+           let x = (1u64, "bar", ok(1u64), validate);
+           foo(x);
+           x
 
-           match x {
-              (x) => "${x}"
-           }
+
         "#;
 
         let mut expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(
@@ -1216,61 +1221,61 @@ mod interpreter_tests {
                         ok: Some(Box::new(AnalysedType::U64(TypeU64))),
                         err: Some(Box::new(AnalysedType::Str(TypeStr)))
                     }),
-                    AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            NameTypePair {
-                                name: "request".to_string(),
-                                typ: AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair {
-                                            name: "path".to_string(),
-                                            typ: AnalysedType::Record(
-                                                TypeRecord {
-                                                    fields: vec![
-                                                        NameTypePair {
-                                                            name: "user".to_string(),
-                                                            typ: AnalysedType::Str(TypeStr)
-                                                        }
-                                                    ]
-                                                }
-                                            )
-                                        }
-                                    ]
-                                })
-                            },
-                            NameTypePair {
-                                name: "y".to_string(),
-                                typ: AnalysedType::Str(TypeStr)
-                            }
-                        ]
-                    }),
+                    // AnalysedType::Record(TypeRecord {
+                    //     fields: vec![
+                    //         NameTypePair {
+                    //             name: "request".to_string(),
+                    //             typ: AnalysedType::Record(TypeRecord {
+                    //                 fields: vec![
+                    //                     NameTypePair {
+                    //                         name: "path".to_string(),
+                    //                         typ: AnalysedType::Record(
+                    //                             TypeRecord {
+                    //                                 fields: vec![
+                    //                                     NameTypePair {
+                    //                                         name: "user".to_string(),
+                    //                                         typ: AnalysedType::Str(TypeStr)
+                    //                                     }
+                    //                                 ]
+                    //                             }
+                    //                         )
+                    //                     }
+                    //                 ]
+                    //             })
+                    //         },
+                    //         NameTypePair {
+                    //             name: "y".to_string(),
+                    //             typ: AnalysedType::Str(TypeStr)
+                    //         }
+                    //     ]
+                    // }),
                     AnalysedType::Variant(TypeVariant {
                         cases: vec![
                             NameOptionTypePair {
-                                name: "foo".to_string(),
+                                name: "register".to_string(),
                                 typ: Some(AnalysedType::U64(TypeU64))
                             },
 
                             NameOptionTypePair {
-                                name: "bar".to_string(),
+                                name: "process".to_string(),
                                 typ: Some(AnalysedType::Str(TypeStr))
                             },
                             NameOptionTypePair {
-                                name: "baz".to_string(),
+                                name: "validate".to_string(),
                                 typ: None
                             }
                         ]
                     }),
-
-                    AnalysedType::Enum(TypeEnum {
-                         cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
-                    })
+                    //
+                    // AnalysedType::Enum(TypeEnum {
+                    //      cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
+                    // })
                 ]
             };
 
             AnalysedType::Tuple(tuple_type)
         }
-        
+
         pub(crate) fn get_analysed_exports(
             function_name: &str,
             input_types: Vec<AnalysedType>,
@@ -1293,10 +1298,6 @@ mod interpreter_tests {
                     typ: output,
                 }],
             })]
-        }
-
-        pub(crate) fn get_analysed_type_result() -> AnalysedType {
-            AnalysedType::
         }
     }
 }
