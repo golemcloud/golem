@@ -14,7 +14,7 @@
 
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
-use golem_client::model::HttpApiDefinition;
+use golem_client::model::HttpApiDefinitionWithTypeInfo;
 
 #[async_trait]
 pub trait ApiDefinitionClient {
@@ -24,28 +24,28 @@ pub trait ApiDefinitionClient {
         &self,
         id: Option<&ApiDefinitionId>,
         project: &Self::ProjectContext,
-    ) -> Result<Vec<HttpApiDefinition>, GolemError>;
+    ) -> Result<Vec<HttpApiDefinitionWithTypeInfo>, GolemError>;
     async fn get(
         &self,
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
         project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError>;
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn create(
         &self,
         path: PathBufOrStdin,
         project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError>;
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn update(
         &self,
         path: PathBufOrStdin,
         project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError>;
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn import(
         &self,
         path: PathBufOrStdin,
         project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError>;
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn delete(
         &self,
         id: ApiDefinitionId,
