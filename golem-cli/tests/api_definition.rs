@@ -249,12 +249,12 @@ pub fn to_definition(
                         worker_name: v.binding.worker_name.clone(),
                         idempotency_key: v.binding.idempotency_key.clone(),
                         response: v.binding.response,
-                        response_mapping_input: RibInputTypeInfo {
+                        response_mapping_input: Some(RibInputTypeInfo {
                             types: HashMap::new(),
-                        },
-                        worker_name_input: RibInputTypeInfo {
+                        }),
+                        worker_name_input: Some(RibInputTypeInfo {
                             types: HashMap::new(),
-                        },
+                        }),
                         idempotency_key_input: None,
                     },
                 }
