@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tests in this module are verifying the STUB WIT created by the stub generator
+
+use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
-use golem_wasm_rpc_stubgen::wit::{copy_wit_files, generate_stub_wit};
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::tempdir;
 use wit_parser::{FunctionKind, Resolve, TypeDefKind, TypeOwner};
 
-///! Tests in this module are verifying the STUB WIT created by the stub generator
-
 #[test]
 fn all_wit_types() {
-    // TODO: extract some of to the main `wit` module
     let source_wit_root = Path::new("test-data/all-wit-types");
     let target_root = tempdir().unwrap();
 
@@ -36,9 +35,7 @@ fn all_wit_types() {
         false,
     )
     .unwrap();
-    generate_stub_wit(&def).unwrap();
-    copy_wit_files(&def).unwrap();
-    let resolve = def.verify_target_wits().unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap();
 
     assert_has_package_name(&resolve, "test:main-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -111,9 +108,7 @@ fn all_wit_types_inlined() {
         true,
     )
     .unwrap();
-    generate_stub_wit(&def).unwrap();
-    copy_wit_files(&def).unwrap();
-    let resolve = def.verify_target_wits().unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap();
 
     assert_has_package_name(&resolve, "test:main-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -186,14 +181,14 @@ fn assert_has_package_name(resolve: &Resolve, package_name: &str) {
     assert!(resolve
         .packages
         .iter()
-        .any(|(_pkg_id, pkg)| pkg.name.to_string() == package_name.to_string()))
+        .any(|(_pkg_id, pkg)| pkg.name.to_string() == *package_name))
 }
 
 fn assert_has_world(resolve: &Resolve, world_name: &str) {
     assert!(resolve
         .worlds
         .iter()
-        .any(|(_world_id, world)| &world.name == world_name))
+        .any(|(_world_id, world)| world.name == world_name))
 }
 
 fn assert_has_interface(resolve: &Resolve, interface_name: &str) {
@@ -220,7 +215,7 @@ fn assert_has_stub_function(
         .iter()
         .find(|(name, _typ_id)| name.as_str() == resource_name)
         .unwrap();
-    let resource_typ = resolve.types.get(resource_id.clone()).unwrap();
+    let resource_typ = resolve.types.get(*resource_id).unwrap();
     assert_eq!(resource_typ.kind, TypeDefKind::Resource);
 
     let async_function_name = format!("[method]{resource_name}.{function_name}");
@@ -230,22 +225,18 @@ fn assert_has_stub_function(
         .functions
         .iter()
         .find(|(_, fun)| {
-            fun.kind == FunctionKind::Method(resource_id.clone())
-                && fun.name == async_function_name.to_string()
+            fun.kind == FunctionKind::Method(*resource_id)
+                && fun.name == async_function_name
         })
-        .expect(&format!(
-            "Could not find method {async_function_name} in interface {interface_name}"
-        ));
+        .unwrap_or_else(|| panic!("Could not find method {async_function_name} in interface {interface_name}"));
     let (_, _blocking_function) = iface
         .functions
         .iter()
         .find(|(_, fun)| {
-            fun.kind == FunctionKind::Method(resource_id.clone())
-                && fun.name == blocking_function_name.to_string()
+            fun.kind == FunctionKind::Method(*resource_id)
+                && fun.name == blocking_function_name
         })
-        .expect(&format!(
-            "Could not find method {blocking_function_name} in interface {interface_name}"
-        ));
+        .unwrap_or_else(|| panic!("Could not find method {blocking_function_name} in interface {interface_name}"));
 
     if has_result {
         // for functions with a result value the async version returns a generated resource type
@@ -255,7 +246,7 @@ fn assert_has_stub_function(
             .iter()
             .find(|(name, _typ_id)| name.as_str() == future_result_name)
             .unwrap();
-        let result_resource_typ = resolve.types.get(result_resource_id.clone()).unwrap();
+        let result_resource_typ = resolve.types.get(*result_resource_id).unwrap();
         assert_eq!(result_resource_typ.kind, TypeDefKind::Resource);
     }
 }
@@ -309,7 +300,7 @@ fn is_owned_by_interface(resolve: &Resolve, owner: &TypeOwner, interface_name: &
     match owner {
         TypeOwner::World(_) => false,
         TypeOwner::Interface(iface_id) => {
-            resolve.interfaces.get(iface_id.clone()).unwrap().name
+            resolve.interfaces.get(*iface_id).unwrap().name
                 == Some(interface_name.to_string())
         }
         TypeOwner::None => false,
