@@ -247,23 +247,23 @@ fn write_type_def(
             write!(out, "  {}", kind_str)?;
             write!(out, " {}", typ_name)?;
 
-            write_flags(out, &flags)?;
+            write_flags(out, flags)?;
         }
         TypeDefKind::Tuple(tuple) => {
             if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
-                write_tuple(out, &tuple, def)?;
+                write_tuple(out, tuple, def)?;
                 writeln!(out, ";")?;
             } else {
                 write!(out, "  {}", kind_str)?;
-                write_tuple(out, &tuple, def)?;
+                write_tuple(out, tuple, def)?;
             }
         }
         TypeDefKind::Variant(variant) => {
             write!(out, "  {}", kind_str)?;
             write!(out, " {}", typ_name)?;
-            write_variant(out, &variant, def)?;
+            write_variant(out, variant, def)?;
         }
         TypeDefKind::Enum(enum_ty) => {
             write!(out, "  {}", kind_str)?;
@@ -274,11 +274,11 @@ fn write_type_def(
             if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
-                write_option(out, &option, def)?;
+                write_option(out, option, def)?;
                 writeln!(out, ";")?;
             } else {
                 write!(out, "  {}", kind_str)?;
-                write_option(out, &option, def)?;
+                write_option(out, option, def)?;
             }
         }
 
@@ -286,11 +286,11 @@ fn write_type_def(
             if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
-                write_result(out, &result, def)?;
+                write_result(out, result, def)?;
                 writeln!(out, ";")?;
             } else {
                 write!(out, "  {}", kind_str)?;
-                write_result(out, &result, def)?;
+                write_result(out, result, def)?;
             }
         }
 
