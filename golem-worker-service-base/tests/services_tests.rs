@@ -405,7 +405,7 @@ mod tests {
                     &ApiSiteString("test.com".to_string()),
                 )
                 .await
-                .unwrap(),
+                .is_ok(),
             "Deployment not found"
         );
 
@@ -659,8 +659,7 @@ mod tests {
                     &EmptyAuthCtx::default(),
                 )
                 .await
-                .unwrap()
-                .is_some(),
+                .is_ok(),
             "Failed to delete definition"
         );
         assert!(
@@ -672,8 +671,7 @@ mod tests {
                     &EmptyAuthCtx::default(),
                 )
                 .await
-                .unwrap()
-                .is_some(),
+                .is_ok(),
             "Failed to delete definition"
         );
 
@@ -702,10 +700,9 @@ mod tests {
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
-            .await
-            .expect("delete succeeded");
+            .await;
 
-        assert!(delete_result.is_none(), "definition should not exist");
+        assert!(delete_result.is_err(), "definition should not exist");
     }
 
     fn get_api_deployment(
