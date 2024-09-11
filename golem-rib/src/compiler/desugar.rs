@@ -27,7 +27,9 @@ pub fn desugar_pattern_match(
         }
     }
 
-    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
+    let x = internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
+    dbg!(x.clone().map(|x| x.to_string()));
+    x
 }
 
 mod internal {
@@ -105,15 +107,13 @@ mod internal {
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::TupleConstructor(expressions) => {
-                hande_constructor(
-                    pred_expr,
-                    "tuple",
-                    expressions,
-                    resolution,
-                    inferred_type_of_pred
-                )
-            }
+            ArmPattern::TupleConstructor(expressions) => hande_constructor(
+                pred_expr,
+                "tuple",
+                expressions,
+                resolution,
+                inferred_type_of_pred,
+            ),
 
             ArmPattern::As(name, inner_pattern) => handle_as_pattern(
                 name,
@@ -229,51 +229,6 @@ mod internal {
                 Some(branch)
             }
 
-            Expr::Tuple(exprs, inferred_type) => {
-                let mut new_body = vec![];
-                let mut conditions = vec![];
-
-                let types = match pred_expr_inferred_type {
-                    InferredType::Tuple(inner) => inner,
-                    _ => vec![],
-                };
-
-                for (i, expr_elem) in exprs.iter().enumerate() {
-                    let new_pred = pred_expr.get(i);
-                    let new_pred_type = types.get(i).unwrap_or(&InferredType::Unknown);
-
-                    let branch = get_conditions(
-                        &MatchArm::new(
-                            ArmPattern::Literal(Box::new(expr_elem.clone())),
-                            expr_elem.clone(),
-                        ),
-                        &new_pred,
-                        None,
-                        new_pred_type.clone(),
-                    );
-
-                    if let Some(x) = branch {
-                        conditions.push(x.condition);
-                        new_body.push(x.body)
-                    }
-                }
-
-                new_body.push(resolution.clone());
-
-                let mut cond: Option<Expr> = None;
-
-                // if x == 1, y ==1
-                for i in conditions {
-                    let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
-                    cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
-                }
-
-                cond.map(|c| IfThenBranch {
-                    condition: c,
-                    body: Expr::multiple(new_body),
-                })
-            }
-
             _ => {
                 // use tag lookup
                 let branch = IfThenBranch {
@@ -367,17 +322,12 @@ mod internal {
                     let new_pred = pred_expr.get(i);
                     let new_pred_type = inferred_types.get(i).unwrap_or(&InferredType::Unknown);
 
-
                     let branch = get_conditions(
                         &MatchArm::new(pattern.clone(), Expr::literal("".to_string())),
                         &pred_expr.get(i),
-                        Some(Expr::equal_to(
-                            Expr::tag(pred_expr.clone()),
-                            Expr::literal(constructor_name),
-                        )),
-                        new_pred_type.clone()
+                        None,
+                        new_pred_type.clone(),
                     );
-
 
                     if let Some(x) = branch {
                         conditions.push(x.condition);

@@ -796,7 +796,7 @@ impl InferredType {
                         match typ.unify_with_required(inferred_type) {
                             Ok(result) => {
                                 unified = Some(result);
-                                break
+                                break;
                             }
                             Err(_) => continue,
                         }
@@ -811,7 +811,6 @@ impl InferredType {
                 }
 
                 (inferred_type, InferredType::OneOf(types)) => {
-
                     if types.contains(inferred_type) {
                         Ok(inferred_type.clone())
                     } else {

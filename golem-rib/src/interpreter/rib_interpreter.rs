@@ -757,6 +757,8 @@ mod internal {
 
         let mut str = String::new();
         for value in type_anntoated_values {
+            let literal = value.get_literal();
+
             let result = value
                 .get_literal()
                 .ok_or("Expected a literal value".to_string())?
@@ -804,7 +806,9 @@ mod internal {
 mod interpreter_tests {
     use super::*;
     use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr};
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr,
+    };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
 
@@ -1190,15 +1194,16 @@ mod interpreter_tests {
         let tuple = internal::get_analysed_type_tuple();
 
         let analysed_exports =
-            internal::get_analysed_exports("foo", vec![tuple],  AnalysedType::Str(TypeStr));
+            internal::get_analysed_exports("foo", vec![tuple], AnalysedType::Str(TypeStr));
 
         let expr = r#"
 
-           let record = { request : { path : { user : "foo" } }, y : "bar" };
+           let record = { request : { path : { user : "jak" } }, y : "bar" };
            let x = (1, "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
            foo(x);
            match x {
-             (n1, txt, xx, process-user(x), register-user(n), validate, prod, dev, test) => "success"
+             (n1, txt, rec, process-user(x), register-user(n), validate, dev, prod, test) =>  "Invalid",
+             (n1, txt, rec, process-user(x), register-user(n), validate, prod, dev, test) =>  "foo ${n1} ${txt} ${rec.request.path.user} ${validate} ${prod} ${dev} ${test}"
            }
 
         "#;
@@ -1209,30 +1214,29 @@ mod interpreter_tests {
 
         assert_eq!(
             result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("1 bar".to_string())
+            TypeAnnotatedValue::Str("foo 1 bar jak validate prod dev test".to_string())
         );
     }
 
     mod internal {
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU64, TypeVariant};
+        use golem_wasm_ast::analysis::*;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
             AnalysedType::Variant(TypeVariant {
                 cases: vec![
                     NameOptionTypePair {
                         name: "register-user".to_string(),
-                        typ: Some(AnalysedType::U64(TypeU64))
+                        typ: Some(AnalysedType::U64(TypeU64)),
                     },
-
                     NameOptionTypePair {
                         name: "process-user".to_string(),
-                        typ: Some(AnalysedType::Str(TypeStr))
+                        typ: Some(AnalysedType::Str(TypeStr)),
                     },
                     NameOptionTypePair {
                         name: "validate".to_string(),
-                        typ: None
-                    }
-                ]
+                        typ: None,
+                    },
+                ],
             })
         }
 
@@ -1242,41 +1246,35 @@ mod interpreter_tests {
                     NameTypePair {
                         name: "request".to_string(),
                         typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "path".to_string(),
-                                    typ: AnalysedType::Record(
-                                        TypeRecord {
-                                            fields: vec![
-                                                NameTypePair {
-                                                    name: "user".to_string(),
-                                                    typ: AnalysedType::Str(TypeStr)
-                                                }
-                                            ]
-                                        }
-                                    )
-                                }
-                            ]
-                        })
+                            fields: vec![NameTypePair {
+                                name: "path".to_string(),
+                                typ: AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "user".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                }),
+                            }],
+                        }),
                     },
                     NameTypePair {
                         name: "y".to_string(),
-                        typ: AnalysedType::Str(TypeStr)
-                    }
-                ]
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                ],
             })
         }
 
         pub(crate) fn get_analysed_type_result() -> AnalysedType {
             AnalysedType::Result(TypeResult {
                 ok: Some(Box::new(AnalysedType::U64(TypeU64))),
-                err: Some(Box::new(AnalysedType::Str(TypeStr)))
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
             })
         }
 
         pub(crate) fn get_analysed_type_enum() -> AnalysedType {
             AnalysedType::Enum(TypeEnum {
-                 cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
+                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
             })
         }
 
@@ -1287,7 +1285,6 @@ mod interpreter_tests {
         pub(crate) fn get_analysed_typ_u64() -> AnalysedType {
             AnalysedType::U64(TypeU64)
         }
-
 
         pub(crate) fn get_analysed_type_tuple() -> AnalysedType {
             let tuple_type = TypeTuple {
@@ -1301,8 +1298,8 @@ mod interpreter_tests {
                     get_analysed_type_variant(),
                     get_analysed_type_enum(),
                     get_analysed_type_enum(),
-                    get_analysed_type_enum()
-                ]
+                    get_analysed_type_enum(),
+                ],
             };
 
             AnalysedType::Tuple(tuple_type)
@@ -1333,5 +1330,3 @@ mod interpreter_tests {
         }
     }
 }
-
-

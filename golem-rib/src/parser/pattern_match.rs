@@ -154,8 +154,8 @@ mod internal {
             .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
     }
 
-    fn tuple_arm_pattern_constructor<'t>(
-    ) -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
+    fn tuple_arm_pattern_constructor<'t>() -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern>
+    {
         (
             string("(").skip(spaces()),
             sep_by(arm_pattern().skip(spaces()), char_(',').skip(spaces())),

@@ -156,16 +156,12 @@ mod internal {
         }
     }
 
-    fn compare_enums(
-        left: &TypedEnum,
-        right: &TypedEnum
-    ) -> Result<TypeAnnotatedValue, String> {
+    fn compare_enums(left: &TypedEnum, right: &TypedEnum) -> Result<TypeAnnotatedValue, String> {
         if left.value == right.value {
             Ok(TypeAnnotatedValue::Bool(true))
         } else {
             Ok(TypeAnnotatedValue::Bool(false))
         }
-
     }
 
     fn unsupported_type_error(left: &TypeAnnotatedValue, right: &TypeAnnotatedValue) -> String {

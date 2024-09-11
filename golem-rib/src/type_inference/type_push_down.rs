@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::call_type::CallType;
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
-use crate::call_type::CallType;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
@@ -95,23 +95,21 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                     // For CallType::Enum constructor, there are no argument expressions
                     // For CallType::Function , there is no type available to push down to arguments, as it is invalid
                     // to push down the return type of a function to its arguments.
-                    CallType::VariantConstructor(name) => {
-                        match inferred_type {
-                            InferredType::Variant(variant) => {
-                                let identified_variant = variant
-                                    .iter()
-                                    .find(|(variant_name, _)| variant_name == name);
+                    CallType::VariantConstructor(name) => match inferred_type {
+                        InferredType::Variant(variant) => {
+                            let identified_variant = variant
+                                .iter()
+                                .find(|(variant_name, _)| variant_name == name);
 
-                                if let Some((_name, Some(inner_type))) = identified_variant {
-                                    for expr in expressions {
-                                        expr.add_infer_type_mut(inner_type.clone());
-                                        queue.push_back(expr);
-                                    }
+                            if let Some((_name, Some(inner_type))) = identified_variant {
+                                for expr in expressions {
+                                    expr.add_infer_type_mut(inner_type.clone());
+                                    queue.push_back(expr);
                                 }
                             }
-                            _ => {}
                         }
-                    }
+                        _ => {}
+                    },
 
                     _ => {
                         for expr in expressions {
@@ -272,20 +270,18 @@ mod internal {
                 }
                 _ => {}
             },
-            ArmPattern::TupleConstructor(patterns) => {
-                match predicate_type {
-                    InferredType::Tuple(inner_types) => {
-                        if patterns.len() == inner_types.len() {
-                            for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
-                                update_arm_pattern_type(pattern, inner_type)?;
-                            }
-                        } else {
-                            return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
+            ArmPattern::TupleConstructor(patterns) => match predicate_type {
+                InferredType::Tuple(inner_types) => {
+                    if patterns.len() == inner_types.len() {
+                        for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
+                            update_arm_pattern_type(pattern, inner_type)?;
                         }
+                    } else {
+                        return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
                     }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
             ArmPattern::WildCard => {}
         }
 

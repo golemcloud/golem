@@ -167,13 +167,15 @@ impl FunctionTypeRegistry {
     }
 }
 
-
 mod internal {
-    use std::collections::HashMap;
-    use golem_wasm_ast::analysis::AnalysedType;
     use crate::{RegistryKey, RegistryValue};
+    use golem_wasm_ast::analysis::AnalysedType;
+    use std::collections::HashMap;
 
-    pub(crate) fn update_registry(ty: &AnalysedType, registry: &mut HashMap<RegistryKey, RegistryValue>) {
+    pub(crate) fn update_registry(
+        ty: &AnalysedType,
+        registry: &mut HashMap<RegistryKey, RegistryValue>,
+    ) {
         match ty.clone() {
             AnalysedType::Variant(variant) => {
                 for name_type_pair in variant.cases {
@@ -198,12 +200,11 @@ mod internal {
                 }
             }
 
-           AnalysedType::Tuple(tuple) => {
+            AnalysedType::Tuple(tuple) => {
                 for element in tuple.items {
                     update_registry(&element, registry);
                 }
             }
-
 
             AnalysedType::List(list) => {
                 update_registry(list.inner.as_ref(), registry);
