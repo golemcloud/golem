@@ -1182,7 +1182,7 @@ mod interpreter_tests {
     }
 
     #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_tuple_with_result() {
+    async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
         let mut interpreter = Interpreter::default();
 
         let tuple = internal::get_analysed_type_tuple();
