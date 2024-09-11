@@ -36,6 +36,7 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     };
 
     let out = get_stub_wit(def, type_gen_strategy)?;
+    println!("{out}");
     println!(
         "Generating stub WIT to {}",
         def.target_wit_path().to_string_lossy()
@@ -231,7 +232,7 @@ fn write_type_def(
     typ_name: &str,
     def: &StubDefinition,
 ) -> anyhow::Result<()> {
-    let typ_kind = typ.clone().kind;
+    let typ_kind = &typ.kind;
     let kind_str = typ_kind.as_str();
 
     match typ_kind {
@@ -239,7 +240,7 @@ fn write_type_def(
             write!(out, "  {}", kind_str)?;
             write!(out, " {}", typ_name)?;
 
-            write_record(out, record.fields, def)?;
+            write_record(out, &record.fields, def)?;
         }
 
         TypeDefKind::Flags(flags) => {
@@ -249,7 +250,7 @@ fn write_type_def(
             write_flags(out, &flags)?;
         }
         TypeDefKind::Tuple(tuple) => {
-            if let Some(name) = typ.name.clone() {
+            if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
                 write_tuple(out, &tuple, def)?;
@@ -270,7 +271,7 @@ fn write_type_def(
             write_enum(out, enum_ty)?;
         }
         TypeDefKind::Option(option) => {
-            if let Some(name) = typ.name.clone() {
+            if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
                 write_option(out, &option, def)?;
@@ -282,7 +283,7 @@ fn write_type_def(
         }
 
         TypeDefKind::Result(result) => {
-            if let Some(name) = typ.name.clone() {
+            if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
                 write_result(out, &result, def)?;
@@ -294,7 +295,7 @@ fn write_type_def(
         }
 
         TypeDefKind::List(list_typ) => {
-            if let Some(name) = typ.name.clone() {
+            if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
                 write!(out, " {}", list_typ.wit_type_string(&def.resolve)?)?;
@@ -306,13 +307,35 @@ fn write_type_def(
         }
         TypeDefKind::Future(_) => {}
         TypeDefKind::Stream(_) => {}
-        TypeDefKind::Type(typ) => {
-            write!(out, "  {} ", kind_str)?;
-            write!(out, "{}", typ_name)?;
-            write!(out, " =")?;
-            write!(out, " {}", typ.wit_type_string(&def.resolve)?)?;
-            writeln!(out, ";")?;
-        }
+        TypeDefKind::Type(aliased_typ) => match aliased_typ {
+            Type::Id(type_id) => {
+                let aliased_type_def = def
+                    .resolve
+                    .types
+                    .get(*type_id)
+                    .ok_or(anyhow!("type not found"))?;
+
+                if aliased_type_def.owner == typ.owner {
+                    // type alias to type defined in the same interface
+                    write!(out, "  {} ", kind_str)?;
+                    write!(out, "{}", typ_name)?;
+                    write!(out, " =")?;
+                    write!(out, " {}", aliased_typ.wit_type_string(&def.resolve)?)?;
+                    writeln!(out, ";")?;
+                } else {
+                    // import from another interface
+                    write_type_def(out, aliased_type_def, typ_name, def)?;
+                }
+            }
+            _ => {
+                // type alias to primitive
+                write!(out, "  {} ", kind_str)?;
+                write!(out, "{}", typ_name)?;
+                write!(out, " =")?;
+                write!(out, " {}", aliased_typ.wit_type_string(&def.resolve)?)?;
+                writeln!(out, ";")?;
+            }
+        },
         TypeDefKind::Unknown => {
             write!(out, "  {}", kind_str)?;
         }
@@ -329,14 +352,14 @@ fn write_type_def(
 }
 
 // https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#wit-types
-fn write_handle(out: &mut String, handle: Handle, def: &StubDefinition) -> anyhow::Result<()> {
+fn write_handle(out: &mut String, handle: &Handle, def: &StubDefinition) -> anyhow::Result<()> {
     match handle {
         Handle::Own(type_id) => {
-            write!(out, "{}", Type::Id(type_id).wit_type_string(&def.resolve)?)?;
+            write!(out, "{}", Type::Id(*type_id).wit_type_string(&def.resolve)?)?;
         }
         Handle::Borrow(type_id) => {
             write!(out, " borrow<")?;
-            write!(out, "{}", Type::Id(type_id).wit_type_string(&def.resolve)?)?;
+            write!(out, "{}", Type::Id(*type_id).wit_type_string(&def.resolve)?)?;
             write!(out, ">")?;
         }
     }
@@ -383,8 +406,7 @@ fn write_variant(out: &mut String, variant: &Variant, def: &StubDefinition) -> a
     writeln!(out)?;
 
     for (idx, case) in variant.cases.iter().enumerate() {
-        let case_name = case.name.clone();
-        write!(out, "    {}", case_name)?;
+        write!(out, "    {}", case.name)?;
 
         if let Some(ty) = case.ty {
             write!(out, "(")?;
@@ -401,7 +423,7 @@ fn write_variant(out: &mut String, variant: &Variant, def: &StubDefinition) -> a
     Ok(())
 }
 
-fn write_enum(out: &mut String, enum_ty: Enum) -> anyhow::Result<()> {
+fn write_enum(out: &mut String, enum_ty: &Enum) -> anyhow::Result<()> {
     let length = enum_ty.cases.len();
     write!(out, " {{")?;
     writeln!(out)?;
@@ -429,7 +451,7 @@ fn write_tuple(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow:
     Ok(())
 }
 
-fn write_record(out: &mut String, fields: Vec<Field>, def: &StubDefinition) -> anyhow::Result<()> {
+fn write_record(out: &mut String, fields: &[Field], def: &StubDefinition) -> anyhow::Result<()> {
     write!(out, " {{")?;
     writeln!(out)?;
 
@@ -497,7 +519,6 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
         if unresolved.name == def.root_package_name {
             println!("Copying root package {}", unresolved.name);
             let dep_dir = dest_wit_root
-                .clone()
                 .join(Path::new("deps"))
                 .join(Path::new(&format!(
                     "{}_{}",
@@ -524,8 +545,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                         regex::escape(stub_package_name.as_str())
                     )
                     .as_str(),
-                )
-                .unwrap();
+                )?;
                 let new_data = re.replace_all(&read_data, "");
 
                 let dest = dep_dir.join(source.file_name().unwrap());
@@ -543,7 +563,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
             for source in unresolved.source_files() {
                 let relative = source.strip_prefix(&def.source_wit_root)?;
-                let dest = dest_wit_root.clone().join(relative);
+                let dest = dest_wit_root.join(relative);
                 println!(
                     "  .. {} to {}",
                     source.to_string_lossy(),
@@ -557,7 +577,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
         }
     }
     let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
-    fs::create_dir_all(&wasm_rpc_root).unwrap();
+    fs::create_dir_all(&wasm_rpc_root)?;
 
     println!(
         "Writing wasm-rpc.wit to {}",
@@ -569,7 +589,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
     )?;
 
     let wasi_poll_root = dest_wit_root.join(Path::new("deps/io"));
-    fs::create_dir_all(&wasi_poll_root).unwrap();
+    fs::create_dir_all(&wasi_poll_root)?;
     println!("Writing poll.wit to {}", wasi_poll_root.to_string_lossy());
     fs::write(
         wasi_poll_root.join(Path::new("poll.wit")),
