@@ -489,6 +489,7 @@ impl Expr {
         self.push_types_down()?;
         self.infer_all_identifiers()?;
         self.pull_types_up()?;
+        self.unify_types().unwrap_or(());
         self.infer_global_inputs();
 
         Ok(())

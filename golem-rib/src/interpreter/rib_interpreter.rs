@@ -1199,11 +1199,11 @@ mod interpreter_tests {
         let expr = r#"
 
            let record = { request : { path : { user : "jak" } }, y : "bar" };
-           let x = (1, "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
-           foo(x);
-           match x {
-             (n1, txt, rec, process-user(x), register-user(n), validate, dev, prod, test) =>  "Invalid",
-             (n1, txt, rec, process-user(x), register-user(n), validate, prod, dev, test) =>  "foo ${n1} ${txt} ${rec.request.path.user} ${validate} ${prod} ${dev} ${test}"
+           let input = (1, ok(100), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
+           foo(input);
+           match input {
+             (n1, err(x1), txt, rec, process-user(x), register-user(n), validate, dev, prod, test) =>  "Invalid",
+             (n1, ok(x2), txt, rec, process-user(x), register-user(n), validate, prod, dev, test) =>  "foo ${x2} ${n1} ${txt} ${rec.request.path.user} ${validate} ${prod} ${dev} ${test}"
            }
 
         "#;
@@ -1214,7 +1214,7 @@ mod interpreter_tests {
 
         assert_eq!(
             result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("foo 1 bar jak validate prod dev test".to_string())
+            TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
         );
     }
 
@@ -1233,11 +1233,11 @@ mod interpreter_tests {
         let expr = r#"
 
            let record = { request : { path : { user : "jak" } }, y : "baz" };
-           let input = (1, "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
+           let input = (1, ok(1), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
            my-worker-function(input);
            match input {
-             (n1, txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
-             (n1, txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
+             (n1, ok(x), txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
+             (n1, ok(x), txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
            }
 
         "#;
@@ -1324,8 +1324,8 @@ mod interpreter_tests {
             let tuple_type = TypeTuple {
                 items: vec![
                     get_analysed_typ_u64(),
+                    get_analysed_type_result(),
                     get_analysed_typ_str(),
-                    //get_analysed_type_result(),
                     get_analysed_type_record(),
                     get_analysed_type_variant(),
                     get_analysed_type_variant(),
