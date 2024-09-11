@@ -1292,7 +1292,7 @@ mod interpreter_tests {
                 items: vec![
                     get_analysed_typ_u64(),
                     get_analysed_typ_str(),
-                   // get_analysed_type_result(),
+                    //get_analysed_type_result(),
                     get_analysed_type_record(),
                     get_analysed_type_variant(),
                     get_analysed_type_variant(),

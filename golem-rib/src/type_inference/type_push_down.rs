@@ -14,6 +14,7 @@
 
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
+use crate::call_type::CallType;
 
 pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
@@ -86,6 +87,34 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 
             Expr::Record(expressions, inferred_type) => {
                 internal::handle_record(expressions, inferred_type, &mut queue)?;
+            }
+
+            // For type push down, if it's variant type or enum type
+            Expr::Call(call_type, expressions, inferred_type) => {
+                match call_type {
+                    CallType::VariantConstructor(name) => {
+                        match inferred_type {
+                            InferredType::Variant(variant) => {
+                                let identified_variant = variant
+                                    .iter()
+                                    .find(|(variant_name, _)| variant_name == name);
+
+                                if let Some((_name, Some(inner_type))) = identified_variant {
+                                    for expr in expressions {
+                                        expr.add_infer_type_mut(inner_type.clone());
+                                        queue.push_back(expr);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {
+                        for expr in expressions {
+                            queue.push_back(expr);
+                        }
+                    }
+                }
             }
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),
