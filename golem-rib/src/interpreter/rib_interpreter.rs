@@ -195,6 +195,10 @@ impl Interpreter {
                 RibIR::Get(index) => {
                     internal::run_get_index_instruction(index, &mut self.stack)?;
                 }
+
+                RibIR::And => {
+                    internal::run_and_instruction(&mut self.stack)?;
+                }
             }
         }
 
@@ -409,6 +413,29 @@ mod internal {
         };
 
         interpreter_stack.push_val(result?);
+        Ok(())
+    }
+
+
+    pub(crate) fn run_and_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let left = interpreter_stack.pop().ok_or(
+            "Empty stack and failed to get a value to do the comparison operation".to_string(),
+        )?;
+        let right = interpreter_stack.pop().ok_or(
+            "Failed to get a value from the stack to do the comparison operation".to_string(),
+        )?;
+
+        let result = left.compare(&right, |a, b| {
+            match (a.get_bool(), b.get_bool()) {
+                (Some(a), Some(b)) => a && b,
+                _ => false
+            }
+        })?;
+
+        interpreter_stack.push(result);
+
         Ok(())
     }
 

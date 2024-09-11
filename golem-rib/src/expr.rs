@@ -572,6 +572,7 @@ impl Expr {
             | Expr::Throw(_, inferred_type)
             | Expr::Tag(_, inferred_type)
             | Expr::Get(_, _, inferred_type)
+            | Expr::And(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -612,6 +613,7 @@ impl Expr {
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::Get(_, _, inferred_type)
+            | Expr::And(_, _, inferred_type)
             | Expr::Tag(_, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
@@ -1186,7 +1188,8 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             // Not yet supported as a syntax, so shouldn't be called
             Expr::Throw(msg, _) => Self::from(Expr::literal(msg)).expr,
             Expr::Tag(expr, _) => Self::from(*expr).expr,
-            Expr::Get(expr, _, _) => Self::from(*expr).expr
+            Expr::Get(expr, _, _) => Self::from(*expr).expr,
+            Expr::And(left, right, _) => Self::from(*left).expr
         };
 
         golem_api_grpc::proto::golem::rib::Expr { expr }

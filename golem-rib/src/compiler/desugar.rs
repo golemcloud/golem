@@ -255,22 +255,17 @@ mod internal {
 
                 new_body.push(resolution.clone());
 
-
-                Some(IfThenBranch {
-                    condition: Expr::all_of(conditions),
-                    body: Expr::multiple(new_body).add_infer_type(inferred_type.clone()),
-                });
-
-                let mut cond = None;
+                let mut cond: Option<Expr> = None;
 
                 // if x == 1, y ==1
-                for i  in if_then_branches {
-                    cond = Some(i.condition);
+                for i  in conditions {
+                    let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
+                    cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
                 }
 
                 cond.map(|c| IfThenBranch {
                     condition: c,
-                    body: resolution.clone()
+                    body: Expr::multiple(new_body)
                 })
             }
 

@@ -43,6 +43,7 @@ pub enum RibIR {
     SelectIndex(usize),
     EqualTo,
     GreaterThan,
+    And,
     LessThan,
     GreaterThanOrEqualTo,
     LessThanOrEqualTo,
@@ -255,6 +256,7 @@ impl From<RibIR> for ProtoRibIR {
                     type_annotated_value: Some(value),
                 })
             }
+            RibIR::And => todo!("Implement And"),
             RibIR::AssignVar(value) => Instruction::AssignVar(value.into()),
             RibIR::LoadVar(value) => Instruction::LoadVar(value.into()),
             RibIR::CreateAndPushRecord(value) => Instruction::CreateAndPushRecord((&value).into()),

@@ -148,6 +148,11 @@ mod internal {
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::LessThanOrEqualTo);
             }
+            Expr::And(lhs, rhs, _) => {
+                stack.push(ExprState::from_expr(rhs.deref()));
+                stack.push(ExprState::from_expr(lhs.deref()));
+                instructions.push(RibIR::And);
+            }
             Expr::Record(fields, inferred_type) => {
                 // Push field instructions in reverse order
                 for (field_name, field_expr) in fields.iter().rev() {

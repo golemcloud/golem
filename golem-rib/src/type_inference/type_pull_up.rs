@@ -178,6 +178,10 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             }
         }
         Expr::Unwrap(expr, _) => expr.pull_types_up()?,
+        Expr::And(left, right, _) => {
+            left.pull_types_up()?;
+            right.pull_types_up()?;
+        }
         Expr::Get(expr, _, _) => expr.pull_types_up()?,
         Expr::Throw(_, _) => {}
         Expr::Tag(expr, _) => expr.pull_types_up()?,

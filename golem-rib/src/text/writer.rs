@@ -292,6 +292,11 @@ impl<W: Write> Writer<W> {
                 self.write_display(index)?;
                 self.write_str(")")
             }
+            Expr::And(left, right, _) => {
+                self.write_expr(left)?;
+                self.write_str(" && ")?;
+                self.write_expr(right)
+            }
         }
     }
 
