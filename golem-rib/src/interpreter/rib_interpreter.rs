@@ -1218,6 +1218,40 @@ mod interpreter_tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_wild_pattern() {
+        let mut interpreter = Interpreter::default();
+
+        let tuple = internal::get_analysed_type_tuple();
+
+        let analysed_exports = internal::get_analysed_exports(
+            "my-worker-function",
+            vec![tuple],
+            AnalysedType::Str(TypeStr),
+        );
+
+        let expr = r#"
+
+           let record = { request : { path : { user : "jak" } }, y : "baz" };
+           let input = (1, "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
+           my-worker-function(input);
+           match input {
+             (n1, txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
+             (n1, txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
+           }
+
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
+        );
+    }
+
     mod internal {
         use golem_wasm_ast::analysis::*;
 
