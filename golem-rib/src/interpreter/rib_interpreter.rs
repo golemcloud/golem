@@ -1196,7 +1196,7 @@ mod interpreter_tests {
            let x = (1, "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
            foo(x);
            match x {
-             (n1, txt, rec, process-user(x), register-user(n2), validate, prod, dev, test) => "success"
+             (n1, txt, xx, process-user(x), register-user(n), validate, prod, dev, test) => "success"
            }
 
         "#;
