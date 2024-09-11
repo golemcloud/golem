@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tests in this module are verifying the STUB WASM created by the stub generator
+//! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
+
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
     AnalysedResourceMode, AnalysedType, AnalysisContext, NameOptionTypePair, NameTypePair,
@@ -21,29 +24,21 @@ use golem_wasm_ast::analysis::{
 };
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
-use golem_wasm_rpc_stubgen::cargo::generate_cargo_toml;
-use golem_wasm_rpc_stubgen::compilation::compile;
-use golem_wasm_rpc_stubgen::rust::generate_stub_source;
+use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
-use golem_wasm_rpc_stubgen::wit::{copy_wit_files, generate_stub_wit};
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
-use heck::ToSnakeCase;
 use std::path::Path;
 use tempfile::tempdir;
 
-///! Tests in this module are verifying the STUB WASM created by the stub generator
-///! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
-
 #[tokio::test]
 async fn all_wit_types() {
-    // TODO: extract some of to the main `build` module
     let source_wit_root = Path::new("test-data/all-wit-types");
     let target_root = tempdir().unwrap();
     let canonical_target_root = target_root.path().canonicalize().unwrap();
 
     let def = StubDefinition::new(
         source_wit_root,
-        target_root.path(),
+        &canonical_target_root,
         &None,
         "1.0.0",
         &WasmRpcOverride {
@@ -61,22 +56,8 @@ async fn all_wit_types() {
         false,
     )
     .unwrap();
-    generate_stub_wit(&def).unwrap();
-    copy_wit_files(&def).unwrap();
-    let _ = def.verify_target_wits().unwrap();
 
-    generate_cargo_toml(&def).unwrap();
-    generate_stub_source(&def).unwrap();
-    compile(&canonical_target_root).await.unwrap();
-
-    let wasm_path = canonical_target_root
-        .join("target")
-        .join("wasm32-wasi")
-        .join("release")
-        .join(format!(
-            "{}.wasm",
-            def.target_crate_name().unwrap().to_snake_case()
-        ));
+    let wasm_path = generate_and_build_stub(&def).await.unwrap();
 
     let stub_bytes = std::fs::read(wasm_path).unwrap();
     let stub_component = Component::<IgnoreAllButMetadata>::from_bytes(&stub_bytes).unwrap();
@@ -496,7 +477,7 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
         .functions
         .iter()
         .find(|f| f.name == format!("[constructor]{name}"))
-        .expect(format!("missing constructor for {name}").as_str());
+        .unwrap_or_else(|| panic!("missing constructor for {name}"));
 
     assert_eq!(fun.results.len(), 1);
     assert!(matches!(
@@ -531,7 +512,7 @@ fn assert_has_stub(
         .functions
         .iter()
         .find(|f| f.name == format!("[constructor]{resource_name}"))
-        .expect(format!("missing constructor for {resource_name}").as_str());
+        .unwrap_or_else(|| panic!("missing constructor for {resource_name}"));
 
     let resource_id = match &constructor.results[0].typ {
         AnalysedType::Handle(TypeHandle {
@@ -548,12 +529,12 @@ fn assert_has_stub(
         .functions
         .iter()
         .find(|f| f.name == async_fun_name)
-        .expect(format!("missing async function {async_fun_name}").as_str());
+        .unwrap_or_else(|| panic!("missing async function {async_fun_name}"));
     let blocking_fun = exported_interface
         .functions
         .iter()
         .find(|f| f.name == blocking_fun_name)
-        .expect(format!("missing blocking function {blocking_fun_name}").as_str());
+        .unwrap_or_else(|| panic!("missing blocking function {blocking_fun_name}"));
 
     let async_parameter_types = async_fun
         .parameters
@@ -568,13 +549,11 @@ fn assert_has_stub(
         .cloned()
         .collect::<Vec<_>>();
 
-    let parameters_with_self = vec![
-        vec![AnalysedType::Handle(TypeHandle {
+    let parameters_with_self = [vec![AnalysedType::Handle(TypeHandle {
             resource_id,
             mode: AnalysedResourceMode::Borrowed,
         })],
-        parameters,
-    ]
+        parameters]
     .concat();
 
     assert_eq!(async_parameter_types, parameters_with_self);
@@ -593,7 +572,7 @@ fn assert_has_stub(
             _ => panic!("unexpected async result return type"),
         };
 
-        assert_valid_polling_resource(&exported_interface, async_result_resource_id, return_type);
+        assert_valid_polling_resource(exported_interface, async_result_resource_id, return_type);
     } else {
         assert_eq!(async_fun.results.len(), 0);
         assert_eq!(blocking_fun.results.len(), 0);
@@ -608,7 +587,7 @@ fn assert_valid_polling_resource(
     let resource_methods = exported_interface
         .functions
         .iter()
-        .filter(|r| r.is_method() && r.parameters.len() >= 1)
+        .filter(|r| r.is_method() && !r.parameters.is_empty())
         .filter(|r| {
             r.parameters[0].typ
                 == AnalysedType::Handle(TypeHandle {
