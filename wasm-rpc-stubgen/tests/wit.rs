@@ -225,18 +225,20 @@ fn assert_has_stub_function(
         .functions
         .iter()
         .find(|(_, fun)| {
-            fun.kind == FunctionKind::Method(*resource_id)
-                && fun.name == async_function_name
+            fun.kind == FunctionKind::Method(*resource_id) && fun.name == async_function_name
         })
-        .unwrap_or_else(|| panic!("Could not find method {async_function_name} in interface {interface_name}"));
+        .unwrap_or_else(|| {
+            panic!("Could not find method {async_function_name} in interface {interface_name}")
+        });
     let (_, _blocking_function) = iface
         .functions
         .iter()
         .find(|(_, fun)| {
-            fun.kind == FunctionKind::Method(*resource_id)
-                && fun.name == blocking_function_name
+            fun.kind == FunctionKind::Method(*resource_id) && fun.name == blocking_function_name
         })
-        .unwrap_or_else(|| panic!("Could not find method {blocking_function_name} in interface {interface_name}"));
+        .unwrap_or_else(|| {
+            panic!("Could not find method {blocking_function_name} in interface {interface_name}")
+        });
 
     if has_result {
         // for functions with a result value the async version returns a generated resource type
@@ -300,8 +302,7 @@ fn is_owned_by_interface(resolve: &Resolve, owner: &TypeOwner, interface_name: &
     match owner {
         TypeOwner::World(_) => false,
         TypeOwner::Interface(iface_id) => {
-            resolve.interfaces.get(*iface_id).unwrap().name
-                == Some(interface_name.to_string())
+            resolve.interfaces.get(*iface_id).unwrap().name == Some(interface_name.to_string())
         }
         TypeOwner::None => false,
     }

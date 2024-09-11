@@ -93,13 +93,17 @@ fn all_wit_types_overwrite_protection_disabled() {
     assert_has_wit_dep(&dest_wit_root, "test_main/main.wit", &original_wit);
 }
 
+// TODO: test update-cargo feature
+// TODO: test circular/self dependencies cases
+
 fn init_stub(name: &str) -> TempDir {
     let tempdir = TempDir::new().unwrap();
+    let canonical_target_root = tempdir.path().canonicalize().unwrap();
 
     let source_wit_root = Path::new("test-data").join(name);
     let def = StubDefinition::new(
         &source_wit_root,
-        tempdir.path(),
+        &canonical_target_root,
         &None,
         "1.0.0",
         &WasmRpcOverride::default(),
@@ -126,7 +130,7 @@ fn init_caller(name: &str) -> TempDir {
 
 fn assert_has_wit_dep(wit_dir: &Path, name: &str, expected_contents: &str) {
     let wit_file = wit_dir.join("deps").join(name);
-    let contents =
-        std::fs::read_to_string(&wit_file).unwrap_or_else(|_| panic!("Could not find {wit_file:?}"));
+    let contents = std::fs::read_to_string(&wit_file)
+        .unwrap_or_else(|_| panic!("Could not find {wit_file:?}"));
     assert_eq!(contents, expected_contents);
 }

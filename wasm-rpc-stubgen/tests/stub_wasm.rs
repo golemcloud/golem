@@ -549,11 +549,13 @@ fn assert_has_stub(
         .cloned()
         .collect::<Vec<_>>();
 
-    let parameters_with_self = [vec![AnalysedType::Handle(TypeHandle {
+    let parameters_with_self = [
+        vec![AnalysedType::Handle(TypeHandle {
             resource_id,
             mode: AnalysedResourceMode::Borrowed,
         })],
-        parameters]
+        parameters,
+    ]
     .concat();
 
     assert_eq!(async_parameter_types, parameters_with_self);
