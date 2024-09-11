@@ -285,6 +285,13 @@ impl<W: Write> Writer<W> {
                 self.write_expr(expr)?;
                 self.write_str(")")
             }
+            Expr::Get(expr, index, _) => {
+                self.write_str("get(")?;
+                self.write_expr(expr)?;
+                self.write_str(", ")?;
+                self.write_display(index)?;
+                self.write_str(")")
+            }
         }
     }
 

@@ -191,6 +191,10 @@ impl Interpreter {
                 }
 
                 RibIR::Label(_) => {}
+
+                RibIR::Get(index) => {
+                    internal::run_get_index_instruction(index, &mut self.stack)?;
+                }
             }
         }
 
@@ -381,6 +385,30 @@ mod internal {
             .ok_or("Failed to get a boolean value from the stack to negate".to_string())?;
 
         interpreter_stack.push_val(TypeAnnotatedValue::Bool(!result));
+        Ok(())
+    }
+
+
+    pub(crate) fn run_get_index_instruction(
+        index: usize,
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let value = interpreter_stack
+            .pop_val()
+            .ok_or("Failed to get a value from the stack to negate".to_string())?;
+
+        let result = match value {
+            TypeAnnotatedValue::Tuple(typed_tuple) => {
+                typed_tuple.value.get(index).and_then(|x| x.type_annotated_value.clone()).ok_or(format!("Failed to get the value from tuple at index {}", index))
+            }
+            TypeAnnotatedValue::List(typed_list) => {
+               typed_list.values.get(index).and_then(|x| x.type_annotated_value.clone()).ok_or(format!("Failed to get the value from list at index {}", index))
+            }
+            type_annotated_Value =>
+                Err(format!("Unable to get the value at index {} for a {:?} type ", index, AnalysedType::try_from(&type_annotated_Value).unwrap()))
+        };
+
+        interpreter_stack.push_val(result?);
         Ok(())
     }
 
@@ -739,7 +767,7 @@ mod internal {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
-    use crate::{InstructionId, VariableId};
+    use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
@@ -1022,6 +1050,50 @@ mod interpreter_tests {
         };
 
         let result = interpreter.run(instructions).await.unwrap();
+        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_option_nested() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x = some(some(1u64));
+
+           match x {
+              some(x) => match x {
+                some(x) => x
+              }
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        dbg!(expr.clone());
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: tuple<u64, str, str> = (1, "foo", "bar");
+
+           match x {
+              (x, y, z) => "${x} ${y} ${z}"
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        dbg!(expr.clone());
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
     }
 }

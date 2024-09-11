@@ -21,19 +21,21 @@ pub fn desugar_pattern_match(
     let mut if_else_branches = vec![];
 
     for match_arm in match_arms.iter() {
-        let if_else_branch = internal::IfElseBranch::from_pred_and_match_arm(match_arm, pred);
+        let if_else_branch = internal::IfThenBranch::from_pred_and_match_arm(match_arm, pred);
         if let Some(condition) = if_else_branch {
             if_else_branches.push(condition);
         }
     }
 
-    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
+    let x = internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
+    dbg!(x.clone());
+    x
 }
 
 mod internal {
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
 
-    pub(crate) fn build_expr_from(if_branches: Vec<IfElseBranch>) -> Option<Expr> {
+    pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
             let mut expr = Expr::cond(
                 branch.condition.clone(),
@@ -58,16 +60,16 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub(crate) struct IfElseBranch {
+    pub(crate) struct IfThenBranch {
         pub(crate) condition: Expr,
         pub(crate) body: Expr,
     }
 
-    impl IfElseBranch {
+    impl IfThenBranch {
         pub(crate) fn from_pred_and_match_arm(
             match_arm: &MatchArm,
             pred: &Expr,
-        ) -> Option<IfElseBranch> {
+        ) -> Option<IfThenBranch> {
             get_conditions(match_arm, pred, None, pred.inferred_type())
         }
     }
@@ -81,10 +83,14 @@ mod internal {
         pred_expr: &Expr,
         tag: Option<Expr>,
         inferred_type_of_pred: InferredType,
-    ) -> Option<IfElseBranch> {
+    ) -> Option<IfThenBranch> {
         let arm_pattern = &match_arm.arm_pattern;
         let resolution = &match_arm.arm_resolution_expr;
 
+
+        // match x {
+             // some(some(x)) => "hello"
+        // }
         match arm_pattern {
             ArmPattern::Literal(arm_pattern_expr) => handle_literal(
                 arm_pattern_expr,
@@ -112,7 +118,7 @@ mod internal {
             ),
 
             ArmPattern::WildCard => {
-                let branch = IfElseBranch {
+                let branch = IfThenBranch {
                     condition: tag.unwrap_or(Expr::boolean(true)),
                     body: resolution.as_ref().clone(),
                 };
@@ -127,7 +133,7 @@ mod internal {
         resolution: &Expr,
         tag: Option<Expr>,
         pred_expr_inferred_type: InferredType,
-    ) -> Option<IfElseBranch> {
+    ) -> Option<IfThenBranch> {
         match arm_pattern_expr {
             Expr::Option(Some(inner_pattern), _) => {
                 let unwrapped_inferred_type = match pred_expr_inferred_type {
@@ -150,7 +156,7 @@ mod internal {
             }
 
             Expr::Option(None, _) => {
-                let branch = IfElseBranch {
+                let branch = IfThenBranch {
                     condition: Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal("none")),
                     body: resolution.clone(),
                 };
@@ -209,16 +215,68 @@ mod internal {
                 );
 
                 let block = Expr::multiple(vec![assign_var, resolution.clone()]);
-                let branch = IfElseBranch {
+                let branch = IfThenBranch {
                     condition: tag.unwrap_or(Expr::boolean(true)),
                     body: block,
                 };
                 Some(branch)
             }
 
+            Expr::Tuple(exprs, inferred_type) => {
+                let mut new_body = vec![];
+                let mut conditions = vec![];
+
+                let types = match pred_expr_inferred_type {
+                    InferredType::Tuple(inner) => inner,
+                    _ => vec![]
+                };
+
+
+                for (i, expr_elem) in exprs.iter().enumerate() {
+                    let new_pred = pred_expr.get(i);
+                    let new_pred_type =
+                        types.get(i).unwrap_or(&InferredType::Unknown);
+
+                    let branch = get_conditions(
+                        &MatchArm::new(
+                            ArmPattern::Literal(Box::new(expr_elem.clone())),
+                            expr_elem.clone()
+                        ),
+                        &new_pred,
+                        None,
+                        new_pred_type.clone(),
+                    );
+
+                    if let Some(x) = branch {
+                        conditions.push(x.condition);
+                        new_body.push(x.body)
+                    }
+                }
+
+                new_body.push(resolution.clone());
+
+
+                Some(IfThenBranch {
+                    condition: Expr::all_of(conditions),
+                    body: Expr::multiple(new_body).add_infer_type(inferred_type.clone()),
+                });
+
+                let mut cond = None;
+
+                // if x == 1, y ==1
+                for i  in if_then_branches {
+                    cond = Some(i.condition);
+                }
+
+                cond.map(|c| IfThenBranch {
+                    condition: c,
+                    body: resolution.clone()
+                })
+            }
+
             _ => {
                 // use tag lookup
-                let branch = IfElseBranch {
+                let branch = IfThenBranch {
                     condition: Expr::equal_to(pred_expr.clone(), arm_pattern_expr.clone()),
                     body: resolution.clone(),
                 };
@@ -233,7 +291,7 @@ mod internal {
         bind_patterns: &[ArmPattern],
         resolution: &Expr,
         pred_expr_inferred_type: InferredType,
-    ) -> Option<IfElseBranch> {
+    ) -> Option<IfThenBranch> {
         match pred_expr_inferred_type {
             InferredType::Variant(variant) => {
                 let arg_pattern_opt = bind_patterns.first();
@@ -267,7 +325,7 @@ mod internal {
                     )),
                     *inner,
                 ),
-                _ => Some(IfElseBranch {
+                _ => Some(IfThenBranch {
                     condition: Expr::equal_to(
                         Expr::tag(pred_expr.clone()),
                         Expr::literal(constructor_name),
@@ -298,7 +356,7 @@ mod internal {
                     _ => None, // Probably fail here to get fine grained error message
                 }
             }
-            InferredType::Unknown => Some(IfElseBranch {
+            InferredType::Unknown => Some(IfThenBranch {
                 condition: Expr::boolean(false),
                 body: resolution.clone(),
             }),
@@ -313,7 +371,7 @@ mod internal {
         resolution: &Expr,
         tag: Option<Expr>,
         pred_expr_inferred_type: InferredType,
-    ) -> Option<IfElseBranch> {
+    ) -> Option<IfThenBranch> {
         let binding = Expr::Let(
             VariableId::global(name.to_string()),
             None,

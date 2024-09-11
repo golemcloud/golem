@@ -52,6 +52,11 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Result(Err(expr), _) => queue.push_back(&mut *expr),
         Expr::Call(_, expressions, _) => queue.extend(expressions.iter_mut()),
         Expr::Unwrap(expr, _) => queue.push_back(&mut *expr), // not yet needed
+        Expr::Get(expr, _, _) => queue.push_back(&mut *expr),
+        Expr::And(expr1, expr2, _) => {
+            queue.push_back(&mut *expr1);
+            queue.push_back(&mut *expr2)
+        },
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
@@ -112,6 +117,11 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Result(Err(expr), _) => queue.push_back(expr),
         Expr::Call(_, expressions, _) => queue.extend(expressions.iter()),
         Expr::Unwrap(expr, _) => queue.push_back(expr),
+        Expr::Get(expr, _, _) => queue.push_back(expr),
+        Expr::And(expr1, expr2, _) => {
+            queue.push_back(expr1);
+            queue.push_back(expr2);
+        },
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}
@@ -197,6 +207,11 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             }
         }
         Expr::Unwrap(expr, _) => queue.push_front(&mut *expr),
+        Expr::Get(expr, _, _) => queue.push_front(&mut *expr),
+        Expr::And(expr1, expr2, _) => {
+            queue.push_front(&mut *expr1);
+            queue.push_front(&mut *expr2)
+        },
         Expr::Literal(_, _) => {}
         Expr::Number(_, _, _) => {}
         Expr::Flags(_, _) => {}

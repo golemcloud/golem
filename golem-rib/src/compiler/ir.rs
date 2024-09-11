@@ -55,6 +55,7 @@ pub enum RibIR {
     PushEnum(String, AnalysedType),
     Throw(String),
     GetTag,
+    Get(usize),
     Concat(usize),
     Negate,
 }
@@ -344,6 +345,9 @@ impl From<RibIR> for ProtoRibIR {
                 arg_size: concat as u64,
             }),
             RibIR::Negate => Instruction::Negate(Negate {}),
+            RibIR::Get(index) => {
+                todo!("Implement Get")
+            }
         };
 
         ProtoRibIR {
