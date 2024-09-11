@@ -177,6 +177,62 @@ fn all_wit_types_inlined() {
     assert_defines_variant(&resolve, "stub-api", "checkout-result");
 }
 
+#[test]
+fn many_ways_to_export() {
+    let source_wit_root = Path::new("test-data/many-ways-to-export");
+    let target_root = tempdir().unwrap();
+
+    let def = StubDefinition::new(
+        source_wit_root,
+        target_root.path(),
+        &None,
+        "1.0.0",
+        &WasmRpcOverride::default(),
+        false,
+    )
+    .unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap();
+
+    assert_has_package_name(&resolve, "test:exports-stub");
+    assert_has_world(&resolve, "wasm-rpc-stub-api");
+    assert_has_interface(&resolve, "stub-api");
+
+    assert_has_stub_function(&resolve, "stub-api", "api", "func1", false);
+    assert_has_stub_function(&resolve, "stub-api", "iface1", "func2", false);
+    assert_has_stub_function(&resolve, "stub-api", "iface2", "func3", true);
+    assert_has_stub_function(&resolve, "stub-api", "inline-iface", "func4", false);
+    assert_has_stub_function(&resolve, "stub-api", "iface4", "func5", false);
+}
+
+#[test]
+fn many_ways_to_export_inlined() {
+    let source_wit_root = Path::new("test-data/many-ways-to-export");
+    let target_root = tempdir().unwrap();
+
+    let def = StubDefinition::new(
+        source_wit_root,
+        target_root.path(),
+        &None,
+        "1.0.0",
+        &WasmRpcOverride::default(),
+        true,
+    )
+    .unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap();
+
+    assert_has_package_name(&resolve, "test:exports-stub");
+    assert_has_world(&resolve, "wasm-rpc-stub-api");
+    assert_has_interface(&resolve, "stub-api");
+
+    assert_has_stub_function(&resolve, "stub-api", "api", "func1", false);
+    assert_has_stub_function(&resolve, "stub-api", "iface1", "func2", false);
+    assert_has_stub_function(&resolve, "stub-api", "iface2", "func3", true);
+    assert_has_stub_function(&resolve, "stub-api", "inline-iface", "func4", false);
+    assert_has_stub_function(&resolve, "stub-api", "iface4", "func5", false);
+
+    assert_defines_enum(&resolve, "stub-api", "color");
+}
+
 fn assert_has_package_name(resolve: &Resolve, package_name: &str) {
     assert!(resolve
         .packages
