@@ -138,8 +138,8 @@ pub struct GolemWorkerBindingWithTypeInfo {
     pub worker_name: String,
     pub idempotency_key: Option<String>,
     pub response: String,
-    pub response_mapping_input: RibInputTypeInfo,
-    pub worker_name_input: RibInputTypeInfo,
+    pub response_mapping_input: Option<RibInputTypeInfo>,
+    pub worker_name_input: Option<RibInputTypeInfo>,
     pub idempotency_key_input: Option<RibInputTypeInfo>,
 }
 
@@ -157,8 +157,8 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
                 .response_compiled
                 .response_rib_expr
                 .to_string(),
-            response_mapping_input: worker_binding.response_compiled.rib_input,
-            worker_name_input: worker_binding.worker_name_compiled.rib_input,
+            response_mapping_input: Some(worker_binding.response_compiled.rib_input),
+            worker_name_input: Some(worker_binding.worker_name_compiled.rib_input),
             idempotency_key_input: value
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
