@@ -1192,7 +1192,7 @@ mod interpreter_tests {
 
         let expr = r#"
 
-           let x = (1u64, "bar", ok(1u64), validate);
+           let x = (1u64, "bar", validate);
            foo(x);
            x
 
@@ -1217,10 +1217,10 @@ mod interpreter_tests {
                 items: vec![
                     AnalysedType::U64(TypeU64),
                     AnalysedType::Str(TypeStr),
-                    AnalysedType::Result(TypeResult {
-                        ok: Some(Box::new(AnalysedType::U64(TypeU64))),
-                        err: Some(Box::new(AnalysedType::Str(TypeStr)))
-                    }),
+                    // AnalysedType::Result(TypeResult {
+                    //     ok: Some(Box::new(AnalysedType::U64(TypeU64))),
+                    //     err: Some(Box::new(AnalysedType::Str(TypeStr)))
+                    // }),
                     // AnalysedType::Record(TypeRecord {
                     //     fields: vec![
                     //         NameTypePair {

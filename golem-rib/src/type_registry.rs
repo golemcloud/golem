@@ -156,30 +156,7 @@ impl FunctionTypeRegistry {
         }
 
         for ty in types {
-            match ty.clone() {
-                AnalysedType::Variant(variant) => {
-                    for name_type_pair in variant.cases {
-                        map.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
-                            name_type_pair.typ.map_or(
-                                RegistryValue::Value(ty.clone()),
-                                |variant_parameter_typ| RegistryValue::Function {
-                                    parameter_types: vec![variant_parameter_typ],
-                                    return_types: vec![ty.clone()],
-                                },
-                            )
-                        });
-                    }
-                }
-                AnalysedType::Enum(type_enum) => {
-                    for name_type_pair in type_enum.cases {
-                        map.insert(
-                            RegistryKey::EnumName(name_type_pair.clone()),
-                            RegistryValue::Value(ty.clone()),
-                        );
-                    }
-                }
-                _ => {}
-            }
+            internal::update_registry(&ty, &mut map);
         }
 
         Self { types: map }
@@ -187,5 +164,58 @@ impl FunctionTypeRegistry {
 
     pub fn lookup(&self, registry_key: &RegistryKey) -> Option<RegistryValue> {
         self.types.get(registry_key).cloned()
+    }
+}
+
+
+mod internal {
+    use std::collections::HashMap;
+    use golem_wasm_ast::analysis::AnalysedType;
+    use crate::{RegistryKey, RegistryValue};
+
+    pub(crate) fn update_registry(ty: &AnalysedType, registry: &mut HashMap<RegistryKey, RegistryValue>) {
+        match ty.clone() {
+            AnalysedType::Variant(variant) => {
+                for name_type_pair in variant.cases {
+                    registry.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
+                        name_type_pair.typ.map_or(
+                            RegistryValue::Value(ty.clone()),
+                            |variant_parameter_typ| RegistryValue::Function {
+                                parameter_types: vec![variant_parameter_typ],
+                                return_types: vec![ty.clone()],
+                            },
+                        )
+                    });
+                }
+            }
+
+            AnalysedType::Enum(type_enum) => {
+                for name_type_pair in type_enum.cases {
+                    registry.insert(
+                        RegistryKey::EnumName(name_type_pair.clone()),
+                        RegistryValue::Value(ty.clone()),
+                    );
+                }
+            }
+
+           AnalysedType::Tuple(tuple) => {
+                for element in tuple.items {
+                    update_registry(&element, registry);
+                }
+            }
+
+
+            AnalysedType::List(list) => {
+                update_registry(list.inner.as_ref(), registry);
+            }
+
+            AnalysedType::Record(record) => {
+                for name_type in record.fields.iter() {
+                    update_registry(&name_type.typ, registry);
+                }
+            }
+
+            _ => {}
+        }
     }
 }
