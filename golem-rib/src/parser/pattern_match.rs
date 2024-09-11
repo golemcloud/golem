@@ -119,6 +119,7 @@ mod internal {
             attempt(option().map(|expr| ArmPattern::Literal(Box::new(expr)))),
             attempt(result().map(|expr| ArmPattern::Literal(Box::new(expr)))),
             attempt(custom_arm_pattern_constructor()),
+            attempt(tuple_arm_pattern_constructor()),
         ))
     }
 
@@ -151,6 +152,16 @@ mod internal {
             string(")").skip(spaces()),
         )
             .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
+    }
+
+    fn tuple_arm_pattern_constructor<'t>(
+    ) -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
+        (
+            string("(").skip(spaces()),
+            sep_by(arm_pattern().skip(spaces()), char_(',').skip(spaces())),
+            string(")").skip(spaces()),
+        )
+            .map(|(_, patterns, _)| ArmPattern::TupleConstructor(patterns))
     }
 
     fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {

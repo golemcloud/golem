@@ -1149,6 +1149,8 @@ mod interpreter_tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        dbg!(expr.clone());
+
         let compiled = compiler::compile(&expr, &vec![]).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 

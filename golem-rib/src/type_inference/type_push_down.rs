@@ -92,6 +92,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             // For type push down, if it's variant type or enum type
             Expr::Call(call_type, expressions, inferred_type) => {
                 match call_type {
+                    // For CallType::Enum constructor, there are no argument expressions
+                    // For CallType::Function , there is no type available to push down to arguments, as it is invalid
+                    // to push down the return type of a function to its arguments.
                     CallType::VariantConstructor(name) => {
                         match inferred_type {
                             InferredType::Variant(variant) => {
@@ -109,6 +112,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                             _ => {}
                         }
                     }
+
                     _ => {
                         for expr in expressions {
                             queue.push_back(expr);
@@ -268,6 +272,20 @@ mod internal {
                 }
                 _ => {}
             },
+            ArmPattern::TupleConstructor(patterns) => {
+                match predicate_type {
+                    InferredType::Tuple(inner_types) => {
+                        if patterns.len() == inner_types.len() {
+                            for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
+                                update_arm_pattern_type(pattern, inner_type)?;
+                            }
+                        } else {
+                            return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
             ArmPattern::WildCard => {}
         }
 

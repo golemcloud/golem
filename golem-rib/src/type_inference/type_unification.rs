@@ -393,6 +393,12 @@ mod internal {
                     push_arm_pattern_expr(pattern, queue);
                 }
             }
+
+            ArmPattern::TupleConstructor(patterns) => {
+                for pattern in patterns {
+                    push_arm_pattern_expr(pattern, queue);
+                }
+            }
             ArmPattern::WildCard => {}
         }
     }

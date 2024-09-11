@@ -484,8 +484,6 @@ mod type_inference_tests {
 
             let result = expr.infer_types(&function_type_registry);
 
-            dbg!(expr.clone());
-
             assert!(result.is_ok());
         }
     }

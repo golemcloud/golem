@@ -477,7 +477,6 @@ impl Expr {
         self.infer_enums(function_type_registry);
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
-        dbg!(self.clone());
         self.unify_types()?;
         Ok(())
     }
@@ -734,6 +733,7 @@ pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
     Constructor(String, Vec<ArmPattern>),
+    TupleConstructor(Vec<ArmPattern>), // Just because tuple doesn't have a name to fall into Constructor
     Literal(Box<Expr>),
 }
 
@@ -749,6 +749,13 @@ impl ArmPattern {
                 }
                 result
             }
+            ArmPattern::TupleConstructor(patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
             ArmPattern::WildCard => vec![],
         }
     }
@@ -758,6 +765,13 @@ impl ArmPattern {
             ArmPattern::Literal(expr) => vec![expr.as_ref()],
             ArmPattern::As(_, pattern) => pattern.get_expr_literals(),
             ArmPattern::Constructor(_, patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals());
+                }
+                result
+            }
+            ArmPattern::TupleConstructor(patterns) => {
                 let mut result = vec![];
                 for pattern in patterns {
                     result.extend(pattern.get_expr_literals());
@@ -1282,6 +1296,8 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                     ),
                 ),
             },
+
+            ArmPattern::TupleConstructor(patterns) => todo!("TupleConstructor"),
         }
     }
 }

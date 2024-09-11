@@ -105,6 +105,16 @@ mod internal {
                 inferred_type_of_pred,
             ),
 
+            ArmPattern::TupleConstructor(expressions) => {
+                hande_constructor(
+                    pred_expr,
+                    "tuple",
+                    expressions,
+                    resolution,
+                    inferred_type_of_pred
+                )
+            }
+
             ArmPattern::As(name, inner_pattern) => handle_as_pattern(
                 name,
                 inner_pattern,
@@ -346,6 +356,51 @@ mod internal {
                     _ => None, // Probably fail here to get fine grained error message
                 }
             }
+
+            InferredType::Tuple(inferred_types) => {
+                let mut new_body = vec![];
+                let mut conditions = vec![];
+
+                let arg_pattern_opt = bind_patterns.first();
+
+                for (i, pattern) in bind_patterns.iter().enumerate() {
+                    let new_pred = pred_expr.get(i);
+                    let new_pred_type = inferred_types.get(i).unwrap_or(&InferredType::Unknown);
+
+
+                    let branch = get_conditions(
+                        &MatchArm::new(pattern.clone(), Expr::literal("".to_string())),
+                        &pred_expr.get(i),
+                        Some(Expr::equal_to(
+                            Expr::tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        )),
+                        new_pred_type.clone()
+                    );
+
+
+                    if let Some(x) = branch {
+                        conditions.push(x.condition);
+                        new_body.push(x.body)
+                    }
+                }
+
+                new_body.push(resolution.clone());
+
+                let mut cond: Option<Expr> = None;
+
+                // if x == 1, y ==1
+                for i in conditions {
+                    let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
+                    cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
+                }
+
+                cond.map(|c| IfThenBranch {
+                    condition: c,
+                    body: Expr::multiple(new_body),
+                })
+            }
+
             InferredType::Unknown => Some(IfThenBranch {
                 condition: Expr::boolean(false),
                 body: resolution.clone(),

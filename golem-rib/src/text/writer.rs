@@ -390,6 +390,19 @@ mod internal {
                     writer.write_display(constructor_type)
                 }
             }
+
+            ArmPattern::TupleConstructor(variables) => {
+                writer.write_str("(")?;
+
+                for (idx, pattern) in variables.iter().enumerate() {
+                    if idx != 0 {
+                        writer.write_str(",")?;
+                    }
+                    write_constructor(pattern, writer)?;
+                }
+
+                writer.write_str(")")
+            }
             ArmPattern::Literal(expr) => match *expr.clone() {
                 Expr::Identifier(s, _) => writer.write_str(s.name()),
                 any_expr => writer.write_expr(&any_expr),
