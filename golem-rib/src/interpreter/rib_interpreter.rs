@@ -392,7 +392,6 @@ mod internal {
         Ok(())
     }
 
-
     pub(crate) fn run_get_index_instruction(
         index: usize,
         interpreter_stack: &mut InterpreterStack,
@@ -402,20 +401,32 @@ mod internal {
             .ok_or("Failed to get a value from the stack to negate".to_string())?;
 
         let result = match value {
-            TypeAnnotatedValue::Tuple(typed_tuple) => {
-                typed_tuple.value.get(index).and_then(|x| x.type_annotated_value.clone()).ok_or(format!("Failed to get the value from tuple at index {}", index))
-            }
-            TypeAnnotatedValue::List(typed_list) => {
-               typed_list.values.get(index).and_then(|x| x.type_annotated_value.clone()).ok_or(format!("Failed to get the value from list at index {}", index))
-            }
-            type_annotated_Value =>
-                Err(format!("Unable to get the value at index {} for a {:?} type ", index, AnalysedType::try_from(&type_annotated_Value).unwrap()))
+            TypeAnnotatedValue::Tuple(typed_tuple) => typed_tuple
+                .value
+                .get(index)
+                .and_then(|x| x.type_annotated_value.clone())
+                .ok_or(format!(
+                    "Failed to get the value from tuple at index {}",
+                    index
+                )),
+            TypeAnnotatedValue::List(typed_list) => typed_list
+                .values
+                .get(index)
+                .and_then(|x| x.type_annotated_value.clone())
+                .ok_or(format!(
+                    "Failed to get the value from list at index {}",
+                    index
+                )),
+            type_annotated_Value => Err(format!(
+                "Unable to get the value at index {} for a {:?} type ",
+                index,
+                AnalysedType::try_from(&type_annotated_Value).unwrap()
+            )),
         };
 
         interpreter_stack.push_val(result?);
         Ok(())
     }
-
 
     pub(crate) fn run_and_instruction(
         interpreter_stack: &mut InterpreterStack,
@@ -427,11 +438,9 @@ mod internal {
             "Failed to get a value from the stack to do the comparison operation".to_string(),
         )?;
 
-        let result = left.compare(&right, |a, b| {
-            match (a.get_bool(), b.get_bool()) {
-                (Some(a), Some(b)) => a && b,
-                _ => false
-            }
+        let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
+            (Some(a), Some(b)) => a && b,
+            _ => false,
         })?;
 
         interpreter_stack.push(result);
@@ -1096,11 +1105,10 @@ mod interpreter_tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        dbg!(expr.clone());
         let compiled = compiler::compile(&expr, &vec![]).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(1));
     }
 
     #[tokio::test]
@@ -1117,10 +1125,60 @@ mod interpreter_tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        dbg!(expr.clone());
         let compiled = compiler::compile(&expr, &vec![]).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("1 foo bar".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_option_some() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: tuple<u64, option<str>, str> = (1, some("foo"), "bar");
+
+           match x {
+              (x, none, z) => "${x} ${z}",
+              (x, some(y), z) => "${x} ${y} ${z}"
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("1 foo bar".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_option_none() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: tuple<u64, option<str>, str> = (1, none, "bar");
+
+           match x {
+              (x, none, z) => "${x} ${z}",
+              (x, some(y), z) => "${x} ${y} ${z}"
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("1 bar".to_string())
+        );
     }
 }

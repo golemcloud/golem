@@ -87,9 +87,8 @@ mod internal {
         let arm_pattern = &match_arm.arm_pattern;
         let resolution = &match_arm.arm_resolution_expr;
 
-
         // match x {
-             // some(some(x)) => "hello"
+        // some(some(x)) => "hello"
         // }
         match arm_pattern {
             ArmPattern::Literal(arm_pattern_expr) => handle_literal(
@@ -228,19 +227,17 @@ mod internal {
 
                 let types = match pred_expr_inferred_type {
                     InferredType::Tuple(inner) => inner,
-                    _ => vec![]
+                    _ => vec![],
                 };
-
 
                 for (i, expr_elem) in exprs.iter().enumerate() {
                     let new_pred = pred_expr.get(i);
-                    let new_pred_type =
-                        types.get(i).unwrap_or(&InferredType::Unknown);
+                    let new_pred_type = types.get(i).unwrap_or(&InferredType::Unknown);
 
                     let branch = get_conditions(
                         &MatchArm::new(
                             ArmPattern::Literal(Box::new(expr_elem.clone())),
-                            expr_elem.clone()
+                            expr_elem.clone(),
                         ),
                         &new_pred,
                         None,
@@ -258,14 +255,14 @@ mod internal {
                 let mut cond: Option<Expr> = None;
 
                 // if x == 1, y ==1
-                for i  in conditions {
+                for i in conditions {
                     let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
                     cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
                 }
 
                 cond.map(|c| IfThenBranch {
                     condition: c,
-                    body: Expr::multiple(new_body)
+                    body: Expr::multiple(new_body),
                 })
             }
 

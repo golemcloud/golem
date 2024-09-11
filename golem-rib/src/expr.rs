@@ -59,7 +59,7 @@ pub enum Expr {
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     Tag(Box<Expr>, InferredType),
-    Get(Box<Expr>, usize, InferredType)
+    Get(Box<Expr>, usize, InferredType),
 }
 
 impl Expr {
@@ -1011,35 +1011,37 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     fn from(value: Expr) -> Self {
         let expr = match value {
             Expr::Let(variable_id, type_name, expr, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Let(Box::new(
-                    golem_api_grpc::proto::golem::rib::LetExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Let(
+                    Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
                         name: variable_id.name().to_string(),
                         expr: Some(Box::new((*expr).into())),
                         type_name: type_name.map(|t| t.into()),
-                    },
-                )))
+                    }),
+                ))
             }
             Expr::SelectField(expr, field, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(Box::new(
-                    golem_api_grpc::proto::golem::rib::SelectFieldExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
                         expr: Some(Box::new((*expr).into())),
                         field,
-                    },
-                )))
+                    }),
+                ))
             }
             Expr::SelectIndex(expr, index, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(Box::new(
-                    golem_api_grpc::proto::golem::rib::SelectIndexExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
                         expr: Some(Box::new((*expr).into())),
                         index: index as u64,
-                    },
-                )))
+                    }),
+                ))
             }
-            Expr::Sequence(exprs, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                golem_api_grpc::proto::golem::rib::SequenceExpr {
-                    exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
-                },
-            )),
+            Expr::Sequence(exprs, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
+                    golem_api_grpc::proto::golem::rib::SequenceExpr {
+                        exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                    },
+                ))
+            }
             Expr::Record(fields, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Record(
                 golem_api_grpc::proto::golem::rib::RecordExpr {
                     fields: fields
@@ -1058,9 +1060,11 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                 },
             )),
-            Expr::Literal(value, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
-                golem_api_grpc::proto::golem::rib::LiteralExpr { value },
-            )),
+            Expr::Literal(value, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
+                    golem_api_grpc::proto::golem::rib::LiteralExpr { value },
+                ))
+            }
             Expr::Number(number, type_name, _) => {
                 Some(golem_api_grpc::proto::golem::rib::expr::Expr::Number(
                     golem_api_grpc::proto::golem::rib::NumberExpr {
@@ -1079,80 +1083,84 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     },
                 ))
             }
-            Expr::Boolean(value, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
-                golem_api_grpc::proto::golem::rib::BooleanExpr { value },
-            )),
+            Expr::Boolean(value, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
+                    golem_api_grpc::proto::golem::rib::BooleanExpr { value },
+                ))
+            }
             Expr::Concat(exprs, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
                 golem_api_grpc::proto::golem::rib::ConcatExpr {
                     exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                 },
             )),
-            Expr::Multiple(exprs, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
-                golem_api_grpc::proto::golem::rib::MultipleExpr {
-                    exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
-                },
-            )),
-            Expr::Not(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Not(Box::new(
-                golem_api_grpc::proto::golem::rib::NotExpr {
+            Expr::Multiple(exprs, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
+                    golem_api_grpc::proto::golem::rib::MultipleExpr {
+                        exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
+                    },
+                ))
+            }
+            Expr::Not(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Not(
+                Box::new(golem_api_grpc::proto::golem::rib::NotExpr {
                     expr: Some(Box::new((*expr).into())),
-                },
-            ))),
+                }),
+            )),
             Expr::GreaterThan(left, right, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(Box::new(
-                    golem_api_grpc::proto::golem::rib::GreaterThanExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(
+                    Box::new(golem_api_grpc::proto::golem::rib::GreaterThanExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
-                    },
-                )))
+                    }),
+                ))
             }
-            Expr::GreaterThanOrEqualTo(left, right, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(Box::new(
+            Expr::GreaterThanOrEqualTo(left, right, _) => Some(
+                golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(Box::new(
                     golem_api_grpc::proto::golem::rib::GreaterThanOrEqualToExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
                     },
-                )))
-            }
+                )),
+            ),
             Expr::LessThan(left, right, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(Box::new(
-                    golem_api_grpc::proto::golem::rib::LessThanExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(
+                    Box::new(golem_api_grpc::proto::golem::rib::LessThanExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
-                    },
-                )))
+                    }),
+                ))
             }
-            Expr::LessThanOrEqualTo(left, right, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
+            Expr::LessThanOrEqualTo(left, right, _) => Some(
+                golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                     golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
                     },
-                )))
-            }
+                )),
+            ),
             Expr::EqualTo(left, right, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(Box::new(
-                    golem_api_grpc::proto::golem::rib::EqualToExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(
+                    Box::new(golem_api_grpc::proto::golem::rib::EqualToExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
-                    },
-                )))
+                    }),
+                ))
             }
             Expr::Cond(left, cond, right, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(Box::new(
-                    golem_api_grpc::proto::golem::rib::CondExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(
+                    Box::new(golem_api_grpc::proto::golem::rib::CondExpr {
                         left: Some(Box::new((*left).into())),
                         cond: Some(Box::new((*cond).into())),
                         right: Some(Box::new((*right).into())),
-                    },
-                )))
+                    }),
+                ))
             }
             Expr::PatternMatch(expr, arms, _) => {
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(Box::new(
-                    golem_api_grpc::proto::golem::rib::PatternMatchExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(
+                    Box::new(golem_api_grpc::proto::golem::rib::PatternMatchExpr {
                         expr: Some(Box::new((*expr).into())),
                         patterns: arms.into_iter().map(|a| a.into()).collect(),
-                    },
-                )))
+                    }),
+                ))
             }
             Expr::Option(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
                 Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
@@ -1169,11 +1177,11 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     ),
                 };
 
-                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Result(Box::new(
-                    golem_api_grpc::proto::golem::rib::ResultExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Result(
+                    Box::new(golem_api_grpc::proto::golem::rib::ResultExpr {
                         result: Some(result),
-                    },
-                )))
+                    }),
+                ))
             }
             Expr::Call(function_name, args, _) => {
                 Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
@@ -1189,7 +1197,7 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Throw(msg, _) => Self::from(Expr::literal(msg)).expr,
             Expr::Tag(expr, _) => Self::from(*expr).expr,
             Expr::Get(expr, _, _) => Self::from(*expr).expr,
-            Expr::And(left, right, _) => Self::from(*left).expr
+            Expr::And(left, right, _) => Self::from(*left).expr,
         };
 
         golem_api_grpc::proto::golem::rib::Expr { expr }

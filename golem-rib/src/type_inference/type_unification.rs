@@ -301,7 +301,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Get(expr,  _, inferred_type) => {
+            Expr::Get(expr, _, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify_types_and_verify();
 
