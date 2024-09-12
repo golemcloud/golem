@@ -31,6 +31,10 @@ message Expr {
     OptionExpr option = 22;
     ResultExpr result = 23;
     CallExpr call = 24;
+    AndExpr and = 25;
+    GetTagExpr tag = 26;
+    UnwrapExpr unwrap = 27;
+    ThrowExpr throw = 28;
   }
 }
 
@@ -61,6 +65,10 @@ message RecordExpr {
 message RecordFieldExpr {
   string name = 1;
   Expr expr = 2;
+}
+
+message ThrowExpr {
+  string message = 1;
 }
 
 message TupleExpr {
@@ -100,7 +108,20 @@ message NotExpr {
   Expr expr = 1;
 }
 
+message GetTagExpr {
+  Expr expr = 1;
+}
+
+message UnwrapExpr {
+  Expr expr = 1;
+}
+
 message GreaterThanExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message AndExpr {
   Expr left = 1;
   Expr right = 2;
 }
@@ -171,6 +192,7 @@ message ArmPattern {
     AsArmPattern as = 2;
     ConstructorArmPattern constructor = 3;
     LiteralArmPattern literal = 4;
+    TupleConstructorArmPattern tuple_constructor = 5;
   }
 }
 
@@ -186,6 +208,10 @@ message AsArmPattern {
 message ConstructorArmPattern {
   string name = 1;
   repeated ArmPattern patterns = 2;
+}
+
+message TupleConstructorArmPattern {
+  repeated ArmPattern patterns = 1;
 }
 
 message LiteralArmPattern {

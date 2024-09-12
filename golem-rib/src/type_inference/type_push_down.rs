@@ -64,12 +64,6 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 queue.push_back(expr);
             }
 
-            // In a pattern the type of the whole pattern match is pushed to the arm resolution expressions
-            // And the type of predicate is pushed down to all those arm patterns that are expressions
-            // It is currently impossible to transfer type info embedded in arm patterns to the arm resolution expressions
-            // Example:  match result { a @ err(_) => a }.  `a` is not an Expr::identifier but rather a name in `ArmPattern::As(name, ..)
-            // Since a field "a"  doesn't have a type, we can't push down / translate that type info to the arm resolution expression, even if we know a is err.
-            // This can be solved though.
             Expr::PatternMatch(pred, match_arms, inferred_type) => {
                 for MatchArm {
                     arm_resolution_expr,
@@ -77,7 +71,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 } in match_arms
                 {
                     let predicate_type = pred.inferred_type();
-                    internal::update_arm_pattern_type(arm_pattern, &predicate_type)?; // recursively push down the types as much as we can
+                    internal::update_arm_pattern_type(arm_pattern, &predicate_type)?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
@@ -94,6 +88,10 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 internal::handle_record(expressions, inferred_type, &mut queue)?;
             }
 
+            Expr::Call(call_type, expressions, inferred_type) => {
+                internal::handle_call(call_type, expressions, inferred_type, &mut queue);
+            }
+
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
@@ -102,6 +100,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
+    use crate::call_type::CallType;
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType};
@@ -196,19 +195,52 @@ mod internal {
         Ok(())
     }
 
+    pub(crate) fn handle_call<'a>(
+        call_type: &CallType,
+        expressions: &'a mut Vec<Expr>,
+        inferred_type: &InferredType,
+        queue: &mut VecDeque<&'a mut Expr>,
+    ) {
+        match call_type {
+            // For CallType::Enum, there are no argument expressions
+            // For CallType::Function, there is no type available to push down to arguments, as it is invalid
+            // to push down the return type of function to its arguments.
+            // For variant constructor, the type of the arguments are present in the return type of the call
+            // and should be pushed down to arguments
+            CallType::VariantConstructor(name) => {
+                if let InferredType::Variant(variant) = inferred_type {
+                    let identified_variant = variant
+                        .iter()
+                        .find(|(variant_name, _)| variant_name == name);
+                    if let Some((_name, Some(inner_type))) = identified_variant {
+                        for expr in expressions {
+                            expr.add_infer_type_mut(inner_type.clone());
+                            queue.push_back(expr);
+                        }
+                    }
+                }
+            }
+            _ => {
+                for expr in expressions {
+                    queue.push_back(expr);
+                }
+            }
+        }
+    }
+
     pub(crate) fn update_arm_pattern_type(
         arm_pattern: &mut ArmPattern,
-        inferred_type: &InferredType,
+        predicate_type: &InferredType,
     ) -> Result<(), String> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
-                expr.add_infer_type_mut(inferred_type.clone());
+                expr.add_infer_type_mut(predicate_type.clone());
                 expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
-                update_arm_pattern_type(pattern, inferred_type)?;
+                update_arm_pattern_type(pattern, predicate_type)?;
             }
-            ArmPattern::Constructor(constructor_name, patterns) => match inferred_type {
+            ArmPattern::Constructor(constructor_name, patterns) => match predicate_type {
                 InferredType::Option(inner_type) => {
                     if constructor_name == "some" || constructor_name == "none" {
                         for pattern in &mut *patterns {
@@ -233,11 +265,11 @@ mod internal {
                     };
                 }
                 InferredType::Variant(variant) => {
-                    let opt = variant
+                    let identified_variant = variant
                         .iter()
                         .find(|(name, _optional_type)| name == constructor_name);
 
-                    if let Some((_name, Some(inner_type))) = opt {
+                    if let Some((_name, Some(inner_type))) = identified_variant {
                         for pattern in &mut *patterns {
                             update_arm_pattern_type(pattern, inner_type)?;
                         }
@@ -245,6 +277,17 @@ mod internal {
                 }
                 _ => {}
             },
+            ArmPattern::TupleConstructor(patterns) => {
+                if let InferredType::Tuple(inner_types) = predicate_type {
+                    if patterns.len() == inner_types.len() {
+                        for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
+                            update_arm_pattern_type(pattern, inner_type)?;
+                        }
+                    } else {
+                        return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
+                    }
+                }
+            }
             ArmPattern::WildCard => {}
         }
 

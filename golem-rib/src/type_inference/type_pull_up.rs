@@ -178,8 +178,12 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             }
         }
         Expr::Unwrap(expr, _) => expr.pull_types_up()?,
+        Expr::And(left, right, _) => {
+            left.pull_types_up()?;
+            right.pull_types_up()?;
+        }
         Expr::Throw(_, _) => {}
-        Expr::Tag(expr, _) => expr.pull_types_up()?,
+        Expr::GetTag(expr, _) => expr.pull_types_up()?,
         Expr::Option(None, _) => {}
     }
 
@@ -222,6 +226,11 @@ mod internal {
                 pull_up_types_of_arm_pattern(arms_patterns)?;
             }
             ArmPattern::Constructor(_, arm_patterns) => {
+                for arm_pattern in arm_patterns {
+                    pull_up_types_of_arm_pattern(arm_pattern)?;
+                }
+            }
+            ArmPattern::TupleConstructor(arm_patterns) => {
                 for arm_pattern in arm_patterns {
                     pull_up_types_of_arm_pattern(arm_pattern)?;
                 }

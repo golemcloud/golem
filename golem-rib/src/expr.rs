@@ -46,6 +46,7 @@ pub enum Expr {
     Multiple(Vec<Expr>, InferredType),
     Not(Box<Expr>, InferredType),
     GreaterThan(Box<Expr>, Box<Expr>, InferredType),
+    And(Box<Expr>, Box<Expr>, InferredType),
     GreaterThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     LessThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     EqualTo(Box<Expr>, Box<Expr>, InferredType),
@@ -57,7 +58,7 @@ pub enum Expr {
     Call(CallType, Vec<Expr>, InferredType),
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
-    Tag(Box<Expr>, InferredType),
+    GetTag(Box<Expr>, InferredType),
 }
 
 impl Expr {
@@ -240,8 +241,24 @@ impl Expr {
     pub fn unwrap(&self) -> Self {
         Expr::Unwrap(Box::new(self.clone()), InferredType::Unknown)
     }
+
     pub fn boolean(value: bool) -> Self {
         Expr::Boolean(value, InferredType::Bool)
+    }
+
+    pub fn and(left: Expr, right: Expr) -> Self {
+        Expr::And(Box::new(left), Box::new(right), InferredType::Bool)
+    }
+
+    pub fn and_combine(conditions: Vec<Expr>) -> Option<Expr> {
+        let mut cond: Option<Expr> = None;
+
+        for i in conditions {
+            let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
+            cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
+        }
+
+        cond
     }
 
     pub fn call(parsed_fn_name: ParsedFunctionName, args: Vec<Expr>) -> Self {
@@ -330,6 +347,10 @@ impl Expr {
         Expr::Literal(value.as_ref().to_string(), InferredType::Str)
     }
 
+    pub fn empty_expr() -> Self {
+        Expr::literal("")
+    }
+
     pub fn multiple(expressions: Vec<Expr>) -> Self {
         let inferred_type = expressions
             .last()
@@ -400,7 +421,7 @@ impl Expr {
     }
 
     pub fn tag(expr: Expr) -> Self {
-        Expr::Tag(Box::new(expr), InferredType::Unknown)
+        Expr::GetTag(Box::new(expr), InferredType::Unknown)
     }
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
@@ -451,7 +472,8 @@ impl Expr {
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
-            | Expr::Tag(_, inferred_type)
+            | Expr::GetTag(_, inferred_type)
+            | Expr::And(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
     }
@@ -480,7 +502,9 @@ impl Expr {
         self.push_types_down()?;
         self.infer_all_identifiers()?;
         self.pull_types_up()?;
+        self.unify_types().unwrap_or(());
         self.infer_global_inputs();
+
         Ok(())
     }
 
@@ -562,7 +586,8 @@ impl Expr {
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
-            | Expr::Tag(_, inferred_type)
+            | Expr::GetTag(_, inferred_type)
+            | Expr::And(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -602,7 +627,8 @@ impl Expr {
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
-            | Expr::Tag(_, inferred_type)
+            | Expr::And(_, _, inferred_type)
+            | Expr::GetTag(_, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -719,6 +745,7 @@ pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
     Constructor(String, Vec<ArmPattern>),
+    TupleConstructor(Vec<ArmPattern>), // Just because tuple doesn't have a name to fall into Constructor
     Literal(Box<Expr>),
 }
 
@@ -734,6 +761,13 @@ impl ArmPattern {
                 }
                 result
             }
+            ArmPattern::TupleConstructor(patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
             ArmPattern::WildCard => vec![],
         }
     }
@@ -743,6 +777,13 @@ impl ArmPattern {
             ArmPattern::Literal(expr) => vec![expr.as_ref()],
             ArmPattern::As(_, pattern) => pattern.get_expr_literals(),
             ArmPattern::Constructor(_, patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals());
+                }
+                result
+            }
+            ArmPattern::TupleConstructor(patterns) => {
                 let mut result = vec![];
                 for pattern in patterns {
                     result.extend(pattern.get_expr_literals());
@@ -825,35 +866,42 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     Expr::let_binding(name, expr)
                 }
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Not(expr) => {
                 let expr = expr.expr.ok_or("Missing expr")?;
                 Expr::not((*expr).try_into()?)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
                 Expr::greater_than((*left).try_into()?, (*right).try_into()?)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
                 Expr::greater_than_or_equal_to((*left).try_into()?, (*right).try_into()?)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
                 Expr::less_than((*left).try_into()?, (*right).try_into()?)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
                 Expr::less_than_or_equal_to((*left).try_into()?, (*right).try_into()?)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let right = expr.right.ok_or("Missing right expr")?;
                 Expr::equal_to((*left).try_into()?, (*right).try_into()?)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Cond(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let cond = expr.cond.ok_or("Missing cond expr")?;
@@ -864,6 +912,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     (*right).try_into()?,
                 )
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
                 golem_api_grpc::proto::golem::rib::ConcatExpr { exprs },
             ) => {
@@ -873,6 +922,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .collect::<Result<Vec<_>, _>>()?;
                 Expr::concat(exprs)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
                 golem_api_grpc::proto::golem::rib::MultipleExpr { exprs },
             ) => {
@@ -882,6 +932,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .collect::<Result<Vec<_>, _>>()?;
                 Expr::multiple(exprs)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
                 golem_api_grpc::proto::golem::rib::SequenceExpr { exprs },
             ) => {
@@ -891,6 +942,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .collect::<Result<Vec<_>, _>>()?;
                 Expr::sequence(exprs)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
                 golem_api_grpc::proto::golem::rib::TupleExpr { exprs },
             ) => {
@@ -900,6 +952,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .collect::<Result<Vec<_>, _>>()?;
                 Expr::tuple(exprs)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Record(
                 golem_api_grpc::proto::golem::rib::RecordExpr { fields },
             ) => {
@@ -911,18 +964,44 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 }
                 Expr::record(values)
             }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
                 golem_api_grpc::proto::golem::rib::FlagsExpr { values },
             ) => Expr::flags(values),
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
                 golem_api_grpc::proto::golem::rib::LiteralExpr { value },
             ) => Expr::literal(value),
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
                 golem_api_grpc::proto::golem::rib::IdentifierExpr { name },
             ) => Expr::identifier(name.as_str()),
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
                 golem_api_grpc::proto::golem::rib::BooleanExpr { value },
             ) => Expr::boolean(value),
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Throw(
+                golem_api_grpc::proto::golem::rib::ThrowExpr { message },
+            ) => Expr::Throw(message, InferredType::Unknown),
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::And(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::and((*left).try_into()?, (*right).try_into()?)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Tag(expr) => {
+                let expr = expr.expr.ok_or("Missing expr in tag")?;
+                Expr::tag((*expr).try_into()?)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(expr) => {
+                let expr = expr.expr.ok_or("Missing expr")?;
+                let expr: Expr = (*expr).try_into()?;
+                expr.unwrap()
+            }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
                 let type_name = number.type_name.map(TypeName::try_from).transpose()?;
                 if let Some(type_name) = type_name {
@@ -999,36 +1078,38 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
     fn from(value: Expr) -> Self {
         let expr = match value {
             Expr::Let(variable_id, type_name, expr, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::Let(Box::new(
-                    golem_api_grpc::proto::golem::rib::LetExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Let(
+                    Box::new(golem_api_grpc::proto::golem::rib::LetExpr {
                         name: variable_id.name().to_string(),
                         expr: Some(Box::new((*expr).into())),
                         type_name: type_name.map(|t| t.into()),
-                    },
+                    }),
                 ))
             }
             Expr::SelectField(expr, field, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(Box::new(
-                    golem_api_grpc::proto::golem::rib::SelectFieldExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectFieldExpr {
                         expr: Some(Box::new((*expr).into())),
                         field,
-                    },
+                    }),
                 ))
             }
             Expr::SelectIndex(expr, index, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(Box::new(
-                    golem_api_grpc::proto::golem::rib::SelectIndexExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::SelectIndex(
+                    Box::new(golem_api_grpc::proto::golem::rib::SelectIndexExpr {
                         expr: Some(Box::new((*expr).into())),
                         index: index as u64,
+                    }),
+                ))
+            }
+            Expr::Sequence(exprs, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
+                    golem_api_grpc::proto::golem::rib::SequenceExpr {
+                        exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                     },
                 ))
             }
-            Expr::Sequence(exprs, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
-                golem_api_grpc::proto::golem::rib::SequenceExpr {
-                    exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
-                },
-            ),
-            Expr::Record(fields, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Record(
+            Expr::Record(fields, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Record(
                 golem_api_grpc::proto::golem::rib::RecordExpr {
                     fields: fields
                         .into_iter()
@@ -1040,113 +1121,119 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                         )
                         .collect(),
                 },
-            ),
-            Expr::Tuple(exprs, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
+            )),
+            Expr::Tuple(exprs, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tuple(
                 golem_api_grpc::proto::golem::rib::TupleExpr {
                     exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                 },
-            ),
-            Expr::Literal(value, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
-                golem_api_grpc::proto::golem::rib::LiteralExpr { value },
-            ),
+            )),
+            Expr::Literal(value, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Literal(
+                    golem_api_grpc::proto::golem::rib::LiteralExpr { value },
+                ))
+            }
             Expr::Number(number, type_name, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::Number(
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Number(
                     golem_api_grpc::proto::golem::rib::NumberExpr {
                         float: number.value,
                         type_name: type_name.map(|t| t.into()),
                     },
-                )
+                ))
             }
-            Expr::Flags(values, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
+            Expr::Flags(values, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Flags(
                 golem_api_grpc::proto::golem::rib::FlagsExpr { values },
-            ),
+            )),
             Expr::Identifier(variable_id, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Identifier(
                     golem_api_grpc::proto::golem::rib::IdentifierExpr {
                         name: variable_id.name(),
                     },
-                )
+                ))
             }
-            Expr::Boolean(value, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
-                golem_api_grpc::proto::golem::rib::BooleanExpr { value },
-            ),
-            Expr::Concat(exprs, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
+            Expr::Boolean(value, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Boolean(
+                    golem_api_grpc::proto::golem::rib::BooleanExpr { value },
+                ))
+            }
+            Expr::Concat(exprs, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Concat(
                 golem_api_grpc::proto::golem::rib::ConcatExpr {
                     exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                 },
-            ),
-            Expr::Multiple(exprs, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
-                golem_api_grpc::proto::golem::rib::MultipleExpr {
-                    exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
-                },
-            ),
-            Expr::Not(expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Not(Box::new(
-                golem_api_grpc::proto::golem::rib::NotExpr {
-                    expr: Some(Box::new((*expr).into())),
-                },
             )),
-            Expr::GreaterThan(left, right, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(Box::new(
-                    golem_api_grpc::proto::golem::rib::GreaterThanExpr {
-                        left: Some(Box::new((*left).into())),
-                        right: Some(Box::new((*right).into())),
+            Expr::Multiple(exprs, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
+                    golem_api_grpc::proto::golem::rib::MultipleExpr {
+                        exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                     },
                 ))
             }
-            Expr::GreaterThanOrEqualTo(left, right, _) => {
+            Expr::Not(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Not(
+                Box::new(golem_api_grpc::proto::golem::rib::NotExpr {
+                    expr: Some(Box::new((*expr).into())),
+                }),
+            )),
+            Expr::GreaterThan(left, right, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThan(
+                    Box::new(golem_api_grpc::proto::golem::rib::GreaterThanExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                ))
+            }
+            Expr::GreaterThanOrEqualTo(left, right, _) => Some(
                 golem_api_grpc::proto::golem::rib::expr::Expr::GreaterThanOrEqual(Box::new(
                     golem_api_grpc::proto::golem::rib::GreaterThanOrEqualToExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
                     },
-                ))
-            }
+                )),
+            ),
             Expr::LessThan(left, right, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(Box::new(
-                    golem_api_grpc::proto::golem::rib::LessThanExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::LessThan(
+                    Box::new(golem_api_grpc::proto::golem::rib::LessThanExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
-                    },
+                    }),
                 ))
             }
-            Expr::LessThanOrEqualTo(left, right, _) => {
+            Expr::LessThanOrEqualTo(left, right, _) => Some(
                 golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                     golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
                     },
-                ))
-            }
+                )),
+            ),
             Expr::EqualTo(left, right, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(Box::new(
-                    golem_api_grpc::proto::golem::rib::EqualToExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::EqualTo(
+                    Box::new(golem_api_grpc::proto::golem::rib::EqualToExpr {
                         left: Some(Box::new((*left).into())),
                         right: Some(Box::new((*right).into())),
-                    },
+                    }),
                 ))
             }
             Expr::Cond(left, cond, right, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::Cond(Box::new(
-                    golem_api_grpc::proto::golem::rib::CondExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Cond(
+                    Box::new(golem_api_grpc::proto::golem::rib::CondExpr {
                         left: Some(Box::new((*left).into())),
                         cond: Some(Box::new((*cond).into())),
                         right: Some(Box::new((*right).into())),
-                    },
+                    }),
                 ))
             }
             Expr::PatternMatch(expr, arms, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(Box::new(
-                    golem_api_grpc::proto::golem::rib::PatternMatchExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::PatternMatch(
+                    Box::new(golem_api_grpc::proto::golem::rib::PatternMatchExpr {
                         expr: Some(Box::new((*expr).into())),
                         patterns: arms.into_iter().map(|a| a.into()).collect(),
-                    },
+                    }),
                 ))
             }
-            Expr::Option(expr, _) => golem_api_grpc::proto::golem::rib::expr::Expr::Option(
+            Expr::Option(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Option(
                 Box::new(golem_api_grpc::proto::golem::rib::OptionExpr {
                     expr: expr.map(|expr| Box::new((*expr).into())),
                 }),
-            ),
+            )),
             Expr::Result(expr, _) => {
                 let result = match expr {
                     Ok(expr) => golem_api_grpc::proto::golem::rib::result_expr::Result::Ok(
@@ -1157,28 +1244,42 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     ),
                 };
 
-                golem_api_grpc::proto::golem::rib::expr::Expr::Result(Box::new(
-                    golem_api_grpc::proto::golem::rib::ResultExpr {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Result(
+                    Box::new(golem_api_grpc::proto::golem::rib::ResultExpr {
                         result: Some(result),
-                    },
+                    }),
                 ))
             }
             Expr::Call(function_name, args, _) => {
-                golem_api_grpc::proto::golem::rib::expr::Expr::Call(
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
                     golem_api_grpc::proto::golem::rib::CallExpr {
                         name: Some(function_name.into()),
                         params: args.into_iter().map(|expr| expr.into()).collect(),
                     },
-                )
+                ))
             }
-            // Not yet supported as a syntax, so shouldn't be called
-            Expr::Unwrap(expr, _) => Self::from(*expr).expr.unwrap(),
-            // Not yet supported as a syntax, so shouldn't be called
-            Expr::Throw(msg, _) => Self::from(Expr::literal(msg)).expr.unwrap(),
-            Expr::Tag(expr, _) => Self::from(*expr).expr.unwrap(),
+            Expr::Unwrap(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(
+                Box::new(golem_api_grpc::proto::golem::rib::UnwrapExpr {
+                    expr: Some(Box::new((*expr).into())),
+                }),
+            )),
+            Expr::Throw(message, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Throw(
+                golem_api_grpc::proto::golem::rib::ThrowExpr { message },
+            )),
+            Expr::GetTag(expr, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Tag(
+                Box::new(golem_api_grpc::proto::golem::rib::GetTagExpr {
+                    expr: Some(Box::new((*expr).into())),
+                }),
+            )),
+            Expr::And(left, right, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::And(
+                Box::new(golem_api_grpc::proto::golem::rib::AndExpr {
+                    left: Some(Box::new((*left).into())),
+                    right: Some(Box::new((*right).into())),
+                }),
+            )),
         };
 
-        golem_api_grpc::proto::golem::rib::Expr { expr: Some(expr) }
+        golem_api_grpc::proto::golem::rib::Expr { expr }
     }
 }
 
@@ -1204,6 +1305,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::ArmPattern> for ArmPattern {
                     .map(ArmPattern::try_from)
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ArmPattern::Constructor(name, patterns))
+            }
+            golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::TupleConstructor(
+                golem_api_grpc::proto::golem::rib::TupleConstructorArmPattern { patterns },
+            ) => {
+                let patterns = patterns
+                    .into_iter()
+                    .map(ArmPattern::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ArmPattern::TupleConstructor(patterns))
             }
             golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::Literal(
                 golem_api_grpc::proto::golem::rib::LiteralArmPattern { expr },
@@ -1257,6 +1367,21 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                     ),
                 ),
             },
+
+            ArmPattern::TupleConstructor(patterns) => {
+                golem_api_grpc::proto::golem::rib::ArmPattern {
+                    pattern: Some(
+                        golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::TupleConstructor(
+                            golem_api_grpc::proto::golem::rib::TupleConstructorArmPattern {
+                                patterns: patterns
+                                    .into_iter()
+                                    .map(golem_api_grpc::proto::golem::rib::ArmPattern::from)
+                                    .collect(),
+                            },
+                        ),
+                    ),
+                }
+            }
         }
     }
 }
