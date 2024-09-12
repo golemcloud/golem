@@ -21,7 +21,9 @@ use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::redis::RedisKeyValueStorage;
+use golem_worker_executor_base::storage::keyvalue::sqlite::{SqliteKeyValueStorage, SqlitePool};
 use golem_worker_executor_base::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -81,6 +83,31 @@ pub(crate) async fn redis_storage() -> impl GetKeyValueStorage {
         _redis: redis,
         _monitor: redis_monitor,
     }
+}
+
+struct SqliteKeyValueStorageWrapper {
+    kvs: SqliteKeyValueStorage,
+}
+
+impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
+    fn get_key_value_storage(&self) -> &dyn KeyValueStorage {
+        &self.kvs
+    }
+}
+
+pub(crate) async fn sqlite_storage() -> impl GetKeyValueStorage {
+    let sqlx_pool_sqlite = SqlitePoolOptions::new()
+        .max_connections(10)
+        .connect("sqlite::memory:")
+        .await
+        .expect("Cannot create db options");
+
+    let pool = SqlitePool::new(sqlx_pool_sqlite)
+        .await
+        .expect("Cannot connect to sqlite db");
+
+    let kvs = SqliteKeyValueStorage::new(pool);
+    SqliteKeyValueStorageWrapper { kvs }
 }
 
 pub fn ns() -> KeyValueStorageNamespace {
@@ -737,6 +764,12 @@ test_kv_storage!(
 test_kv_storage!(
     redis_hash,
     crate::key_value_storage::redis_storage,
+    crate::key_value_storage::ns2,
+    crate::key_value_storage::ns
+);
+test_kv_storage!(
+    sqllite,
+    crate::key_value_storage::sqlite_storage,
     crate::key_value_storage::ns2,
     crate::key_value_storage::ns
 );

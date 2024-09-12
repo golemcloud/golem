@@ -3944,6 +3944,7 @@ dependencies = [
  "rustls 0.23.12",
  "serde 1.0.207",
  "serde_json",
+ "sqlx",
  "sysinfo",
  "tempfile",
  "testcontainers",

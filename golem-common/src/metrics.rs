@@ -405,3 +405,85 @@ pub mod api {
         };
     }
 }
+
+pub mod db {
+    use std::time::Duration;
+
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        static ref DB_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
+            "db_success_seconds",
+            "Duration of successful db calls",
+            &["db_type", "svc", "api", "cmd"],
+            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref DB_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "db_failure_total",
+            "Number of failed db calls",
+            &["db_type", "svc", "api", "cmd"]
+        )
+        .unwrap();
+        static ref DB_SERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "db_serialized_size_bytes",
+            "Size of serialized db entities",
+            &["db_type", "svc", "entity"],
+            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref DB_DESERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "db_deserialized_size_bytes",
+            "Size of deserialized db entities",
+            &["db_type", "svc", "entity"],
+            crate::metrics::DEFAULT_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+    }
+
+    pub fn record_db_success(
+        db_type: &'static str,
+        svc_name: &'static str,
+        api_name: &'static str,
+        cmd_name: &'static str,
+        duration: Duration,
+    ) {
+        DB_SUCCESS_SECONDS
+            .with_label_values(&[db_type, svc_name, api_name, cmd_name])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_db_failure(
+        db_type: &'static str,
+        svc_name: &'static str,
+        api_name: &'static str,
+        cmd_name: &'static str,
+    ) {
+        DB_FAILURE_TOTAL
+            .with_label_values(&[db_type, svc_name, api_name, cmd_name])
+            .inc();
+    }
+
+    pub fn record_db_serialized_size(
+        db_type: &'static str,
+        svc_name: &'static str,
+        entity_name: &'static str,
+        size: usize,
+    ) {
+        DB_SERIALIZED_SIZE_BYTES
+            .with_label_values(&[db_type, svc_name, entity_name])
+            .observe(size as f64);
+    }
+
+    pub fn record_db_deserialized_size(
+        db_type: &'static str,
+        svc_name: &'static str,
+        entity_name: &'static str,
+        size: usize,
+    ) {
+        DB_DESERIALIZED_SIZE_BYTES
+            .with_label_values(&[db_type, svc_name, entity_name])
+            .observe(size as f64);
+    }
+}
