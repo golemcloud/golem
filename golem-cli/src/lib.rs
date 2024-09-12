@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
+use colored::Colorize;
 use lenient_bool::LenientBool;
 use log::Level;
+use tracing::warn;
 use tracing_subscriber::FmtSubscriber;
 
 pub mod clients;
@@ -64,5 +67,26 @@ pub fn init_tracing(verbosity: &Verbosity) {
 
         tracing::subscriber::set_global_default(subscriber)
             .expect("setting default subscriber failed");
+    }
+}
+
+pub async fn check_for_newer_server_version(version_service: &dyn VersionService) {
+    match version_service.check().await {
+        Ok(VersionCheckResult::Ok) => { /* NOP */ }
+        Ok(VersionCheckResult::NewerServerVersionAvailable {
+            cli_version,
+            server_version,
+        }) => {
+            fn warn<S: AsRef<str>>(line: S) {
+                eprintln!("{}", line.as_ref().yellow());
+            }
+
+            warn(format!("Warning: golem-cli version ({cli_version}) is older than the targeted Golem server version ({server_version})!"));
+            warn("Download and install the latest version: https://github.com/golemcloud/golem-cloud-releases/releases");
+            warn("(For more information see: https://learn.golem.cloud/docs/quickstart)");
+        }
+        Err(error) => {
+            warn!("{}", error.0)
+        }
     }
 }
