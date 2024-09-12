@@ -25,6 +25,7 @@ use golem_common::serialization::{deserialize, serialize};
 pub mod fs;
 pub mod memory;
 pub mod s3;
+pub mod sqlite;
 
 #[async_trait]
 pub trait BlobStorage: Debug {

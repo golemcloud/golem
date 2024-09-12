@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::anyhow;
 use crate::storage::indexed::ScanCursor;
 use bytes::Bytes;
+use chrono::NaiveDateTime;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::{record_db_failure, record_db_success};
 use sqlx::query::QueryAs;
@@ -23,8 +25,10 @@ use sqlx::FromRow;
 use sqlx::SqlitePool as SqlitePoolx;
 use sqlx::{Error, Sqlite};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use super::blob::{BlobMetadata, ExistsResult};
 
 #[derive(Clone, Debug)]
 pub struct SqlitePool {
@@ -127,6 +131,20 @@ impl SqlitePool {
             .execute(pool)
             .await?;
 
+        sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS blob_storage (
+            namespace TEXT NOT NULL,       -- 'Bucket' or namespace
+            path TEXT NOT NULL,            -- Full path or index within the namespace
+            value BLOB,                    -- The actual blob data
+            last_modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Metadata: Last modified timestamp
+            size INTEGER NOT NULL,         -- Metadata: Size of the blob
+            is_directory BOOLEAN DEFAULT FALSE NOT NULL, -- Flag indicating if the row represents a directory
+            PRIMARY KEY (namespace, path)  -- Composite primary key
+        );
+        "#)
+            .execute(pool)
+            .await?;
+
         Ok(())
     }
 
@@ -139,12 +157,6 @@ impl SqlitePool {
     }
 }
 
-pub struct SqliteLabelledApi {
-    svc_name: &'static str,
-    api_name: &'static str,
-    pool: SqlitePoolx,
-}
-
 #[derive(sqlx::FromRow, Debug)]
 struct DBScoreValue {
     score: f64,
@@ -155,11 +167,6 @@ impl DBScoreValue {
     fn into_pair(self) -> (f64, Bytes) {
         (self.score, Bytes::from(self.value))
     }
-}
-
-#[derive(sqlx::FromRow, Debug)]
-struct DBKey {
-    key: String,
 }
 
 #[derive(sqlx::FromRow, Debug)]
@@ -193,6 +200,34 @@ impl DBIdValue {
     fn into_pair(self) -> (u64, Bytes) {
         (self.id as u64, Bytes::from(self.value))
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct DBMetadata {
+    last_modified_at: NaiveDateTime,
+    size: i64,
+}
+impl DBMetadata {
+    pub const ISO_8601_FORMAT: &'static str = "%Y-%m-%dT%H:%M:%S";
+    fn into_blob_metadata(self) -> Result<BlobMetadata, Error> {
+        let str = self
+            .last_modified_at
+            .format(Self::ISO_8601_FORMAT)
+            .to_string();
+        match str.parse() {
+            Ok(last_modified_at) => Ok(BlobMetadata {
+                last_modified_at,
+                size: self.size as u64,
+            }),
+            Err(msg) => Err(sqlx::Error::Decode(anyhow!(msg).into())),
+        }
+    }
+}
+
+pub struct SqliteLabelledApi {
+    svc_name: &'static str,
+    api_name: &'static str,
+    pool: SqlitePoolx,
 }
 
 impl SqliteLabelledApi {
@@ -377,8 +412,8 @@ impl SqliteLabelledApi {
             sqlx::query_as("SELECT key FROM kv_storage WHERE namespace = ?;").bind(namespace);
 
         let start = Instant::now();
-        self.record(start, "keys", self.fetch_all::<DBKey>(query).await)
-            .map(|vec| vec.into_iter().map(|k| k.key).collect::<Vec<String>>())
+        self.record(start, "keys", self.fetch_all::<(String,)>(query).await)
+            .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
     }
 
     pub async fn add_to_set(&self, namespace: &str, key: &str, value: &[u8]) -> Result<(), Error> {
@@ -556,8 +591,8 @@ impl SqliteLabelledApi {
 
         let start = Instant::now();
         let keys = self
-            .record(start, "scan", self.fetch_all::<DBKey>(query).await)
-            .map(|keys| keys.into_iter().map(|k| k.key).collect::<Vec<String>>())?;
+            .record(start, "scan", self.fetch_all::<(String,)>(query).await)
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())?;
 
         let new_cursor = if keys.len() < count as usize {
             0
@@ -697,5 +732,125 @@ impl SqliteLabelledApi {
         let start = Instant::now();
         self.record(start, "drop_prefix", query.execute(&self.pool).await)
             .map(|_| ())
+    }
+
+    pub async fn get_raw(&self, namespace: &str, path: &str) -> Result<Option<Bytes>, Error> {
+        let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND path = ? AND is_directory = FALSE;")
+        .bind(namespace)
+        .bind(path);
+        let start = Instant::now();
+        self.record(
+            start,
+            "get_raw",
+            self.fetch_optional::<DBValue>(query).await,
+        )
+        .map(|r| r.map(|op| op.into_bytes()))
+    }
+
+    pub async fn get_metadata(
+        &self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        let query = sqlx::query_as(
+            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND path = ?;",
+        )
+        .bind(namespace)
+        .bind(path);
+        let start = Instant::now();
+        self.record(
+            start,
+            "get_metadata",
+            self.fetch_optional::<DBMetadata>(query).await,
+        )
+        .map(|r| r.map(|op| op.into_blob_metadata()))?
+        .transpose()
+    }
+
+    pub async fn put_raw(&self, namespace: &str, path: &str, data: &[u8]) -> Result<(), Error> {
+        let query = sqlx::query(
+            r#"
+                INSERT INTO blob_storage (namespace, path, value, size, is_directory) 
+                VALUES (?, ?, ?, ?, FALSE)
+                ON CONFLICT(namespace, path) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+            "#,
+        )
+        .bind(namespace)
+        .bind(path)
+        .bind(data)
+        .bind(data.len() as i64);
+        let start = Instant::now();
+        self.record(start, "put_raw", query.execute(&self.pool).await)
+            .map(|_| ())
+    }
+
+    pub async fn delete_blob(&self, namespace: &str, path: &str) -> Result<(), Error> {
+        let query = sqlx::query("DELETE FROM blob_storage WHERE namespace = ?  AND path = ?;")
+            .bind(namespace)
+            .bind(path);
+        let start = Instant::now();
+        self.record(start, "delete_blob", query.execute(&self.pool).await)
+            .map(|_| ())
+    }
+
+    pub async fn create_dir(&self, namespace: &str, path: &str) -> Result<(), Error> {
+        let query = sqlx::query(
+            r#"
+                INSERT INTO blob_storage (namespace, path, value, size, is_directory) 
+                VALUES (?, ?, NULL, 0, TRUE)
+                ON CONFLICT(namespace, path) DO UPDATE SET is_directory = TRUE, value = NULL, size = 0;
+            "#
+        )
+        .bind(namespace)
+        .bind(path);
+        let start = Instant::now();
+        self.record(start, "create_dir", query.execute(&self.pool).await)
+            .map(|_| ())
+    }
+
+    pub async fn list_dir(&self, namespace: &str, path: &str) -> Result<Vec<PathBuf>, Error> {
+        let path_like = format!("{}%", path);
+        let query = sqlx::query_as(
+            "SELECT path FROM blob_storage WHERE namespace = ? AND path LIKE ? AND path <> ?;",
+        )
+        .bind(namespace)
+        .bind(&path_like)
+        .bind(path);
+
+        let start = Instant::now();
+        self.record(start, "list_dir", self.fetch_all::<(String,)>(query).await)
+            .map(|r| r.into_iter().map(|row| PathBuf::from(row.0)).collect())
+    }
+
+    pub async fn delete_dir(&self, namespace: &str, path: &str) -> Result<(), Error> {
+        let path_like = format!("{}%", path);
+        let query = sqlx::query("DELETE FROM blob_storage WHERE namespace = ?  AND path LIKE ?;")
+            .bind(namespace)
+            .bind(path_like);
+        let start = Instant::now();
+        self.record(start, "delete_dir", query.execute(&self.pool).await)
+            .map(|_| ())
+    }
+
+    pub async fn exists_blob(&self, namespace: &str, path: &str) -> Result<ExistsResult, Error> {
+        let query = sqlx::query_as(
+            "SELECT is_directory FROM blob_storage WHERE namespace = ? AND path = ? LIMIT 1;",
+        )
+        .bind(namespace)
+        .bind(path);
+
+        let start = Instant::now();
+        self.record(start, "exists_blob", query.fetch_optional(&self.pool).await)
+            .map(|row| {
+                if let Some((is_directory,)) = row {
+                    if is_directory {
+                        ExistsResult::Directory
+                    } else {
+                        ExistsResult::File
+                    }
+                } else {
+                    ExistsResult::DoesNotExist
+                }
+            })
     }
 }

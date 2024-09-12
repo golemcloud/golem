@@ -16,6 +16,7 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
+use golem_worker_executor_base::storage::blob::sqlite::SqliteBlobStorage;
 use once_cell::sync::Lazy;
 use tempfile::{tempdir, TempDir};
 use testcontainers::Container;
@@ -25,8 +26,10 @@ use uuid::Uuid;
 use golem_common::model::{AccountId, ComponentId};
 use golem_worker_executor_base::services::golem_config::S3BlobStorageConfig;
 use golem_worker_executor_base::storage::blob::{
-    fs, memory, s3, BlobStorage, BlobStorageNamespace,
+    fs, memory, s3, sqlite, BlobStorage, BlobStorageNamespace,
 };
+use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
+use sqlx::sqlite::SqlitePoolOptions;
 
 macro_rules! test_blob_storage {
     ( $name:ident, $init:expr, $ns:expr ) => {
@@ -336,6 +339,16 @@ impl GetBlobStorage for S3Test {
     }
 }
 
+struct SqliteTest {
+    storage: sqlite::SqliteBlobStorage,
+}
+
+impl GetBlobStorage for SqliteTest {
+    fn get_blob_storage(&self) -> &dyn BlobStorage {
+        &self.storage
+    }
+}
+
 pub(crate) async fn in_memory() -> impl GetBlobStorage {
     InMemoryTest {
         storage: memory::InMemoryBlobStorage::new(),
@@ -445,6 +458,22 @@ pub(crate) fn compressed_oplog() -> BlobStorageNamespace {
     }
 }
 
+pub(crate) async fn sqlite() -> impl GetBlobStorage {
+    let sqlx_pool_sqlite = SqlitePoolOptions::new()
+        .max_connections(10)
+        .connect("sqlite::memory:")
+        .await
+        .expect("Cannot create db options");
+
+    let pool = SqlitePool::new(sqlx_pool_sqlite)
+        .await
+        .expect("Cannot connect to sqlite db");
+
+    let sbs = SqliteBlobStorage::new(pool);
+
+    SqliteTest { storage: sbs }
+}
+
 test_blob_storage!(
     in_memory_cc,
     crate::blob_storage::in_memory,
@@ -463,6 +492,11 @@ test_blob_storage!(
 test_blob_storage!(
     s3_prefixed_cc,
     crate::blob_storage::s3_prefixed,
+    crate::blob_storage::compilation_cache
+);
+test_blob_storage!(
+    sqlite_cc,
+    crate::blob_storage::sqlite,
     crate::blob_storage::compilation_cache
 );
 
@@ -484,5 +518,10 @@ test_blob_storage!(
 test_blob_storage!(
     s3_prefixed_co,
     crate::blob_storage::s3_prefixed,
+    crate::blob_storage::compressed_oplog
+);
+test_blob_storage!(
+    sqlite_co,
+    crate::blob_storage::sqlite,
     crate::blob_storage::compressed_oplog
 );
