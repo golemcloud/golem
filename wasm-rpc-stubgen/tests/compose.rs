@@ -17,8 +17,8 @@
 // TODO: test compose with multiple stubs
 
 use fs_extra::dir::CopyOptions;
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::DefaultAst;
+use golem_wasm_ast::component::{Component, ComponentExternName};
+use golem_wasm_ast::{DefaultAst, IgnoreAllButMetadata};
 use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
@@ -60,7 +60,7 @@ async fn compose_with_single_stub() {
     let dest_wasm = caller_dir.path().join("target/result.wasm");
     compose(&component_wasm, &[stub_wasm], &dest_wasm).unwrap();
 
-    // TODO: check something
+    assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn compose_with_single_stub_not_importing_stub() {
     let dest_wasm = caller_dir.path().join("target/result.wasm");
     compose(&component_wasm, &[stub_wasm], &dest_wasm).unwrap();
 
-    // TODO: check something
+    assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }
 
 async fn init_stub(name: &str) -> (TempDir, PathBuf) {
@@ -152,4 +152,14 @@ fn compile_rust(path: &Path) {
 fn assert_is_component(wasm_path: &Path) {
     let _component: Component<DefaultAst> =
         Component::from_bytes(&std::fs::read(wasm_path).unwrap()).unwrap();
+}
+
+fn assert_not_importing(wasm_path: &Path, import_name: &str) {
+    let component_bytes = std::fs::read(wasm_path).unwrap();
+    let component: Component<IgnoreAllButMetadata> =
+        Component::from_bytes(&component_bytes).unwrap();
+    component.imports().iter().all(|import| {
+        let ComponentExternName::Name(name) = &import.name;
+        name != import_name
+    });
 }
