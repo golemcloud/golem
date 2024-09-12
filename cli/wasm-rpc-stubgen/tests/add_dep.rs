@@ -148,25 +148,25 @@ fn direct_circular() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wit_dep(&dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
 
     let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
 
     let original_b =
         std::fs::read_to_string(Path::new("test-data").join("direct-circular-b/b.wit")).unwrap();
-    assert_has_wit_dep_similar(&dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
 
-    assert_has_wit_dep(&dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
 
     let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    assert_has_wit_dep(dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
 
     let original_a =
         std::fs::read_to_string(Path::new("test-data").join("direct-circular-a/a.wit")).unwrap();
-    assert_has_wit_dep_similar(&dest_b.path(), "test_a/a.wit", &original_a);
+    assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
 }
 
 #[test]
@@ -200,25 +200,25 @@ fn direct_circular_readd() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wit_dep(&dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
 
     let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
 
     let original_b =
         std::fs::read_to_string(Path::new("test-data").join("direct-circular-b/b.wit")).unwrap();
-    assert_has_wit_dep_similar(&dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
 
-    assert_has_wit_dep(&dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
 
     let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    assert_has_wit_dep(dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
 
     let original_a =
         std::fs::read_to_string(Path::new("test-data").join("direct-circular-a/a.wit")).unwrap();
-    assert_has_wit_dep_similar(&dest_b.path(), "test_a/a.wit", &original_a);
+    assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
 }
 
 #[test]
@@ -239,29 +239,29 @@ fn direct_circular_same_world_name() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wit_dep(&dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
 
     let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
 
     let original_b = std::fs::read_to_string(
         Path::new("test-data").join("direct-circular-b-same-world-name/b.wit"),
     )
     .unwrap();
-    assert_has_wit_dep_similar(&dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
 
-    assert_has_wit_dep(&dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
 
     let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    assert_has_wit_dep(dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
 
     let original_a = std::fs::read_to_string(
         Path::new("test-data").join("direct-circular-a-same-world-name/a.wit"),
     )
     .unwrap();
-    assert_has_wit_dep_similar(&dest_b.path(), "test_a/a.wit", &original_a);
+    assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
 }
 
 // TODO: test update-cargo feature
@@ -286,8 +286,8 @@ fn init_stub(name: &str) -> TempDir {
 
 fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
     let def = StubDefinition::new(
-        &source_wit_root,
-        &stub_dir,
+        source_wit_root,
+        stub_dir,
         &None,
         "1.0.0",
         &WasmRpcOverride::default(),
@@ -312,7 +312,7 @@ fn init_caller(name: &str) -> TempDir {
 }
 
 fn assert_valid_wit_root(wit_root: &Path) {
-    let (final_root, final_deps) = get_unresolved_packages(&wit_root).unwrap();
+    let (final_root, final_deps) = get_unresolved_packages(wit_root).unwrap();
 
     let mut final_resolve = Resolve::new();
     for unresolved in final_deps.iter().cloned() {
