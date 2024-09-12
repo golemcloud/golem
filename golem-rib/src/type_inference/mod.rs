@@ -443,7 +443,7 @@ mod type_inference_tests {
                     input_variant_type.clone(),
                     input_variant_type.clone(),
                     input_variant_type.clone(),
-                    AnalysedType::Str(TypeStr),
+                    AnalysedType::U64(TypeU64),
                 ],
                 output_variant_type.clone(),
             );
@@ -482,10 +482,8 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr).unwrap();
 
-            let result = expr.infer_types(&function_type_registry).unwrap_err();
-
-            dbg!(result.clone());
-            assert!(result.is_empty());
+            let result = expr.infer_types(&function_type_registry);
+            assert!(result.is_ok());
         }
     }
 
