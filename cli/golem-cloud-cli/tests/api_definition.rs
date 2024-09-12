@@ -4,11 +4,13 @@ use crate::worker::make_component_from_file;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
 use golem_client::model::{
-    GolemWorkerBinding, HttpApiDefinition, HttpApiDefinitionRequest, MethodPattern, Route,
+    GolemWorkerBinding, GolemWorkerBindingWithTypeInfo, HttpApiDefinitionRequest,
+    HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, Route, RouteWithTypeInfo,
     VersionedComponentId,
 };
 use libtest_mimic::{Failed, Trial};
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -228,12 +230,36 @@ pub fn make_open_api_file(
 pub fn to_definition(
     request: HttpApiDefinitionRequest,
     created_at: Option<DateTime<Utc>>,
-) -> HttpApiDefinition {
-    HttpApiDefinition {
+) -> HttpApiDefinitionWithTypeInfo {
+    HttpApiDefinitionWithTypeInfo {
         id: request.id,
         version: request.version,
         draft: request.draft,
-        routes: request.routes,
+        routes: request
+            .routes
+            .iter()
+            .map(|v0| {
+                let v = v0.clone();
+
+                RouteWithTypeInfo {
+                    method: v.method,
+                    path: v.path,
+                    binding: GolemWorkerBindingWithTypeInfo {
+                        component_id: v.binding.component_id,
+                        worker_name: v.binding.worker_name.clone(),
+                        idempotency_key: v.binding.idempotency_key.clone(),
+                        response: v.binding.response,
+                        response_mapping_input: Some(RibInputTypeInfo {
+                            types: HashMap::new(),
+                        }),
+                        worker_name_input: Some(RibInputTypeInfo {
+                            types: HashMap::new(),
+                        }),
+                        idempotency_key_input: None,
+                    },
+                }
+            })
+            .collect(),
         created_at,
     }
 }
@@ -251,7 +277,8 @@ fn api_definition_import(
     let component_version = component.component_version;
     let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
-    let res: HttpApiDefinition = cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
+    let res: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
 
     let expected = to_definition(golem_def(&component_name, &component_id), res.created_at);
 
@@ -273,7 +300,8 @@ fn api_definition_add(
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let res: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let res: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let expected = to_definition(def, res.created_at);
     assert_eq!(res, expected);
@@ -294,7 +322,8 @@ fn api_definition_update(
 
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let updated = golem_def_with_response(
         &component_name,
@@ -303,7 +332,8 @@ fn api_definition_update(
             .to_string(),
     );
     let path = make_golem_file(&updated)?;
-    let res: HttpApiDefinition = cli.run(&["api-definition", "update", path.to_str().unwrap()])?;
+    let res: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "update", path.to_str().unwrap()])?;
 
     let expected = to_definition(updated, res.created_at);
 
@@ -326,7 +356,8 @@ fn api_definition_update_immutable(
     let mut def = golem_def(&component_name, &component_id);
     def.draft = false;
     let path = make_golem_file(&def)?;
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string());
     let path = make_golem_file(&updated)?;
@@ -350,9 +381,10 @@ fn api_definition_list(
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let res: Vec<HttpApiDefinition> = cli.run(&["api-definition", "list"])?;
+    let res: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&["api-definition", "list"])?;
 
     let found = res.into_iter().find(|d| {
         let e = to_definition(def.clone(), d.created_at);
@@ -378,9 +410,10 @@ fn api_definition_list_versions(
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
-    let res: Vec<HttpApiDefinition> = cli.run(&[
+    let res: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&[
         "api-definition",
         "list",
         &cfg.arg('i', "id"),
@@ -388,7 +421,7 @@ fn api_definition_list_versions(
     ])?;
 
     assert_eq!(res.len(), 1);
-    let res: HttpApiDefinition = res.first().unwrap().clone();
+    let res: HttpApiDefinitionWithTypeInfo = res.first().unwrap().clone();
     let expected = to_definition(def, res.created_at);
 
     assert_eq!(res, expected);
@@ -409,11 +442,12 @@ fn api_definition_get(
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;
 
-    let res: HttpApiDefinition = cli.run(&[
+    let res: HttpApiDefinitionWithTypeInfo = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
@@ -442,11 +476,12 @@ fn api_definition_delete(
     let def = golem_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
-    let _: HttpApiDefinition = cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let _: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let cfg = &cli.config;
 
-    let res: HttpApiDefinition = cli.run(&[
+    let res: HttpApiDefinitionWithTypeInfo = cli.run(&[
         "api-definition",
         "get",
         &cfg.arg('i', "id"),
@@ -468,7 +503,7 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    let res_list: Vec<HttpApiDefinition> = cli.run(&[
+    let res_list: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&[
         "api-definition",
         "list",
         &cfg.arg('i', "id"),
