@@ -19,6 +19,7 @@ use anyhow::{anyhow, Context};
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tempfile::TempDir;
 use wit_parser::{PackageName, UnresolvedPackage};
 
 pub fn add_stub_dependency(
@@ -37,6 +38,7 @@ pub fn add_stub_dependency(
     let parsed_stub = UnresolvedPackage::parse_file(&stub_wit)?;
 
     let destination_package_name = parsed_dest.name.clone();
+
     let stub_target_package_name = PackageName {
         name: parsed_stub
             .name
@@ -46,7 +48,9 @@ pub fn add_stub_dependency(
             .to_string(),
         ..parsed_stub.name.clone()
     };
-    if destination_package_name == stub_target_package_name {
+    if destination_package_name == stub_target_package_name
+        && !is_self_stub(&stub_wit, dest_wit_root)?
+    {
         return Err(anyhow!(
             "Both the caller and the target components are using the same package name ({destination_package_name}), which is not supported."
         ));
@@ -166,6 +170,26 @@ pub fn add_stub_dependency(
     }
 
     Ok(())
+}
+
+/// Checks whether `stub_wit` is a stub generated for `dest_wit_root`
+fn is_self_stub(stub_wit: &Path, dest_wit_root: &Path) -> anyhow::Result<bool> {
+    let temp_root = TempDir::new()?;
+    let canonical_temp_root = temp_root.path().canonicalize()?;
+    let dest_stub_def = StubDefinition::new(
+        dest_wit_root,
+        &canonical_temp_root,
+        &None,
+        "0.0.1",
+        &WasmRpcOverride::default(),
+        false,
+    )?;
+    let dest_stub_wit_imported = get_stub_wit(&dest_stub_def, StubTypeGen::ImportRootTypes)?;
+    let dest_stub_wit_inlined = get_stub_wit(&dest_stub_def, StubTypeGen::InlineRootTypes)?;
+
+    let stub_wit = std::fs::read_to_string(stub_wit)?;
+
+    Ok(stub_wit == dest_stub_wit_imported || stub_wit == dest_stub_wit_inlined)
 }
 
 fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
