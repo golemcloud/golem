@@ -98,23 +98,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
     }
 }
-
-fn init_tracing(verbosity: &Verbosity) {
-    if let Some(level) = verbosity.log_level() {
-        let tracing_level = match level {
-            Level::Error => tracing::Level::ERROR,
-            Level::Warn => tracing::Level::WARN,
-            Level::Info => tracing::Level::INFO,
-            Level::Debug => tracing::Level::DEBUG,
-            Level::Trace => tracing::Level::TRACE,
-        };
-
-        let subscriber = FmtSubscriber::builder()
-            .with_max_level(tracing_level)
-            .with_writer(std::io::stderr)
-            .finish();
-
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("setting default subscriber failed");
-    }
-}

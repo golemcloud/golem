@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use clap_verbosity_flag::Verbosity;
 use lenient_bool::LenientBool;
+use log::Level;
+use tracing_subscriber::FmtSubscriber;
 
 pub mod clients;
 pub mod cloud;
@@ -41,5 +44,25 @@ pub fn parse_bool(s: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sy
     match s.parse::<LenientBool>() {
         Ok(b) => Ok(b.into()),
         Err(_) => Err(format!("invalid boolean: `{s}`"))?,
+    }
+}
+
+pub fn init_tracing(verbosity: &Verbosity) {
+    if let Some(level) = verbosity.log_level() {
+        let tracing_level = match level {
+            Level::Error => tracing::Level::ERROR,
+            Level::Warn => tracing::Level::WARN,
+            Level::Info => tracing::Level::INFO,
+            Level::Debug => tracing::Level::DEBUG,
+            Level::Trace => tracing::Level::TRACE,
+        };
+
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(tracing_level)
+            .with_writer(std::io::stderr)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
     }
 }
