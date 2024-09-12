@@ -1,3 +1,0 @@
-// Test WIT covering two components, A and B, referencing each other.
-
-package test:b;
