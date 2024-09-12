@@ -113,7 +113,7 @@ impl StubDefinition {
         self.target_wit_root().join("_stub.wit")
     }
 
-    pub fn verify_target_wits(&self) -> anyhow::Result<()> {
+    pub fn verify_target_wits(&self) -> anyhow::Result<Resolve> {
         let (final_root, final_deps) = get_unresolved_packages(&self.target_wit_root())?;
 
         let mut final_resolve = Resolve::new();
@@ -121,7 +121,7 @@ impl StubDefinition {
             final_resolve.push(unresolved)?;
         }
         final_resolve.push(final_root.clone())?;
-        Ok(())
+        Ok(final_resolve)
     }
 
     pub fn fix_inlined_owner(&self, typedef: &TypeDef) -> StubTypeOwner {
