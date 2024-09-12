@@ -290,7 +290,7 @@ mod internal {
             Expr::Boolean(bool, _) => {
                 instructions.push(RibIR::PushLit(TypeAnnotatedValue::Bool(*bool)));
             }
-            Expr::Tag(expr, _) => {
+            Expr::GetTag(expr, _) => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 stack.push(ExprState::from_ir(RibIR::GetTag));
             }

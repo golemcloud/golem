@@ -327,12 +327,12 @@ mod internal {
                 // However there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully built the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = pred_expr.get(index);
+                    let new_pred = Expr::select_index(pred_expr.clone(), index);
                     let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);
 
                     let branch = get_conditions(
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
-                        &pred_expr.get(index),
+                        &new_pred,
                         None,
                         new_pred_type.clone(),
                     );
@@ -460,7 +460,7 @@ mod desugar_tests {
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
-                    Box::new(Expr::Tag(
+                    Box::new(Expr::GetTag(
                         Box::new(Expr::Identifier(
                             VariableId::local("x", 0),
                             InferredType::Option(Box::new(InferredType::U64)),
@@ -493,7 +493,7 @@ mod desugar_tests {
                 )),
                 Box::new(Expr::Cond(
                     Box::new(Expr::EqualTo(
-                        Box::new(Expr::Tag(
+                        Box::new(Expr::GetTag(
                             Box::new(Expr::Identifier(
                                 VariableId::local("x", 0),
                                 InferredType::Option(Box::new(InferredType::U64)),

@@ -31,6 +31,9 @@ message Expr {
     OptionExpr option = 22;
     ResultExpr result = 23;
     CallExpr call = 24;
+    AndExpr and = 25;
+    GetTagExpr tag = 26;
+    UnwrapExpr unwrap = 27;
   }
 }
 
@@ -100,7 +103,20 @@ message NotExpr {
   Expr expr = 1;
 }
 
+message GetTagExpr {
+  Expr expr = 1;
+}
+
+message UnwrapExpr {
+  Expr expr = 1;
+}
+
 message GreaterThanExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message AndExpr {
   Expr left = 1;
   Expr right = 2;
 }

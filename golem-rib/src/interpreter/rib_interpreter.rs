@@ -192,10 +192,6 @@ impl Interpreter {
 
                 RibIR::Label(_) => {}
 
-                RibIR::Get(index) => {
-                    internal::run_get_index_instruction(index, &mut self.stack)?;
-                }
-
                 RibIR::And => {
                     internal::run_and_instruction(&mut self.stack)?;
                 }
@@ -392,42 +388,6 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn run_get_index_instruction(
-        index: usize,
-        interpreter_stack: &mut InterpreterStack,
-    ) -> Result<(), String> {
-        let value = interpreter_stack
-            .pop_val()
-            .ok_or("Failed to get a value from the stack to negate".to_string())?;
-
-        let result = match value {
-            TypeAnnotatedValue::Tuple(typed_tuple) => typed_tuple
-                .value
-                .get(index)
-                .and_then(|x| x.type_annotated_value.clone())
-                .ok_or(format!(
-                    "Failed to get the value from tuple at index {}",
-                    index
-                )),
-            TypeAnnotatedValue::List(typed_list) => typed_list
-                .values
-                .get(index)
-                .and_then(|x| x.type_annotated_value.clone())
-                .ok_or(format!(
-                    "Failed to get the value from list at index {}",
-                    index
-                )),
-            type_annotated_Value => Err(format!(
-                "Unable to get the value at index {} for a {:?} type ",
-                index,
-                AnalysedType::try_from(&type_annotated_Value).unwrap()
-            )),
-        };
-
-        interpreter_stack.push_val(result?);
-        Ok(())
-    }
-
     pub(crate) fn run_and_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
@@ -521,8 +481,22 @@ mod internal {
                 interpreter_stack.push_val(inner_type_annotated_value);
                 Ok(())
             }
+            RibInterpreterResult::Val(TypeAnnotatedValue::Tuple(typed_tuple)) => {
+                let value = typed_tuple
+                    .value
+                    .get(index)
+                    .ok_or(format!("Index {} not found in the tuple", index))?
+                    .clone();
+
+                let inner_type_annotated_value = value
+                    .type_annotated_value
+                    .ok_or("Field value not found".to_string())?;
+
+                interpreter_stack.push_val(inner_type_annotated_value);
+                Ok(())
+            }
             result => Err(format!(
-                "Expected a sequence value to select an index. But obtained {:?}",
+                "Expected a sequence value or tuple to select an index. But obtained {:?}",
                 result
             )),
         }

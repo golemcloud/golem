@@ -58,8 +58,7 @@ pub enum Expr {
     Call(CallType, Vec<Expr>, InferredType),
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
-    Tag(Box<Expr>, InferredType),
-    Get(Box<Expr>, usize, InferredType),
+    GetTag(Box<Expr>, InferredType),
 }
 
 impl Expr {
@@ -243,9 +242,6 @@ impl Expr {
         Expr::Unwrap(Box::new(self.clone()), InferredType::Unknown)
     }
 
-    pub fn get(&self, index: usize) -> Self {
-        Expr::Get(Box::new(self.clone()), index, InferredType::Unknown)
-    }
     pub fn boolean(value: bool) -> Self {
         Expr::Boolean(value, InferredType::Bool)
     }
@@ -425,7 +421,7 @@ impl Expr {
     }
 
     pub fn tag(expr: Expr) -> Self {
-        Expr::Tag(Box::new(expr), InferredType::Unknown)
+        Expr::GetTag(Box::new(expr), InferredType::Unknown)
     }
 
     pub fn tuple(expressions: Vec<Expr>) -> Self {
@@ -476,8 +472,7 @@ impl Expr {
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
-            | Expr::Tag(_, inferred_type)
-            | Expr::Get(_, _, inferred_type)
+            | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
@@ -591,8 +586,7 @@ impl Expr {
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
-            | Expr::Tag(_, inferred_type)
-            | Expr::Get(_, _, inferred_type)
+            | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
@@ -633,9 +627,8 @@ impl Expr {
             | Expr::Result(_, inferred_type)
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
-            | Expr::Get(_, _, inferred_type)
             | Expr::And(_, _, inferred_type)
-            | Expr::Tag(_, inferred_type)
+            | Expr::GetTag(_, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -1231,7 +1224,7 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Unwrap(expr, _) => Self::from(*expr).expr,
             // Not yet supported as a syntax, so shouldn't be called
             Expr::Throw(msg, _) => Self::from(Expr::literal(msg)).expr,
-            Expr::Tag(expr, _) => Self::from(*expr).expr,
+            Expr::GetTag(expr, _) => Self::from(*expr).expr,
             Expr::Get(expr, _, _) => Self::from(*expr).expr,
             Expr::And(left, right, _) => Self::from(*left).expr,
         };

@@ -301,19 +301,6 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Get(expr, _, inferred_type) => {
-                queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
-
-                match unified_inferred_type {
-                    Ok(unified_type) => *inferred_type = unified_type,
-                    Err(e) => {
-                        errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.extend(e);
-                    }
-                }
-            }
-
             Expr::Throw(_, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify_types_and_verify();
 
@@ -326,7 +313,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Tag(_, inferred_type) => {
+            Expr::GetTag(_, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify_types_and_verify();
 
                 match unified_inferred_type {

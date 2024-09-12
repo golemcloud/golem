@@ -280,7 +280,7 @@ impl<W: Write> Writer<W> {
                 self.write_str(msg)?;
                 self.write_str(")")
             }
-            Expr::Tag(expr, _) => {
+            Expr::GetTag(expr, _) => {
                 self.write_str("get_tag(")?;
                 self.write_expr(expr)?;
                 self.write_str(")")

@@ -56,7 +56,6 @@ pub enum RibIR {
     PushEnum(String, AnalysedType),
     Throw(String),
     GetTag,
-    Get(usize),
     Concat(usize),
     Negate,
 }

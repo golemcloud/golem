@@ -94,7 +94,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 match call_type {
                     // For CallType::Enum constructor, there are no argument expressions
                     // For CallType::Function , there is no type available to push down to arguments, as it is invalid
-                    // to push down the return type of a function to its arguments.
+                    // to push down the return type of function to its arguments.
+                    // For variant constructor, the type of the arguments are present in th return type of the call
+                    // which should be a variant having a collection of each case with the argument type
                     CallType::VariantConstructor(name) => match inferred_type {
                         InferredType::Variant(variant) => {
                             let identified_variant = variant
