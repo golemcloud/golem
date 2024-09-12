@@ -5,7 +5,8 @@ use cloud_common::model::ProjectAction;
 use golem_common::model::ProjectId;
 use golem_worker_service_base::{
     api_definition::{
-        http::HttpApiDefinition, http::HttpApiDefinitionRequest, ApiDefinitionId, ApiVersion,
+        http::CompiledHttpApiDefinition, http::HttpApiDefinitionRequest, ApiDefinitionId,
+        ApiVersion,
     },
     service::{
         api_definition::{
@@ -27,14 +28,14 @@ pub trait ApiDefinitionService {
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<HttpApiDefinition>;
+    ) -> ApiDefResult<CompiledHttpApiDefinition>;
 
     async fn update(
         &self,
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<HttpApiDefinition>;
+    ) -> ApiDefResult<CompiledHttpApiDefinition>;
 
     async fn get(
         &self,
@@ -42,7 +43,7 @@ pub trait ApiDefinitionService {
         api_definition_id: &ApiDefinitionId,
         version: &ApiVersion,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Option<HttpApiDefinition>>;
+    ) -> ApiDefResult<Option<CompiledHttpApiDefinition>>;
 
     async fn delete(
         &self,
@@ -50,20 +51,20 @@ pub trait ApiDefinitionService {
         api_definition_id: &ApiDefinitionId,
         version: &ApiVersion,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Option<ApiDefinitionId>>;
+    ) -> ApiDefResult<()>;
 
     async fn get_all(
         &self,
         project_id: &ProjectId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<HttpApiDefinition>>;
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>>;
 
     async fn get_all_versions(
         &self,
         project_id: &ProjectId,
         api_id: &ApiDefinitionId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<HttpApiDefinition>>;
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,7 +104,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<HttpApiDefinition> {
+    ) -> ApiDefResult<CompiledHttpApiDefinition> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::CreateApiDefinition, ctx)
@@ -115,7 +116,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .create(&api_definition_request, &namespace.clone(), ctx)
             .await?;
 
-        Ok((api_definition.into(), namespace))
+        Ok((api_definition, namespace))
     }
 
     async fn update(
@@ -123,7 +124,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<HttpApiDefinition> {
+    ) -> ApiDefResult<CompiledHttpApiDefinition> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::UpdateApiDefinition, ctx)
@@ -135,7 +136,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .update(&api_definition_request, &namespace.clone(), ctx)
             .await?;
 
-        Ok((api_definition.into(), namespace))
+        Ok((api_definition, namespace))
     }
 
     async fn get(
@@ -144,7 +145,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         api_definition_id: &ApiDefinitionId,
         version: &ApiVersion,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Option<HttpApiDefinition>> {
+    ) -> ApiDefResult<Option<CompiledHttpApiDefinition>> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::ViewApiDefinition, ctx)
@@ -155,7 +156,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .get(api_definition_id, version, &namespace.clone(), ctx)
             .await?;
 
-        Ok((api_definition.map(Into::into), namespace))
+        Ok((api_definition, namespace))
     }
 
     async fn delete(
@@ -164,25 +165,24 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         api_definition_id: &ApiDefinitionId,
         version: &ApiVersion,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Option<ApiDefinitionId>> {
+    ) -> ApiDefResult<()> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::DeleteApiDefinition, ctx)
             .await?;
 
-        let api_definition_id = self
-            .api_definition_service
+        self.api_definition_service
             .delete(api_definition_id, version, &namespace.clone(), ctx)
             .await?;
 
-        Ok((api_definition_id, namespace))
+        Ok(((), namespace))
     }
 
     async fn get_all(
         &self,
         project_id: &ProjectId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<HttpApiDefinition>> {
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::ViewApiDefinition, ctx)
@@ -193,10 +193,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .get_all(&namespace.clone(), ctx)
             .await?;
 
-        Ok((
-            api_definitions.into_iter().map(Into::into).collect(),
-            namespace,
-        ))
+        Ok((api_definitions, namespace))
     }
 
     async fn get_all_versions(
@@ -204,7 +201,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         project_id: &ProjectId,
         api_id: &ApiDefinitionId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<HttpApiDefinition>> {
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>> {
         let namespace = self
             .auth_service
             .is_authorized(project_id, ProjectAction::ViewApiDefinition, ctx)
@@ -215,9 +212,6 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
             .get_all_versions(api_id, &namespace.clone(), ctx)
             .await?;
 
-        Ok((
-            api_definitions.into_iter().map(Into::into).collect(),
-            namespace,
-        ))
+        Ok((api_definitions, namespace))
     }
 }

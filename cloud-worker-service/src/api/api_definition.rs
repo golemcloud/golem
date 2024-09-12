@@ -7,8 +7,8 @@ use crate::service::auth::CloudAuthCtx;
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
-use golem_worker_service_base::api::HttpApiDefinition;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
+use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
 use golem_worker_service_base::api_definition::http::{
     get_api_definition, HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest,
     JsonOpenApiDefinition,
@@ -43,7 +43,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         Json(openapi): Json<JsonOpenApiDefinition>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
 
@@ -62,10 +62,7 @@ impl ApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            result
-                .try_into()
-                .map_err(ApiEndpointError::internal)
-                .map(Json)
+            Ok(Json(result.into()))
         };
 
         record.result(response)
@@ -85,7 +82,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         payload: Json<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
         let record = recorded_http_api_request!(
@@ -109,10 +106,7 @@ impl ApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            result
-                .try_into()
-                .map_err(ApiEndpointError::internal)
-                .map(Json)
+            Ok(Json(result.into()))
         };
 
         record.result(response)
@@ -133,7 +127,7 @@ impl ApiDefinitionApi {
         version: Path<ApiVersion>,
         payload: Json<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let project_id = &project_id.0;
         let token = token.secret();
         let record = recorded_http_api_request!(
@@ -164,10 +158,7 @@ impl ApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                result
-                    .try_into()
-                    .map_err(ApiEndpointError::internal)
-                    .map(Json)
+                Ok(Json(result.into()))
             }
         };
 
@@ -188,7 +179,7 @@ impl ApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<HttpApiDefinition>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let token = token.secret();
         let record = recorded_http_api_request!(
             "get_definition",
@@ -214,7 +205,7 @@ impl ApiDefinitionApi {
                 format!("Can't find api definition with id {api_definition_id}, and version {version} in project {project_id}")
             ))?;
 
-            Ok(Json(data.try_into().map_err(ApiEndpointError::internal)?))
+            Ok(Json(data.into()))
         };
 
         record.result(response)
@@ -233,7 +224,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<HttpApiDefinition>>, ApiEndpointError> {
+    ) -> Result<Json<Vec<HttpApiDefinitionWithTypeInfo>>, ApiEndpointError> {
         let token = token.secret();
         let record = recorded_http_api_request!(
             "list_definitions",
@@ -258,12 +249,10 @@ impl ApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?
             };
-            let values = data
-                .into_iter()
-                .map(|d| d.try_into().map_err(ApiEndpointError::internal))
-                .collect::<Result<Vec<HttpApiDefinition>, ApiEndpointError>>()?;
+            let values = data.into_iter().map(|d| d.into()).collect();
             Ok(Json(values))
         };
+
         record.result(response)
     }
 
@@ -295,17 +284,12 @@ impl ApiDefinitionApi {
             let api_definition_id = id.0;
             let version = version.0;
             let auth_ctx = CloudAuthCtx::new(token);
-            let (deleted, _) = self
-                .definition_service
+            self.definition_service
                 .delete(&project_id, &api_definition_id, &version, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 
-            if deleted.is_some() {
-                Ok(Json("API definition deleted".to_string()))
-            } else {
-                Ok(Json("API definition not found".to_string()))
-            }
+            Ok(Json("API definition not found".to_string()))
         };
         record.result(response)
     }
