@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
 
@@ -90,31 +89,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
             }
 
             Expr::Call(call_type, expressions, inferred_type) => {
-                match call_type {
-                    // For CallType::Enum, there are no argument expressions
-                    // For CallType::Function, there is no type available to push down to arguments, as it is invalid
-                    // to push down the return type of function to its arguments.
-                    // For variant constructor, the type of the arguments are present in the return type of the call
-                    // and should be pushed down to arguments
-                    CallType::VariantConstructor(name) => {
-                        if let InferredType::Variant(variant) = inferred_type {
-                            let identified_variant = variant
-                                .iter()
-                                .find(|(variant_name, _)| variant_name == name);
-                            if let Some((_name, Some(inner_type))) = identified_variant {
-                                for expr in expressions {
-                                    expr.add_infer_type_mut(inner_type.clone());
-                                    queue.push_back(expr);
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        for expr in expressions {
-                            queue.push_back(expr);
-                        }
-                    }
-                }
+                internal::handle_call(call_type, expressions, inferred_type, &mut queue);
             }
 
             _ => expr.visit_children_mut_bottom_up(&mut queue),
@@ -125,6 +100,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
+    use crate::call_type::CallType;
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType};
@@ -217,6 +193,39 @@ mod internal {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn handle_call<'a>(
+        call_type: &CallType,
+        expressions: &'a mut Vec<Expr>,
+        inferred_type: &InferredType,
+        queue: &mut VecDeque<&'a mut Expr>,
+    ) {
+        match call_type {
+            // For CallType::Enum, there are no argument expressions
+            // For CallType::Function, there is no type available to push down to arguments, as it is invalid
+            // to push down the return type of function to its arguments.
+            // For variant constructor, the type of the arguments are present in the return type of the call
+            // and should be pushed down to arguments
+            CallType::VariantConstructor(name) => {
+                if let InferredType::Variant(variant) = inferred_type {
+                    let identified_variant = variant
+                        .iter()
+                        .find(|(variant_name, _)| variant_name == name);
+                    if let Some((_name, Some(inner_type))) = identified_variant {
+                        for expr in expressions {
+                            expr.add_infer_type_mut(inner_type.clone());
+                            queue.push_back(expr);
+                        }
+                    }
+                }
+            }
+            _ => {
+                for expr in expressions {
+                    queue.push_back(expr);
+                }
+            }
+        }
     }
 
     pub(crate) fn update_arm_pattern_type(
