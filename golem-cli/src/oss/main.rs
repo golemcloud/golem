@@ -38,25 +38,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     print_completion: Box<dyn PrintCompletion>,
     profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let OssProfile {
-        url,
-        worker_url,
-        allow_insecure,
-        config,
-    } = profile;
-
-    let format = cmd.format.unwrap_or(config.default_format);
-
-    let component_url = url;
-    let worker_url = worker_url.unwrap_or_else(|| component_url.clone());
-
-    let factory = OssServiceFactory {
-        component_url,
-        worker_url,
-        allow_insecure,
-    };
-
-    let ctx = &OssContext::EMPTY;
+    let format = cmd.format.unwrap_or(profile.config.default_format);
+    let factory = OssServiceFactory::from_profile(&profile)?;
 
     let res = match cmd.command {
         OssCommand::Component { subcommand } => {
@@ -65,9 +48,9 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             subcommand
                 .handle(
                     format,
-                    factory.component_service(ctx)?,
-                    factory.deploy_service(ctx)?,
-                    factory.project_resolver(ctx)?.as_ref(),
+                    factory.component_service(),
+                    factory.deploy_service(),
+                    factory.project_resolver().as_ref(),
                 )
                 .await
         }
@@ -75,11 +58,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             check_version(&factory, &cmd.verbosity).await?;
 
             subcommand
-                .handle(
-                    format,
-                    factory.worker_service(ctx)?,
-                    factory.project_resolver(ctx)?,
-                )
+                .handle(format, factory.worker_service(), factory.project_resolver())
                 .await
         }
         OssCommand::Examples(golem_examples::cli::Command::New {
@@ -101,8 +80,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
             subcommand
                 .handle(
-                    factory.api_definition_service(ctx)?.as_ref(),
-                    factory.project_resolver(ctx)?.as_ref(),
+                    factory.api_definition_service().as_ref(),
+                    factory.project_resolver().as_ref(),
                 )
                 .await
         }
@@ -111,8 +90,8 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
 
             subcommand
                 .handle(
-                    factory.api_deployment_service(ctx)?.as_ref(),
-                    factory.project_resolver(ctx)?.as_ref(),
+                    factory.api_deployment_service().as_ref(),
+                    factory.project_resolver().as_ref(),
                 )
                 .await
         }
@@ -161,9 +140,7 @@ async fn check_version(
     factory: &OssServiceFactory,
     verbosity: &Verbosity,
 ) -> Result<(), GolemError> {
-    let ctx = &OssContext::EMPTY;
-
-    let version_check = factory.version_service(ctx)?.check().await;
+    let version_check = factory.version_service().check().await;
 
     if let Err(err) = version_check {
         if verbosity.log_level() == Some(log::Level::Warn)
@@ -187,13 +164,13 @@ async fn get_resource_by_urn(
     match urn {
         ResourceUrn::Component(c) => {
             factory
-                .component_service(ctx)?
+                .component_service()
                 .get(ComponentUri::URN(c), None, None)
                 .await
         }
         ResourceUrn::ComponentVersion(c) => {
             factory
-                .component_service(ctx)?
+                .component_service()
                 .get(
                     ComponentUri::URN(ComponentUrn { id: c.id }),
                     Some(c.version),
@@ -201,21 +178,16 @@ async fn get_resource_by_urn(
                 )
                 .await
         }
-        ResourceUrn::Worker(w) => {
-            factory
-                .worker_service(ctx)?
-                .get(WorkerUri::URN(w), None)
-                .await
-        }
+        ResourceUrn::Worker(w) => factory.worker_service().get(WorkerUri::URN(w), None).await,
         ResourceUrn::WorkerFunction(f) => {
             factory
-                .worker_service(ctx)?
+                .worker_service()
                 .get_function(WorkerUri::URN(WorkerUrn { id: f.id }), &f.function, None)
                 .await
         }
         ResourceUrn::ApiDefinition(ad) => {
             factory
-                .api_definition_service(ctx)?
+                .api_definition_service()
                 .get(
                     ApiDefinitionId(ad.id),
                     ApiDefinitionVersion(ad.version),
@@ -223,7 +195,7 @@ async fn get_resource_by_urn(
                 )
                 .await
         }
-        ResourceUrn::ApiDeployment(ad) => factory.api_deployment_service(ctx)?.get(ad.site).await,
+        ResourceUrn::ApiDeployment(ad) => factory.api_deployment_service().get(ad.site).await,
     }
 }
 
@@ -236,13 +208,13 @@ async fn get_resource_by_url(
     match url {
         ResourceUrl::Component(c) => {
             factory
-                .component_service(ctx)?
+                .component_service()
                 .get(ComponentUri::URL(c), None, None)
                 .await
         }
         ResourceUrl::ComponentVersion(c) => {
             factory
-                .component_service(ctx)?
+                .component_service()
                 .get(
                     ComponentUri::URL(ComponentUrl { name: c.name }),
                     Some(c.version),
@@ -250,15 +222,10 @@ async fn get_resource_by_url(
                 )
                 .await
         }
-        ResourceUrl::Worker(w) => {
-            factory
-                .worker_service(ctx)?
-                .get(WorkerUri::URL(w), None)
-                .await
-        }
+        ResourceUrl::Worker(w) => factory.worker_service().get(WorkerUri::URL(w), None).await,
         ResourceUrl::WorkerFunction(f) => {
             factory
-                .worker_service(ctx)?
+                .worker_service()
                 .get_function(
                     WorkerUri::URL(WorkerUrl {
                         component_name: f.component_name,
@@ -271,7 +238,7 @@ async fn get_resource_by_url(
         }
         ResourceUrl::ApiDefinition(ad) => {
             factory
-                .api_definition_service(ctx)?
+                .api_definition_service()
                 .get(
                     ApiDefinitionId(ad.name),
                     ApiDefinitionVersion(ad.version),
@@ -279,7 +246,7 @@ async fn get_resource_by_url(
                 )
                 .await
         }
-        ResourceUrl::ApiDeployment(ad) => factory.api_deployment_service(ctx)?.get(ad.site).await,
+        ResourceUrl::ApiDeployment(ad) => factory.api_deployment_service().get(ad.site).await,
     }
 }
 

@@ -16,6 +16,8 @@ use crate::clients::health_check::HealthCheckClient;
 use crate::model::{GolemError, GolemResult};
 use async_trait::async_trait;
 use std::cmp::Ordering;
+use std::sync::Arc;
+use tokio::task::JoinSet;
 use version_compare::Version;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -26,15 +28,20 @@ pub trait VersionService {
 }
 
 pub struct VersionServiceLive {
-    pub clients: Vec<Box<dyn HealthCheckClient + Send + Sync>>,
+    pub clients: Vec<Arc<dyn HealthCheckClient + Send + Sync>>,
 }
 
 #[async_trait]
 impl VersionService for VersionServiceLive {
     async fn check(&self) -> Result<GolemResult, GolemError> {
+        let mut requests = JoinSet::new();
+        for client in self.clients.clone() {
+            requests.spawn(async move { client.version().await });
+        }
+
         let mut versions = Vec::with_capacity(self.clients.len());
-        for client in &self.clients {
-            versions.push(client.version().await?)
+        while let Some(result) = requests.join_next().await {
+            versions.push(result.expect("Failed to join version request")?);
         }
 
         let srv_versions = versions
