@@ -28,6 +28,8 @@ use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
 use std::path::PathBuf;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     cmd: GolemOssCommand<ProfileAdd>,
     profile: OssProfile,
@@ -39,7 +41,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     let format = cmd.format.unwrap_or(profile.config.default_format);
     let factory = || async {
         let factory = OssServiceFactory::from_profile(&profile)?;
-        check_for_newer_server_version(factory.version_service().as_ref()).await;
+        check_for_newer_server_version(factory.version_service().as_ref(), VERSION).await;
         Ok::<OssServiceFactory, GolemError>(factory)
     };
 

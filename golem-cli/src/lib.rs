@@ -70,8 +70,11 @@ pub fn init_tracing(verbosity: &Verbosity) {
     }
 }
 
-pub async fn check_for_newer_server_version(version_service: &dyn VersionService) {
-    match version_service.check().await {
+pub async fn check_for_newer_server_version(
+    version_service: &dyn VersionService,
+    cli_version: &str,
+) {
+    match version_service.check(cli_version).await {
         Ok(VersionCheckResult::Ok) => { /* NOP */ }
         Ok(VersionCheckResult::NewerServerVersionAvailable {
             cli_version,

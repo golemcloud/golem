@@ -20,8 +20,6 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use version_compare::Version;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 pub enum VersionCheckResult {
     Ok,
     NewerServerVersionAvailable {
@@ -32,7 +30,7 @@ pub enum VersionCheckResult {
 
 #[async_trait]
 pub trait VersionService {
-    async fn check(&self) -> Result<VersionCheckResult, GolemError>;
+    async fn check(&self, cli_version: &str) -> Result<VersionCheckResult, GolemError>;
 }
 
 pub struct VersionServiceLive {
@@ -41,7 +39,7 @@ pub struct VersionServiceLive {
 
 #[async_trait]
 impl VersionService for VersionServiceLive {
-    async fn check(&self) -> Result<VersionCheckResult, GolemError> {
+    async fn check(&self, cli_version: &str) -> Result<VersionCheckResult, GolemError> {
         let mut requests = JoinSet::new();
         for client in self.clients.clone() {
             requests.spawn(async move { client.version().await });
@@ -57,7 +55,7 @@ impl VersionService for VersionServiceLive {
             .map(|v| Version::from(v.version.as_str()).unwrap())
             .collect::<Vec<_>>();
 
-        let cli_version = Version::from(VERSION).unwrap();
+        let cli_version = Version::from(cli_version).unwrap();
 
         let newer_server_version = server_versions
             .iter()
