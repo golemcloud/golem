@@ -405,7 +405,7 @@ mod tests {
                     &ApiSiteString("test.com".to_string()),
                 )
                 .await
-                .unwrap(),
+                .is_ok(),
             "Deployment not found"
         );
 
@@ -420,6 +420,28 @@ mod tests {
             .await
             .unwrap();
         assert!(deployment.is_none());
+
+        let definition1 = definition_service
+            .get(
+                &def1.id,
+                &def1.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert!(definition1.is_some_and(|x| x.draft));
+
+        let definition2 = definition_service
+            .get(
+                &def2.id,
+                &def2.version,
+                &DefaultNamespace::default(),
+                &EmptyAuthCtx::default(),
+            )
+            .await
+            .unwrap();
+        assert!(definition2.is_some_and(|x| x.draft));
     }
 
     async fn test_deployment_conflict(
@@ -637,8 +659,7 @@ mod tests {
                     &EmptyAuthCtx::default(),
                 )
                 .await
-                .unwrap()
-                .is_some(),
+                .is_ok(),
             "Failed to delete definition"
         );
         assert!(
@@ -650,8 +671,7 @@ mod tests {
                     &EmptyAuthCtx::default(),
                 )
                 .await
-                .unwrap()
-                .is_some(),
+                .is_ok(),
             "Failed to delete definition"
         );
 
@@ -680,10 +700,9 @@ mod tests {
                 &DefaultNamespace::default(),
                 &EmptyAuthCtx::default(),
             )
-            .await
-            .expect("delete succeeded");
+            .await;
 
-        assert!(delete_result.is_none(), "definition should not exist");
+        assert!(delete_result.is_err(), "definition should not exist");
     }
 
     fn get_api_deployment(

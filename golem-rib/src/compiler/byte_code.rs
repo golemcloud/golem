@@ -148,6 +148,11 @@ mod internal {
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::LessThanOrEqualTo);
             }
+            Expr::And(lhs, rhs, _) => {
+                stack.push(ExprState::from_expr(rhs.deref()));
+                stack.push(ExprState::from_expr(lhs.deref()));
+                instructions.push(RibIR::And);
+            }
             Expr::Record(fields, inferred_type) => {
                 // Push field instructions in reverse order
                 for (field_name, field_expr) in fields.iter().rev() {
@@ -285,7 +290,7 @@ mod internal {
             Expr::Boolean(bool, _) => {
                 instructions.push(RibIR::PushLit(TypeAnnotatedValue::Bool(*bool)));
             }
-            Expr::Tag(expr, _) => {
+            Expr::GetTag(expr, _) => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 stack.push(ExprState::from_ir(RibIR::GetTag));
             }

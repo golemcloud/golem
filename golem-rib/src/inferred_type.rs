@@ -674,8 +674,6 @@ impl InferredType {
                     Ok(InferredType::Flags(a_flags.clone()))
                 }
                 (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
-                    dbg!(a_variants);
-                    dbg!(b_variants);
                     if a_variants != b_variants {
                         return Err(vec!["Enum variants do not match".to_string()]);
                     }
@@ -793,8 +791,19 @@ impl InferredType {
                 }
 
                 (InferredType::OneOf(types), inferred_type) => {
-                    if types.contains(inferred_type) {
-                        Ok(inferred_type.clone())
+                    let mut unified = None;
+                    for typ in types {
+                        match typ.unify_with_required(inferred_type) {
+                            Ok(result) => {
+                                unified = Some(result);
+                                break;
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+
+                    if let Some(unified) = unified {
+                        Ok(unified)
                     } else {
                         let type_set: HashSet<_> = types.iter().collect::<HashSet<_>>();
                         Err(vec![format!("Types do not match. Inferred to be any of {:?}, but found (or used as) {:?} ",  type_set, inferred_type)])
@@ -806,8 +815,7 @@ impl InferredType {
                         Ok(inferred_type.clone())
                     } else {
                         let type_set: HashSet<_> = types.iter().collect::<HashSet<_>>();
-
-                        Err(vec![format!("Types do not match. Inferred to be any of {:?}, but found or used as {:?} ", type_set, inferred_type)])
+                        Err(vec![format!("Types do not match. Inferred to be any of {:?}, but found (or used as) {:?} ",  type_set, inferred_type)])
                     }
                 }
 

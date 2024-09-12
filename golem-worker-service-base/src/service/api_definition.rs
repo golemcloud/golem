@@ -129,7 +129,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         version: &ApiVersion,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<ApiDefinitionId>, ValidationError>;
+    ) -> ApiResult<(), ValidationError>;
 
     async fn get_all(
         &self,
@@ -356,7 +356,7 @@ where
         version: &ApiVersion,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
+    ) -> ApiResult<(), ValidationError> {
         info!(namespace = %namespace, "Delete API definition");
 
         let deployments = self
@@ -370,9 +370,11 @@ where
                 .delete(&namespace.to_string(), id.0.as_str(), version.0.as_str())
                 .await?;
 
-            let value = if deleted { Some(id.clone()) } else { None };
-
-            Ok(value)
+            if deleted {
+                Ok(())
+            } else {
+                Err(ApiDefinitionError::ApiDefinitionNotFound(id.clone()))
+            }
         } else {
             Err(ApiDefinitionError::ApiDefinitionDeployed(
                 deployments
@@ -484,8 +486,8 @@ where
         _version: &ApiVersion,
         _namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<ApiDefinitionId>, ValidationError> {
-        Ok(None)
+    ) -> ApiResult<(), ValidationError> {
+        Ok(())
     }
 
     async fn get_all(

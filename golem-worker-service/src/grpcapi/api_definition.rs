@@ -397,8 +397,7 @@ impl GrpcApiDefinitionService {
         let api_definition_id = get_api_definition_id(request.api_definition_id)?;
         let version = ApiVersion(request.version);
 
-        let _ = self
-            .definition_service
+        self.definition_service
             .delete(
                 &api_definition_id,
                 &version,

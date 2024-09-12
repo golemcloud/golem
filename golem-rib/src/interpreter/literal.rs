@@ -26,6 +26,18 @@ impl GetLiteralValue for TypeAnnotatedValue {
         match self {
             TypeAnnotatedValue::Str(value) => Some(LiteralValue::String(value.clone())),
             TypeAnnotatedValue::Bool(value) => Some(LiteralValue::Bool(*value)),
+            TypeAnnotatedValue::Enum(value) => {
+                // An enum can be turned into a simple literal and can be part of string concatenations
+                Some(LiteralValue::String(value.value.clone()))
+            }
+            TypeAnnotatedValue::Variant(value) => {
+                // A no arg variant can be turned into a simple literal and can be part of string concatenations
+                if value.case_value.is_none() {
+                    Some(LiteralValue::String(value.case_name.clone()))
+                } else {
+                    None
+                }
+            }
             other => internal::get_numeric_value(other).map(LiteralValue::Num),
         }
     }

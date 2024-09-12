@@ -6,7 +6,7 @@ use crate::model::{
     WorkersMetadataResponseView,
 };
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use golem_client::model::{HttpApiDefinition, Route, ScanCursor};
+use golem_client::model::{HttpApiDefinitionWithTypeInfo, RouteWithTypeInfo, ScanCursor};
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
@@ -29,8 +29,8 @@ struct HttpApiDefinitionView {
     pub n_routes: usize,
 }
 
-impl From<&HttpApiDefinition> for HttpApiDefinitionView {
-    fn from(value: &HttpApiDefinition) -> Self {
+impl From<&HttpApiDefinitionWithTypeInfo> for HttpApiDefinitionView {
+    fn from(value: &HttpApiDefinitionWithTypeInfo) -> Self {
         Self {
             id: value.id.to_string(),
             version: value.version.to_string(),
@@ -39,7 +39,7 @@ impl From<&HttpApiDefinition> for HttpApiDefinitionView {
     }
 }
 
-impl TextFormat for Vec<HttpApiDefinition> {
+impl TextFormat for Vec<HttpApiDefinitionWithTypeInfo> {
     fn print(&self) {
         print_stdout(
             self.iter()
@@ -52,7 +52,7 @@ impl TextFormat for Vec<HttpApiDefinition> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiDefinitionGetRes(pub HttpApiDefinition);
+pub struct ApiDefinitionGetRes(pub HttpApiDefinitionWithTypeInfo);
 
 impl TextFormat for ApiDefinitionGetRes {
     fn print(&self) {
@@ -61,7 +61,7 @@ impl TextFormat for ApiDefinitionGetRes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiDefinitionAddRes(pub HttpApiDefinition);
+pub struct ApiDefinitionAddRes(pub HttpApiDefinitionWithTypeInfo);
 
 #[derive(Table)]
 struct RouteView {
@@ -75,8 +75,8 @@ struct RouteView {
     pub worker_name: String,
 }
 
-impl From<&Route> for RouteView {
-    fn from(value: &Route) -> Self {
+impl From<&RouteWithTypeInfo> for RouteView {
+    fn from(value: &RouteWithTypeInfo) -> Self {
         let component_urn = ComponentUrn {
             id: ComponentId(value.binding.component_id.component_id),
         };
@@ -91,7 +91,7 @@ impl From<&Route> for RouteView {
     }
 }
 
-fn print_api_definition(def: &HttpApiDefinition, action: &str) {
+fn print_api_definition(def: &HttpApiDefinitionWithTypeInfo, action: &str) {
     printdoc!(
         "
             API Definition {action}with ID {} and version {}.
@@ -118,7 +118,7 @@ impl TextFormat for ApiDefinitionAddRes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiDefinitionUpdateRes(pub HttpApiDefinition);
+pub struct ApiDefinitionUpdateRes(pub HttpApiDefinitionWithTypeInfo);
 
 impl TextFormat for ApiDefinitionUpdateRes {
     fn print(&self) {
@@ -127,7 +127,7 @@ impl TextFormat for ApiDefinitionUpdateRes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiDefinitionImportRes(pub HttpApiDefinition);
+pub struct ApiDefinitionImportRes(pub HttpApiDefinitionWithTypeInfo);
 
 impl TextFormat for ApiDefinitionImportRes {
     fn print(&self) {

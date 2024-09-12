@@ -37,6 +37,8 @@ use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use std::sync::Arc;
+use storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use storage::sqlite_types::SqlitePool;
 use tokio::runtime::Handle;
 use tonic::transport::Server;
 use tracing::info;
@@ -182,6 +184,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             KeyValueStorageConfig::InMemory => {
                 info!("Using in-memory key-value storage");
                 (None, Arc::new(InMemoryKeyValueStorage::new()))
+            }
+            KeyValueStorageConfig::Sqlite(sqlite) => {
+                info!("Using Sqlite for key-value storage at {}", sqlite.database);
+                let pool = SqlitePool::configured(sqlite)
+                    .await
+                    .map_err(|err| anyhow!(err))?;
+                let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                    Arc::new(SqliteKeyValueStorage::new(pool.clone()));
+                (None, key_value_storage)
             }
         };
 

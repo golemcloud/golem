@@ -20,13 +20,15 @@ pub struct ResponseMapping(pub Expr);
 
 impl From<CompiledGolemWorkerBinding> for GolemWorkerBinding {
     fn from(value: CompiledGolemWorkerBinding) -> Self {
+        let worker_binding = value.clone();
+
         GolemWorkerBinding {
-            component_id: value.component_id,
-            worker_name: value.worker_name_compiled.worker_name,
-            idempotency_key: value
+            component_id: worker_binding.component_id,
+            worker_name: worker_binding.worker_name_compiled.worker_name,
+            idempotency_key: worker_binding
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.idempotency_key),
-            response: ResponseMapping(value.response_compiled.response_rib_expr),
+            response: ResponseMapping(worker_binding.response_compiled.response_rib_expr),
         }
     }
 }

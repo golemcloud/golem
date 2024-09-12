@@ -78,11 +78,12 @@ pub trait ApiDefinitionRepo {
 
     async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError>;
 
-    async fn set_not_draft(
+    async fn set_draft(
         &self,
         namespace: &str,
         id: &str,
         version: &str,
+        draft: bool,
     ) -> Result<(), RepoError>;
 
     async fn get(
@@ -162,22 +163,24 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
         Ok(())
     }
 
-    async fn set_not_draft(
+    async fn set_draft(
         &self,
         namespace: &str,
         id: &str,
         version: &str,
+        draft: bool,
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"
               UPDATE api_definitions
-              SET draft = false
+              SET draft = $4
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
         .bind(namespace)
         .bind(id)
         .bind(version)
+        .bind(draft)
         .execute(self.db_pool.deref())
         .await?;
 
@@ -298,22 +301,24 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn set_not_draft(
+    async fn set_draft(
         &self,
         namespace: &str,
         id: &str,
         version: &str,
+        draft: bool,
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"
               UPDATE api_definitions
-              SET draft = false
+              SET draft = $4
               WHERE namespace = $1 AND id = $2 AND version = $3
                "#,
         )
         .bind(namespace)
         .bind(id)
         .bind(version)
+        .bind(draft)
         .execute(self.db_pool.deref())
         .await?;
 

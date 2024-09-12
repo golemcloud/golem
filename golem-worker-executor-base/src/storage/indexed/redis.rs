@@ -40,6 +40,15 @@ impl RedisIndexedStorage {
         }
     }
 
+    fn parse_composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
+        let prefix = Self::composite_key(namespace, "");
+        if key.starts_with(&prefix) {
+            key[prefix.len()..].to_string()
+        } else {
+            key.to_string()
+        }
+    }
+
     const KEY: &'static str = "key";
 
     fn parse_entry_id(id: &str) -> Result<u64, String> {
@@ -126,11 +135,21 @@ impl IndexedStorage for RedisIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        self.redis
+        let (cursor, keys) = self
+            .redis
             .with(svc_name, api_name)
-            .scan(Self::composite_key(namespace, pattern), cursor, count)
+            .scan(
+                Self::composite_key(namespace.clone(), pattern),
+                cursor,
+                count,
+            )
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        let keys = keys
+            .into_iter()
+            .map(|k| Self::parse_composite_key(namespace.clone(), &k))
+            .collect();
+        Ok((cursor, keys))
     }
 
     async fn append(

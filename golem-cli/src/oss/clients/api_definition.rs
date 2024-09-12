@@ -18,8 +18,8 @@ use std::io::Read;
 
 use async_trait::async_trait;
 
-use golem_client::model::HttpApiDefinition;
 use golem_client::model::HttpApiDefinitionRequest;
+use golem_client::model::HttpApiDefinitionWithTypeInfo;
 
 use crate::clients::api_definition::ApiDefinitionClient;
 use tokio::fs::read_to_string;
@@ -57,7 +57,7 @@ async fn create_or_update_api_definition<
     action: Action,
     client: &C,
     path: PathBufOrStdin,
-) -> Result<HttpApiDefinition, GolemError> {
+) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
     info!("{action} api definition from {path:?}");
 
     let definition_str: String = match path {
@@ -109,7 +109,7 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         &self,
         id: Option<&ApiDefinitionId>,
         _project: &Self::ProjectContext,
-    ) -> Result<Vec<HttpApiDefinition>, GolemError> {
+    ) -> Result<Vec<HttpApiDefinitionWithTypeInfo>, GolemError> {
         info!("Getting api definitions");
 
         Ok(self
@@ -123,7 +123,7 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         id: ApiDefinitionId,
         version: ApiDefinitionVersion,
         _project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError> {
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
         info!("Getting api definition for {}/{}", id.0, version.0);
 
         Ok(self
@@ -136,7 +136,7 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         &self,
         path: PathBufOrStdin,
         _project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError> {
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
         create_or_update_api_definition(Action::Create, &self.client, path).await
     }
 
@@ -144,7 +144,7 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         &self,
         path: PathBufOrStdin,
         _project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError> {
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
         create_or_update_api_definition(Action::Update, &self.client, path).await
     }
 
@@ -152,7 +152,7 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         &self,
         path: PathBufOrStdin,
         _project: &Self::ProjectContext,
-    ) -> Result<HttpApiDefinition, GolemError> {
+    ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
         create_or_update_api_definition(Action::Import, &self.client, path).await
     }
 

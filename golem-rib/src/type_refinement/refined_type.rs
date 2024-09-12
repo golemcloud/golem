@@ -129,7 +129,7 @@ impl<A> RefinedType<A> {
             }
             RefinedType::AllOf(inner) => {
                 let x = inner.iter().map(|v| v.inner_types()).collect::<Vec<_>>();
-                internal::combine(x, InferredType::one_of)
+                internal::combine(x, InferredType::all_of)
             }
             RefinedType::Value(value) => HeterogeneousCollectionType(value.inner_types()),
         }

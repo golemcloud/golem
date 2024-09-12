@@ -23,6 +23,7 @@ use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
 pub mod redis;
+pub mod sqlite;
 
 pub type ScanCursor = u64;
 
@@ -61,7 +62,8 @@ pub trait IndexedStorage: Debug {
         key: &str,
     ) -> Result<bool, String>;
 
-    /// Returns all the keys matching the given pattern, in a paginated way
+    /// Returns all the keys matching the given pattern, in a paginated way. If there are
+    /// no more pages to scan, the returned cursor will be 0.
     async fn scan(
         &self,
         svc_name: &'static str,
@@ -72,7 +74,7 @@ pub trait IndexedStorage: Debug {
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String>;
 
-    /// Appends an entry to the given key, starting from the given id
+    /// Appends an entry to the given key with the given id
     async fn append(
         &self,
         svc_name: &'static str,
@@ -146,6 +148,8 @@ pub trait IndexedStorage: Debug {
         id: u64,
     ) -> Result<Option<(u64, Bytes)>, String>;
 
+    /// Deletes the entry with the closest id to the given id in the index of the given key,
+    /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
     async fn drop_prefix(
         &self,
         svc_name: &'static str,

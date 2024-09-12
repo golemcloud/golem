@@ -76,7 +76,7 @@ impl PrimaryOplogService {
     }
 
     pub fn get_worker_id_from_key(key: &str, component_id: &ComponentId) -> WorkerId {
-        let redis_prefix = format!("worker:oplog:{}:", component_id.0);
+        let redis_prefix = format!("{}:", component_id.0);
         if key.starts_with(&redis_prefix) {
             let worker_name = &key[redis_prefix.len()..];
             WorkerId {

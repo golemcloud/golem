@@ -913,7 +913,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinition'
+                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
         '400':
           description: ''
           content:
@@ -975,7 +975,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/HttpApiDefinition'
+                  $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
         '400':
           description: ''
           content:
@@ -1032,7 +1032,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinition'
+                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
         '400':
           description: ''
           content:
@@ -1099,7 +1099,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinition'
+                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
         '400':
           description: ''
           content:
@@ -1171,7 +1171,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinition'
+                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
         '400':
           description: ''
           content:
@@ -2929,29 +2929,29 @@ components:
       - componentId
       - workerName
       - response
-    HealthcheckResponse:
-      type: object
-    HttpApiDefinition:
+    GolemWorkerBindingWithTypeInfo:
       type: object
       properties:
-        id:
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        workerName:
           type: string
-        version:
+        idempotencyKey:
           type: string
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/Route'
-        draft:
-          type: boolean
-        createdAt:
+        response:
           type: string
-          format: date-time
+        responseMappingInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        workerNameInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        idempotencyKeyInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
       required:
-      - id
-      - version
-      - routes
-      - draft
+      - componentId
+      - workerName
+      - response
+    HealthcheckResponse:
+      type: object
     HttpApiDefinitionRequest:
       type: object
       properties:
@@ -2965,6 +2965,27 @@ components:
             $ref: '#/components/schemas/Route'
         draft:
           type: boolean
+      required:
+      - id
+      - version
+      - routes
+      - draft
+    HttpApiDefinitionWithTypeInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteWithTypeInfo'
+        draft:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
       required:
       - id
       - version
@@ -3077,6 +3098,15 @@ components:
       - createdAt
     ResumeResponse:
       type: object
+    RibInputTypeInfo:
+      type: object
+      properties:
+        types:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AnalysedType'
+      required:
+      - types
     Route:
       type: object
       properties:
@@ -3106,6 +3136,19 @@ components:
       - path
       - component
       - detail
+    RouteWithTypeInfo:
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/MethodPattern'
+        path:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GolemWorkerBindingWithTypeInfo'
+      required:
+      - method
+      - path
+      - binding
     ScanCursor:
       type: object
       properties:

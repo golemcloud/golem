@@ -300,6 +300,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
+
             Expr::Throw(_, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify_types_and_verify();
 
@@ -312,7 +313,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
-            Expr::Tag(_, inferred_type) => {
+            Expr::GetTag(_, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify_types_and_verify();
 
                 match unified_inferred_type {
@@ -325,6 +326,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             }
 
             Expr::GreaterThan(left, right, _) => {
+                queue.push(left);
+                queue.push(right);
+            }
+
+            Expr::And(left, right, _) => {
                 queue.push(left);
                 queue.push(right);
             }
@@ -370,6 +376,12 @@ mod internal {
                 push_arm_pattern_expr(pattern, queue);
             }
             ArmPattern::Constructor(_, patterns) => {
+                for pattern in patterns {
+                    push_arm_pattern_expr(pattern, queue);
+                }
+            }
+
+            ArmPattern::TupleConstructor(patterns) => {
                 for pattern in patterns {
                     push_arm_pattern_expr(pattern, queue);
                 }

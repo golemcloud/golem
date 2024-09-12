@@ -143,6 +143,11 @@ mod internal {
                     collect_all_identifiers(pattern, state)
                 }
             }
+            ArmPattern::TupleConstructor(patterns) => {
+                for pattern in patterns {
+                    collect_all_identifiers(pattern, state)
+                }
+            }
             ArmPattern::Literal(expr) => accumulate_types_of_identifiers(&mut *expr, state),
         }
     }

@@ -191,6 +191,10 @@ impl Interpreter {
                 }
 
                 RibIR::Label(_) => {}
+
+                RibIR::And => {
+                    internal::run_and_instruction(&mut self.stack)?;
+                }
             }
         }
 
@@ -384,6 +388,26 @@ mod internal {
         Ok(())
     }
 
+    pub(crate) fn run_and_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let left = interpreter_stack.pop().ok_or(
+            "Empty stack and failed to get a value to do the comparison operation".to_string(),
+        )?;
+        let right = interpreter_stack.pop().ok_or(
+            "Failed to get a value from the stack to do the comparison operation".to_string(),
+        )?;
+
+        let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
+            (Some(a), Some(b)) => a && b,
+            _ => false,
+        })?;
+
+        interpreter_stack.push(result);
+
+        Ok(())
+    }
+
     pub(crate) fn run_compare_instruction(
         interpreter_stack: &mut InterpreterStack,
         compare_fn: fn(LiteralValue, LiteralValue) -> bool,
@@ -457,8 +481,22 @@ mod internal {
                 interpreter_stack.push_val(inner_type_annotated_value);
                 Ok(())
             }
+            RibInterpreterResult::Val(TypeAnnotatedValue::Tuple(typed_tuple)) => {
+                let value = typed_tuple
+                    .value
+                    .get(index)
+                    .ok_or(format!("Index {} not found in the tuple", index))?
+                    .clone();
+
+                let inner_type_annotated_value = value
+                    .type_annotated_value
+                    .ok_or("Field value not found".to_string())?;
+
+                interpreter_stack.push_val(inner_type_annotated_value);
+                Ok(())
+            }
             result => Err(format!(
-                "Expected a sequence value to select an index. But obtained {:?}",
+                "Expected a sequence value or tuple to select an index. But obtained {:?}",
                 result
             )),
         }
@@ -739,8 +777,10 @@ mod internal {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
-    use crate::{InstructionId, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32};
+    use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr,
+    };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
 
@@ -1023,5 +1063,274 @@ mod interpreter_tests {
 
         let result = interpreter.run(instructions).await.unwrap();
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_option_nested() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x = some(some(1u64));
+
+           match x {
+              some(x) => match x {
+                some(x) => x
+              }
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(1));
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: tuple<u64, str, str> = (1, "foo", "bar");
+
+           match x {
+              (x, y, z) => "${x} ${y} ${z}"
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("1 foo bar".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_option_some() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: tuple<u64, option<str>, str> = (1, some("foo"), "bar");
+
+           match x {
+              (x, none, z) => "${x} ${z}",
+              (x, some(y), z) => "${x} ${y} ${z}"
+           }
+        "#;
+
+        let mut expr = Expr::from_text(expr).unwrap();
+        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("1 foo bar".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_option_none() {
+        let mut interpreter = Interpreter::default();
+
+        let expr = r#"
+           let x: tuple<u64, option<str>, str> = (1, none, "bar");
+
+           match x {
+              (x, none, z) => "${x} ${z}",
+              (x, some(y), z) => "${x} ${y} ${z}"
+           }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &vec![]).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("1 bar".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
+        let mut interpreter = Interpreter::default();
+
+        let tuple = internal::get_analysed_type_tuple();
+
+        let analysed_exports =
+            internal::get_component_metadata("foo", vec![tuple], AnalysedType::Str(TypeStr));
+
+        let expr = r#"
+
+           let record = { request : { path : { user : "jak" } }, y : "bar" };
+           let input = (1, ok(100), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
+           foo(input);
+           match input {
+             (n1, err(x1), txt, rec, process-user(x), register-user(n), validate, dev, prod, test) =>  "Invalid",
+             (n1, ok(x2), txt, rec, process-user(x), register-user(n), validate, prod, dev, test) =>  "foo ${x2} ${n1} ${txt} ${rec.request.path.user} ${validate} ${prod} ${dev} ${test}"
+           }
+
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_pattern_match_on_tuple_with_wild_pattern() {
+        let mut interpreter = Interpreter::default();
+
+        let tuple = internal::get_analysed_type_tuple();
+
+        let analysed_exports = internal::get_component_metadata(
+            "my-worker-function",
+            vec![tuple],
+            AnalysedType::Str(TypeStr),
+        );
+
+        let expr = r#"
+
+           let record = { request : { path : { user : "jak" } }, y : "baz" };
+           let input = (1, ok(1), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
+           my-worker-function(input);
+           match input {
+             (n1, ok(x), txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
+             (n1, ok(x), txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
+           }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
+        );
+    }
+
+    mod internal {
+        use golem_wasm_ast::analysis::*;
+
+        pub(crate) fn get_analysed_type_variant() -> AnalysedType {
+            AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "register-user".to_string(),
+                        typ: Some(AnalysedType::U64(TypeU64)),
+                    },
+                    NameOptionTypePair {
+                        name: "process-user".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                    NameOptionTypePair {
+                        name: "validate".to_string(),
+                        typ: None,
+                    },
+                ],
+            })
+        }
+
+        pub(crate) fn get_analysed_type_record() -> AnalysedType {
+            AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "request".to_string(),
+                        typ: AnalysedType::Record(TypeRecord {
+                            fields: vec![NameTypePair {
+                                name: "path".to_string(),
+                                typ: AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "user".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                }),
+                            }],
+                        }),
+                    },
+                    NameTypePair {
+                        name: "y".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                ],
+            })
+        }
+
+        pub(crate) fn get_analysed_type_result() -> AnalysedType {
+            AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            })
+        }
+
+        pub(crate) fn get_analysed_type_enum() -> AnalysedType {
+            AnalysedType::Enum(TypeEnum {
+                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
+            })
+        }
+
+        pub(crate) fn get_analysed_typ_str() -> AnalysedType {
+            AnalysedType::Str(TypeStr)
+        }
+
+        pub(crate) fn get_analysed_typ_u64() -> AnalysedType {
+            AnalysedType::U64(TypeU64)
+        }
+
+        pub(crate) fn get_analysed_type_tuple() -> AnalysedType {
+            let tuple_type = TypeTuple {
+                items: vec![
+                    get_analysed_typ_u64(),
+                    get_analysed_type_result(),
+                    get_analysed_typ_str(),
+                    get_analysed_type_record(),
+                    get_analysed_type_variant(),
+                    get_analysed_type_variant(),
+                    get_analysed_type_variant(),
+                    get_analysed_type_enum(),
+                    get_analysed_type_enum(),
+                    get_analysed_type_enum(),
+                ],
+            };
+
+            AnalysedType::Tuple(tuple_type)
+        }
+
+        pub(crate) fn get_component_metadata(
+            function_name: &str,
+            input_types: Vec<AnalysedType>,
+            output: AnalysedType,
+        ) -> Vec<AnalysedExport> {
+            let analysed_function_parameters = input_types
+                .into_iter()
+                .enumerate()
+                .map(|(index, typ)| AnalysedFunctionParameter {
+                    name: format!("param{}", index),
+                    typ,
+                })
+                .collect();
+
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }],
+            })]
+        }
     }
 }
