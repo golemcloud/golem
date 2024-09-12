@@ -1194,7 +1194,7 @@ mod interpreter_tests {
         let tuple = internal::get_analysed_type_tuple();
 
         let analysed_exports =
-            internal::get_analysed_exports("foo", vec![tuple], AnalysedType::Str(TypeStr));
+            internal::get_component_metadata("foo", vec![tuple], AnalysedType::Str(TypeStr));
 
         let expr = r#"
 
@@ -1208,7 +1208,7 @@ mod interpreter_tests {
 
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let expr = Expr::from_text(expr).unwrap();
         let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1224,7 +1224,7 @@ mod interpreter_tests {
 
         let tuple = internal::get_analysed_type_tuple();
 
-        let analysed_exports = internal::get_analysed_exports(
+        let analysed_exports = internal::get_component_metadata(
             "my-worker-function",
             vec![tuple],
             AnalysedType::Str(TypeStr),
@@ -1239,10 +1239,9 @@ mod interpreter_tests {
              (n1, ok(x), txt, rec, _, _, _, _, prod, _) =>  "prod ${n1} ${txt} ${rec.request.path.user} ${rec.y}",
              (n1, ok(x), txt, rec, _, _, _, _, dev, _) =>   "dev ${n1} ${txt} ${rec.request.path.user} ${rec.y}"
            }
-
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let expr = Expr::from_text(expr).unwrap();
         let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -1339,7 +1338,7 @@ mod interpreter_tests {
             AnalysedType::Tuple(tuple_type)
         }
 
-        pub(crate) fn get_analysed_exports(
+        pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,
             output: AnalysedType,

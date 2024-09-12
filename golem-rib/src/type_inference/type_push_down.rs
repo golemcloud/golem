@@ -197,6 +197,7 @@ mod internal {
         let inner_types = refined_tuple_type.inner_types();
 
         for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
+            dbg!(expr.clone(), typ.clone());
             expr.add_infer_type_mut(typ.clone());
             push_down_queue.push_back(expr);
         }
