@@ -20,6 +20,10 @@ use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor_base::storage::indexed::redis::RedisIndexedStorage;
+use golem_worker_executor_base::storage::indexed::sqlite::SqliteIndexedStorage;
+use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
+use sqlx::sqlite::SqlitePoolOptions;
+
 use golem_worker_executor_base::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -80,6 +84,30 @@ pub(crate) async fn redis_storage() -> impl GetIndexedStorage {
         _redis: redis,
         _monitor: redis_monitor,
     }
+}
+
+struct SqliteIndexedStorageWrapper {
+    sis: SqliteIndexedStorage,
+}
+
+impl GetIndexedStorage for SqliteIndexedStorageWrapper {
+    fn get_indexed_storage(&self) -> &dyn IndexedStorage {
+        &self.sis
+    }
+}
+
+pub(crate) async fn sqlite_storage() -> impl GetIndexedStorage {
+    let sqlx_pool_sqlite = SqlitePoolOptions::new()
+        .max_connections(10)
+        .connect("sqlite::memory:")
+        .await
+        .expect("Cannot create db options");
+
+    let pool = SqlitePool::new(sqlx_pool_sqlite)
+        .await
+        .expect("Cannot connect to sqlite db");
+    let sis = SqliteIndexedStorage::new(pool);
+    SqliteIndexedStorageWrapper { sis }
 }
 
 pub fn ns() -> IndexedStorageNamespace {
@@ -855,3 +883,4 @@ macro_rules! test_indexed_storage {
 
 test_indexed_storage!(in_memory, crate::indexed_storage::in_memory_storage());
 test_indexed_storage!(redis, crate::indexed_storage::redis_storage());
+test_indexed_storage!(sqlite, crate::indexed_storage::sqlite_storage());

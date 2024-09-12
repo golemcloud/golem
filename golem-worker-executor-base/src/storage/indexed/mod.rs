@@ -23,6 +23,7 @@ use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
 pub mod redis;
+pub mod sqlite;
 
 pub type ScanCursor = u64;
 
@@ -147,6 +148,8 @@ pub trait IndexedStorage: Debug {
         id: u64,
     ) -> Result<Option<(u64, Bytes)>, String>;
 
+    /// Deletes the entry with the closest id to the given id in the index of the given key,
+    /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
     async fn drop_prefix(
         &self,
         svc_name: &'static str,
