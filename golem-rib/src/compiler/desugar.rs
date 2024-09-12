@@ -311,9 +311,10 @@ mod internal {
             }
 
             InferredType::Tuple(inferred_types) => {
-                // Resolution body is a list of expressions which gets built up
+                // Resolution body is a list of expressions which grows (may be with some let bindings)
                 // as we recursively iterate over the bind patterns
                 // where bind patterns are x, _, y in the case of `match tuple_variable { (x, _, y)) =>`
+                // These will exist prior to the original resolution of a successful tuple match.
                 let mut resolution_body = vec![];
 
                 // The conditions keep growing as we recursively iterate over the bind patterns
@@ -321,9 +322,9 @@ mod internal {
                 let mut conditions = vec![];
 
                 // We assume pred-expr is indexed (i.e, tuple is indexed), and we pick each element in the bind pattern
-                // and get the corresponding expr in pred-expr and keep recursively iterating until the tuple is completed
+                // and get the corresponding expr in pred-expr and keep recursively iterating until the tuple is completed.
                 // However there is no resolution body for each of this iteration, so we use an empty expression
-                // and finally push the original resolution body once we fully built the conditions.
+                // and finally push the original resolution body once we fully build the conditions.
                 for (index, arm_pattern) in bind_patterns.iter().enumerate() {
                     let new_pred = Expr::select_index(pred_expr.clone(), index);
                     let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);

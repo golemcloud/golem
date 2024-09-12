@@ -89,14 +89,13 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 internal::handle_record(expressions, inferred_type, &mut queue)?;
             }
 
-            // For type push down, if it's variant type or enum type
             Expr::Call(call_type, expressions, inferred_type) => {
                 match call_type {
-                    // For CallType::Enum constructor, there are no argument expressions
-                    // For CallType::Function , there is no type available to push down to arguments, as it is invalid
+                    // For CallType::Enum, there are no argument expressions
+                    // For CallType::Function, there is no type available to push down to arguments, as it is invalid
                     // to push down the return type of function to its arguments.
-                    // For variant constructor, the type of the arguments are present in th return type of the call
-                    // which should be a variant having a collection of each case with the argument type
+                    // For variant constructor, the type of the arguments are present in the return type of the call
+                    // and should be pushed down to arguments
                     CallType::VariantConstructor(name) => {
                         if let InferredType::Variant(variant) = inferred_type {
                             let identified_variant = variant
