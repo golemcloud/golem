@@ -1,3 +1,0 @@
-// Test WIT covering three components, A, B and C, referencing each other as A->B->C->A.
-
-package test:a;

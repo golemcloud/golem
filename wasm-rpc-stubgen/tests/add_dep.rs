@@ -264,9 +264,163 @@ fn direct_circular_same_world_name() {
     assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
 }
 
-// TODO: test update-cargo feature
+#[test]
+fn indirect_circular() {
+    let stub_a_dir = init_stub("indirect-circular-a");
+    let stub_b_dir = init_stub("indirect-circular-b");
+    let stub_c_dir = init_stub("indirect-circular-c");
+
+    let dest_a = init_caller("indirect-circular-a");
+    let dest_b = init_caller("indirect-circular-b");
+    let dest_c = init_caller("indirect-circular-c");
+
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), false, false).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
+
+    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
+    uncomment_imports(&dest_a.path().join("a.wit"));
+    uncomment_imports(&dest_b.path().join("b.wit"));
+    uncomment_imports(&dest_c.path().join("c.wit"));
+
+    assert_valid_wit_root(dest_a.path());
+    assert_valid_wit_root(dest_b.path());
+    assert_valid_wit_root(dest_c.path());
+
+    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+
+    let original_b =
+        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-b/b.wit")).unwrap();
+    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+
+    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let stub_wit_c = std::fs::read_to_string(stub_c_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_b.path(), "test_c-stub/_stub.wit", &stub_wit_c);
+
+    let original_c =
+        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-c/c.wit")).unwrap();
+    assert_has_wit_dep_similar(dest_b.path(), "test_c/c.wit", &original_c);
+
+    assert_has_wit_dep(dest_c.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_c.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_c.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    let original_a =
+        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-a/a.wit")).unwrap();
+    assert_has_wit_dep_similar(dest_c.path(), "test_a/a.wit", &original_a);
+}
+
+#[test]
+fn indirect_circular_readd() {
+    let stub_a_dir = init_stub("indirect-circular-a");
+    let stub_b_dir = init_stub("indirect-circular-b");
+    let stub_c_dir = init_stub("indirect-circular-c");
+
+    let dest_a = init_caller("indirect-circular-a");
+    let dest_b = init_caller("indirect-circular-b");
+    let dest_c = init_caller("indirect-circular-c");
+
+    println!("dest_a: {:?}", dest_a.path());
+    println!("dest_b: {:?}", dest_b.path());
+    println!("dest_c: {:?}", dest_c.path());
+
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), false, false).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
+
+    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
+    uncomment_imports(&dest_a.path().join("a.wit"));
+    uncomment_imports(&dest_b.path().join("b.wit"));
+    uncomment_imports(&dest_c.path().join("c.wit"));
+
+    assert_valid_wit_root(dest_a.path());
+    assert_valid_wit_root(dest_b.path());
+    assert_valid_wit_root(dest_c.path());
+
+    // At this point we simulate doing stub generation and add-stub-dependency _again_ on the a.wit and b.wit which are already have the corresponding
+    // stubs imported
+
+    regenerate_stub(stub_a_dir.path(), dest_a.path());
+    regenerate_stub(stub_b_dir.path(), dest_b.path());
+    regenerate_stub(stub_c_dir.path(), dest_c.path());
+
+    println!("Second round of add_stub_dependency calls");
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), true, false).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), true, false).unwrap();
+    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), true, false).unwrap();
+
+    assert_valid_wit_root(dest_a.path());
+    assert_valid_wit_root(dest_b.path());
+    assert_valid_wit_root(dest_c.path());
+
+    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+
+    let original_b =
+        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-b/b.wit")).unwrap();
+    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+
+    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let stub_wit_c = std::fs::read_to_string(stub_c_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_b.path(), "test_c-stub/_stub.wit", &stub_wit_c);
+
+    let original_c =
+        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-c/c.wit")).unwrap();
+    assert_has_wit_dep_similar(dest_b.path(), "test_c/c.wit", &original_c);
+
+    assert_has_wit_dep(dest_c.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_c.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_c.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    let original_a =
+        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-a/a.wit")).unwrap();
+    assert_has_wit_dep_similar(dest_c.path(), "test_a/a.wit", &original_a);
+}
+
+#[test]
+fn self_circular() {
+    let stub_a_dir = init_stub("self-circular");
+    let inlined_stub_a_dir = init_stub_inlined("self-circular");
+
+    let dest_a = init_caller("self-circular");
+
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+
+    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
+    uncomment_imports(&dest_a.path().join("a.wit"));
+
+    assert_valid_wit_root(dest_a.path());
+
+    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
+    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+
+    let inlined_stub_wit_a =
+        std::fs::read_to_string(inlined_stub_a_dir.path().join("wit/_stub.wit")).unwrap();
+    assert_has_wit_dep(dest_a.path(), "test_a-stub/_stub.wit", &inlined_stub_wit_a);
+}
 
 fn init_stub(name: &str) -> TempDir {
+    init_stub_internal(name, false)
+}
+
+fn init_stub_inlined(name: &str) -> TempDir {
+    init_stub_internal(name, true)
+}
+
+fn init_stub_internal(name: &str, always_inline_types: bool) -> TempDir {
     let tempdir = TempDir::new().unwrap();
     let canonical_target_root = tempdir.path().canonicalize().unwrap();
 
@@ -277,7 +431,7 @@ fn init_stub(name: &str) -> TempDir {
         &None,
         "1.0.0",
         &WasmRpcOverride::default(),
-        false,
+        always_inline_types,
     )
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
@@ -339,7 +493,10 @@ fn assert_has_wit_dep_similar(wit_dir: &Path, name: &str, expected_contents: &st
 
     for line in contents.lines() {
         if !line.starts_with("//") {
-            assert!(expected_contents.contains(line), "checking {wit_file:?}");
+            assert!(
+                expected_contents.contains(line.trim()),
+                "checking {wit_file:?}, line {line}"
+            );
         }
     }
 }
