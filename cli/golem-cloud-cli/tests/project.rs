@@ -70,7 +70,7 @@ fn project_get_default(
 ) -> Result<(), Failed> {
     let project: ProjectView = cli.run(&["project", "get-default"])?;
 
-    assert_eq!(project.0.project_data.name, "default-project");
+    assert_eq!(project.name, "default-project");
 
     Ok(())
 }
@@ -88,16 +88,16 @@ fn project_list(
 
     let projects: ProjectVecView = cli.run(&["project", "list"])?;
 
-    assert!(projects.0.iter().all(|p| p.project_data.name != name));
+    assert!(projects.0.iter().all(|p| p.name != name));
 
     let project: ProjectView =
         cli.run(&["project", "add", &cfg.arg('p', "project-name"), &name])?;
 
-    assert_eq!(project.0.project_data.name, name);
+    assert_eq!(project.name, name);
 
     let projects: ProjectVecView = cli.run(&["project", "list"])?;
 
-    assert!(projects.0.iter().any(|p| p.project_data.name == name));
+    assert!(projects.0.iter().any(|p| p.name == name));
 
     Ok(())
 }

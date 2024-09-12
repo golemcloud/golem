@@ -65,19 +65,20 @@ impl ProjectService for ProjectServiceLive {
             .create(&self.account_id, project_name, project_description)
             .await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectView(project))))
+        Ok(GolemResult::Ok(Box::new(ProjectView::from(project))))
     }
 
     async fn list(&self, project_name: Option<String>) -> Result<GolemResult, GolemError> {
         let projects = self.client.find(project_name).await?;
 
+        let projects = projects.into_iter().map(ProjectView::from).collect();
         Ok(GolemResult::Ok(Box::new(ProjectVecView(projects))))
     }
 
     async fn get_default(&self) -> Result<GolemResult, GolemError> {
         let project = self.find_default().await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectView(project))))
+        Ok(GolemResult::Ok(Box::new(ProjectView::from(project))))
     }
 
     async fn get(&self, uri: ProjectUri) -> Result<GolemResult, GolemError> {
@@ -90,7 +91,7 @@ impl ProjectService for ProjectServiceLive {
             .expect("Unexpected default project");
         let project = self.client.get(urn).await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectView(project))))
+        Ok(GolemResult::Ok(Box::new(ProjectView::from(project))))
     }
 
     async fn find_default(&self) -> Result<Project, GolemError> {
@@ -112,7 +113,7 @@ impl ProjectService for ProjectServiceLive {
                         "
                             Multiple projects found for name {name}:
                             {}
-                            Use explicit --project-id or set target project as default.
+                            Use explicit --project or set target project as default.
                         ",
                         projects.join(", ")
                     )))

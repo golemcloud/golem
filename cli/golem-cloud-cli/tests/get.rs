@@ -22,9 +22,9 @@ use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
 use golem_client::model::HttpApiDefinition;
 use golem_cloud_cli::cloud::model::text::{AccountViewGet, ProjectView};
-use golem_common::model::{AccountId, ProjectId};
-use golem_common::uri::cloud::url::{AccountUrl, ProjectUrl};
-use golem_common::uri::cloud::urn::{AccountUrn, ProjectUrn};
+use golem_common::model::AccountId;
+use golem_common::uri::cloud::url::AccountUrl;
+use golem_common::uri::cloud::urn::AccountUrn;
 use golem_common::uri::oss::url::{ApiDefinitionUrl, ComponentUrl, WorkerFunctionUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ApiDefinitionUrn, WorkerFunctionUrn, WorkerUrn};
 use libtest_mimic::{Failed, Trial};
@@ -112,24 +112,11 @@ fn top_level_get_project(
 
     let project: ProjectView = cli.run(&["project", "add", "--project-name", name])?;
 
-    let res1: ProjectView = cli.run(&[
-        "get",
-        &ProjectUrn {
-            id: ProjectId(project.0.project_id),
-        }
-        .to_string(),
-    ])?;
+    let res1: ProjectView = cli.run(&["get", &project.project_urn.to_string()])?;
 
     assert_eq!(res1, project);
 
-    let res2: ProjectView = cli.run(&[
-        "get",
-        &ProjectUrl {
-            name: project.0.project_data.name.clone(),
-            account: None,
-        }
-        .to_string(),
-    ])?;
+    let res2: ProjectView = cli.run(&["get", &project.project_urn.to_string()])?;
 
     assert_eq!(res2, project);
 

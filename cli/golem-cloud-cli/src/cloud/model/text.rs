@@ -4,9 +4,11 @@ use cli_table::{print_stdout, Table, WithTitle};
 use colored::Colorize;
 use golem_cli::model::text::TextFormat;
 use golem_cloud_client::model::{
-    Account, Project, ProjectGrant, ProjectPolicy, Token, UnsafeToken,
+    Account, Project, ProjectGrant, ProjectPolicy, ProjectType, Token, UnsafeToken,
 };
 use golem_cloud_client::model::{ApiDomain, Certificate};
+use golem_common::model::ProjectId;
+use golem_common::uri::cloud::urn::ProjectUrn;
 use indoc::printdoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -51,48 +53,73 @@ impl TextFormat for AccountViewUpdate {
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ProjectView(pub Project);
+#[serde(rename_all = "camelCase")]
+pub struct ProjectView {
+    pub project_urn: ProjectUrn,
+    pub name: String,
+    pub owner_account_id: String,
+    pub description: String,
+    pub default_environment_id: String,
+    pub project_type: ProjectType,
+}
+
+impl From<Project> for ProjectView {
+    fn from(value: Project) -> Self {
+        let project_urn = ProjectUrn {
+            id: ProjectId(value.project_id),
+        };
+
+        Self {
+            project_urn,
+            name: value.project_data.name.to_string(),
+            owner_account_id: value.project_data.owner_account_id.to_string(),
+            description: value.project_data.description.to_string(),
+            default_environment_id: value.project_data.default_environment_id.to_string(),
+            project_type: value.project_data.project_type.clone(),
+        }
+    }
+}
 
 impl TextFormat for ProjectView {
     fn print(&self) {
         printdoc!(
             r#"
-            Project "{}" with id {}.
+            Project "{}" with URN {}.
             Description: "{}".
             Owner: {}, environment: {}, type: {}
             "#,
-            self.0.project_data.name,
-            self.0.project_id,
-            self.0.project_data.description,
-            self.0.project_data.owner_account_id,
-            self.0.project_data.default_environment_id,
-            self.0.project_data.project_type,
+            self.name,
+            self.project_urn,
+            self.description,
+            self.owner_account_id,
+            self.default_environment_id,
+            self.project_type,
         )
     }
 }
 
 #[derive(Table)]
 struct ProjectListView {
-    #[table(title = "ID")]
-    pub id: Uuid,
+    #[table(title = "URN")]
+    pub project_urn: String,
     #[table(title = "Name")]
     pub name: String,
     #[table(title = "Description")]
     pub description: String,
 }
 
-impl From<&Project> for ProjectListView {
-    fn from(value: &Project) -> Self {
+impl From<&ProjectView> for ProjectListView {
+    fn from(value: &ProjectView) -> Self {
         ProjectListView {
-            id: value.project_id,
-            name: value.project_data.name.to_string(),
-            description: textwrap::wrap(&value.project_data.description, 30).join("\n"),
+            project_urn: value.project_urn.to_string(),
+            name: value.name.to_string(),
+            description: textwrap::wrap(&value.description, 30).join("\n"),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectVecView(pub Vec<Project>);
+pub struct ProjectVecView(pub Vec<ProjectView>);
 
 impl TextFormat for ProjectVecView {
     fn print(&self) {

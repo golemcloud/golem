@@ -4,8 +4,6 @@ use golem_cloud_cli::cloud::model::text::{
     AccountViewAdd, ProjectGrantView, ProjectPolicyView, ProjectView,
 };
 use golem_cloud_client::model::ProjectAction;
-use golem_common::model::ProjectId;
-use golem_common::uri::cloud::urn::ProjectUrn;
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
 
@@ -81,10 +79,7 @@ fn share_policy(
     let res: ProjectGrantView = cli.run(&[
         "share",
         &cfg.arg('P', "project"),
-        &ProjectUrn {
-            id: ProjectId(project.0.project_id),
-        }
-        .to_string(),
+        &project.project_urn.to_string(),
         "--recipient-account-id",
         &account.0.id,
         "--project-policy-id",
@@ -92,7 +87,7 @@ fn share_policy(
     ])?;
 
     assert_eq!(res.0.data.grantee_account_id, account.0.id);
-    assert_eq!(res.0.data.grantor_project_id, project.0.project_id);
+    assert_eq!(res.0.data.grantor_project_id, project.project_urn.id.0);
     assert_eq!(res.0.data.project_policy_id, policy.0.id);
 
     Ok(())
@@ -124,10 +119,7 @@ fn share_actions(
     let res: ProjectGrantView = cli.run(&[
         "share",
         &cfg.arg('P', "project"),
-        &ProjectUrn {
-            id: ProjectId(project.0.project_id),
-        }
-        .to_string(),
+        &project.project_urn.to_string(),
         "--recipient-account-id",
         &account.0.id,
         &cfg.arg('A', "project-actions"),
@@ -137,7 +129,7 @@ fn share_actions(
     ])?;
 
     assert_eq!(res.0.data.grantee_account_id, account.0.id);
-    assert_eq!(res.0.data.grantor_project_id, project.0.project_id);
+    assert_eq!(res.0.data.grantor_project_id, project.project_urn.id.0);
 
     let policy: ProjectPolicyView = cli.run(&[
         "project-policy",
