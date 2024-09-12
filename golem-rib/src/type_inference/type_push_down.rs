@@ -97,12 +97,11 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                     // to push down the return type of function to its arguments.
                     // For variant constructor, the type of the arguments are present in th return type of the call
                     // which should be a variant having a collection of each case with the argument type
-                    CallType::VariantConstructor(name) => match inferred_type {
-                        InferredType::Variant(variant) => {
+                    CallType::VariantConstructor(name) => {
+                        if let InferredType::Variant(variant) = inferred_type {
                             let identified_variant = variant
                                 .iter()
                                 .find(|(variant_name, _)| variant_name == name);
-
                             if let Some((_name, Some(inner_type))) = identified_variant {
                                 for expr in expressions {
                                     expr.add_infer_type_mut(inner_type.clone());
@@ -110,9 +109,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                                 }
                             }
                         }
-                        _ => {}
-                    },
-
+                    }
                     _ => {
                         for expr in expressions {
                             queue.push_back(expr);
@@ -199,7 +196,6 @@ mod internal {
         let inner_types = refined_tuple_type.inner_types();
 
         for (expr, typ) in inner_expressions.iter_mut().zip(inner_types) {
-            dbg!(expr.clone(), typ.clone());
             expr.add_infer_type_mut(typ.clone());
             push_down_queue.push_back(expr);
         }
@@ -273,8 +269,8 @@ mod internal {
                 }
                 _ => {}
             },
-            ArmPattern::TupleConstructor(patterns) => match predicate_type {
-                InferredType::Tuple(inner_types) => {
+            ArmPattern::TupleConstructor(patterns) => {
+                if let InferredType::Tuple(inner_types) = predicate_type {
                     if patterns.len() == inner_types.len() {
                         for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
                             update_arm_pattern_type(pattern, inner_type)?;
@@ -283,8 +279,7 @@ mod internal {
                         return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
                     }
                 }
-                _ => {}
-            },
+            }
             ArmPattern::WildCard => {}
         }
 

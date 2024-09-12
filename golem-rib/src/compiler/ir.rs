@@ -16,7 +16,7 @@ use crate::{AnalysedTypeWithUnit, ParsedFunctionName, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{
-    CallInstruction, ConcatInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo,
+    And, CallInstruction, ConcatInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo,
     JumpInstruction, LessThan, LessThanOrEqualTo, Negate, PushListInstruction, PushNoneInstruction,
     PushTupleInstruction, RibIr as ProtoRibIR,
 };
@@ -162,6 +162,7 @@ impl TryFrom<ProtoRibIR> for RibIR {
             Instruction::LessThan(_) => Ok(RibIR::LessThan),
             Instruction::GreaterThanOrEqualTo(_) => Ok(RibIR::GreaterThanOrEqualTo),
             Instruction::LessThanOrEqualTo(_) => Ok(RibIR::LessThanOrEqualTo),
+            Instruction::And(_) => Ok(RibIR::And),
             Instruction::JumpIfFalse(value) => Ok(RibIR::JumpIfFalse(InstructionId::from(
                 value.instruction_id as usize,
             ))),
@@ -255,7 +256,7 @@ impl From<RibIR> for ProtoRibIR {
                     type_annotated_value: Some(value),
                 })
             }
-            RibIR::And => todo!("Implement And"),
+            RibIR::And => Instruction::And(And {}),
             RibIR::AssignVar(value) => Instruction::AssignVar(value.into()),
             RibIR::LoadVar(value) => Instruction::LoadVar(value.into()),
             RibIR::CreateAndPushRecord(value) => Instruction::CreateAndPushRecord((&value).into()),
@@ -346,9 +347,6 @@ impl From<RibIR> for ProtoRibIR {
                 arg_size: concat as u64,
             }),
             RibIR::Negate => Instruction::Negate(Negate {}),
-            RibIR::Get(index) => {
-                todo!("Implement Get")
-            }
         };
 
         ProtoRibIR {

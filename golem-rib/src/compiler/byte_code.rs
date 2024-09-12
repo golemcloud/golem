@@ -314,11 +314,6 @@ mod internal {
                 let analysed_type = convert_to_analysed_type_for(expr, analysed_type)?;
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
-
-            Expr::Get(expr, index, _) => {
-                stack.push(ExprState::from_expr(expr.deref()));
-                stack.push(ExprState::from_ir(RibIR::Get(*index)));
-            }
         }
 
         Ok(())

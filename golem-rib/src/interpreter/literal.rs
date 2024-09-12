@@ -32,7 +32,7 @@ impl GetLiteralValue for TypeAnnotatedValue {
             }
             TypeAnnotatedValue::Variant(value) => {
                 // A no arg variant can be turned into a simple literal and can be part of string concatenations
-                if let None = value.case_value {
+                if value.case_value.is_none() {
                     Some(LiteralValue::String(value.case_name.clone()))
                 } else {
                     None

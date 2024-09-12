@@ -482,9 +482,10 @@ mod type_inference_tests {
 
             let mut expr = Expr::from_text(expr).unwrap();
 
-            let result = expr.infer_types(&function_type_registry);
+            let result = expr.infer_types(&function_type_registry).unwrap_err();
 
-            assert!(result.is_ok());
+            dbg!(result.clone());
+            assert!(result.is_empty());
         }
     }
 

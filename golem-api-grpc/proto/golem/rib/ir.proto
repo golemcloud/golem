@@ -38,6 +38,7 @@ message RibIR {
         Negate negate = 28;
         ConcatInstruction concat = 29;
         EnumConstructionInstruction enum_construction = 30;
+        And and = 31;
     }
 }
 
@@ -104,3 +105,4 @@ message GreaterThanOrEqualTo {}
 message LessThanOrEqualTo {}
 message GetTag {}
 message Negate {}
+message And {}

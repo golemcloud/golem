@@ -731,8 +731,6 @@ mod internal {
 
         let mut str = String::new();
         for value in type_anntoated_values {
-            let literal = value.get_literal();
-
             let result = value
                 .get_literal()
                 .ok_or("Expected a literal value".to_string())?
@@ -1127,7 +1125,6 @@ mod interpreter_tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        dbg!(expr.clone());
 
         let compiled = compiler::compile(&expr, &vec![]).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
@@ -1151,7 +1148,7 @@ mod interpreter_tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
+        let expr = Expr::from_text(expr).unwrap();
         let compiled = compiler::compile(&expr, &vec![]).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
