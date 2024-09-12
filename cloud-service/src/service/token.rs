@@ -37,9 +37,7 @@ impl TokenServiceError {
         E: Display + Debug + Send + Sync + 'static,
         C: Display + Send + Sync + 'static,
     {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
+        Self::Internal(anyhow::Error::msg(error).context(context))
     }
 
     fn unauthorized<M>(error: M) -> Self
