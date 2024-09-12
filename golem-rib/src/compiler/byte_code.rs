@@ -315,7 +315,7 @@ mod internal {
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
 
-            Expr::Get(expr, index, inferred_type) => {
+            Expr::Get(expr, index, _) => {
                 stack.push(ExprState::from_expr(expr.deref()));
                 stack.push(ExprState::from_ir(RibIR::Get(*index)));
             }

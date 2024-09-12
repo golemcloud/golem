@@ -308,46 +308,48 @@ mod internal {
                             .clone(),
                     ),
 
-                    _ => None, // Probably fail here to get fine grained error message
+                    _ => None,
                 }
             }
 
             InferredType::Tuple(inferred_types) => {
-                let mut new_body = vec![];
+                // Resolution body is a list of expressions which gets built up
+                // as we recursively iterate over the bind patterns
+                // where bind patterns are x, _, y in the case of `match tuple_variable { (x, _, y)) =>`
+                let mut resolution_body = vec![];
+
+                // The conditions keep growing as we recursively iterate over the bind patterns
+                // and there are multiple conditions (if condition) for each element in the tuple
                 let mut conditions = vec![];
 
-                let arg_pattern_opt = bind_patterns.first();
-
-                for (i, pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = pred_expr.get(i);
-                    let new_pred_type = inferred_types.get(i).unwrap_or(&InferredType::Unknown);
+                // We assume pred-expr is indexed (i.e, tuple is indexed), and we pick each element in the bind pattern
+                // and get the corresponding expr in pred-expr and keep recursively iterating until the tuple is completed
+                // However there is no resolution body for each of this iteration, so we use an empty expression
+                // and finally push the original resolution body once we fully built the conditions.
+                for (index, arm_pattern) in bind_patterns.iter().enumerate() {
+                    let new_pred = pred_expr.get(index);
+                    let new_pred_type = inferred_types.get(index).unwrap_or(&InferredType::Unknown);
 
                     let branch = get_conditions(
-                        &MatchArm::new(pattern.clone(), Expr::literal("".to_string())),
-                        &pred_expr.get(i),
+                        &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
+                        &pred_expr.get(index),
                         None,
                         new_pred_type.clone(),
                     );
 
                     if let Some(x) = branch {
                         conditions.push(x.condition);
-                        new_body.push(x.body)
+                        resolution_body.push(x.body)
                     }
                 }
 
-                new_body.push(resolution.clone());
+                resolution_body.push(resolution.clone());
 
-                let mut cond: Option<Expr> = None;
+                let and_cond = Expr::and_combine(conditions);
 
-                // if x == 1, y ==1
-                for i in conditions {
-                    let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
-                    cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
-                }
-
-                cond.map(|c| IfThenBranch {
+                and_cond.map(|c| IfThenBranch {
                     condition: c,
-                    body: Expr::multiple(new_body),
+                    body: Expr::multiple(resolution_body),
                 })
             }
 
@@ -355,7 +357,7 @@ mod internal {
                 condition: Expr::boolean(false),
                 body: resolution.clone(),
             }),
-            _ => None, // probably fail here to get fine grained error message
+            _ => None,
         }
     }
 

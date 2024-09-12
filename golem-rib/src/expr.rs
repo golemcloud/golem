@@ -250,6 +250,21 @@ impl Expr {
         Expr::Boolean(value, InferredType::Bool)
     }
 
+    pub fn and(left: Expr, right: Expr) -> Self {
+        Expr::And(Box::new(left), Box::new(right), InferredType::Bool)
+    }
+
+    pub fn and_combine(conditions: Vec<Expr>) -> Option<Expr> {
+        let mut cond: Option<Expr> = None;
+
+        for i in conditions {
+            let left = Box::new(cond.clone().unwrap_or(Expr::boolean(true)));
+            cond = Some(Expr::And(left, Box::new(i), InferredType::Bool));
+        }
+
+        cond
+    }
+
     pub fn call(parsed_fn_name: ParsedFunctionName, args: Vec<Expr>) -> Self {
         Expr::Call(
             CallType::Function(parsed_fn_name),
@@ -334,6 +349,10 @@ impl Expr {
 
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal(value.as_ref().to_string(), InferredType::Str)
+    }
+
+    pub fn empty_expr() -> Self {
+        Expr::literal("")
     }
 
     pub fn multiple(expressions: Vec<Expr>) -> Self {
