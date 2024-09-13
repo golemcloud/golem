@@ -1,9 +1,8 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_cli::cloud::{AuthSecret, CloudAuthenticationConfig, CloudAuthenticationConfigData};
-use golem_cloud_client::model::{OAuth2Data, Token, TokenSecret, UnsafeToken};
+use golem_cloud_client::model::{Token, TokenSecret, UnsafeToken, WebFlowAuthorizeUrlResponse};
 use indoc::printdoc;
 use tracing::warn;
 use uuid::Uuid;
@@ -100,7 +99,7 @@ impl AuthLive {
     ) -> Result<CloudAuthentication, GolemError> {
         let data = self.login.start_oauth2().await?;
         inform_user(&data);
-        let token = self.login.complete_oauth2(data.encoded_session).await?;
+        let token = self.login.complete_oauth2(data.state).await?;
         self.save_auth(&token, profile_name, config_dir);
         Ok(CloudAuthentication(token))
     }
@@ -119,14 +118,9 @@ impl AuthLive {
     }
 }
 
-fn inform_user(data: &OAuth2Data) {
-    let box_url_line = String::from_utf8(vec![b'-'; data.url.len() + 2]).unwrap();
-    let box_code_line = String::from_utf8(vec![b'-'; data.user_code.len() + 2]).unwrap();
-    let expires: DateTime<Utc> = data.expires;
-    let expires_in = expires.signed_duration_since(Utc::now()).num_minutes();
-    let expires_at = expires.format("%T");
+fn inform_user(data: &WebFlowAuthorizeUrlResponse) {
     let url = &data.url;
-    let user_code = &data.user_code;
+    let box_url_line = String::from_utf8(vec![b'-'; data.url.len() + 2]).unwrap();
 
     printdoc! {"
         >>
@@ -138,14 +132,6 @@ fn inform_user(data: &OAuth2Data) {
         >>   ┏{box_url_line}┓
         >>   ┃ {url} ┃
         >>   ┗{box_url_line}┛
-        >>
-        >>  And enter following code:
-        >>
-        >>   ┏{box_code_line}┓
-        >>   ┃ {user_code} ┃
-        >>   ┗{box_code_line}┛
-        >>
-        >>  Code will expire in {expires_in} minutes at {expires_at}.
         >>
         Waiting...
     "}

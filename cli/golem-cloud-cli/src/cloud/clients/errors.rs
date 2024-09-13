@@ -1,9 +1,11 @@
-use golem_cloud_client::api::WorkerError;
 use golem_cloud_client::api::{
     AccountError, ApiCertificateError, ApiDefinitionError, ApiDeploymentError, ApiDomainError,
-    ComponentError, GrantError, HealthCheckError, LoginError, ProjectError, ProjectGrantError,
+    ComponentError, GrantError, HealthCheckError, LoginCurrentLoginTokenError,
+    LoginLoginOauth2Error, LoginOauth2WebFlowCallbackGithubError, LoginOauth2WebFlowPollError,
+    LoginOauth2WebFlowStartError, LoginStartLoginOauth2Error, ProjectError, ProjectGrantError,
     ProjectPolicyError, TokenError,
 };
+use golem_cloud_client::api::{LoginCompleteLoginOauth2Error, WorkerError};
 use golem_cloud_client::model::{
     GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
     GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
@@ -90,12 +92,76 @@ impl ResponseContentErrorMapper for GrantError {
     }
 }
 
-impl ResponseContentErrorMapper for LoginError {
+impl ResponseContentErrorMapper for LoginLoginOauth2Error {
     fn map(self) -> String {
         match self {
-            LoginError::Error400(errors) => errors.errors.iter().join(", "),
-            LoginError::Error401(error) => error.error,
-            LoginError::Error500(error) => error.error,
+            LoginLoginOauth2Error::Error400(errors) => errors.errors.iter().join(", "),
+            LoginLoginOauth2Error::Error401(error) => error.error,
+            LoginLoginOauth2Error::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for LoginCurrentLoginTokenError {
+    fn map(self) -> String {
+        match self {
+            LoginCurrentLoginTokenError::Error400(errors) => errors.errors.iter().join(", "),
+            LoginCurrentLoginTokenError::Error401(error) => error.error,
+            LoginCurrentLoginTokenError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for LoginStartLoginOauth2Error {
+    fn map(self) -> String {
+        match self {
+            LoginStartLoginOauth2Error::Error400(errors) => errors.errors.iter().join(", "),
+            LoginStartLoginOauth2Error::Error401(error) => error.error,
+            LoginStartLoginOauth2Error::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for LoginCompleteLoginOauth2Error {
+    fn map(self) -> String {
+        match self {
+            LoginCompleteLoginOauth2Error::Error400(errors) => errors.errors.iter().join(", "),
+            LoginCompleteLoginOauth2Error::Error401(error) => error.error,
+            LoginCompleteLoginOauth2Error::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for LoginOauth2WebFlowStartError {
+    fn map(self) -> String {
+        match self {
+            LoginOauth2WebFlowStartError::Error400(errors) => errors.errors.iter().join(", "),
+            LoginOauth2WebFlowStartError::Error401(error) => error.error,
+            LoginOauth2WebFlowStartError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for LoginOauth2WebFlowCallbackGithubError {
+    fn map(self) -> String {
+        match self {
+            LoginOauth2WebFlowCallbackGithubError::Error302(_) => "Redirect Request".into(),
+            LoginOauth2WebFlowCallbackGithubError::Error400(errors) => {
+                errors.errors.iter().join(", ")
+            }
+            LoginOauth2WebFlowCallbackGithubError::Error401(error) => error.error,
+            LoginOauth2WebFlowCallbackGithubError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for LoginOauth2WebFlowPollError {
+    fn map(self) -> String {
+        match self {
+            LoginOauth2WebFlowPollError::Error202(_) => "Pending Web Flow".into(),
+            LoginOauth2WebFlowPollError::Error400(errors) => errors.errors.iter().join(", "),
+            LoginOauth2WebFlowPollError::Error401(error) => error.error,
+            LoginOauth2WebFlowPollError::Error500(error) => error.error,
         }
     }
 }
