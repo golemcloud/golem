@@ -17,178 +17,91 @@ use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::component::ComponentClient;
 use crate::clients::health_check::HealthCheckClient;
 use crate::clients::worker::WorkerClient;
-use crate::model::GolemError;
 use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceLive};
 use crate::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceLive};
 use crate::service::component::{ComponentService, ComponentServiceLive};
 use crate::service::deploy::{DeployService, DeployServiceLive};
 use crate::service::project::ProjectResolver;
 use crate::service::version::{VersionService, VersionServiceLive};
-use crate::service::worker::{
-    ComponentServiceBuilder, WorkerClientBuilder, WorkerService, WorkerServiceLive,
-};
+use crate::service::worker::{WorkerService, WorkerServiceLive};
 use std::fmt::Display;
 use std::sync::Arc;
 
 pub trait ServiceFactory {
-    type SecurityContext: Clone + Send + Sync + 'static;
     type ProjectRef: Send + Sync + 'static;
     type ProjectContext: Display + Send + Sync + 'static;
 
-    fn with_auth(
-        &self,
-        auth: &Self::SecurityContext,
-    ) -> FactoryWithAuth<Self::ProjectRef, Self::ProjectContext, Self::SecurityContext>;
-
     fn project_resolver(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    >;
+    ) -> Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>;
 
     fn component_client(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ComponentClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    >;
+    ) -> Box<dyn ComponentClient<ProjectContext = Self::ProjectContext> + Send + Sync>;
 
     fn component_service(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Arc<dyn ComponentService<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Arc::new(ComponentServiceLive {
-            client: self.component_client(auth)?,
-        }))
+    ) -> Arc<dyn ComponentService<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Arc::new(ComponentServiceLive {
+            client: self.component_client(),
+        })
     }
 
-    fn worker_client(
-        &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError>;
+    fn worker_client(&self) -> Arc<dyn WorkerClient + Send + Sync>;
 
     fn worker_service(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Arc<dyn WorkerService<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    >
+    ) -> Arc<dyn WorkerService<ProjectContext = Self::ProjectContext> + Send + Sync>
     where
         Self: Send + Sync + Sized + 'static,
     {
-        Ok(Arc::new(WorkerServiceLive {
-            client: self.worker_client(auth)?,
-            components: self.component_service(auth)?,
-            client_builder: Box::new(self.with_auth(auth)),
-            component_service_builder: Box::new(self.with_auth(auth)),
-        }))
+        Arc::new(WorkerServiceLive {
+            client: self.worker_client(),
+            components: self.component_service(),
+        })
     }
 
     fn api_definition_client(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ApiDefinitionClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    >;
+    ) -> Box<dyn ApiDefinitionClient<ProjectContext = Self::ProjectContext> + Send + Sync>;
 
     fn api_definition_service(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ApiDefinitionService<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Box::new(ApiDefinitionServiceLive {
-            client: self.api_definition_client(auth)?,
-        }))
+    ) -> Arc<dyn ApiDefinitionService<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Arc::new(ApiDefinitionServiceLive {
+            client: self.api_definition_client(),
+        })
     }
 
     fn api_deployment_client(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    >;
+    ) -> Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync>;
 
     fn api_deployment_service(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ApiDeploymentService<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Box::new(ApiDeploymentServiceLive {
-            client: self.api_deployment_client(auth)?,
-        }))
+    ) -> Arc<dyn ApiDeploymentService<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Arc::new(ApiDeploymentServiceLive {
+            client: self.api_deployment_client(),
+        })
     }
 
-    fn health_check_clients(
-        &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<Vec<Box<dyn HealthCheckClient + Send + Sync>>, GolemError>;
+    fn health_check_clients(&self) -> Vec<Arc<dyn HealthCheckClient + Send + Sync>>;
 
-    fn version_service(
-        &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<Box<dyn VersionService + Send + Sync>, GolemError> {
-        Ok(Box::new(VersionServiceLive {
-            clients: self.health_check_clients(auth)?,
-        }))
+    fn version_service(&self) -> Arc<dyn VersionService + Send + Sync> {
+        Arc::new(VersionServiceLive {
+            clients: self.health_check_clients(),
+        })
     }
 
     fn deploy_service(
         &self,
-        auth: &Self::SecurityContext,
-    ) -> Result<
-        Arc<dyn DeployService<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    >
+    ) -> Arc<dyn DeployService<ProjectContext = Self::ProjectContext> + Send + Sync>
     where
         Self: Send + Sync + Sized + 'static,
     {
-        Ok(Arc::new(DeployServiceLive {
-            component_service: self.component_service(auth)?,
-            worker_service: self.worker_service(auth)?,
-        }))
-    }
-}
-
-pub struct FactoryWithAuth<
-    PR: Send + Sync + 'static,
-    PC: Send + Sync + 'static,
-    SecurityContext: Clone + Send + Sync + 'static,
-> {
-    pub auth: SecurityContext,
-    pub factory: Box<
-        dyn ServiceFactory<ProjectRef = PR, ProjectContext = PC, SecurityContext = SecurityContext>
-            + Send
-            + Sync,
-    >,
-}
-
-impl<PR: Send + Sync, PC: Display + Send + Sync, S: Clone + Send + Sync> WorkerClientBuilder
-    for FactoryWithAuth<PR, PC, S>
-{
-    fn build(&self) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError> {
-        self.factory.worker_client(&self.auth)
-    }
-}
-
-impl<PR: Send + Sync, PC: Display + Send + Sync, S: Clone + Send + Sync> ComponentServiceBuilder<PC>
-    for FactoryWithAuth<PR, PC, S>
-{
-    fn build(
-        &self,
-    ) -> Result<Arc<dyn ComponentService<ProjectContext = PC> + Send + Sync>, GolemError> {
-        self.factory.component_service(&self.auth)
+        Arc::new(DeployServiceLive {
+            component_service: self.component_service(),
+            worker_service: self.worker_service(),
+        })
     }
 }

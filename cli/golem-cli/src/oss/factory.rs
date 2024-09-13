@@ -17,8 +17,8 @@ use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::component::ComponentClient;
 use crate::clients::health_check::HealthCheckClient;
 use crate::clients::worker::WorkerClient;
-use crate::config::HttpClientConfig;
-use crate::factory::{FactoryWithAuth, ServiceFactory};
+use crate::config::{HttpClientConfig, OssProfile};
+use crate::factory::ServiceFactory;
 use crate::model::GolemError;
 use crate::oss::clients::api_definition::ApiDefinitionClientLive;
 use crate::oss::clients::api_deployment::ApiDeploymentClientLive;
@@ -28,164 +28,183 @@ use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
 use crate::service::project::{ProjectResolver, ProjectResolverOss};
 use golem_client::Context;
+use itertools::Itertools;
 use std::sync::Arc;
+use tracing::warn;
 use url::Url;
 
 #[derive(Debug, Clone)]
-pub struct OssServiceFactory {
+pub struct OssServiceFactoryConfig {
     pub component_url: Url,
     pub worker_url: Url,
+    pub service_http_client_config: HttpClientConfig,
+    pub health_check_http_client_config: HttpClientConfig,
     pub allow_insecure: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct OssServiceFactory {
+    config: OssServiceFactoryConfig,
+    http_client_service: reqwest::Client,
+    http_client_health_check: reqwest::Client,
+}
+
 impl OssServiceFactory {
-    fn client(&self, http_client_config: &HttpClientConfig) -> Result<reqwest::Client, GolemError> {
-        let mut builder = reqwest::Client::builder();
-        if self.allow_insecure {
-            builder = builder.danger_accept_invalid_certs(true);
-        }
+    pub fn new(config: OssServiceFactoryConfig) -> Result<Self, GolemError> {
+        let service_http_client = make_reqwest_client(&config.service_http_client_config)?;
+        let healthcheck_http_client = make_reqwest_client(&config.health_check_http_client_config)?;
 
-        if let Some(timeout) = http_client_config.timeout {
-            builder = builder.timeout(timeout);
-        }
-        if let Some(connect_timeout) = http_client_config.connect_timeout {
-            builder = builder.connect_timeout(connect_timeout);
-        }
-        if let Some(read_timeout) = http_client_config.read_timeout {
-            builder = builder.read_timeout(read_timeout);
-        }
-
-        Ok(builder.connection_verbose(true).build()?)
-    }
-
-    fn component_context_base(
-        &self,
-        http_client_config: &HttpClientConfig,
-    ) -> Result<Context, GolemError> {
-        Ok(Context {
-            base_url: self.component_url.clone(),
-            client: self.client(http_client_config)?,
-        })
-    }
-    fn worker_context_base(
-        &self,
-        http_client_config: &HttpClientConfig,
-    ) -> Result<Context, GolemError> {
-        Ok(Context {
-            base_url: self.worker_url.clone(),
-            client: self.client(http_client_config)?,
+        Ok(Self {
+            config,
+            http_client_service: service_http_client,
+            http_client_health_check: healthcheck_http_client,
         })
     }
 
-    fn component_context(&self) -> Result<Context, GolemError> {
-        self.component_context_base(&HttpClientConfig::env())
+    pub fn from_profile(profile: &OssProfile) -> Result<Self, GolemError> {
+        let component_url = profile.url.clone();
+        let worker_url = profile
+            .worker_url
+            .clone()
+            .unwrap_or_else(|| component_url.clone());
+        let allow_insecure = profile.allow_insecure;
+
+        OssServiceFactory::new(OssServiceFactoryConfig {
+            component_url,
+            worker_url,
+            service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
+            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
+            allow_insecure,
+        })
     }
-    fn component_context_health_check(&self) -> Result<Context, GolemError> {
-        self.component_context_base(&HttpClientConfig::health_check())
+
+    fn component_context(&self) -> Context {
+        Context {
+            client: self.http_client_service.clone(),
+            base_url: self.config.component_url.clone(),
+        }
     }
-    fn worker_context(&self) -> Result<Context, GolemError> {
-        self.worker_context_base(&HttpClientConfig::env())
+
+    fn component_context_health_check(&self) -> Context {
+        Context {
+            client: self.http_client_health_check.clone(),
+            base_url: self.config.component_url.clone(),
+        }
     }
-    fn worker_context_health_check(&self) -> Result<Context, GolemError> {
-        self.worker_context_base(&HttpClientConfig::health_check())
+
+    fn worker_context(&self) -> Context {
+        Context {
+            client: self.http_client_service.clone(),
+            base_url: self.config.worker_url.clone(),
+        }
+    }
+
+    fn worker_context_health_check(&self) -> Context {
+        Context {
+            client: self.http_client_health_check.clone(),
+            base_url: self.config.worker_url.clone(),
+        }
     }
 }
 
 impl ServiceFactory for OssServiceFactory {
-    type SecurityContext = OssContext;
     type ProjectRef = OssContext;
     type ProjectContext = OssContext;
 
-    fn with_auth(
-        &self,
-        auth: &Self::SecurityContext,
-    ) -> FactoryWithAuth<Self::ProjectRef, Self::ProjectContext, Self::SecurityContext> {
-        FactoryWithAuth {
-            auth: *auth,
-            factory: Box::new(self.clone()),
-        }
-    }
-
     fn project_resolver(
         &self,
-        _auth: &Self::SecurityContext,
-    ) -> Result<
-        Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Arc::new(ProjectResolverOss::DUMMY))
+    ) -> Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync> {
+        Arc::new(ProjectResolverOss::DUMMY)
     }
 
     fn component_client(
         &self,
-        _auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ComponentClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Box::new(ComponentClientLive {
+    ) -> Box<dyn ComponentClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Box::new(ComponentClientLive {
             client: golem_client::api::ComponentClientLive {
-                context: self.component_context()?,
+                context: self.component_context(),
             },
-        }))
+        })
     }
 
-    fn worker_client(
-        &self,
-        _auth: &Self::SecurityContext,
-    ) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError> {
-        Ok(Box::new(WorkerClientLive {
+    fn worker_client(&self) -> Arc<dyn WorkerClient + Send + Sync> {
+        Arc::new(WorkerClientLive {
             client: golem_client::api::WorkerClientLive {
-                context: self.worker_context()?,
+                context: self.worker_context(),
             },
-            context: self.worker_context()?,
-            allow_insecure: self.allow_insecure,
-        }))
+            context: self.worker_context(),
+            allow_insecure: self.config.allow_insecure,
+        })
     }
 
     fn api_definition_client(
         &self,
-        _auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ApiDefinitionClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Box::new(ApiDefinitionClientLive {
+    ) -> Box<dyn ApiDefinitionClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Box::new(ApiDefinitionClientLive {
             client: golem_client::api::ApiDefinitionClientLive {
-                context: self.worker_context()?,
+                context: self.worker_context(),
             },
-        }))
+        })
     }
 
     fn api_deployment_client(
         &self,
-        _auth: &Self::SecurityContext,
-    ) -> Result<
-        Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync>,
-        GolemError,
-    > {
-        Ok(Box::new(ApiDeploymentClientLive {
+    ) -> Box<dyn ApiDeploymentClient<ProjectContext = Self::ProjectContext> + Send + Sync> {
+        Box::new(ApiDeploymentClientLive {
             client: golem_client::api::ApiDeploymentClientLive {
-                context: self.worker_context()?,
+                context: self.worker_context(),
             },
-        }))
+        })
     }
 
-    fn health_check_clients(
-        &self,
-        _auth: &Self::SecurityContext,
-    ) -> Result<Vec<Box<dyn HealthCheckClient + Send + Sync>>, GolemError> {
-        Ok(vec![
-            Box::new(HealthCheckClientLive {
-                client: golem_client::api::HealthCheckClientLive {
-                    context: self.component_context_health_check()?,
-                },
-            }),
-            Box::new(HealthCheckClientLive {
-                client: golem_client::api::HealthCheckClientLive {
-                    context: self.worker_context_health_check()?,
-                },
-            }),
-        ])
+    fn health_check_clients(&self) -> Vec<Arc<dyn HealthCheckClient + Send + Sync>> {
+        let contexts = vec![
+            self.component_context_health_check(),
+            self.worker_context_health_check(),
+        ];
+
+        let contexts_count = contexts.len();
+
+        let unique_contexts: Vec<_> = contexts
+            .iter()
+            .unique_by(|context| context.base_url.clone())
+            .collect();
+
+        if contexts_count != unique_contexts.len() {
+            warn!(
+                "Health check client contexts are not unique, contexts count: {}, unique count: {}",
+                contexts_count,
+                unique_contexts.len()
+            )
+        }
+
+        contexts
+            .into_iter()
+            .map(|context| -> Arc<dyn HealthCheckClient + Send + Sync> {
+                Arc::new(HealthCheckClientLive {
+                    client: golem_client::api::HealthCheckClientLive { context },
+                })
+            })
+            .collect()
     }
+}
+
+pub fn make_reqwest_client(config: &HttpClientConfig) -> Result<reqwest::Client, GolemError> {
+    let mut builder = reqwest::Client::builder();
+
+    if config.allow_insecure {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(timeout) = config.timeout {
+        builder = builder.timeout(timeout);
+    }
+    if let Some(connect_timeout) = config.connect_timeout {
+        builder = builder.connect_timeout(connect_timeout);
+    }
+    if let Some(read_timeout) = config.read_timeout {
+        builder = builder.read_timeout(read_timeout);
+    }
+
+    Ok(builder.connection_verbose(true).build()?)
 }

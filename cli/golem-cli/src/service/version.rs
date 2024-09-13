@@ -13,50 +13,62 @@
 // limitations under the License.
 
 use crate::clients::health_check::HealthCheckClient;
-use crate::model::{GolemError, GolemResult};
+use crate::model::GolemError;
 use async_trait::async_trait;
 use std::cmp::Ordering;
+use std::sync::Arc;
+use tokio::task::JoinSet;
 use version_compare::Version;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub enum VersionCheckResult {
+    Ok,
+    NewerServerVersionAvailable {
+        cli_version: String,
+        server_version: String,
+    },
+}
 
 #[async_trait]
 pub trait VersionService {
-    async fn check(&self) -> Result<GolemResult, GolemError>;
+    async fn check(&self, cli_version: &str) -> Result<VersionCheckResult, GolemError>;
 }
 
 pub struct VersionServiceLive {
-    pub clients: Vec<Box<dyn HealthCheckClient + Send + Sync>>,
+    pub clients: Vec<Arc<dyn HealthCheckClient + Send + Sync>>,
 }
 
 #[async_trait]
 impl VersionService for VersionServiceLive {
-    async fn check(&self) -> Result<GolemResult, GolemError> {
-        let mut versions = Vec::with_capacity(self.clients.len());
-        for client in &self.clients {
-            versions.push(client.version().await?)
+    async fn check(&self, cli_version: &str) -> Result<VersionCheckResult, GolemError> {
+        let mut requests = JoinSet::new();
+        for client in self.clients.clone() {
+            requests.spawn(async move { client.version().await });
         }
 
-        let srv_versions = versions
+        let mut versions = Vec::with_capacity(self.clients.len());
+        while let Some(result) = requests.join_next().await {
+            versions.push(result.expect("Failed to join version request")?);
+        }
+
+        let server_versions = versions
             .iter()
             .map(|v| Version::from(v.version.as_str()).unwrap())
             .collect::<Vec<_>>();
 
-        let cli_version = Version::from(VERSION).unwrap();
+        let cli_version = Version::from(cli_version).unwrap();
 
-        let warning = |cli_version: Version, server_version: &Version| -> String {
-            format!("Warning: golem-cli {} is older than the targeted Golem servers ({})\nInstall the matching version with:\ncargo install golem-cli@{}\n", cli_version.as_str(), server_version.as_str(), server_version.as_str()).to_string()
-        };
-
-        let newer = srv_versions
+        let newer_server_version = server_versions
             .iter()
             .filter(|&v| v > &cli_version)
             .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
-        if let Some(version) = newer {
-            Err(GolemError(warning(cli_version, version)))
-        } else {
-            Ok(GolemResult::Str("No updates found".to_string()))
-        }
+        Ok(newer_server_version
+            .map(
+                |server_version| VersionCheckResult::NewerServerVersionAvailable {
+                    cli_version: cli_version.as_str().to_string(),
+                    server_version: server_version.as_str().to_string(),
+                },
+            )
+            .unwrap_or_else(|| VersionCheckResult::Ok))
     }
 }
