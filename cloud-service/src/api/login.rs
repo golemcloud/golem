@@ -38,9 +38,9 @@ impl TraceErrorKind for LoginError {
 }
 
 impl LoginError {
-    pub fn bad_request(error: String) -> Self {
+    pub fn bad_request(error: impl Into<String>) -> Self {
         LoginError::BadRequest(Json(ErrorsBody {
-            errors: vec![error],
+            errors: vec![error.into()],
         }))
     }
 }
@@ -79,9 +79,11 @@ impl From<OAuth2Error> for LoginError {
             OAuth2Error::Internal(_) => LoginError::Internal(Json(ErrorBody {
                 error: value.to_string(),
             })),
-            OAuth2Error::InvalidSession(_) => LoginError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_string()],
-            })),
+            OAuth2Error::InvalidSession(_) | OAuth2Error::InvalidState(_) => {
+                LoginError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_string()],
+                }))
+            }
         }
     }
 }
@@ -160,7 +162,7 @@ impl LoginApi {
         method = "post",
         operation_id = "start_login_oauth2"
     )]
-    async fn start_o_auth2(&self) -> Result<Json<OAuth2Data>> {
+    async fn start_login_oauth2(&self) -> Result<Json<OAuth2Data>> {
         let record = recorded_http_api_request!("start_login_oauth2",);
         let response = {
             let result = self
@@ -183,7 +185,7 @@ impl LoginApi {
         method = "post",
         operation_id = "complete_login_oauth2"
     )]
-    async fn complete_o_auth2(&self, result: Json<String>) -> Result<Json<UnsafeToken>> {
+    async fn complete_login_oauth2(&self, result: Json<String>) -> Result<Json<UnsafeToken>> {
         let record = recorded_http_api_request!("complete_login_oauth2",);
         let response = {
             let token = self
@@ -201,4 +203,171 @@ impl LoginApi {
 
         record.result(response)
     }
+
+    /// Initiate OAuth2 Web Flow
+    ///
+    /// Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+    #[oai(
+        path = "/v1/login/oauth2/web/authorize",
+        method = "get",
+        operation_id = "oauth2_web_flow_start"
+    )]
+    async fn oauth2_web_flow_start(
+        &self,
+        /// Currently only `github` is supported.
+        Query(provider): Query<String>,
+        /// The redirect URL to redirect to after the user has authorized the application
+        Query(redirect): Query<Option<String>>,
+    ) -> Result<Json<WebFlowAuthorizeUrlResponse>> {
+        let record = recorded_http_api_request!("oauth2_web_flow_start",);
+        let response = async {
+            let redirect = match redirect {
+                Some(r) => {
+                    let url = url::Url::parse(&r)
+                        .map_err(|_| LoginError::bad_request("Invalid redirect URL"))?;
+                    if url.domain().map_or(false, |d| {
+                        d.starts_with("localhost") || d.contains("golem.cloud")
+                    }) {
+                        Some(url)
+                    } else {
+                        return Err(LoginError::bad_request("Invalid redirect domain"));
+                    }
+                }
+                None => None,
+            };
+            let provider =
+                OAuth2Provider::from_str(provider.as_str()).map_err(LoginError::bad_request)?;
+            let state = self
+                .login_service
+                .generate_temp_token_state(redirect)
+                .await?;
+            let url = self
+                .oauth2_service
+                .get_authorize_url(provider, &state)
+                .await?;
+            Ok(Json(WebFlowAuthorizeUrlResponse { url, state }))
+        }
+        .instrument(record.span.clone())
+        .await;
+
+        record.result(response)
+    }
+
+    /// GitHub OAuth2 Web Flow callback
+    ///
+    /// This endpoint handles the callback from GitHub after the user has authorized the application.
+    /// It exchanges the code for an access token and then uses that to log the user in.
+    #[oai(
+        path = "/v1/login/oauth2/web/callback/github",
+        method = "get",
+        operation_id = "oauth2_web_flow_callback_github"
+    )]
+    async fn oauth2_web_flow_callback_github(
+        &self,
+        /// The authorization code returned by GitHub
+        Query(code): Query<String>,
+        /// The state parameter for CSRF protection
+        Query(state): Query<String>,
+    ) -> Result<WebFlowCallbackSuccess> {
+        let record = recorded_http_api_request!("oauth2_web_flow_callback_github",);
+        let response = async {
+            // Exchange the code for an access token
+            let access_token = self
+                .oauth2_service
+                .exchange_code_for_token(OAuth2Provider::Github, &code, &state)
+                .await?;
+
+            // Use the access token to log in or create a user
+            let unsafe_token = self
+                .login_service
+                .oauth2(&OAuth2Provider::Github, &access_token)
+                .await?;
+
+            // Store the token temporarily
+            let token = self
+                .login_service
+                .link_temp_token(&unsafe_token.data.id, &state)
+                .await?;
+
+            let response = if let Some(mut redirect) = token.metadata.redirect {
+                redirect.query_pairs_mut().append_pair("state", &state);
+                WebFlowCallbackSuccess::Redirect(
+                    Json(WebFlowCallbackSuccessResponse {}),
+                    redirect.to_string(),
+                )
+            } else {
+                WebFlowCallbackSuccess::Success(Json(WebFlowCallbackSuccessResponse {}))
+            };
+
+            Ok(response)
+        }
+        .instrument(record.span.clone())
+        .await;
+
+        record.result(response)
+    }
+
+    /// Poll for OAuth2 Web Flow token
+    ///
+    /// This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+    #[oai(
+        path = "/v1/login/oauth2/web/poll",
+        method = "get",
+        operation_id = "oauth2_web_flow_poll"
+    )]
+    async fn oauth2_web_flow_poll(
+        &self,
+        /// The state parameter for identifying the session
+        Query(state): Query<String>,
+    ) -> Result<WebFlowPoll> {
+        let record = recorded_http_api_request!("oauth2_web_flow_poll",);
+        let response = async {
+            let token = self.login_service.get_temp_token(&state).await?;
+
+            let Some(token) = token else {
+                return Ok(WebFlowPoll::Pending(Json(PendingFlowCompletionResponse {})));
+            };
+
+            Ok(WebFlowPoll::Completed(Json(token.token)))
+        }
+        .instrument(record.span.clone())
+        .await;
+
+        record.result(response)
+    }
 }
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowPoll {
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Completed(Json<UnsafeToken>),
+    /// OAuth flow is pending
+    #[oai(status = 202)]
+    Pending(Json<PendingFlowCompletionResponse>),
+}
+
+#[derive(Debug, Clone, Object)]
+pub struct PendingFlowCompletionResponse {}
+
+#[derive(Debug, Clone, Object)]
+pub struct WebFlowAuthorizeUrlResponse {
+    pub url: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum WebFlowCallbackSuccess {
+    /// Redirect to the given URL specified in the web flow start
+    #[oai(status = 302)]
+    Redirect(
+        Json<WebFlowCallbackSuccessResponse>,
+        #[oai(header = "Location")] String,
+    ),
+    /// OAuth flow has completed
+    #[oai(status = 200)]
+    Success(Json<WebFlowCallbackSuccessResponse>),
+}
+
+#[derive(Debug, Clone, Object)]
+pub struct WebFlowCallbackSuccessResponse {}

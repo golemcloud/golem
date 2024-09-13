@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cloud_common::model::TokenSecret;
+use cloud_common::model::{TokenId, TokenSecret};
 use golem_common::model::AccountId;
 use tracing::info;
 
@@ -16,6 +16,8 @@ use crate::service::account_grant::AccountGrantService;
 use crate::service::oauth2_provider_client::{OAuth2ProviderClient, OAuth2ProviderClientError};
 use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};
 use crate::service::token::{TokenService, TokenServiceError};
+
+use super::token::UnsafeTokenWithMetadata;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoginError {
@@ -69,6 +71,7 @@ impl From<TokenServiceError> for LoginError {
             TokenServiceError::AccountNotFound(_) => LoginError::internal(err),
             TokenServiceError::Internal(error) => LoginError::Internal(error),
             TokenServiceError::Unauthorized(_) => LoginError::internal(err),
+            TokenServiceError::UnknownTokenState(_) => LoginError::external(err),
         }
     }
 }
@@ -91,6 +94,23 @@ pub trait LoginService {
         provider: &OAuth2Provider,
         access_token: &str,
     ) -> Result<UnsafeToken, LoginError>;
+
+    async fn generate_temp_token_state(
+        &self,
+        redirect: Option<url::Url>,
+    ) -> Result<String, LoginError>;
+
+    async fn link_temp_token(
+        &self,
+        token: &TokenId,
+        state: &str,
+    ) -> Result<UnsafeTokenWithMetadata, LoginError>;
+
+    async fn get_temp_token(
+        &self,
+        state: &str,
+    ) -> Result<Option<UnsafeTokenWithMetadata>, LoginError>;
+
     async fn create_initial_users(&self) -> Result<(), LoginError>;
 }
 
@@ -258,6 +278,34 @@ impl LoginService for LoginServiceDefault {
         Ok(unsafe_token)
     }
 
+    async fn generate_temp_token_state(
+        &self,
+        redirect: Option<url::Url>,
+    ) -> Result<String, LoginError> {
+        let state = self
+            .token_service
+            .generate_temp_token_state(redirect)
+            .await?;
+        Ok(state)
+    }
+
+    async fn link_temp_token(
+        &self,
+        token: &TokenId,
+        state: &str,
+    ) -> Result<UnsafeTokenWithMetadata, LoginError> {
+        let token = self.token_service.link_temp_token(token, state).await?;
+        Ok(token)
+    }
+
+    async fn get_temp_token(
+        &self,
+        state: &str,
+    ) -> Result<Option<UnsafeTokenWithMetadata>, LoginError> {
+        let token = self.token_service.get_temp_token(state).await?;
+        Ok(token)
+    }
+
     async fn create_initial_users(&self) -> Result<(), LoginError> {
         for account_config in self.accounts_config.accounts.values() {
             self.create_account(account_config).await?
@@ -276,6 +324,28 @@ impl LoginService for LoginServiceNoOp {
         _provider: &OAuth2Provider,
         _access_token: &str,
     ) -> Result<UnsafeToken, LoginError> {
+        Err(LoginError::internal("Not implemented".to_string()))
+    }
+
+    async fn generate_temp_token_state(
+        &self,
+        _redirect: Option<url::Url>,
+    ) -> Result<String, LoginError> {
+        Err(LoginError::internal("Not implemented".to_string()))
+    }
+
+    async fn link_temp_token(
+        &self,
+        _token: &TokenId,
+        _state: &str,
+    ) -> Result<UnsafeTokenWithMetadata, LoginError> {
+        Err(LoginError::internal("Not implemented".to_string()))
+    }
+
+    async fn get_temp_token(
+        &self,
+        _state: &str,
+    ) -> Result<Option<UnsafeTokenWithMetadata>, LoginError> {
         Err(LoginError::internal("Not implemented".to_string()))
     }
 

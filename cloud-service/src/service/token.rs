@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::auth::AccountAuthorisation;
 use crate::model::{Token, UnsafeToken};
 use crate::repo::account::AccountRepo;
+use crate::repo::oauth2_web_flow_state::{LinkedTokenState, OAuth2WebFlowStateRepo};
 use crate::repo::token::TokenRepo;
 use crate::repo::RepoError;
 use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};
@@ -25,6 +26,8 @@ pub enum TokenServiceError {
     AccountNotFound(AccountId),
     #[error("Unknown token: {0}")]
     UnknownToken(TokenId),
+    #[error("Unknown token state: {0}")]
+    UnknownTokenState(String),
     #[error("Arg Validation error: {}", .0.join(", "))]
     ArgValidation(Vec<String>),
     #[error("Internal error: {0}")]
@@ -110,10 +113,31 @@ pub trait TokenService {
         id: &TokenId,
         auth: &AccountAuthorisation,
     ) -> Result<(), TokenServiceError>;
+
+    async fn generate_temp_token_state(
+        &self,
+        redirect: Option<url::Url>,
+    ) -> Result<String, TokenServiceError>;
+
+    async fn valid_temp_token_state(&self, state: &str) -> Result<(), TokenServiceError>;
+
+    async fn link_temp_token(
+        &self,
+        token_id: &TokenId,
+        state: &str,
+    ) -> Result<UnsafeTokenWithMetadata, TokenServiceError>;
+
+    /// Returns None if the token exists, but has not yet been linked
+    /// Returns Error if state is not found
+    async fn get_temp_token(
+        &self,
+        state: &str,
+    ) -> Result<Option<UnsafeTokenWithMetadata>, TokenServiceError>;
 }
 
 pub struct TokenServiceDefault {
     token_repo: Arc<dyn TokenRepo + Send + Sync>,
+    oauth2_web_flow_state_repo: Arc<dyn OAuth2WebFlowStateRepo + Send + Sync>,
     account_repo: Arc<dyn AccountRepo + Sync + Send>,
     oauth2_token_service: Arc<dyn OAuth2TokenService + Send + Sync>,
 }
@@ -121,11 +145,13 @@ pub struct TokenServiceDefault {
 impl TokenServiceDefault {
     pub fn new(
         token_repo: Arc<dyn TokenRepo + Send + Sync>,
+        oauth2_web_flow_state_repo: Arc<dyn OAuth2WebFlowStateRepo + Send + Sync>,
         account_repo: Arc<dyn AccountRepo + Sync + Send>,
         oauth2_token_service: Arc<dyn OAuth2TokenService + Send + Sync>,
     ) -> Self {
         Self {
             token_repo,
+            oauth2_web_flow_state_repo,
             account_repo,
             oauth2_token_service,
         }
@@ -199,6 +225,16 @@ impl TokenServiceDefault {
                 Err(error.into())
             }
         }
+    }
+
+    fn delete_expired_states(&self) {
+        let oauth2_web_flow_state_repo = self.oauth2_web_flow_state_repo.clone();
+        tokio::spawn(async move {
+            let result = oauth2_web_flow_state_repo.delete_expired_states().await;
+            if let Err(error) = result {
+                error!("Failed to delete expired states. {}", error);
+            }
+        });
     }
 }
 
@@ -336,6 +372,117 @@ impl TokenService for TokenServiceDefault {
             }
         }
     }
+
+    async fn generate_temp_token_state(
+        &self,
+        redirect: Option<url::Url>,
+    ) -> Result<String, TokenServiceError> {
+        self.delete_expired_states();
+
+        let metadata = TempTokenMetadata { redirect };
+        let metadata_bytes = serde_json::to_vec(&metadata).map_err(|e| {
+            TokenServiceError::internal("Failed to serialize temp token metadata", e)
+        })?;
+
+        Ok(self
+            .oauth2_web_flow_state_repo
+            .generate_temp_token_state(&metadata_bytes)
+            .await?)
+    }
+
+    async fn valid_temp_token_state(&self, state: &str) -> Result<(), TokenServiceError> {
+        self.delete_expired_states();
+
+        match self
+            .oauth2_web_flow_state_repo
+            .valid_temp_token(state)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(TokenServiceError::UnknownTokenState(state.to_string())),
+            Err(error) => {
+                error!("Failed to validate temporary token. {}", error);
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn link_temp_token(
+        &self,
+        token_id: &TokenId,
+        state: &str,
+    ) -> Result<UnsafeTokenWithMetadata, TokenServiceError> {
+        self.delete_expired_states();
+
+        match self
+            .oauth2_web_flow_state_repo
+            .link_temp_token(&token_id.0, state)
+            .await
+        {
+            Ok(Some(linked_token)) => {
+                let token = UnsafeTokenWithMetadata::try_from(linked_token).map_err(|e| {
+                    TokenServiceError::internal("Failed to deserialize temp token", e)
+                })?;
+                Ok(token)
+            }
+            Ok(None) => Err(TokenServiceError::UnknownTokenState(state.to_string())),
+            Err(error) => {
+                error!("Failed to link temporary token. {}", error);
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn get_temp_token(
+        &self,
+        state: &str,
+    ) -> Result<Option<UnsafeTokenWithMetadata>, TokenServiceError> {
+        self.delete_expired_states();
+
+        let token_state = self
+            .oauth2_web_flow_state_repo
+            .get_temp_token(state)
+            .await?;
+        match token_state {
+            LinkedTokenState::Linked(linked_token) => {
+                let token = UnsafeTokenWithMetadata::try_from(linked_token).map_err(|e| {
+                    TokenServiceError::internal("Failed to deserialize temp token", e)
+                })?;
+                Ok(Some(token))
+            }
+            LinkedTokenState::Pending => Ok(None),
+            LinkedTokenState::NotFound => {
+                Err(TokenServiceError::UnknownTokenState(state.to_string()))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TempTokenMetadata {
+    pub redirect: Option<url::Url>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnsafeTokenWithMetadata {
+    pub token: UnsafeToken,
+    pub metadata: TempTokenMetadata,
+}
+
+impl TryFrom<crate::repo::oauth2_web_flow_state::LinkedToken> for UnsafeTokenWithMetadata {
+    type Error = serde_json::Error;
+
+    fn try_from(
+        linked_token: crate::repo::oauth2_web_flow_state::LinkedToken,
+    ) -> Result<Self, Self::Error> {
+        let secret: TokenSecret = TokenSecret::new(linked_token.token.secret);
+        let metadata: TempTokenMetadata = serde_json::from_slice(&linked_token.metadata)?;
+        let token = UnsafeToken {
+            data: linked_token.token.into(),
+            secret,
+        };
+        Ok(UnsafeTokenWithMetadata { token, metadata })
+    }
 }
 
 #[derive(Default)]
@@ -420,5 +567,31 @@ impl TokenService for TokenServiceNoOp {
         _auth: &AccountAuthorisation,
     ) -> Result<(), TokenServiceError> {
         Ok(())
+    }
+
+    async fn generate_temp_token_state(
+        &self,
+        _redirect: Option<url::Url>,
+    ) -> Result<String, TokenServiceError> {
+        Ok(Uuid::new_v4().to_string())
+    }
+
+    async fn valid_temp_token_state(&self, _state: &str) -> Result<(), TokenServiceError> {
+        Ok(())
+    }
+
+    async fn link_temp_token(
+        &self,
+        _token_id: &TokenId,
+        _state: &str,
+    ) -> Result<UnsafeTokenWithMetadata, TokenServiceError> {
+        Err(TokenServiceError::UnknownTokenState("".to_string()))
+    }
+
+    async fn get_temp_token(
+        &self,
+        _state: &str,
+    ) -> Result<Option<UnsafeTokenWithMetadata>, TokenServiceError> {
+        Ok(None)
     }
 }

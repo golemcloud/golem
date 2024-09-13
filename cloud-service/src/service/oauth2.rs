@@ -12,6 +12,8 @@ use crate::service::oauth2_session::{OAuth2SessionError, OAuth2SessionService};
 pub enum OAuth2Error {
     #[error("Invalid Session: {0}")]
     InvalidSession(String),
+    #[error("Invalid State: {0}")]
+    InvalidState(String),
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
@@ -33,6 +35,12 @@ impl From<OAuth2SessionError> for OAuth2Error {
     }
 }
 
+#[derive(Debug)]
+pub struct UrlWithState {
+    pub url: String,
+    pub state: String,
+}
+
 #[async_trait]
 pub trait OAuth2Service {
     async fn start_workflow(&self) -> Result<OAuth2Data, OAuth2Error>;
@@ -40,6 +48,19 @@ pub trait OAuth2Service {
         &self,
         encoded_session: &EncodedOAuth2Session,
     ) -> Result<OAuth2AccessToken, OAuth2Error>;
+
+    async fn get_authorize_url(
+        &self,
+        provider: OAuth2Provider,
+        state: &str,
+    ) -> Result<String, OAuth2Error>;
+
+    async fn exchange_code_for_token(
+        &self,
+        provider: OAuth2Provider,
+        code: &str,
+        state: &str,
+    ) -> Result<String, OAuth2Error>;
 }
 
 pub struct OAuth2ServiceDefault {
@@ -92,6 +113,30 @@ impl OAuth2Service for OAuth2ServiceDefault {
             access_token,
         })
     }
+
+    async fn get_authorize_url(
+        &self,
+        provider: OAuth2Provider,
+        state: &str,
+    ) -> Result<String, OAuth2Error> {
+        match provider {
+            OAuth2Provider::Github => {
+                let url = self.client.get_authorize_url(state).await;
+                Ok(url)
+            }
+        }
+    }
+
+    async fn exchange_code_for_token(
+        &self,
+        provider: OAuth2Provider,
+        code: &str,
+        state: &str,
+    ) -> Result<String, OAuth2Error> {
+        match provider {
+            OAuth2Provider::Github => Ok(self.client.exchange_code_for_token(code, state).await?),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -107,6 +152,7 @@ impl OAuth2Service for OAuth2ServiceNoOp {
             encoded_session: String::new(),
         })
     }
+
     async fn finish_workflow(
         &self,
         _encoded_session: &EncodedOAuth2Session,
@@ -115,5 +161,22 @@ impl OAuth2Service for OAuth2ServiceNoOp {
             provider: OAuth2Provider::Github,
             access_token: String::new(),
         })
+    }
+
+    async fn get_authorize_url(
+        &self,
+        _provider: OAuth2Provider,
+        _state: &str,
+    ) -> Result<String, OAuth2Error> {
+        Ok(String::new())
+    }
+
+    async fn exchange_code_for_token(
+        &self,
+        _provider: OAuth2Provider,
+        _code: &str,
+        _state: &str,
+    ) -> Result<String, OAuth2Error> {
+        Ok(String::new())
     }
 }

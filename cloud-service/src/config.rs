@@ -109,12 +109,19 @@ impl From<PlanConfig> for Plan {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OAuth2Config {
     pub github_client_id: String,
+    pub github_client_secret: String,
+    pub github_redirect_uri: url::Url,
 }
 
 impl Default for OAuth2Config {
     fn default() -> Self {
         OAuth2Config {
             github_client_id: "GITHUB_CLIENT_ID".to_string(),
+            github_client_secret: "GITHUB_CLIENT_SECRET".to_string(),
+            github_redirect_uri: url::Url::parse(
+                "http://localhost:8080/v1/login/oauth2/web/callback/github",
+            )
+            .unwrap(),
         }
     }
 }

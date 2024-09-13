@@ -31,6 +31,8 @@ public_key = ""
 
 [oauth2]
 github_client_id = "GITHUB_CLIENT_ID"
+github_client_secret = "GITHUB_CLIENT_SECRET"
+github_redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback/github"
 
 [plans.default]
 component_limit = 100

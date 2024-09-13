@@ -45,6 +45,9 @@ impl From<TokenServiceError> for AuthServiceError {
             TokenServiceError::Unauthorized(message) => {
                 AuthServiceError::internal(format!("Failed access with Admin account: {}", message))
             }
+            TokenServiceError::UnknownTokenState(_) => {
+                AuthServiceError::internal(format!("Unknown token state: {}", error))
+            }
         }
     }
 }

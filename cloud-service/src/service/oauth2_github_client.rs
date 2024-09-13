@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use url::Url;
 
 #[async_trait]
 pub trait OAuth2GithubClient {
@@ -13,6 +14,14 @@ pub trait OAuth2GithubClient {
         device_code: &str,
         interval: std::time::Duration,
         expires: DateTime<Utc>,
+    ) -> Result<String, OAuth2GithubClientError>;
+
+    async fn get_authorize_url(&self, state: &str) -> String;
+
+    async fn exchange_code_for_token(
+        &self,
+        code: &str,
+        state: &str,
     ) -> Result<String, OAuth2GithubClientError>;
 }
 
@@ -37,9 +46,7 @@ impl OAuth2GithubClientError {
         E: Display + Debug + Send + Sync + 'static,
         C: Display + Send + Sync + 'static,
     {
-        Self::Unexpected(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
+        Self::Unexpected(anyhow::Error::msg(error).context(context))
     }
 }
 
@@ -138,6 +145,55 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             };
 
             tokio::time::sleep(interval).await;
+        }
+    }
+
+    async fn get_authorize_url(&self, state: &str) -> String {
+        Url::parse_with_params(
+            "https://github.com/login/oauth/authorize",
+            &[
+                ("client_id", self.config.github_client_id.as_str()),
+                ("redirect_uri", self.config.github_redirect_uri.as_str()),
+                ("state", state),
+                ("scope", "user:email"),
+            ],
+        )
+        .expect("Failed to construct GitHub authorize URL")
+        .to_string()
+    }
+
+    async fn exchange_code_for_token(
+        &self,
+        code: &str,
+        state: &str,
+    ) -> Result<String, OAuth2GithubClientError> {
+        let client = reqwest::Client::new();
+
+        let res = client
+            .post("https://github.com/login/oauth/access_token")
+            .query(&[
+                ("client_id", &self.config.github_client_id),
+                ("client_secret", &self.config.github_client_secret),
+                ("code", &String::from(code)),
+                ("state", &String::from(state)),
+            ])
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                OAuth2GithubClientError::unexpected("Failed to exchange code for token", e)
+            })?;
+
+        if res.status().is_success() {
+            let access_token: AccessToken = res.json().await.map_err(|e| {
+                OAuth2GithubClientError::unexpected("Failed to parse access token", e)
+            })?;
+            Ok(access_token.access_token)
+        } else {
+            Err(OAuth2GithubClientError::unexpected(
+                "Failed to exchange code for token",
+                res.status(),
+            ))
         }
     }
 }
@@ -349,6 +405,11 @@ mod tests {
         let client = OAuth2GithubClientDefault {
             config: crate::config::OAuth2Config {
                 github_client_id: CLIENT_ID.into(),
+                github_client_secret: "".into(),
+                github_redirect_uri: url::Url::parse(
+                    "http://localhost:8085/v1/login/oauth2/web/callback/github",
+                )
+                .unwrap(),
             },
         };
 

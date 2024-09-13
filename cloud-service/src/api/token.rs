@@ -74,6 +74,9 @@ impl From<TokenServiceError> for TokenError {
             TokenServiceError::AccountNotFound(_) => TokenError::BadRequest(Json(ErrorsBody {
                 errors: vec![value.to_string()],
             })),
+            TokenServiceError::UnknownTokenState(_) => TokenError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_string()],
+            })),
         }
     }
 }

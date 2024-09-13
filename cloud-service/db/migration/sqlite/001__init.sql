@@ -118,6 +118,13 @@ CREATE TABLE oauth2_tokens
     FOREIGN KEY (token_id) REFERENCES tokens (id)
 );
 
+CREATE TABLE IF NOT EXISTS oauth2_web_flow_state (
+    oauth2_state TEXT PRIMARY KEY,
+    metadata     BLOB NOT NULL,
+    -- NULL token_id indicates pending OAuth callback linkage
+    token_id     TEXT REFERENCES tokens(id),
+    created_at   TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 
 CREATE TABLE project_account
 (

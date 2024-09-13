@@ -57,9 +57,11 @@ impl From<OAuth2Error> for LoginError {
             OAuth2Error::Internal(_) => login_error::Error::Internal(ErrorBody {
                 error: value.to_string(),
             }),
-            OAuth2Error::InvalidSession(_) => login_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_string()],
-            }),
+            OAuth2Error::InvalidSession(_) | OAuth2Error::InvalidState(_) => {
+                login_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_string()],
+                })
+            }
         };
         LoginError { error: Some(error) }
     }

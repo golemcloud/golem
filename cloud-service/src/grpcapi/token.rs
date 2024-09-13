@@ -61,6 +61,11 @@ impl From<token::TokenServiceError> for TokenError {
                     errors: vec![value.to_string()],
                 })
             }
+            token::TokenServiceError::UnknownTokenState(_) => {
+                token_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_string()],
+                })
+            }
         };
         TokenError { error: Some(error) }
     }

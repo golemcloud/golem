@@ -122,6 +122,7 @@ impl Services {
         let token_service: Arc<dyn token::TokenService + Sync + Send> =
             Arc::new(token::TokenServiceDefault::new(
                 repositories.token_repo.clone(),
+                repositories.oauth2_web_flow_state_repo.clone(),
                 repositories.account_repo.clone(),
                 oauth2_token_service.clone(),
             ));

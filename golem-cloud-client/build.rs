@@ -21,14 +21,14 @@ fn main() {
 
         // Copying the file to the crate so it gets packaged
         std::fs::create_dir_all(Path::new(&manifest_dir).join("openapi")).unwrap();
-        copy_if_different(
+        std::fs::copy(
             yaml_path.clone(),
             Path::new(&manifest_dir).join("openapi/golem-cloud-service.yaml"),
         )
         .unwrap();
 
         println!("cargo::rerun-if-changed=build.rs");
-        println!("cargo::rerun-if-changed=openapi/golem-cloud-service.yaml");
+        println!("cargo::rerun-if-changed={}", yaml_path.display());
     } else {
         let crate_yaml_path = Path::new(&manifest_dir).join("openapi/golem-cloud-service.yaml");
         generate(crate_yaml_path, out_dir);
@@ -45,21 +45,4 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         true,
     )
     .expect("Failed to generate client code from OpenAPI spec.");
-}
-
-fn copy_if_different(
-    src: impl AsRef<Path> + Sized,
-    dst: impl AsRef<Path> + Sized,
-) -> std::io::Result<()> {
-    if dst.as_ref().exists() {
-        let a = std::fs::read(&src)?;
-        let b = std::fs::read(&dst)?;
-        if a != b {
-            std::fs::copy(src, dst)?;
-        }
-        Ok(())
-    } else {
-        std::fs::copy(src, dst)?;
-        Ok(())
-    }
 }
