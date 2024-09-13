@@ -43,7 +43,7 @@ pub mod api;
 pub mod blob_storage;
 pub mod blobstore;
 pub mod compatibility;
-pub mod guest_languages;
+pub mod guest_languages1;
 pub mod guest_languages2;
 pub mod guest_languages3;
 pub mod hot_update;
@@ -54,7 +54,7 @@ pub mod measure_test_component_mem;
 pub mod rust_rpc;
 pub mod scalability;
 pub mod transactions;
-pub mod ts_rpc;
+pub mod ts_rpc1;
 pub mod ts_rpc2;
 pub mod wasi;
 

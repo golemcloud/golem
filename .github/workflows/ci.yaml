@@ -62,7 +62,7 @@ jobs:
           shared-key: release-gcc-aarch64-linux-gnu
           cache-all-crates: true
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - name: Build Executables
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
@@ -225,7 +225,7 @@ jobs:
           cache-all-crates: true
           save-if: true
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -272,14 +272,14 @@ jobs:
           shared-key: debug-workertests
           cache-all-crates: true
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
@@ -317,14 +317,14 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
@@ -349,14 +349,14 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
@@ -382,14 +382,14 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
@@ -415,14 +415,14 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
@@ -456,7 +456,7 @@ jobs:
           shared-key: release
           cache-all-crates: true
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3

@@ -209,7 +209,7 @@ cargo test --package golem-worker-executor-base --test integration keyvalue -- -
 description = "Runs worker executor tests only (group 2/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration guest_languages -- --nocapture
+cargo test --package golem-worker-executor-base --test integration guest_languages1 -- --nocapture
 '''
 
 [tasks.worker-executor-tests-group3]
@@ -242,7 +242,7 @@ cargo test --package golem-worker-executor-base --test integration guest_languag
 description = "Runs worker executor tests only (group 6/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration ts_rpc -- --nocapture
+cargo test --package golem-worker-executor-base --test integration ts_rpc1 -- --nocapture
 '''
 
 [tasks.worker-executor-tests-group7]
