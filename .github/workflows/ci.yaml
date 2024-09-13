@@ -204,7 +204,7 @@ jobs:
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
 
-  build-and-test:
+  build:
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -225,6 +225,43 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build all targets
         run: cargo make --profile ci build
+      - name: Upload debug binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-bins
+          path: |
+            target/debug/golem-cli
+            target/debug/golem-component-compilation-service
+            target/debug/golem-component-service
+            target/debug/golem-shard-manager
+            target/debug/golem-worker-service
+            target/debug/worker-executor
+
+  test:
+    needs: [build]
+    runs-on: ubuntu-latest-large
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download debug binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: target-bins
+          path: target/debug
       - name: Check that OpenAPI specs are up-to-date
         run: cargo make --profile ci check-openapi
       - name: Check that configs are up-to-date
@@ -233,7 +270,7 @@ jobs:
         run: cargo make --profile ci unit-tests
 
   check:
-    needs: [build-and-test]
+    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -323,7 +360,7 @@ jobs:
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
   integration-tests:
-    needs: [build-and-test]
+    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -347,13 +384,18 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Download debug binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: target-bins
+          path: target/debug
       - name: Integration tests
         env:
           QUIET: 1
         run: cargo make --profile ci integration-tests
         timeout-minutes: 30
   cli-tests:
-    needs: [build-and-test]
+    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -377,13 +419,18 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Download debug binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: target-bins
+          path: target/debug
       - name: CLI tests
         env:
           QUIET: 1
         run: cargo make --profile ci cli-tests
         timeout-minutes: 30
   sharding-tests:
-    needs: [build-and-test]
+    needs: [build]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -407,6 +454,11 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+      - name: Download debug binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: target-bins
+          path: target/debug
       - name: Sharding tests
         env:
           QUIET: 1
@@ -415,7 +467,9 @@ jobs:
   publish:
     needs:
       [
-        build-and-test,
+        build,
+        test,
+        check,
         worker-tests,
         integration-tests,
         cli-tests,
