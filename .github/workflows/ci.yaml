@@ -260,7 +260,7 @@ jobs:
       - name: Download debug binaries
         uses: actions/download-artifact@v4
         with:
-          name: debug-bins
+          name: target-bins
           path: target/debug
       - name: Check that OpenAPI specs are up-to-date
         run: cargo make --profile ci check-openapi
@@ -387,7 +387,7 @@ jobs:
       - name: Download debug binaries
         uses: actions/download-artifact@v4
         with:
-          name: debug-bins
+          name: target-bins
           path: target/debug
       - name: Integration tests
         env:
@@ -422,7 +422,7 @@ jobs:
       - name: Download debug binaries
         uses: actions/download-artifact@v4
         with:
-          name: debug-bins
+          name: target-bins
           path: target/debug
       - name: CLI tests
         env:
@@ -457,7 +457,7 @@ jobs:
       - name: Download debug binaries
         uses: actions/download-artifact@v4
         with:
-          name: debug-bins
+          name: target-bins
           path: target/debug
       - name: Sharding tests
         env:
