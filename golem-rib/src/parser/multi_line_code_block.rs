@@ -20,17 +20,41 @@ use combine::{
 
 use crate::expr::Expr;
 
-use crate::parser::rib_expr::rib_program;
-use combine::stream::easy;
-
-pub fn multi_line_block<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn multi_line_block<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     spaces().with(between(
         char_('{').skip(spaces()),
         char_('}').skip(spaces()),
-        rib_program().skip(spaces()),
+        internal::block().skip(spaces()),
     ))
 }
 
+mod internal {
+    use crate::parser::rib_expr::rib_expr;
+    use crate::Expr;
+    use combine::parser::char::{char, spaces};
+    use combine::{sep_by, Parser};
+
+    // A block is different to a complete rib-program that the it may not be the end of the stream
+    pub fn block<Input>() -> impl Parser<Input, Output = Expr>
+    where
+        Input: combine::Stream<Token = char>,
+    {
+        spaces().with(
+            sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(
+                |expressions: Vec<Expr>| {
+                    if expressions.len() == 1 {
+                        expressions.first().unwrap().clone()
+                    } else {
+                        Expr::multiple(expressions)
+                    }
+                },
+            ),
+        )
+    }
+}
 #[cfg(test)]
 mod tests {
     use crate::expr::Expr;

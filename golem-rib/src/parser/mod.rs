@@ -16,6 +16,7 @@ mod binary_comparison;
 mod boolean;
 pub(crate) mod call;
 mod cond;
+mod errors;
 mod flag;
 mod identifier;
 mod let_binding;

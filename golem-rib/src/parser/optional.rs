@@ -13,23 +13,24 @@
 // limitations under the License.
 
 use combine::{
-    between, choice,
-    parser::char::{char, spaces, string},
+    attempt, between,
+    parser::char::{char, string},
     Parser,
 };
 
 use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
-use combine::stream::easy;
 
-pub fn option<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    choice((
-        spaces().with(
-            between(string("some("), char(')'), rib_expr()).map(|expr| Expr::option(Some(expr))),
-        ),
-        spaces().with(string("none").map(|_| Expr::option(None))),
-    ))
+pub fn option<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    attempt(string("some"))
+        .with(between(char('('), char(')'), rib_expr()))
+        .map(|expr| Expr::option(Some(expr)))
+        .or(attempt(string("none")).map(|_| Expr::option(None)))
+        .message("Invalid syntax for Option type")
 }
 
 #[cfg(test)]

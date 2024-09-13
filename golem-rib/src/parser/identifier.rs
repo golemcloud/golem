@@ -13,27 +13,33 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use combine::error::StreamError;
 use combine::parser::char::digit;
 use combine::parser::char::{char as char_, letter, spaces};
-use combine::parser::repeat::many1;
-use combine::stream::easy;
-use combine::Parser;
+use combine::{many, Parser};
 
-pub fn identifier<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn identifier<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    identifier_text()
+        .map(Expr::identifier)
+        .message("Invalid identifier")
+}
+
+pub fn identifier_text<Input>() -> impl Parser<Input, Output = String>
+where
+    Input: combine::Stream<Token = char>,
+{
     spaces().with(
-        many1(letter().or(digit()).or(char_('_').or(char_('-'))))
-            .and_then(|s: Vec<char>| {
-                if s.first().map_or(false, |&c| c.is_alphabetic()) {
-                    Ok(s)
-                } else {
-                    Err(easy::Error::message_static_message(
-                        "Identifier must start with a letter",
-                    ))
-                }
-            })
-            .map(|s: Vec<char>| Expr::identifier(s.into_iter().collect::<String>().as_str()))
-            .message("Unable to parse identifier"),
+        (
+            letter(),
+            many(letter().or(digit()).or(char_('_').or(char_('-')))),
+        )
+            .map(|(a, s): (char, Vec<char>)| {
+                let mut vec = vec![a];
+                vec.extend(s);
+                vec.iter().collect::<String>()
+            }),
     )
 }
 

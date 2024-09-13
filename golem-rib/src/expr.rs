@@ -19,6 +19,7 @@ use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{text, type_inference, InferredType, VariableId};
 use bincode::{Decode, Encode};
+use combine::stream::position;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -80,15 +81,9 @@ impl Expr {
     ///
     pub fn from_text(input: &str) -> Result<Expr, String> {
         rib_program()
-            .easy_parse(input.as_ref())
-            .map_err(|err| err.to_string())
-            .and_then(|(expr, remaining)| {
-                if remaining.is_empty() {
-                    Ok(expr)
-                } else {
-                    Err(format!("Failed to parse: {}", remaining))
-                }
-            })
+            .easy_parse(position::Stream::new(input))
+            .map(|t| t.0)
+            .map_err(|err| format!("{}", err))
     }
 
     /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`

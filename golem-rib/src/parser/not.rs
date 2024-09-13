@@ -15,15 +15,19 @@
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
 use combine::parser::char::{spaces, string};
-use combine::stream::easy;
 use combine::Parser;
 
-pub fn not<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (string("!").skip(spaces()), rib_expr())
-            .map(|(_, expr)| Expr::not(expr))
-            .message("Unable to parse not"),
-    )
+pub fn not<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    spaces()
+        .with(
+            (string("!").skip(spaces()), rib_expr())
+                .map(|(_, expr)| Expr::not(expr))
+                .message("Unable to parse not"),
+        )
+        .message("Unable to parse not")
 }
 
 #[cfg(test)]

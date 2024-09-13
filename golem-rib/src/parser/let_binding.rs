@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::error::StreamError;
 use combine::parser::char::digit;
 use combine::{
-    many1, optional,
+    attempt, many1, optional,
     parser::char::{char as char_, letter, spaces, string},
     Parser,
 };
@@ -23,12 +22,13 @@ use combine::{
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::type_name::parse_type_name;
-use combine::stream::easy;
 
-pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
+pub fn let_binding<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    attempt(string("let")).skip(spaces()).with(
         (
-            string("let").skip(spaces()),
             let_variable().skip(spaces()),
             optional(
                 char_(':')
@@ -39,7 +39,7 @@ pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
             char_('=').skip(spaces()),
             rib_expr(),
         )
-            .map(|(_, var, optional_type, _, expr)| {
+            .map(|(var, optional_type, _, expr)| {
                 if let Some(type_name) = optional_type {
                     Expr::let_binding_with_type(var, type_name, expr)
                 } else {
@@ -49,19 +49,13 @@ pub fn let_binding<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
     )
 }
 
-fn let_variable<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
+fn let_variable<Input>() -> impl Parser<Input, Output = String>
+where
+    Input: combine::Stream<Token = char>,
+{
     many1(letter().or(digit()).or(char_('_')))
-        .and_then(|s: Vec<char>| {
-            if s.first().map_or(false, |&c| c.is_alphabetic()) {
-                Ok(s)
-            } else {
-                Err(easy::Error::message_static_message(
-                    "Let binding variable must start with a letter",
-                ))
-            }
-        })
         .map(|s: Vec<char>| s.into_iter().collect())
-        .message("Unable to parse let binding variable")
+        .message("Unable to parse binding variable")
 }
 
 #[cfg(test)]
@@ -129,7 +123,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_result() {
         let input = "let foo = ok(bar)";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -142,7 +136,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_literal() {
         let input = "let foo = \"bar\"";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((Expr::let_binding("foo", Expr::literal("bar")), ""))
@@ -152,7 +146,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_record() {
         let input = "let foo = { bar : baz }";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -168,7 +162,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u8() {
         let input = "let foo: u8 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -185,7 +179,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u16() {
         let input = "let foo: u16 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -202,7 +196,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u32() {
         let input = "let foo: u32 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -219,7 +213,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_u64() {
         let input = "let foo: u64 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -236,7 +230,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s8() {
         let input = "let foo: s8 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -253,7 +247,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s16() {
         let input = "let foo: s16 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -270,7 +264,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s32() {
         let input = "let foo: s32 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -287,7 +281,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_s64() {
         let input = "let foo: s64 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -304,7 +298,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_f32() {
         let input = "let foo: f32 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -321,7 +315,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_f64() {
         let input = "let foo: f64 = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -338,7 +332,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_chr() {
         let input = "let foo: chr = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -355,7 +349,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_str() {
         let input = "let foo: str = bar";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((
@@ -372,7 +366,7 @@ mod tests {
     #[test]
     fn test_let_binding_with_type_name_list_u8() {
         let input = "let foo: list<u8> = []";
-        let result = let_binding().easy_parse(input);
+        let result = rib_expr().easy_parse(input);
         assert_eq!(
             result,
             Ok((

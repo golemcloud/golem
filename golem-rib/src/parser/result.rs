@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use combine::{
-    between, choice,
+    attempt, choice,
     parser::char::{char, string},
     Parser,
 };
@@ -24,15 +24,20 @@ use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
 
-use combine::stream::easy;
-
-pub fn result<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn result<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     choice((
-        spaces().with(between(string("ok("), char(')'), rib_expr()).map(Expr::ok)),
-        spaces().with(between(string("err("), char(')'), rib_expr()).map(Expr::err)),
+        attempt(string("ok")).with(
+            (char('('), rib_expr().skip(spaces()), char(')')).map(|(_, expr, _)| Expr::ok(expr)),
+        ),
+        attempt(string("err")).with(
+            (char('('), rib_expr().skip(spaces()), char(')')).map(|(_, expr, _)| Expr::err(expr)),
+        ),
     ))
+    .message("Invalid syntax for Result type")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
