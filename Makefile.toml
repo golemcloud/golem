@@ -262,7 +262,7 @@ cargo test --package golem-worker-executor-base --test integration ts_rpc2 -- --
 
 [tasks.integration-tests]
 description = "Runs integration tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -277,7 +277,7 @@ args = [
 
 [tasks.sharding-tests]
 description = "Runs sharding integration tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
@@ -292,7 +292,7 @@ args = [
 ]
 
 [tasks.sharding-tests-debug]
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 script = '''
 rm -rf logs data
 mkdir -pv logs data
@@ -311,7 +311,7 @@ cargo test \
 
 [tasks.cli-tests]
 description = "Runs CLI tests only"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 command = "cargo"
 args = [
