@@ -20,7 +20,6 @@ use derive_more::FromStr;
 use indoc::printdoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
@@ -282,46 +281,51 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct HttpClientConfig {
+    pub allow_insecure: bool,
     pub timeout: Option<Duration>,
     pub connect_timeout: Option<Duration>,
     pub read_timeout: Option<Duration>,
 }
 
 impl HttpClientConfig {
-    pub fn env() -> Self {
+    pub fn new_for_service_calls(allow_insecure: bool) -> Self {
+        Self {
+            allow_insecure,
+            timeout: None,
+            connect_timeout: None,
+            read_timeout: None,
+        }
+        .with_env_overrides("GOLEM")
+    }
+
+    pub fn new_for_health_check(allow_insecure: bool) -> Self {
+        Self {
+            allow_insecure,
+            timeout: Some(Duration::from_secs(2)),
+            connect_timeout: Some(Duration::from_secs(1)),
+            read_timeout: Some(Duration::from_secs(1)),
+        }
+        .with_env_overrides("GOLEM_HEALTHCHECK")
+    }
+
+    fn with_env_overrides(mut self, prefix: &str) -> Self {
         fn env_duration(name: &str) -> Option<Duration> {
             let duration_str = std::env::var(name).ok()?;
             Some(iso8601::duration(&duration_str).ok()?.into())
         }
 
-        let timeout = env_duration("GOLEM_TIMEOUT");
-        let connect_timeout = env_duration("GOLEM_CONNECT_TIMEOUT");
-        let read_timeout = env_duration("GOLEM_READ_TIMEOUT");
+        let duration_fields: Vec<(&str, &mut Option<Duration>)> = vec![
+            ("TIMEOUT", &mut self.timeout),
+            ("CONNECT_TIMEOUT", &mut self.connect_timeout),
+            ("READ_TIMEOUT", &mut self.read_timeout),
+        ];
 
-        Self {
-            timeout,
-            connect_timeout,
-            read_timeout,
-        }
-    }
-
-    pub fn health_check() -> Self {
-        fn min_opt(d1: Duration, opt_d2: Option<Duration>) -> Duration {
-            match opt_d2 {
-                None => d1,
-                Some(d2) => min(d1, d2),
+        for (env_var_name, field) in duration_fields {
+            if let Some(duration) = env_duration(&format!("{}_{}", prefix, env_var_name)) {
+                *field = Some(duration);
             }
         }
 
-        let from_env = Self::env();
-
-        let timeout = Some(min_opt(Duration::from_secs(2), from_env.timeout));
-        let connect_timeout = Some(min_opt(Duration::from_secs(1), from_env.connect_timeout));
-        let read_timeout = Some(min_opt(Duration::from_secs(1), from_env.read_timeout));
-        Self {
-            timeout,
-            connect_timeout,
-            read_timeout,
-        }
+        self
     }
 }

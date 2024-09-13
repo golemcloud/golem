@@ -198,35 +198,9 @@ pub trait WorkerService {
     ) -> Result<Vec<WorkerMetadata>, GolemError>;
 }
 
-pub trait WorkerClientBuilder {
-    fn build(&self) -> Result<Box<dyn WorkerClient + Send + Sync>, GolemError>;
-}
-
-pub trait ComponentServiceBuilder<ProjectContext: Send + Sync> {
-    fn build(
-        &self,
-    ) -> Result<Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>, GolemError>;
-}
-
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
-    pub client: Box<dyn WorkerClient + Send + Sync>,
+    pub client: Arc<dyn WorkerClient + Send + Sync>,
     pub components: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
-    pub client_builder: Box<dyn WorkerClientBuilder + Send + Sync>,
-    pub component_service_builder: Box<dyn ComponentServiceBuilder<ProjectContext> + Send + Sync>,
-}
-
-// same as resolve_worker_component_version, but with no borrowing, so we can spawn it.
-async fn resolve_worker_component_version_no_ref<ProjectContext: Send + Sync>(
-    worker_client: Box<dyn WorkerClient + Send + Sync>,
-    component_service: Arc<dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync>,
-    worker_urn: WorkerUrn,
-) -> Result<Option<Component>, GolemError> {
-    resolve_worker_component_version(
-        worker_client.as_ref(),
-        component_service.as_ref(),
-        worker_urn,
-    )
-    .await
 }
 
 async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
@@ -531,13 +505,17 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let async_component_request = if let Some(component) = component_meta {
             AsyncComponentRequest::Resolved(component)
         } else if human_readable {
-            let worker_client = self.client_builder.build()?;
-            let component_service = self.component_service_builder.build()?;
-            AsyncComponentRequest::Async(tokio::spawn(resolve_worker_component_version_no_ref(
-                worker_client,
-                component_service,
-                worker_urn.clone(),
-            )))
+            let worker_client = self.client.clone();
+            let component_service = self.components.clone();
+            let worker_urn = worker_urn.clone();
+            AsyncComponentRequest::Async(tokio::spawn(async move {
+                resolve_worker_component_version(
+                    worker_client.as_ref(),
+                    component_service.as_ref(),
+                    worker_urn,
+                )
+                .await
+            }))
         } else {
             AsyncComponentRequest::Empty
         };
