@@ -61,19 +61,13 @@ jobs:
         with:
           shared-key: release-gcc-aarch64-linux-gnu
           cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - name: Build Executables
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci build-release
       - name: Prepare Targets
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci package-release
       - uses: actions/upload-artifact@v4
         name: Upload Targets
@@ -224,37 +218,20 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build all targets
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci build
       - name: Check that OpenAPI specs are up-to-date
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci check-openapi
       - name: Check that configs are up-to-date
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci check-configs
       - name: Unit tests
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci unit-tests
       - name: Check formatting and clippy rules
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci check
 
   worker-tests-group1:
@@ -271,8 +248,6 @@ jobs:
         with:
           shared-key: debug-workertests
           cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -284,9 +259,6 @@ jobs:
           redis-version: latest
           auto-start: false
       - name: Worker Executor integration tests
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci worker-executor-tests-group1
         timeout-minutes: 20
   worker-tests:
@@ -316,8 +288,6 @@ jobs:
           shared-key: debug-workertests
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -329,9 +299,6 @@ jobs:
           redis-version: latest
           auto-start: false
       - name: Worker Executor integration tests
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
   integration-tests:
@@ -348,8 +315,6 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -363,8 +328,6 @@ jobs:
       - name: Integration tests
         env:
           QUIET: 1
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci integration-tests
         timeout-minutes: 30
   cli-tests:
@@ -381,8 +344,6 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -396,8 +357,6 @@ jobs:
       - name: CLI tests
         env:
           QUIET: 1
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci cli-tests
         timeout-minutes: 30
   sharding-tests:
@@ -414,8 +373,6 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -429,8 +386,6 @@ jobs:
       - name: Sharding tests
         env:
           QUIET: 1
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci sharding-tests
         timeout-minutes: 30
   publish:
@@ -455,8 +410,6 @@ jobs:
         with:
           shared-key: release
           cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.5
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -468,8 +421,6 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci publish
 
   publish_cli_binaries:
