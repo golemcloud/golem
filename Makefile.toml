@@ -29,7 +29,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 [env]
 
 [env.ci]
-CARGO_INCREMENTAL=false
+CARGO_INCREMENTAL = "false"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -52,6 +52,10 @@ dependencies = [
 description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
+
+[tasks.build-bins-non-ci]
+condition = { env_not_set = ["CI"] } # on CI we always 'cargo make build' first so no need to recompile bins
+run_task = "build-bins"
 
 [tasks.build-bins]
 description = "Builds all executables in debug mode"
@@ -133,7 +137,7 @@ args = ["fmt", "--all", "--", "--check"]
 description = "Runs clippy checks without applying any fix"
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--no-deps", "--all-targets", "--", "-Dwarnings"]
+args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
 ## ** FIX **
 
@@ -157,6 +161,7 @@ args = [
     "--allow-dirty",
     "--allow-staged",
     "--",
+    "--no-deps",
     "-Dwarnings",
 ]
 
@@ -309,7 +314,7 @@ args = [
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
-    "build-bins",
+    "build-bins-non-ci",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
@@ -609,7 +614,7 @@ kill $redis_pid || true
 
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 
 script = '''
 export RUST_BACKTRACE=1

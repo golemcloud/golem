@@ -236,11 +236,6 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci build
-      - name: Check formatting and clippy rules
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make --profile ci check
       - name: Check that OpenAPI specs are up-to-date
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -256,6 +251,11 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo make --profile ci unit-tests
+      - name: Check formatting and clippy rules
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo make --profile ci check
 
   worker-tests-group1:
     runs-on: ubuntu-latest-large
