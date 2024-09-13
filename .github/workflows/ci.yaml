@@ -262,6 +262,14 @@ jobs:
         with:
           name: debug-bins
           path: target/debug
+      - name: Fix permissions
+        run: |
+          chmod +x target/debug/golem-cli
+          chmod +x target/debug/golem-component-compilation-service
+          chmod +x target/debug/golem-component-service
+          chmod +x target/debug/golem-shard-manager
+          chmod +x target/debug/golem-worker-service
+          chmod +x target/debug/worker-executor
       - name: Check that OpenAPI specs are up-to-date
         run: cargo make --profile ci check-openapi
       - name: Check that configs are up-to-date
@@ -389,6 +397,14 @@ jobs:
         with:
           name: debug-bins
           path: target/debug
+      - name: Fix permissions
+        run: |
+          chmod +x target/debug/golem-cli
+          chmod +x target/debug/golem-component-compilation-service
+          chmod +x target/debug/golem-component-service
+          chmod +x target/debug/golem-shard-manager
+          chmod +x target/debug/golem-worker-service
+          chmod +x target/debug/worker-executor
       - name: Integration tests
         env:
           QUIET: 1
@@ -424,6 +440,14 @@ jobs:
         with:
           name: debug-bins
           path: target/debug
+      - name: Fix permissions
+        run: |
+          chmod +x target/debug/golem-cli
+          chmod +x target/debug/golem-component-compilation-service
+          chmod +x target/debug/golem-component-service
+          chmod +x target/debug/golem-shard-manager
+          chmod +x target/debug/golem-worker-service
+          chmod +x target/debug/worker-executor
       - name: CLI tests
         env:
           QUIET: 1
@@ -459,6 +483,14 @@ jobs:
         with:
           name: debug-bins
           path: target/debug
+      - name: Fix permissions
+        run: |
+          chmod +x target/debug/golem-cli
+          chmod +x target/debug/golem-component-compilation-service
+          chmod +x target/debug/golem-component-service
+          chmod +x target/debug/golem-shard-manager
+          chmod +x target/debug/golem-worker-service
+          chmod +x target/debug/worker-executor
       - name: Sharding tests
         env:
           QUIET: 1
