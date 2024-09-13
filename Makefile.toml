@@ -30,7 +30,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
-CARGO_LOG="cargo::core::compiler::fingerprint=trace"
+# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"

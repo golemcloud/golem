@@ -231,6 +231,27 @@ jobs:
         run: cargo make --profile ci check-configs
       - name: Unit tests
         run: cargo make --profile ci unit-tests
+
+  check:
+    needs: [build-and-test]
+    runs-on: ubuntu-latest-large
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
 
@@ -302,6 +323,7 @@ jobs:
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
   integration-tests:
+    needs: [build-and-test]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -331,6 +353,7 @@ jobs:
         run: cargo make --profile ci integration-tests
         timeout-minutes: 30
   cli-tests:
+    needs: [build-and-test]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -360,6 +383,7 @@ jobs:
         run: cargo make --profile ci cli-tests
         timeout-minutes: 30
   sharding-tests:
+    needs: [build-and-test]
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
