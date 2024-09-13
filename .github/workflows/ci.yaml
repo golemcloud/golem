@@ -505,7 +505,9 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
     needs:
       [
-        build-and-test,
+        build,
+        check,
+        test,
         worker-tests,
         integration-tests,
         cli-tests,
