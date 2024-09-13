@@ -301,6 +301,8 @@ jobs:
           - name: group4
           - name: group5
           - name: group6
+          - name: group7
+          - name: group8
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout

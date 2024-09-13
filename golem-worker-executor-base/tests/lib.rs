@@ -45,6 +45,7 @@ pub mod blobstore;
 pub mod compatibility;
 pub mod guest_languages;
 pub mod guest_languages2;
+pub mod guest_languages3;
 pub mod hot_update;
 pub mod indexed_storage;
 pub mod key_value_storage;
@@ -54,6 +55,7 @@ pub mod rust_rpc;
 pub mod scalability;
 pub mod transactions;
 pub mod ts_rpc;
+pub mod ts_rpc2;
 pub mod wasi;
 
 #[derive(Clone)]
