@@ -324,11 +324,12 @@ impl LoginApi {
         let response = async {
             let token = self.login_service.get_temp_token(&state).await?;
 
-            let Some(token) = token else {
-                return Ok(WebFlowPoll::Pending(Json(PendingFlowCompletionResponse {})));
+            let result = match token {
+                Some(token) => WebFlowPoll::Completed(Json(token.token)),
+                None => WebFlowPoll::Pending(Json(PendingFlowCompletionResponse {})),
             };
 
-            Ok(WebFlowPoll::Completed(Json(token.token)))
+            Ok(result)
         }
         .instrument(record.span.clone())
         .await;
