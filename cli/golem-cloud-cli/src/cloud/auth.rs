@@ -120,21 +120,21 @@ impl AuthLive {
 
 fn inform_user(data: &WebFlowAuthorizeUrlResponse) {
     let url = &data.url;
-    let box_url_line = String::from_utf8(vec![b'-'; data.url.len() + 2]).unwrap();
 
-    printdoc! {"
-        >>
-        >>  Application requests to perform OAuth2
-        >>  authorization.
-        >>
-        >>  Visit following URL in a browser:
-        >>
-        >>   ┏{box_url_line}┓
-        >>   ┃ {url} ┃
-        >>   ┗{box_url_line}┛
-        >>
-        Waiting...
-    "}
+    printdoc! {
+        "
+        ┌────────────────────────────────────────┐
+        │       Authenticate with GitHub         │
+        │                                        │
+        │  Visit the following URL in a browser  │
+        │                                        │
+        └────────────────────────────────────────┘
+        {url}
+        ──────────────────────────────────────────
+        "
+    }
+
+    println!("Waiting for authentication...");
 }
 
 #[async_trait]

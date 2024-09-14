@@ -44,7 +44,7 @@ impl<C: HttpClient + Sync + Send> LoginClient for LoginClientLive<C> {
 
         info!("Complete OAuth2 workflow");
         let mut attempts = 0;
-        let max_attempts = 30;
+        let max_attempts = 60;
         let delay = Duration::from_secs(1);
 
         loop {
