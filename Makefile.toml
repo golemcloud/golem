@@ -26,6 +26,12 @@
 default_to_workspace = false # by default, we run cargo commands on top level instead of per member
 skip_core_tasks = true       # we are not using the predefined cargo-make flows, instead redefine here for more clarity
 
+[env]
+
+[env.ci]
+CARGO_INCREMENTAL = "false"
+# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
+
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
 run_task = "dev-flow"
@@ -47,6 +53,10 @@ dependencies = [
 description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
+
+[tasks.build-bins-non-ci]
+condition = { env_not_set = ["CI"] } # on CI we always 'cargo make build' first so no need to recompile bins
+run_task = "build-bins"
 
 [tasks.build-bins]
 description = "Builds all executables in debug mode"
@@ -116,7 +126,7 @@ args = [
 
 [tasks.check]
 description = "Runs rustfmt and clippy checks without applying any fix"
-dependencies = ["check-rustfmt", "check-clippy"]
+dependencies = ["check-clippy", "check-rustfmt"]
 
 [tasks.check-rustfmt]
 description = "Runs rustfmt checks without applying any fix"
@@ -128,7 +138,7 @@ args = ["fmt", "--all", "--", "--check"]
 description = "Runs clippy checks without applying any fix"
 install_crate = "clippy"
 command = "cargo"
-args = ["clippy", "--no-deps", "--all-targets", "--", "-Dwarnings"]
+args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
 ## ** FIX **
 
@@ -152,6 +162,7 @@ args = [
     "--allow-dirty",
     "--allow-staged",
     "--",
+    "--no-deps",
     "-Dwarnings",
 ]
 
@@ -187,7 +198,7 @@ args = [
 ]
 
 [tasks.worker-executor-tests-group1]
-description = "Runs worker executor tests only (group 1/6)"
+description = "Runs worker executor tests only (group 1/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration api -- --nocapture
@@ -196,14 +207,14 @@ cargo test --package golem-worker-executor-base --test integration keyvalue -- -
 '''
 
 [tasks.worker-executor-tests-group2]
-description = "Runs worker executor tests only (group 2/6)"
+description = "Runs worker executor tests only (group 2/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration guest_languages -- --nocapture
+cargo test --package golem-worker-executor-base --test integration guest_languages1 -- --nocapture
 '''
 
 [tasks.worker-executor-tests-group3]
-description = "Runs worker executor tests only (group 3/6)"
+description = "Runs worker executor tests only (group 3/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration transactions -- --nocapture
@@ -211,7 +222,7 @@ cargo test --package golem-worker-executor-base --test integration wasi -- --noc
 '''
 
 [tasks.worker-executor-tests-group4]
-description = "Runs worker executor tests only (group 4/6)"
+description = "Runs worker executor tests only (group 4/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration scalability -- --nocapture
@@ -221,7 +232,7 @@ cargo test --package golem-worker-executor-base --test integration rust_rpc -- -
 '''
 
 [tasks.worker-executor-tests-group5]
-description = "Runs worker executor tests only (group 5/6)"
+description = "Runs worker executor tests only (group 5/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
 cargo test --package golem-worker-executor-base --test integration guest_languages2 -- --nocapture
@@ -229,10 +240,24 @@ cargo test --package golem-worker-executor-base --test integration guest_languag
 
 
 [tasks.worker-executor-tests-group6]
-description = "Runs worker executor tests only (group 6/6)"
+description = "Runs worker executor tests only (group 6/8)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
 script = '''
-cargo test --package golem-worker-executor-base --test integration ts_rpc -- --nocapture
+cargo test --package golem-worker-executor-base --test integration ts_rpc1 -- --nocapture
+'''
+
+[tasks.worker-executor-tests-group7]
+description = "Runs worker executor tests only (group 7/8)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+script = '''
+cargo test --package golem-worker-executor-base --test integration guest_languages3 -- --nocapture
+'''
+
+[tasks.worker-executor-tests-group8]
+description = "Runs worker executor tests only (group 8/8)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+script = '''
+cargo test --package golem-worker-executor-base --test integration ts_rpc2 -- --nocapture
 '''
 
 [tasks.integration-tests]
@@ -304,7 +329,7 @@ args = [
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
 dependencies = [
-    "build-bins",
+    "build-bins-non-ci",
     "generate-worker-service-openapi",
     "generate-component-service-openapi",
     "merge-openapi",
@@ -604,7 +629,7 @@ kill $redis_pid || true
 
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 
 script = '''
 export RUST_BACKTRACE=1

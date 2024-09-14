@@ -61,20 +61,14 @@ jobs:
         with:
           shared-key: release-gcc-aarch64-linux-gnu
           cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - name: Build Executables
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make build-release
+        run: cargo make --profile ci build-release
       - name: Prepare Targets
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make package-release
+        run: cargo make --profile ci package-release
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -209,33 +203,8 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-router.outputs.tags }}
           labels: ${{ steps.meta-golem-router.outputs.labels }}
-  check:
-    runs-on: ubuntu-latest-large
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check formatting and clippy rules
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make check
-  build:
+
+  build-and-test:
     runs-on: ubuntu-latest-large
     steps:
       - name: Checkout
@@ -249,54 +218,22 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build all targets
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make build
-  unit-tests:
-    runs-on: ubuntu-latest-large
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
-      - uses: davidB/rust-cargo-make@v1
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo make --profile ci build
       - name: Check that OpenAPI specs are up-to-date
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make check-openapi
+        run: cargo make --profile ci check-openapi
       - name: Check that configs are up-to-date
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make check-configs
+        run: cargo make --profile ci check-configs
       - name: Unit tests
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make unit-tests
+        run: cargo make --profile ci unit-tests
+      - name: Check formatting and clippy rules
+        run: cargo make --profile ci check
+
   worker-tests-group1:
     runs-on: ubuntu-latest-large
     name: worker-tests-group1
@@ -311,23 +248,18 @@ jobs:
         with:
           shared-key: debug-workertests
           cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
       - name: Worker Executor integration tests
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make worker-executor-tests-group1
+        run: cargo make --profile ci worker-executor-tests-group1
         timeout-minutes: 20
   worker-tests:
     needs: [ worker-tests-group1 ]
@@ -341,6 +273,8 @@ jobs:
           - name: group4
           - name: group5
           - name: group6
+          - name: group7
+          - name: group8
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout
@@ -354,23 +288,18 @@ jobs:
           shared-key: debug-workertests
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
       - name: Worker Executor integration tests
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make worker-executor-tests-${{ matrix.group.name }}
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
   integration-tests:
     runs-on: ubuntu-latest-large
@@ -386,24 +315,20 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
       - name: Integration tests
         env:
           QUIET: 1
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make integration-tests
+        run: cargo make --profile ci integration-tests
         timeout-minutes: 30
   cli-tests:
     runs-on: ubuntu-latest-large
@@ -419,25 +344,21 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
       - name: CLI tests
         env:
           QUIET: 1
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make cli-tests
-        timeout-minutes: 30
+        run: cargo make --profile ci cli-tests
+        timeout-minutes: 35
   sharding-tests:
     runs-on: ubuntu-latest-large
     steps:
@@ -452,31 +373,25 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.29.0
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
       - name: Sharding tests
         env:
           QUIET: 1
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make sharding-tests
+        run: cargo make --profile ci sharding-tests
         timeout-minutes: 30
   publish:
     needs:
       [
-        build,
-        check,
-        unit-tests,
+        build-and-test,
         worker-tests,
         integration-tests,
         cli-tests,
@@ -495,8 +410,6 @@ jobs:
         with:
           shared-key: release
           cache-all-crates: true
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
       - uses: davidB/rust-cargo-make@v1
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -508,17 +421,13 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        run: cargo make publish
+        run: cargo make --profile ci publish
 
   publish_cli_binaries:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
     needs:
       [
-        build,
-        check,
-        unit-tests,
+        build-and-test,
         worker-tests,
         integration-tests,
         cli-tests,
@@ -561,7 +470,7 @@ jobs:
       - name: Set version for all packages
         env:
           VERSION: ${{ steps.get_version.outputs.version-without-v }}
-        run: cargo make set-version
+        run: cargo make --profile ci set-version
       - run: cargo build -p golem-cli --release --target ${{ matrix.rust-target }}
         if: ${{ ! matrix.cross }}
       - run: cargo install cross
