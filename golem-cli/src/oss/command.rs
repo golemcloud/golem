@@ -102,7 +102,7 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about, long_about, rename_all = "kebab-case")]
+#[command(author, version = crate::VERSION, about, long_about, rename_all = "kebab-case")]
 /// Command line interface for OSS version of Golem.
 pub struct GolemOssCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]

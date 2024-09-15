@@ -22,13 +22,11 @@ use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
-use crate::{check_for_newer_server_version, examples};
+use crate::{check_for_newer_server_version, examples, VERSION};
 use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
 use std::path::PathBuf;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     cmd: GolemOssCommand<ProfileAdd>,

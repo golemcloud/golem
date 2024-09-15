@@ -15,6 +15,7 @@
 use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
+use golem_common::golem_version;
 use lenient_bool::LenientBool;
 use log::Level;
 use tracing::warn;
@@ -33,6 +34,8 @@ pub mod model;
 pub mod oss;
 pub mod service;
 pub mod stubgen;
+
+const VERSION: &str = golem_version!();
 
 pub fn parse_key_val(
     s: &str,

@@ -1,11 +1,11 @@
+use golem_common::golem_version;
+use golem_service_base::api_tags::ApiTags;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 
-use golem_service_base::api_tags::ApiTags;
-
 pub struct HealthcheckApi;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = golem_version!();
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,

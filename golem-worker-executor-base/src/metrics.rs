@@ -16,6 +16,7 @@
 // Collecting them in one place makes it easier to look them up and to share
 // common metrics between different layers of the application.
 
+use crate::VERSION;
 use lazy_static::lazy_static;
 use prometheus::*;
 
@@ -30,14 +31,10 @@ lazy_static! {
 
 pub fn register_all() -> Registry {
     VERSION_INFO
-        .with_label_values(&[version(), wasmtime::VERSION])
+        .with_label_values(&[VERSION, wasmtime::VERSION])
         .inc();
 
     default_registry().clone()
-}
-
-fn version() -> &'static str {
-    option_env!("CARGO_VERSION_INFO").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 const FUEL_BUCKETS: &[f64; 11] = &[

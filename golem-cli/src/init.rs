@@ -116,7 +116,7 @@ pub enum InitCommand<ProfileAdd: clap::Args> {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about = "Your Golem is not configured. Please run `golem-cli init`", long_about = None, rename_all = "kebab-case")]
+#[command(author, version = crate::VERSION, about = "Your Golem is not configured. Please run `golem-cli init`", long_about = None, rename_all = "kebab-case")]
 /// Your Golem is not configured. Please run `golem-cli init`
 pub struct GolemInitCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
