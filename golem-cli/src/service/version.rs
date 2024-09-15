@@ -50,12 +50,35 @@ impl VersionService for VersionServiceLive {
             versions.push(result.expect("Failed to join version request")?);
         }
 
-        let server_versions = versions
-            .iter()
-            .map(|v| Version::from(v.version.as_str()).unwrap())
-            .collect::<Vec<_>>();
+        let server_versions = {
+            let mut server_versions: Vec<_> = vec![];
+            for version in &versions {
+                match Version::from(version.version.as_str()) {
+                    Some(version) => {
+                        server_versions.push(version);
+                    }
+                    None => {
+                        return Err(GolemError(format!(
+                            "Failed to parse server version: {}",
+                            version.version
+                        )))
+                    }
+                }
+            }
+            server_versions
+        };
 
-        let cli_version = Version::from(cli_version).unwrap();
+        let cli_version = {
+            match Version::from(cli_version) {
+                Some(version) => version,
+                None => {
+                    return Err(GolemError(format!(
+                        "Failed to parse cli version: {}",
+                        cli_version
+                    )))
+                }
+            }
+        };
 
         let newer_server_version = server_versions
             .iter()
