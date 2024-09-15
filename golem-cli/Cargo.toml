@@ -41,7 +41,7 @@ golem-wasm-rpc = { workspace = true }
 golem-wasm-rpc-stubgen = { version = "1.0.2", optional = true }
 h2 = "0.3.24"
 http = { workspace = true }
-humansize = {workspace = true}
+humansize = { workspace = true }
 hyper = { workspace = true }
 indoc = "2.0.4"
 inquire = "0.7.5"
@@ -51,6 +51,7 @@ lenient_bool = "0.1.1"
 log = { version = "0.4.22" }
 native-tls = "0.2.11"
 openapiv3 = { workspace = true }
+phf = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }

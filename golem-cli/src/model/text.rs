@@ -16,6 +16,7 @@ use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
 use indoc::{eprintdoc, printdoc};
 use itertools::Itertools;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -52,7 +53,8 @@ impl<T: MessageWithFieldsTextFormat> TextFormat for T {
 pub struct FieldsBuilder(Vec<(&'static str, String)>);
 
 impl FieldsBuilder {
-    pub fn empty() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Self(vec![])
     }
 
@@ -301,7 +303,28 @@ impl TextFormat for ComponentUpdateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentGetView(pub ComponentView);
 
-impl TextFormat for ComponentGetView {
+impl MessageWithFieldsTextFormat for ComponentGetView {
+    fn message(&self) -> String {
+        format!("Metadata for component: {}", self.0.component_name.bold())
+    }
+
+    fn fields(&self) -> Vec<(&'static str, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Component URN", &self.0.component_urn, format_main_id)
+            .fmt_field("Component name", &self.0.component_name, format_id)
+            .fmt_field("Component version", &self.0.component_version, format_id)
+            .fmt_field_option("Project ID", &self.0.project_id, format_id)
+            .fmt_field("Component size", &self.0.component_size, format_binary_size)
+            .fmt_field_option("Created at", &self.0.created_at, |d| d.to_string())
+            .fmt_field("Exports", &self.0.exports, |e| format_exports(e.as_slice()));
+
+        fields.build()
+    }
+}
+
+/*impl TextFormat for ComponentGetView {
     fn print(&self) {
         printdoc!(
             "
@@ -319,7 +342,7 @@ impl TextFormat for ComponentGetView {
             println!("\t{export}")
         }
     }
-}
+}*/
 
 #[derive(Table)]
 struct ComponentListView {
@@ -370,11 +393,12 @@ impl TextFormat for WorkerAddView {
 
         printdoc!(
             "
-            New worker created for component {component_urn}, with name {}.
+            New worker created for component {}, with name {}.
             Worker URN: {}
             ",
-            self.0.id.worker_name,
-            self.0,
+            format_id(&component_urn),
+            format_id(&self.0.id.worker_name),
+            format_main_id(&self.0),
         )
     }
 }
@@ -424,14 +448,13 @@ impl TextFormat for InvokeResultView {
 impl MessageWithFieldsTextFormat for WorkerMetadataView {
     fn message(&self) -> String {
         format!(
-            "{}{}",
-            "Metadata for worker: ",
+            "Metadata for worker: {}",
             self.worker_urn.id.worker_name.bold()
         )
     }
 
     fn fields(&self) -> Vec<(&'static str, String)> {
-        let mut fields = FieldsBuilder::empty();
+        let mut fields = FieldsBuilder::new();
 
         fields
             .fmt_field("Worker URN", &self.worker_urn, format_main_id)
@@ -439,7 +462,7 @@ impl MessageWithFieldsTextFormat for WorkerMetadataView {
                 format_id(&ComponentUrn { id: id.clone() })
             })
             .fmt_field("Worker name", &self.worker_urn.id.worker_name, format_id)
-            .field("Component version", &self.component_version)
+            .fmt_field("Component version", &self.component_version, format_id)
             .field("Created at", &self.created_at)
             .fmt_field("Component size", &self.component_size, format_binary_size)
             .fmt_field(
@@ -499,7 +522,7 @@ impl From<&WorkerMetadataView> for WorkerMetadataListView {
             worker_name: value.worker_urn.id.worker_name.to_string(),
             status: format_status(&value.status),
             component_version: value.component_version,
-            created_at: value.created_at.clone(),
+            created_at: value.created_at,
         }
     }
 }
@@ -691,4 +714,60 @@ pub fn format_retry_count(retry_count: &u64) -> String {
     } else {
         format_warn(&retry_count.to_string())
     }
+}
+
+static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
+    "bool",
+    "s8", "s16", "s32", "s64",
+    "u8", "u16", "u32", "u64",
+    "f32", "f64",
+    "char",
+    "string",
+    "list",
+    "option",
+    "result",
+    "tuple"
+};
+
+// A very naive highlighter
+pub fn format_export(export: &str) -> String {
+    let separator =
+        Regex::new(r"[ :/.{}()<>]").expect("Failed to compile export separator pattern");
+    let mut formatted = String::with_capacity(export.len());
+
+    fn format_token(target: &mut String, token: &str) {
+        let trimmed_token = token.trim_ascii_start();
+        let starts_with_ascii = trimmed_token
+            .chars()
+            .next()
+            .map(|c| c.is_ascii())
+            .unwrap_or(false);
+        if starts_with_ascii {
+            if BUILTIN_TYPES.contains(trimmed_token) {
+                target.push_str(&token.green().to_string());
+            } else {
+                target.push_str(&token.cyan().to_string());
+            }
+        } else {
+            target.push_str(token);
+        }
+    }
+
+    let mut last_end = 0;
+    for separator in separator.find_iter(export) {
+        if separator.start() != last_end {
+            format_token(&mut formatted, &export[last_end..separator.start()]);
+        }
+        formatted.push_str(separator.as_str());
+        last_end = separator.end();
+    }
+    if last_end != export.len() {
+        format_token(&mut formatted, &export[last_end..])
+    }
+
+    formatted
+}
+
+pub fn format_exports(exports: &[String]) -> String {
+    exports.iter().map(|e| format_export(e.as_str())).join("\n")
 }
