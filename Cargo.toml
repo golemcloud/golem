@@ -99,6 +99,7 @@ golem-wasm-rpc = { version = "1.0.2", default-features = false, features = [
 ] }
 http = "1.0.0" # keep in sync with wasmtime
 http_02 = { package = "http", version = "0.2.11" }
+humansize = "2.1.3"
 humantime-serde = "1.1.1"
 hyper = { version = "1.0.1", features = ["full"] } # keep in sync with wasmtime
 iso8601-timestamp = "0.2.16"

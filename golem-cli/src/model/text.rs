@@ -6,7 +6,10 @@ use crate::model::{
     WorkersMetadataResponseView,
 };
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use golem_client::model::{HttpApiDefinitionWithTypeInfo, RouteWithTypeInfo, ScanCursor};
+use colored::Colorize;
+use golem_client::model::{
+    HttpApiDefinitionWithTypeInfo, RouteWithTypeInfo, ScanCursor, WorkerStatus,
+};
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_examples::model::{ExampleName, GuestLanguage, GuestLanguageTier};
@@ -17,6 +20,84 @@ use std::fmt::Debug;
 
 pub trait TextFormat {
     fn print(&self);
+}
+
+pub trait MessageWithFieldsTextFormat {
+    fn message(&self) -> String;
+    fn fields(&self) -> Vec<(&'static str, String)>;
+}
+
+impl<T: MessageWithFieldsTextFormat> TextFormat for T {
+    fn print(&self) {
+        println!("{}\n", self.message());
+
+        let fields = self.fields();
+        let max_field_len = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
+
+        for (name, value) in self.fields() {
+            let lines: Vec<_> = value.lines().collect();
+            if lines.len() == 1 {
+                println!("{: <max_field_len$} {}", format!("{}:", name), lines[0]);
+            } else {
+                println!("{}:", name);
+                for line in lines {
+                    println!("  {}", line)
+                }
+            }
+        }
+    }
+}
+
+pub struct FieldsBuilder(Vec<(&'static str, String)>);
+
+impl FieldsBuilder {
+    pub fn empty() -> Self {
+        Self(vec![])
+    }
+
+    pub fn field<T: ToString>(&mut self, name: &'static str, value: &T) -> &mut Self {
+        self.0.push((name, value.to_string()));
+        self
+    }
+
+    pub fn fmt_field<T>(
+        &mut self,
+        name: &'static str,
+        value: &T,
+        format: impl Fn(&T) -> String,
+    ) -> &mut Self {
+        self.0.push((name, format(value)));
+        self
+    }
+
+    pub fn fmt_field_optional<T>(
+        &mut self,
+        name: &'static str,
+        value: &T,
+        cond: bool,
+        format: impl Fn(&T) -> String,
+    ) -> &mut Self {
+        if cond {
+            self.0.push((name, format(value)));
+        }
+        self
+    }
+
+    pub fn fmt_field_option<T>(
+        &mut self,
+        name: &'static str,
+        value: &Option<T>,
+        format: impl Fn(&T) -> String,
+    ) -> &mut Self {
+        if let Some(value) = &value {
+            self.0.push((name, format(value)));
+        }
+        self
+    }
+
+    pub fn build(self) -> Vec<(&'static str, String)> {
+        self.0
+    }
 }
 
 #[derive(Table)]
@@ -339,28 +420,75 @@ impl TextFormat for InvokeResultView {
     }
 }
 
-impl TextFormat for WorkerMetadataView {
-    fn print(&self) {
-        printdoc!(
-            r#"
-            Worker "{}" of component {} with component version {}.
-            URN: {}.
-            Status: {}.
-            Startup arguments: {}.
-            Environment variables: {}.
-            Retry count: {}.
-            "#,
-            self.worker_urn.id.worker_name,
-            ComponentUrn {
-                id: self.worker_urn.id.component_id.clone()
-            },
-            self.component_version,
-            self.worker_urn,
-            self.status.to_string(),
-            self.args.join(", "),
-            self.env.iter().map(|(k, v)| format!("{k}={v}")).join(", "),
-            self.retry_count,
+impl MessageWithFieldsTextFormat for WorkerMetadataView {
+    fn message(&self) -> String {
+        format!(
+            "{}{}",
+            "Metadata for worker: ",
+            self.worker_urn.id.worker_name.bold()
         )
+    }
+
+    fn fields(&self) -> Vec<(&'static str, String)> {
+        let mut fields = FieldsBuilder::empty();
+
+        fields
+            .fmt_field("URN", &self.worker_urn, format_main_id)
+            .fmt_field("Worker name", &self.worker_urn.id.worker_name, format_id)
+            .fmt_field("Component ID", &self.worker_urn.id.component_id, format_id)
+            .field("Component version", &self.component_version)
+            .field("Created at", &self.created_at)
+            .fmt_field("Component size", &self.component_size, format_binary_size)
+            .fmt_field(
+                "Total linear memory size",
+                &self.total_linear_memory_size,
+                format_binary_size,
+            )
+            .fmt_field_optional("Arguments", &self.args, !self.args.is_empty(), |args| {
+                args.join(" ")
+            })
+            .fmt_field_optional(
+                "Environment variables",
+                &self.env,
+                !self.env.is_empty(),
+                |env| {
+                    env.iter()
+                        .map(|(k, v)| format!("{}={}", k, v.bold()))
+                        .join(";")
+                },
+            )
+            .fmt_field("Status", &self.status, |status| {
+                let status_name = status.to_string();
+
+                match self.status {
+                    WorkerStatus::Running => status_name.green(),
+                    WorkerStatus::Idle => status_name.cyan(),
+                    WorkerStatus::Suspended => status_name.yellow(),
+                    WorkerStatus::Interrupted => status_name.red(),
+                    WorkerStatus::Retrying => status_name.yellow(),
+                    WorkerStatus::Failed => status_name.bright_red(),
+                    WorkerStatus::Exited => status_name.white(),
+                }
+                .to_string()
+            })
+            .fmt_field("Retry count", &self.retry_count, |retry_count| {
+                if *retry_count == 0 {
+                    retry_count.to_string()
+                } else {
+                    format_warn(&retry_count.to_string())
+                }
+            })
+            .fmt_field_optional(
+                "Pending invocation count",
+                &self.pending_invocation_count,
+                self.pending_invocation_count > 0,
+                |n| n.to_string(),
+            )
+            .fmt_field_option("Last error", &self.last_error, |err| {
+                format_stack(err.as_ref())
+            });
+
+        fields.build()
     }
 }
 
@@ -517,4 +645,41 @@ impl TextFormat for TryUpdateAllWorkersResult {
             .unwrap();
         }
     }
+}
+
+pub fn format_main_id<T: ToString>(id: &T) -> String {
+    id.to_string().bold().underline().to_string()
+}
+
+pub fn format_id<T: ToString>(id: &T) -> String {
+    id.to_string().bold().to_string()
+}
+
+pub fn format_warn<T: ToString>(s: &T) -> String {
+    s.to_string().yellow().to_string()
+}
+
+pub fn format_stack(stack: &str) -> String {
+    stack
+        .lines()
+        .map(|line| {
+            if line.contains("<unknown>!<wasm function") {
+                line.bright_black().to_string()
+            } else {
+                line.yellow().to_string()
+            }
+        })
+        .join("\n")
+}
+
+pub fn format_error(error: &str) -> String {
+    if error.starts_with("error while executing at wasm backtrace") {
+        format_stack(error)
+    } else {
+        error.yellow().to_string()
+    }
+}
+
+pub fn format_binary_size(size: &u64) -> String {
+    humansize::format_size(*size, humansize::BINARY)
 }
