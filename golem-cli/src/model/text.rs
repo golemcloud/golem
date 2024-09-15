@@ -5,6 +5,7 @@ use crate::model::{
     ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadataView,
     WorkersMetadataResponseView,
 };
+use chrono::{DateTime, Utc};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use colored::Colorize;
 use golem_client::model::{
@@ -433,9 +434,11 @@ impl MessageWithFieldsTextFormat for WorkerMetadataView {
         let mut fields = FieldsBuilder::empty();
 
         fields
-            .fmt_field("URN", &self.worker_urn, format_main_id)
+            .fmt_field("Worker URN", &self.worker_urn, format_main_id)
+            .fmt_field("Component URN", &self.worker_urn.id.component_id, |id| {
+                format_id(&ComponentUrn { id: id.clone() })
+            })
             .fmt_field("Worker name", &self.worker_urn.id.worker_name, format_id)
-            .fmt_field("Component ID", &self.worker_urn.id.component_id, format_id)
             .field("Component version", &self.component_version)
             .field("Created at", &self.created_at)
             .fmt_field("Component size", &self.component_size, format_binary_size)
@@ -457,27 +460,8 @@ impl MessageWithFieldsTextFormat for WorkerMetadataView {
                         .join(";")
                 },
             )
-            .fmt_field("Status", &self.status, |status| {
-                let status_name = status.to_string();
-
-                match self.status {
-                    WorkerStatus::Running => status_name.green(),
-                    WorkerStatus::Idle => status_name.cyan(),
-                    WorkerStatus::Suspended => status_name.yellow(),
-                    WorkerStatus::Interrupted => status_name.red(),
-                    WorkerStatus::Retrying => status_name.yellow(),
-                    WorkerStatus::Failed => status_name.bright_red(),
-                    WorkerStatus::Exited => status_name.white(),
-                }
-                .to_string()
-            })
-            .fmt_field("Retry count", &self.retry_count, |retry_count| {
-                if *retry_count == 0 {
-                    retry_count.to_string()
-                } else {
-                    format_warn(&retry_count.to_string())
-                }
-            })
+            .fmt_field("Status", &self.status, format_status)
+            .fmt_field("Retry count", &self.retry_count, format_retry_count)
             .fmt_field_optional(
                 "Pending invocation count",
                 &self.pending_invocation_count,
@@ -494,14 +478,16 @@ impl MessageWithFieldsTextFormat for WorkerMetadataView {
 
 #[derive(Table)]
 struct WorkerMetadataListView {
-    #[table(title = "Component")]
+    #[table(title = "Component URN")]
     pub component_urn: ComponentUrn,
     #[table(title = "Name")]
     pub worker_name: String,
+    #[table(title = "Component\nversion", justify = "Justify::Right")]
+    pub component_version: u64,
     #[table(title = "Status", justify = "Justify::Right")]
     pub status: String,
-    #[table(title = "Component version", justify = "Justify::Right")]
-    pub component_version: u64,
+    #[table(title = "Created at")]
+    pub created_at: DateTime<Utc>,
 }
 
 impl From<&WorkerMetadataView> for WorkerMetadataListView {
@@ -511,8 +497,9 @@ impl From<&WorkerMetadataView> for WorkerMetadataListView {
                 id: value.worker_urn.id.component_id.clone(),
             },
             worker_name: value.worker_urn.id.worker_name.to_string(),
-            status: value.status.to_string(),
+            status: format_status(&value.status),
             component_version: value.component_version,
+            created_at: value.created_at.clone(),
         }
     }
 }
@@ -682,4 +669,26 @@ pub fn format_error(error: &str) -> String {
 
 pub fn format_binary_size(size: &u64) -> String {
     humansize::format_size(*size, humansize::BINARY)
+}
+
+pub fn format_status(status: &WorkerStatus) -> String {
+    let status_name = status.to_string();
+    match status {
+        WorkerStatus::Running => status_name.green(),
+        WorkerStatus::Idle => status_name.cyan(),
+        WorkerStatus::Suspended => status_name.yellow(),
+        WorkerStatus::Interrupted => status_name.red(),
+        WorkerStatus::Retrying => status_name.yellow(),
+        WorkerStatus::Failed => status_name.bright_red(),
+        WorkerStatus::Exited => status_name.white(),
+    }
+    .to_string()
+}
+
+pub fn format_retry_count(retry_count: &u64) -> String {
+    if *retry_count == 0 {
+        retry_count.to_string()
+    } else {
+        format_warn(&retry_count.to_string())
+    }
 }
