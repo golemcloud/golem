@@ -22,11 +22,14 @@ use crate::diagnose::diagnose;
 use crate::model::{
     ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
 };
+use crate::oss::command::GolemOssCommand;
+use crate::oss::completion::PrintCompletion;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use crate::{diagnose, examples, InitArgs};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
 use golem_common::uri::oss::uri::ResourceUri;
@@ -143,6 +146,12 @@ impl<ProfileAdd: clap::Args> HasVerbosity for GolemInitCommand<ProfileAdd> {
     }
 }
 
+impl<ProfileAdd: clap::Args> PrintCompletion for GolemInitCommand<ProfileAdd> {
+    fn print_completion(shell: Shell) {
+        GolemOssCommand::<ProfileAdd>::print_completion(shell);
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CliKind {
     Universal,
@@ -173,10 +182,6 @@ impl ProfileAuth for DummyProfileAuth {
     }
 }
 
-pub trait PrintCompletion {
-    fn print_completion(&self, shell: clap_complete::Shell);
-}
-
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
     args: InitArgs<GolemInitCommand<ProfileAdd>>,
 ) -> Result<GolemResult, GolemError> {
@@ -184,16 +189,15 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         cli_kind,
         config_dir,
         command,
-        profile_auth,
-        print_completion,
     } = args;
+
+    let profile_auth = &DummyProfileAuth;
 
     match command.command {
         InitCommand::Init {} => {
             let profile_name = ProfileName::default(cli_kind);
 
-            let res =
-                init_profile(cli_kind, profile_name, &config_dir, profile_auth.as_ref()).await?;
+            let res = init_profile(cli_kind, profile_name, &config_dir, profile_auth).await?;
 
             if res.auth_required {
                 profile_auth.auth(&res.profile_name, &config_dir).await?
@@ -202,9 +206,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             Ok(GolemResult::Str("Profile created".to_string()))
         }
         InitCommand::Profile { subcommand } => {
-            subcommand
-                .handle(cli_kind, &config_dir, profile_auth.as_ref())
-                .await
+            subcommand.handle(cli_kind, &config_dir, profile_auth).await
         }
         InitCommand::Examples(golem_examples::cli::Command::New {
             name_or_language,
@@ -220,7 +222,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             language,
         }) => examples::process_list_examples(min_tier, language),
         InitCommand::Completion { generator } => {
-            print_completion.print_completion(generator);
+            GolemInitCommand::<ProfileAdd>::print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
         InitCommand::Diagnose { command } => {

@@ -17,9 +17,8 @@ extern crate derive_more;
 use clap::Parser;
 use golem_cli::command::profile::OssProfileAdd;
 use golem_cli::config::{get_config_dir, Config, NamedProfile, Profile};
-use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand, PrintCompletion, ProfileAuth};
+use golem_cli::init::{CliKind, GolemInitCommand};
 use golem_cli::oss::command::GolemOssCommand;
-use golem_cli::oss::completion::PrintOssCompletion;
 use golem_cli::{oss, run_main, ConfiguredArgs, InitArgs};
 use indoc::eprintdoc;
 use std::process::ExitCode;
@@ -53,9 +52,6 @@ fn main() -> ExitCode {
         None => None,
     };
 
-    let profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static> = Box::new(DummyProfileAuth);
-    let print_completion: Box<dyn PrintCompletion> = Box::new(PrintOssCompletion);
-
     if let Some((profile_name, profile)) = oss_profile {
         run_main(
             oss::main::async_main,
@@ -65,8 +61,6 @@ fn main() -> ExitCode {
                 profile_name,
                 profile,
                 command: GolemOssCommand::<OssProfileAdd>::parse(),
-                profile_auth,
-                print_completion,
             },
         )
     } else {
@@ -76,8 +70,6 @@ fn main() -> ExitCode {
                 cli_kind,
                 config_dir,
                 command: GolemInitCommand::<OssProfileAdd>::parse(),
-                profile_auth,
-                print_completion,
             },
         )
     }

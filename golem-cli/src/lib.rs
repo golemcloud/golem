@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::config::ProfileName;
-use crate::init::{CliKind, PrintCompletion, ProfileAuth};
+use crate::init::CliKind;
 use crate::model::text::format_error;
 use crate::model::{Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity};
+use crate::oss::completion::PrintCompletion;
 use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
@@ -54,18 +55,16 @@ pub trait MainArgs {
 
 pub struct InitArgs<Command>
 where
-    Command: HasFormatConfig + HasVerbosity,
+    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
     pub cli_kind: CliKind,
     pub config_dir: PathBuf,
     pub command: Command,
-    pub profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
-    pub print_completion: Box<dyn PrintCompletion>,
 }
 
 impl<Command> MainArgs for InitArgs<Command>
 where
-    Command: HasFormatConfig + HasVerbosity,
+    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
     fn format(&self) -> Format {
         self.command.format().unwrap_or(Format::default())
@@ -91,21 +90,19 @@ where
 pub struct ConfiguredArgs<Profile, Command>
 where
     Profile: HasFormatConfig,
-    Command: HasFormatConfig + HasVerbosity,
+    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
     pub cli_kind: CliKind,
     pub config_dir: PathBuf,
     pub profile_name: ProfileName,
     pub profile: Profile,
     pub command: Command,
-    pub profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
-    pub print_completion: Box<dyn PrintCompletion>,
 }
 
 impl<Profile, Command> MainArgs for ConfiguredArgs<Profile, Command>
 where
     Profile: HasFormatConfig,
-    Command: HasFormatConfig + HasVerbosity,
+    Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
     fn format(&self) -> Format {
         if let Some(format) = self.command.format() {

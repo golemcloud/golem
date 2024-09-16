@@ -16,9 +16,10 @@ use crate::command::profile::UniversalProfileAdd;
 use crate::config::{OssProfile, ProfileName};
 use crate::diagnose::diagnose;
 use crate::factory::ServiceFactory;
-use crate::init::init_profile;
+use crate::init::{init_profile, DummyProfileAuth, ProfileAuth};
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use crate::oss::command::{GolemOssCommand, OssCommand};
+use crate::oss::completion::PrintCompletion;
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
@@ -37,9 +38,9 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         command,
         cli_kind,
         config_dir,
-        print_completion,
-        profile_auth,
     } = args;
+
+    let profile_auth = &DummyProfileAuth;
 
     let factory = || async {
         let factory = OssServiceFactory::from_profile(&profile)?;
@@ -102,15 +103,12 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
         }
         OssCommand::Profile { subcommand } => {
-            subcommand
-                .handle(cli_kind, &config_dir, profile_auth.as_ref())
-                .await
+            subcommand.handle(cli_kind, &config_dir, profile_auth).await
         }
         OssCommand::Init {} => {
             let profile_name = ProfileName::default(cli_kind);
 
-            let res =
-                init_profile(cli_kind, profile_name, &config_dir, profile_auth.as_ref()).await?;
+            let res = init_profile(cli_kind, profile_name, &config_dir, profile_auth).await?;
 
             if res.auth_required {
                 profile_auth.auth(&res.profile_name, &config_dir).await?
@@ -124,7 +122,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             get_resource_by_uri(uri, &factory).await
         }
         OssCommand::Completion { generator } => {
-            print_completion.print_completion(generator);
+            GolemOssCommand::<ProfileAdd>::print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
         OssCommand::Diagnose { command } => {

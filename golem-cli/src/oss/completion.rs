@@ -1,19 +1,11 @@
-use crate::command::profile::OssProfileAdd;
-use crate::init::PrintCompletion;
-use crate::oss::command::GolemOssCommand;
-use clap::CommandFactory;
+use clap::Command;
 
-pub fn print_completion(generator: clap_complete::Shell) {
-    let mut cmd = GolemOssCommand::<OssProfileAdd>::command();
-    let cmd_name = cmd.get_name().to_string();
-    tracing::info!("Golem CLI - generating completion file for {generator:?}...");
-    clap_complete::generate(generator, &mut cmd, cmd_name, &mut std::io::stdout());
+pub fn print_completion(mut command: Command, shell: clap_complete::Shell) {
+    let cmd_name = command.get_name().to_string();
+    tracing::info!("Golem CLI - generating completion file for {cmd_name} - {shell:?}...");
+    clap_complete::generate(shell, &mut command, cmd_name, &mut std::io::stdout());
 }
 
-pub struct PrintOssCompletion;
-
-impl PrintCompletion for PrintOssCompletion {
-    fn print_completion(&self, generator: clap_complete::Shell) {
-        print_completion(generator)
-    }
+pub trait PrintCompletion {
+    fn print_completion(shell: clap_complete::Shell);
 }

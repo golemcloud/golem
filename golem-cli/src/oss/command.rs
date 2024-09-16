@@ -19,8 +19,11 @@ use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::diagnose;
 use crate::model::{ComponentUriArg, Format, HasFormatConfig, HasVerbosity};
+use crate::oss::completion;
+use crate::oss::completion::PrintCompletion;
 use crate::oss::model::OssContext;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
 use golem_common::uri::oss::uri::ResourceUri;
 
@@ -124,5 +127,11 @@ impl<ProfileAdd: clap::Args> HasFormatConfig for GolemOssCommand<ProfileAdd> {
 impl<ProfileAdd: clap::Args> HasVerbosity for GolemOssCommand<ProfileAdd> {
     fn verbosity(&self) -> Verbosity {
         self.verbosity.clone()
+    }
+}
+
+impl<ProfileAdd: clap::Args> PrintCompletion for GolemOssCommand<ProfileAdd> {
+    fn print_completion(shell: Shell) {
+        completion::print_completion(GolemOssCommand::<ProfileAdd>::command(), shell)
     }
 }
