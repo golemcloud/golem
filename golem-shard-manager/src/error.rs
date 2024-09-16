@@ -55,7 +55,7 @@ impl IsRetriableError for ShardManagerError {
         }
     }
 
-    fn is_loggable(&self) -> Option<String> {
+    fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
     }
 }
@@ -125,7 +125,7 @@ impl IsRetriableError for HealthCheckError {
         }
     }
 
-    fn is_loggable(&self) -> Option<String> {
+    fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
     }
 }

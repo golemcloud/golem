@@ -128,7 +128,7 @@ pub async fn with_retries_customized<In, F, R, E: std::error::Error>(
     i: &In,
     action: F,
     is_retriable: impl Fn(&E) -> bool,
-    is_loggable: impl Fn(&E) -> Option<String>,
+    as_loggable: impl Fn(&E) -> Option<String>,
 ) -> Result<R, E>
 where
     F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
@@ -160,7 +160,7 @@ where
             }
             Err(error) if is_retriable(&error) => {
                 if let Some(delay) = get_delay(config, attempts) {
-                    if let Some(error_string) = is_loggable(&error) {
+                    if let Some(error_string) = as_loggable(&error) {
                         warn!(
                             delay_ms = delay.as_millis(),
                             error = error_string,
@@ -170,7 +170,7 @@ where
                     }
                     delay
                 } else {
-                    if let Some(error_string) = is_loggable(&error) {
+                    if let Some(error_string) = as_loggable(&error) {
                         error!(error = error_string, "op failure - no more retries");
                         record_external_call_failure(target_label, op_label);
                     }
@@ -178,7 +178,7 @@ where
                 }
             }
             Err(error) => {
-                if let Some(error_string) = is_loggable(&error) {
+                if let Some(error_string) = as_loggable(&error) {
                     error!(error = error_string, "op failure - non-retriable");
                     record_external_call_failure(target_label, op_label);
                 }
@@ -212,7 +212,7 @@ where
         i,
         action,
         IsRetriableError::is_retriable,
-        IsRetriableError::is_loggable,
+        IsRetriableError::as_loggable,
     )
     .await
 }

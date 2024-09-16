@@ -454,7 +454,7 @@ impl IsRetriableError for CallWorkerExecutorError {
         }
     }
 
-    fn is_loggable(&self) -> Option<String> {
+    fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
     }
 }

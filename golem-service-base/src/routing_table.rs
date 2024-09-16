@@ -85,7 +85,7 @@ impl IsRetriableError for RoutingTableError {
         }
     }
 
-    fn is_loggable(&self) -> Option<String> {
+    fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
     }
 }

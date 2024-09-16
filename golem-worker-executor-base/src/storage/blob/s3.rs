@@ -161,7 +161,7 @@ impl S3BlobStorage {
                     })
                 },
                 Self::is_list_objects_v2_error_retriable,
-                Self::is_loggable_generic,
+                Self::as_loggable_generic,
             )
             .await
             .map_err(|err| err.to_string())?;
@@ -242,11 +242,11 @@ impl S3BlobStorage {
         }
     }
 
-    fn is_loggable_generic<T: Error>(error: &SdkError<T>) -> Option<String> {
+    fn as_loggable_generic<T: Error>(error: &SdkError<T>) -> Option<String> {
         Some(Self::error_string(error))
     }
 
-    fn is_get_object_error_loggable(
+    fn get_object_error_as_loggable(
         error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
     ) -> Option<String> {
         match error {
@@ -261,7 +261,7 @@ impl S3BlobStorage {
         }
     }
 
-    fn is_head_object_error_loggable(error: &SdkError<HeadObjectError>) -> Option<String> {
+    fn head_object_error_as_loggable(error: &SdkError<HeadObjectError>) -> Option<String> {
         match error {
             SdkError::ServiceError(service_error) => {
                 if matches!(service_error.err(), HeadObjectError::NotFound(_)) {
@@ -304,7 +304,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_get_object_error_retriable,
-            Self::is_get_object_error_loggable,
+            Self::get_object_error_as_loggable,
         )
         .await;
 
@@ -354,7 +354,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_get_object_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await;
 
@@ -402,7 +402,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_head_object_error_retriable,
-            Self::is_head_object_error_loggable,
+            Self::head_object_error_as_loggable,
         )
         .await;
         match file_head_result {
@@ -437,7 +437,7 @@ impl BlobStorage for S3BlobStorage {
                             })
                         },
                         Self::is_head_object_error_retriable,
-                        Self::is_head_object_error_loggable,
+                        Self::head_object_error_as_loggable,
                     )
                     .await;
                     match dir_marker_head_result {
@@ -494,7 +494,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_put_object_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await
         .map(|_| ())
@@ -528,7 +528,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_object_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -579,7 +579,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_objects_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -616,7 +616,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_put_object_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -710,7 +710,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_objects_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -746,7 +746,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_head_object_error_retriable,
-            Self::is_head_object_error_loggable,
+            Self::head_object_error_as_loggable,
         )
         .await;
         match file_head_result {
@@ -771,7 +771,7 @@ impl BlobStorage for S3BlobStorage {
                             })
                         },
                         Self::is_head_object_error_retriable,
-                        Self::is_head_object_error_loggable,
+                        Self::head_object_error_as_loggable,
                     )
                     .await;
                     match dir_marker_head_result {
@@ -819,7 +819,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_copy_object_error_retriable,
-            Self::is_loggable_generic,
+            Self::as_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;

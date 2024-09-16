@@ -23,7 +23,7 @@ pub trait IsRetriableError {
     ///
     /// This is useful to accept some errors as the expected response (such as a not-found result
     /// when looking for a resource).
-    fn is_loggable(&self) -> Option<String>;
+    fn as_loggable(&self) -> Option<String>;
 }
 
 impl IsRetriableError for Status {
@@ -49,7 +49,7 @@ impl IsRetriableError for Status {
         }
     }
 
-    fn is_loggable(&self) -> Option<String> {
+    fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
     }
 }
