@@ -26,7 +26,7 @@ use crate::model::{
 use crate::oss::command::GolemOssCommand;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
-use crate::{diagnose, examples, InitArgs};
+use crate::{diagnose, examples, InitMainArgs};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
@@ -183,9 +183,9 @@ impl ProfileAuth for DummyProfileAuth {
 }
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    args: InitArgs<GolemInitCommand<ProfileAdd>>,
+    args: InitMainArgs<GolemInitCommand<ProfileAdd>>,
 ) -> Result<GolemResult, GolemError> {
-    let InitArgs {
+    let InitMainArgs {
         cli_kind,
         config_dir,
         command,

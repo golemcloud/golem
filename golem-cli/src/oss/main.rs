@@ -23,16 +23,16 @@ use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
-use crate::{check_for_newer_server_version, examples, ConfiguredArgs, MainArgs, VERSION};
+use crate::{check_for_newer_server_version, examples, ConfiguredMainArgs, MainArgs, VERSION};
 use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    args: ConfiguredArgs<OssProfile, GolemOssCommand<ProfileAdd>>,
+    args: ConfiguredMainArgs<OssProfile, GolemOssCommand<ProfileAdd>>,
 ) -> Result<GolemResult, GolemError> {
     let format = args.format();
-    let ConfiguredArgs {
+    let ConfiguredMainArgs {
         profile,
         profile_name: _,
         command,

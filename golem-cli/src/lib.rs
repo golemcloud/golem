@@ -54,7 +54,7 @@ pub trait MainArgs {
     fn args_kind(&self) -> &str;
 }
 
-pub struct InitArgs<Command>
+pub struct InitMainArgs<Command>
 where
     Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
@@ -63,7 +63,7 @@ where
     pub command: Command,
 }
 
-impl<Command> MainArgs for InitArgs<Command>
+impl<Command> MainArgs for InitMainArgs<Command>
 where
     Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
@@ -88,7 +88,7 @@ where
     }
 }
 
-pub struct ConfiguredArgs<Profile, Command>
+pub struct ConfiguredMainArgs<Profile, Command>
 where
     Profile: HasFormatConfig,
     Command: HasFormatConfig + HasVerbosity + PrintCompletion,
@@ -100,7 +100,7 @@ where
     pub command: Command,
 }
 
-impl<Profile, Command> MainArgs for ConfiguredArgs<Profile, Command>
+impl<Profile, Command> MainArgs for ConfiguredMainArgs<Profile, Command>
 where
     Profile: HasFormatConfig,
     Command: HasFormatConfig + HasVerbosity + PrintCompletion,

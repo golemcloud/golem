@@ -19,7 +19,7 @@ use golem_cli::command::profile::OssProfileAdd;
 use golem_cli::config::{get_config_dir, Config, NamedProfile, Profile};
 use golem_cli::init::{CliKind, GolemInitCommand};
 use golem_cli::oss::command::GolemOssCommand;
-use golem_cli::{oss, run_main, ConfiguredArgs, InitArgs};
+use golem_cli::{oss, run_main, ConfiguredMainArgs, InitMainArgs};
 use indoc::eprintdoc;
 use std::process::ExitCode;
 
@@ -55,7 +55,7 @@ fn main() -> ExitCode {
     if let Some((profile_name, profile)) = oss_profile {
         run_main(
             oss::main::async_main,
-            ConfiguredArgs {
+            ConfiguredMainArgs {
                 cli_kind,
                 config_dir,
                 profile_name,
@@ -66,7 +66,7 @@ fn main() -> ExitCode {
     } else {
         run_main(
             golem_cli::init::async_main,
-            InitArgs {
+            InitMainArgs {
                 cli_kind,
                 config_dir,
                 command: GolemInitCommand::<OssProfileAdd>::parse(),
