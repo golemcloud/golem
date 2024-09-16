@@ -59,7 +59,7 @@ impl Display for ProfileName {
 impl ProfileName {
     pub fn default(cli_kind: CliKind) -> ProfileName {
         match cli_kind {
-            CliKind::Universal | CliKind::Golem => ProfileName("default".to_string()),
+            CliKind::Universal | CliKind::Oss => ProfileName("default".to_string()),
             CliKind::Cloud => ProfileName("cloud_default".to_string()),
         }
     }
@@ -114,6 +114,12 @@ pub struct CloudProfile {
     pub config: ProfileConfig,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auth: Option<CloudAuthenticationConfig>,
+}
+
+impl HasFormatConfig for CloudProfile {
+    fn format(&self) -> Option<Format> {
+        Some(self.config.default_format)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,7 +212,7 @@ impl Config {
                     }
                 }
                 Profile::GolemCloud(_) => {
-                    if cli_kind == CliKind::Golem {
+                    if cli_kind == CliKind::Oss {
                         return Err(GolemError(format!("Profile {profile_name} is a Cloud profile. Use `golem-cloud-cli` instead of `golem-cli` for this profile. You can also install universal version of `golem-cli` using `cargo install golem-cloud-cli --features universal`")));
                     }
                 }
@@ -219,7 +225,7 @@ impl Config {
         }
 
         match cli_kind {
-            CliKind::Universal | CliKind::Golem => config.active_profile = Some(profile_name),
+            CliKind::Universal | CliKind::Oss => config.active_profile = Some(profile_name),
             CliKind::Cloud => config.active_cloud_profile = Some(profile_name),
         }
 
@@ -232,7 +238,7 @@ impl Config {
         let mut config = Self::read_from_file(config_dir);
 
         let name = match cli_kind {
-            CliKind::Universal | CliKind::Golem => config
+            CliKind::Universal | CliKind::Oss => config
                 .active_profile
                 .unwrap_or_else(|| ProfileName::default(cli_kind)),
             CliKind::Cloud => config

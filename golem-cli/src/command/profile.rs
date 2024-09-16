@@ -348,7 +348,7 @@ impl<ProfileAdd: Into<UniversalProfileAdd> + clap::Args> ProfileSubCommand<Profi
                     active_cloud_profile,
                 } = Config::read_from_file(config_dir);
                 let active_profile = match cli_kind {
-                    CliKind::Universal | CliKind::Golem => {
+                    CliKind::Universal | CliKind::Oss => {
                         active_profile.unwrap_or_else(|| ProfileName::default(cli_kind))
                     }
                     CliKind::Cloud => {

@@ -146,7 +146,7 @@ impl<ProfileAdd: clap::Args> HasVerbosity for GolemInitCommand<ProfileAdd> {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CliKind {
     Universal,
-    Golem,
+    Oss,
     Cloud,
 }
 
@@ -510,7 +510,7 @@ pub async fn init_profile(
     validate_profile_override(&profile_name, config_dir)?;
     let typ = match cli_kind {
         CliKind::Universal => select_type()?,
-        CliKind::Golem => select_oss_type()?,
+        CliKind::Oss => select_oss_type()?,
         CliKind::Cloud => ProfileType::Cloud,
     };
 

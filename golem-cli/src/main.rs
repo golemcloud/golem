@@ -26,7 +26,7 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let config_dir = get_config_dir();
-    let cli_kind = CliKind::Golem;
+    let cli_kind = CliKind::Oss;
 
     let oss_profile = match Config::get_active_profile(cli_kind, &config_dir) {
         Some(NamedProfile {
