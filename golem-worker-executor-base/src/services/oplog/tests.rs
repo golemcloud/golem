@@ -860,6 +860,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         result
     };
 
+    let last_oplog_index_1 = oplog_service.get_last_index(&owned_worker_id).await;
+
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -878,6 +880,10 @@ async fn scheduled_archive_impl(use_blob: bool) {
     assert_eq!(secondary_length, 1);
     assert_eq!(tertiary_length, 0);
     assert_eq!(archive_result, Some(true));
+
+    let last_oplog_index_2 = oplog_service.get_last_index(&owned_worker_id).await;
+
+    assert_eq!(last_oplog_index_1, last_oplog_index_2);
 
     // Calling archive again
     let archive_result2 = {
@@ -905,4 +911,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
     assert_eq!(secondary_length, 0);
     assert_eq!(tertiary_length, 1);
     assert_eq!(archive_result2, Some(false));
+
+    let last_oplog_index_3 = oplog_service.get_last_index(&owned_worker_id).await;
+
+    assert_eq!(last_oplog_index_2, last_oplog_index_3);
 }

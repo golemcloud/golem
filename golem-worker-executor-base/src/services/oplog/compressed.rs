@@ -75,9 +75,9 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     async fn read(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        idx: golem_common::model::oplog::OplogIndex,
+        idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let archive = self.open(owned_worker_id).await;
         archive.read(idx, n).await
     }
@@ -125,6 +125,19 @@ impl OplogArchiveService for CompressedOplogArchiveService {
                 })
                 .collect(),
         ))
+    }
+
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        let key = Self::compressed_oplog_key(&owned_worker_id.worker_id);
+        OplogIndex::from_u64(
+            self.indexed_storage
+                .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
+                .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &key)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("failed to get last entry from compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
+                }).unwrap_or_default(),
+        )
     }
 }
 
@@ -295,7 +308,7 @@ impl OplogArchive for CompressedOplogArchive {
                 .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
-                    panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
+                    panic!("failed to get the last entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
                 }).unwrap_or_default(),
         )
     }
@@ -330,6 +343,10 @@ impl OplogArchive for CompressedOplogArchive {
             .unwrap_or_else(|err| {
                 panic!("failed to get compressed oplog length from indexed storage: {err}")
             })
+    }
+
+    async fn get_last_index(&self) -> OplogIndex {
+        self.current_oplog_index().await
     }
 }
 

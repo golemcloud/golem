@@ -54,6 +54,10 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::RedisError(_) => false,
         }
     }
+
+    fn is_loggable(&self) -> Option<String> {
+        Some(self.to_string())
+    }
 }
 
 impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
@@ -119,6 +123,10 @@ impl IsRetriableError for HealthCheckError {
             HealthCheckError::K8sConnectError(_) => true,
             HealthCheckError::K8sOther(_) => true,
         }
+    }
+
+    fn is_loggable(&self) -> Option<String> {
+        Some(self.to_string())
     }
 }
 

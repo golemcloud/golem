@@ -107,6 +107,32 @@ where
     F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
     G: Fn(&E) -> bool,
 {
+    with_retries_customized(
+        target_label,
+        op_label,
+        op_id,
+        config,
+        i,
+        action,
+        is_retriable,
+        |error| Some(error.to_string()),
+    )
+    .await
+}
+
+pub async fn with_retries_customized<In, F, R, E: std::error::Error>(
+    target_label: &'static str,
+    op_label: &'static str,
+    op_id: Option<String>,
+    config: &RetryConfig,
+    i: &In,
+    action: F,
+    is_retriable: impl Fn(&E) -> bool,
+    is_loggable: impl Fn(&E) -> Option<String>,
+) -> Result<R, E>
+where
+    F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
+{
     let mut attempts = 0;
     loop {
         attempts += 1;
@@ -134,22 +160,28 @@ where
             }
             Err(error) if is_retriable(&error) => {
                 if let Some(delay) = get_delay(config, attempts) {
-                    warn!(
-                        delay_ms = delay.as_millis(),
-                        error = error.to_string(),
-                        "op failure - retrying"
-                    );
-                    record_external_call_retry(target_label, op_label);
+                    if let Some(error_string) = is_loggable(&error) {
+                        warn!(
+                            delay_ms = delay.as_millis(),
+                            error = error_string,
+                            "op failure - retrying"
+                        );
+                        record_external_call_retry(target_label, op_label);
+                    }
                     delay
                 } else {
-                    error!(error = error.to_string(), "op failure - no more retries");
-                    record_external_call_failure(target_label, op_label);
+                    if let Some(error_string) = is_loggable(&error) {
+                        error!(error = error_string, "op failure - no more retries");
+                        record_external_call_failure(target_label, op_label);
+                    }
                     return Err(error);
                 }
             }
             Err(error) => {
-                error!(error = error.to_string(), "op failure - non-retriable");
-                record_external_call_failure(target_label, op_label);
+                if let Some(error_string) = is_loggable(&error) {
+                    error!(error = error_string, "op failure - non-retriable");
+                    record_external_call_failure(target_label, op_label);
+                }
                 return Err(error);
             }
         };
@@ -172,9 +204,16 @@ where
     E: std::error::Error + IsRetriableError,
     F: for<'a> Fn(&'a In) -> Pin<Box<dyn Future<Output = Result<R, E>> + 'a + Send>>,
 {
-    with_retries(target_label, op_label, op_id, config, i, action, |error| {
-        error.is_retriable()
-    })
+    with_retries_customized(
+        target_label,
+        op_label,
+        op_id,
+        config,
+        i,
+        action,
+        IsRetriableError::is_retriable,
+        IsRetriableError::is_loggable,
+    )
     .await
 }
 

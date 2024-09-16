@@ -24,7 +24,8 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use bytes::Bytes;
 use golem_common::model::Timestamp;
-use golem_common::retries::with_retries;
+use golem_common::retries::with_retries_customized;
+use std::error::Error;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -131,30 +132,36 @@ impl S3BlobStorage {
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &str,
+        prefix: &Path,
     ) -> Result<Vec<Object>, String> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
 
         loop {
-            let response = with_retries(
+            let response = with_retries_customized(
                 target_label,
                 op_label,
-                Some(format!("{bucket} - {prefix}")),
+                Some(format!("{bucket} - {}", prefix.to_string_lossy())),
                 &self.config.retries,
                 &(self.client.clone(), bucket, prefix, cont),
                 |(client, bucket, prefix, cont)| {
                     Box::pin(async move {
+                        let prefix = if prefix.to_string_lossy().ends_with('/') {
+                            prefix.to_string_lossy().to_string()
+                        } else {
+                            format!("{}/", prefix.to_string_lossy())
+                        };
                         client
                             .list_objects_v2()
                             .bucket(*bucket)
-                            .prefix(*prefix)
+                            .prefix(prefix)
                             .set_continuation_token(cont.clone())
                             .send()
                             .await
                     })
                 },
                 Self::is_list_objects_v2_error_retriable,
+                Self::is_loggable_generic,
             )
             .await
             .map_err(|err| err.to_string())?;
@@ -221,6 +228,51 @@ impl S3BlobStorage {
             _ => true,
         }
     }
+
+    fn error_string<T: Error>(error: &SdkError<T>) -> String {
+        match error {
+            SdkError::ConstructionFailure(_) => "Construction failure".to_string(),
+            SdkError::TimeoutError(_) => "Timeout".to_string(),
+            SdkError::DispatchFailure(inner) => {
+                format!("Dispatch failure: {}", inner.as_connector_error().unwrap())
+            }
+            SdkError::ResponseError(_) => "Response error".to_string(),
+            SdkError::ServiceError(inner) => inner.err().to_string(),
+            _ => error.to_string(),
+        }
+    }
+
+    fn is_loggable_generic<T: Error>(error: &SdkError<T>) -> Option<String> {
+        Some(Self::error_string(error))
+    }
+
+    fn is_get_object_error_loggable(
+        error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
+    ) -> Option<String> {
+        match error {
+            SdkError::ServiceError(service_error) => {
+                if matches!(service_error.err(), NoSuchKey(_)) {
+                    None
+                } else {
+                    Some(Self::error_string(error))
+                }
+            }
+            _ => Some(Self::error_string(error)),
+        }
+    }
+
+    fn is_head_object_error_loggable(error: &SdkError<HeadObjectError>) -> Option<String> {
+        match error {
+            SdkError::ServiceError(service_error) => {
+                if matches!(service_error.err(), HeadObjectError::NotFound(_)) {
+                    None
+                } else {
+                    Some(Self::error_string(error))
+                }
+            }
+            _ => Some(Self::error_string(error)),
+        }
+    }
 }
 
 #[async_trait]
@@ -235,7 +287,7 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
-        let result = with_retries(
+        let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
@@ -252,6 +304,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_get_object_error_retriable,
+            Self::is_get_object_error_loggable,
         )
         .await;
 
@@ -267,7 +320,7 @@ impl BlobStorage for S3BlobStorage {
                 NoSuchKey(_) => Ok(None),
                 err => Err(err.to_string()),
             },
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(Self::error_string(&err)),
         }
     }
 
@@ -283,7 +336,7 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
-        let result = with_retries(
+        let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
@@ -301,6 +354,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_get_object_error_retriable,
+            Self::is_loggable_generic,
         )
         .await;
 
@@ -316,7 +370,7 @@ impl BlobStorage for S3BlobStorage {
                 NoSuchKey(_) => Ok(None),
                 err => Err(err.to_string()),
             },
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(Self::error_string(&err)),
         }
     }
 
@@ -331,7 +385,7 @@ impl BlobStorage for S3BlobStorage {
         let key = self.prefix_of(&namespace).join(path);
         let op_id = format!("{} - {:?}", bucket, key);
 
-        let file_head_result = with_retries(
+        let file_head_result = with_retries_customized(
             target_label,
             op_label,
             Some(op_id.clone()),
@@ -348,6 +402,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_head_object_error_retriable,
+            Self::is_head_object_error_loggable,
         )
         .await;
         match file_head_result {
@@ -365,7 +420,7 @@ impl BlobStorage for S3BlobStorage {
             Err(SdkError::ServiceError(service_error)) => match service_error.err() {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
-                    let dir_marker_head_result = with_retries(
+                    let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
@@ -382,6 +437,7 @@ impl BlobStorage for S3BlobStorage {
                             })
                         },
                         Self::is_head_object_error_retriable,
+                        Self::is_head_object_error_loggable,
                     )
                     .await;
                     match dir_marker_head_result {
@@ -400,12 +456,12 @@ impl BlobStorage for S3BlobStorage {
                             HeadObjectError::NotFound(_) => Ok(None),
                             err => Err(err.to_string()),
                         },
-                        Err(err) => Err(err.to_string()),
+                        Err(err) => Err(Self::error_string(&err)),
                     }
                 }
                 err => Err(err.to_string()),
             },
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(Self::error_string(&err)),
         }
     }
 
@@ -420,7 +476,7 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
-        with_retries(
+        with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
@@ -438,6 +494,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_put_object_error_retriable,
+            Self::is_loggable_generic,
         )
         .await
         .map(|_| ())
@@ -454,7 +511,7 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
-        with_retries(
+        with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
@@ -471,6 +528,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_object_error_retriable,
+            Self::is_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -499,7 +557,7 @@ impl BlobStorage for S3BlobStorage {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        with_retries(
+        with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {prefix:?}")),
@@ -521,6 +579,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_objects_error_retriable,
+            Self::is_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -539,7 +598,7 @@ impl BlobStorage for S3BlobStorage {
         let key = self.prefix_of(&namespace).join(path);
         let marker = key.join("__dir_marker");
 
-        with_retries(
+        with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
@@ -557,6 +616,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_put_object_error_retriable,
+            Self::is_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -576,7 +636,7 @@ impl BlobStorage for S3BlobStorage {
         let key = namespace_root.join(path);
 
         Ok(self
-            .list_objects(target_label, op_label, bucket, &key.to_string_lossy())
+            .list_objects(target_label, op_label, bucket, &key)
             .await?
             .iter()
             .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
@@ -615,7 +675,7 @@ impl BlobStorage for S3BlobStorage {
         let key = self.prefix_of(&namespace).join(path);
 
         let to_delete = self
-            .list_objects(target_label, op_label, bucket, &key.to_string_lossy())
+            .list_objects(target_label, op_label, bucket, &key)
             .await?
             .iter()
             .flat_map(|obj| {
@@ -628,7 +688,7 @@ impl BlobStorage for S3BlobStorage {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        with_retries(
+        with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
@@ -650,6 +710,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_delete_objects_error_retriable,
+            Self::is_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -668,7 +729,7 @@ impl BlobStorage for S3BlobStorage {
         let key = self.prefix_of(&namespace).join(path);
         let op_id = format!("{} - {:?}", bucket, key);
 
-        let file_head_result = with_retries(
+        let file_head_result = with_retries_customized(
             target_label,
             op_label,
             Some(op_id.clone()),
@@ -685,6 +746,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_head_object_error_retriable,
+            Self::is_head_object_error_loggable,
         )
         .await;
         match file_head_result {
@@ -692,7 +754,7 @@ impl BlobStorage for S3BlobStorage {
             Err(SdkError::ServiceError(service_error)) => match service_error.err() {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
-                    let dir_marker_head_result = with_retries(
+                    let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
@@ -709,6 +771,7 @@ impl BlobStorage for S3BlobStorage {
                             })
                         },
                         Self::is_head_object_error_retriable,
+                        Self::is_head_object_error_loggable,
                     )
                     .await;
                     match dir_marker_head_result {
@@ -717,12 +780,12 @@ impl BlobStorage for S3BlobStorage {
                             HeadObjectError::NotFound(_) => Ok(ExistsResult::DoesNotExist),
                             err => Err(err.to_string()),
                         },
-                        Err(err) => Err(err.to_string()),
+                        Err(err) => Err(Self::error_string(&err)),
                     }
                 }
                 err => Err(err.to_string()),
             },
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(Self::error_string(&err)),
         }
     }
 
@@ -738,7 +801,7 @@ impl BlobStorage for S3BlobStorage {
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);
 
-        with_retries(
+        with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
@@ -756,6 +819,7 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_copy_object_error_retriable,
+            Self::is_loggable_generic,
         )
         .await
         .map_err(|err| err.to_string())?;
