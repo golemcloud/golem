@@ -2,7 +2,7 @@ use crate::model::component::ComponentView;
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::{
-    ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadataView,
+    ApiDeployment, ExampleDescription, IdempotencyKey, WorkerMetadata, WorkerMetadataView,
     WorkersMetadataResponseView,
 };
 use chrono::{DateTime, Utc};
@@ -419,11 +419,26 @@ impl TextFormat for InvokeResultView {
     }
 }
 
-impl MessageWithFields for WorkerMetadataView {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerGetView(pub WorkerMetadataView);
+
+impl From<WorkerMetadata> for WorkerGetView {
+    fn from(value: WorkerMetadata) -> Self {
+        WorkerMetadataView::from(value).into()
+    }
+}
+
+impl From<WorkerMetadataView> for WorkerGetView {
+    fn from(value: WorkerMetadataView) -> Self {
+        Self(value)
+    }
+}
+
+impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for worker {}",
-            format_message_highlight(&self.worker_urn.id.worker_name)
+            format_message_highlight(&self.0.worker_urn.id.worker_name)
         )
     }
 
@@ -431,41 +446,41 @@ impl MessageWithFields for WorkerMetadataView {
         let mut fields = FieldsBuilder::new();
 
         fields
-            .fmt_field("Worker URN", &self.worker_urn, format_main_id)
-            .fmt_field("Component URN", &self.worker_urn.id.component_id, |id| {
+            .fmt_field("Worker URN", &self.0.worker_urn, format_main_id)
+            .fmt_field("Component URN", &self.0.worker_urn.id.component_id, |id| {
                 format_id(&ComponentUrn { id: id.clone() })
             })
-            .fmt_field("Worker name", &self.worker_urn.id.worker_name, format_id)
-            .fmt_field("Component version", &self.component_version, format_id)
-            .field("Created at", &self.created_at)
-            .fmt_field("Component size", &self.component_size, format_binary_size)
+            .fmt_field("Worker name", &self.0.worker_urn.id.worker_name, format_id)
+            .fmt_field("Component version", &self.0.component_version, format_id)
+            .field("Created at", &self.0.created_at)
+            .fmt_field("Component size", &self.0.component_size, format_binary_size)
             .fmt_field(
                 "Total linear memory size",
-                &self.total_linear_memory_size,
+                &self.0.total_linear_memory_size,
                 format_binary_size,
             )
-            .fmt_field_optional("Arguments", &self.args, !self.args.is_empty(), |args| {
+            .fmt_field_optional("Arguments", &self.0.args, !self.0.args.is_empty(), |args| {
                 args.join(" ")
             })
             .fmt_field_optional(
                 "Environment variables",
-                &self.env,
-                !self.env.is_empty(),
+                &self.0.env,
+                !self.0.env.is_empty(),
                 |env| {
                     env.iter()
                         .map(|(k, v)| format!("{}={}", k, v.bold()))
                         .join(";")
                 },
             )
-            .fmt_field("Status", &self.status, format_status)
-            .fmt_field("Retry count", &self.retry_count, format_retry_count)
+            .fmt_field("Status", &self.0.status, format_status)
+            .fmt_field("Retry count", &self.0.retry_count, format_retry_count)
             .fmt_field_optional(
                 "Pending invocation count",
-                &self.pending_invocation_count,
-                self.pending_invocation_count > 0,
+                &self.0.pending_invocation_count,
+                self.0.pending_invocation_count > 0,
                 |n| n.to_string(),
             )
-            .fmt_field_option("Last error", &self.last_error, |err| {
+            .fmt_field_option("Last error", &self.0.last_error, |err| {
                 format_stack(err.as_ref())
             });
 
