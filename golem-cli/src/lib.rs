@@ -16,10 +16,10 @@ use crate::config::ProfileName;
 use crate::init::CliKind;
 use crate::model::text::format_error;
 use crate::model::{Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity};
-use completion::PrintCompletion;
 use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
+use completion::PrintCompletion;
 use golem_common::golem_version;
 use lenient_bool::LenientBool;
 use log::Level;
@@ -32,6 +32,7 @@ use tracing_subscriber::FmtSubscriber;
 pub mod clients;
 pub mod cloud;
 pub mod command;
+pub mod completion;
 pub mod config;
 pub mod connect_output;
 pub mod diagnose;
@@ -42,7 +43,6 @@ pub mod model;
 pub mod oss;
 pub mod service;
 pub mod stubgen;
-pub mod completion;
 
 const VERSION: &str = golem_version!();
 
@@ -68,7 +68,7 @@ where
     Command: HasFormatConfig + HasVerbosity + PrintCompletion,
 {
     fn format(&self) -> Format {
-        self.command.format().unwrap_or(Format::default())
+        self.command.format().unwrap_or_default()
     }
 
     fn verbosity(&self) -> Verbosity {

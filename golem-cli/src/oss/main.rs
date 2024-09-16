@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::command::profile::UniversalProfileAdd;
+use crate::completion::PrintCompletion;
 use crate::config::{OssProfile, ProfileName};
 use crate::diagnose::diagnose;
 use crate::factory::ServiceFactory;
 use crate::init::{init_profile, DummyProfileAuth, ProfileAuth};
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use crate::oss::command::{GolemOssCommand, OssCommand};
-use crate::completion::PrintCompletion;
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;

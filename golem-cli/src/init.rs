@@ -17,13 +17,13 @@ use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
 use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
+use crate::completion::PrintCompletion;
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
 use crate::diagnose::diagnose;
 use crate::model::{
     ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
 };
 use crate::oss::command::GolemOssCommand;
-use crate::completion::PrintCompletion;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use crate::{diagnose, examples, InitArgs};
