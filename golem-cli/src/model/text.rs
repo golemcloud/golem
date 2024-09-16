@@ -178,9 +178,9 @@ impl From<&RouteWithTypeInfo> for RouteView {
 fn print_api_definition(def: &HttpApiDefinitionWithTypeInfo, action: &str) {
     printdoc!(
         "
-            API Definition {action}with ID {} and version {}.
-            Routes:
-            ",
+        API Definition {action}with ID {} and version {}.
+        Routes:
+        ",
         def.id,
         def.version
     );
