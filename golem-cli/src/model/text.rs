@@ -661,7 +661,7 @@ pub fn format_stack(stack: &str) -> String {
 }
 
 pub fn format_error(error: &str) -> String {
-    if error.starts_with("error while executing at wasm backtrace") {
+    if error.contains("error while executing at wasm backtrace") {
         format_stack(error)
     } else {
         error.yellow().to_string()

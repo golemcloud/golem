@@ -12,13 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::ProfileName;
+use crate::init::{CliKind, PrintCompletion, ProfileAuth};
+use crate::model::text::format_error;
+use crate::model::{Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity};
 use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
 use golem_common::golem_version;
 use lenient_bool::LenientBool;
 use log::Level;
-use tracing::warn;
+use std::future::Future;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
 
 pub mod clients;
@@ -37,6 +44,130 @@ pub mod stubgen;
 
 const VERSION: &str = golem_version!();
 
+pub trait MainArgs {
+    fn format(&self) -> Format;
+    fn verbosity(&self) -> Verbosity;
+    fn profile_name(&self) -> Option<&ProfileName>;
+    fn cli_kind(&self) -> CliKind;
+    fn args_kind(&self) -> &str;
+}
+
+pub struct InitArgs<Command>
+where
+    Command: HasFormatConfig + HasVerbosity,
+{
+    pub cli_kind: CliKind,
+    pub config_dir: PathBuf,
+    pub command: Command,
+    pub profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
+    pub print_completion: Box<dyn PrintCompletion>,
+}
+
+impl<Command> MainArgs for InitArgs<Command>
+where
+    Command: HasFormatConfig + HasVerbosity,
+{
+    fn format(&self) -> Format {
+        self.command.format().unwrap_or(Format::default())
+    }
+
+    fn verbosity(&self) -> Verbosity {
+        self.command.verbosity()
+    }
+
+    fn profile_name(&self) -> Option<&ProfileName> {
+        None
+    }
+
+    fn cli_kind(&self) -> CliKind {
+        self.cli_kind
+    }
+
+    fn args_kind(&self) -> &str {
+        "init"
+    }
+}
+
+pub struct ConfiguredArgs<Profile, Command>
+where
+    Profile: HasFormatConfig,
+    Command: HasFormatConfig + HasVerbosity,
+{
+    pub cli_kind: CliKind,
+    pub config_dir: PathBuf,
+    pub profile_name: ProfileName,
+    pub profile: Profile,
+    pub command: Command,
+    pub profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
+    pub print_completion: Box<dyn PrintCompletion>,
+}
+
+impl<Profile, Command> MainArgs for ConfiguredArgs<Profile, Command>
+where
+    Profile: HasFormatConfig,
+    Command: HasFormatConfig + HasVerbosity,
+{
+    fn format(&self) -> Format {
+        if let Some(format) = self.command.format() {
+            return format;
+        }
+        if let Some(format) = self.profile.format() {
+            return format;
+        }
+        Format::default()
+    }
+
+    fn verbosity(&self) -> Verbosity {
+        self.command.verbosity()
+    }
+
+    fn profile_name(&self) -> Option<&ProfileName> {
+        Some(&self.profile_name)
+    }
+
+    fn cli_kind(&self) -> CliKind {
+        self.cli_kind
+    }
+
+    fn args_kind(&self) -> &str {
+        "configured"
+    }
+}
+
+pub fn run_main<F, A>(main: fn(A) -> F, args: A) -> ExitCode
+where
+    A: MainArgs,
+    F: Future<Output = Result<GolemResult, GolemError>>,
+{
+    let format = args.format();
+    init_tracing(args.verbosity());
+
+    info!(
+        args_king = args.args_kind(),
+        cli_kind = format!("{:?}", args.cli_kind()),
+        profile_name = format!("{:?}", args.profile_name()),
+        format = format!("{:?}", format),
+        "Starting Golem CLI",
+    );
+
+    let result = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime for cli main")
+        .block_on(main(args));
+
+    match result {
+        Ok(result) => {
+            result.print(format);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{}", format_error(&error.0));
+            ExitCode::FAILURE
+        }
+    }
+}
+
 pub fn parse_key_val(
     s: &str,
 ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync + 'static>> {
@@ -53,7 +184,7 @@ pub fn parse_bool(s: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sy
     }
 }
 
-pub fn init_tracing(verbosity: &Verbosity) {
+pub fn init_tracing(verbosity: Verbosity) {
     if let Some(level) = verbosity.log_level() {
         let tracing_level = match level {
             Level::Error => tracing::Level::ERROR,

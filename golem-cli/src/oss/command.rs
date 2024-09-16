@@ -18,7 +18,7 @@ use crate::command::component::ComponentSubCommand;
 use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::diagnose;
-use crate::model::{ComponentUriArg, Format};
+use crate::model::{ComponentUriArg, Format, HasFormatConfig, HasVerbosity};
 use crate::oss::model::OssContext;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
@@ -113,4 +113,16 @@ pub struct GolemOssCommand<ProfileAdd: clap::Args> {
 
     #[command(subcommand)]
     pub command: OssCommand<ProfileAdd>,
+}
+
+impl<ProfileAdd: clap::Args> HasFormatConfig for GolemOssCommand<ProfileAdd> {
+    fn format(&self) -> Option<Format> {
+        self.format
+    }
+}
+
+impl<ProfileAdd: clap::Args> HasVerbosity for GolemOssCommand<ProfileAdd> {
+    fn verbosity(&self) -> Verbosity {
+        self.verbosity.clone()
+    }
 }

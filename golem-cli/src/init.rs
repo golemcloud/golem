@@ -19,10 +19,12 @@ use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
 use crate::diagnose::diagnose;
-use crate::model::{ComponentUriArg, Format, GolemError, GolemResult};
+use crate::model::{
+    ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
+};
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
-use crate::{diagnose, examples};
+use crate::{diagnose, examples, InitArgs};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::Verbosity;
@@ -32,7 +34,7 @@ use indoc::formatdoc;
 use inquire::{Confirm, CustomType, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -129,6 +131,18 @@ pub struct GolemInitCommand<ProfileAdd: clap::Args> {
     pub command: InitCommand<ProfileAdd>,
 }
 
+impl<ProfileAdd: clap::Args> HasFormatConfig for GolemInitCommand<ProfileAdd> {
+    fn format(&self) -> Option<Format> {
+        Some(self.format)
+    }
+}
+
+impl<ProfileAdd: clap::Args> HasVerbosity for GolemInitCommand<ProfileAdd> {
+    fn verbosity(&self) -> Verbosity {
+        self.verbosity.clone()
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CliKind {
     Universal,
@@ -142,7 +156,7 @@ pub trait ProfileAuth {
     async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError>;
 }
 
-pub struct DummyProfileAuth {}
+pub struct DummyProfileAuth;
 
 #[async_trait]
 impl ProfileAuth for DummyProfileAuth {
@@ -164,13 +178,17 @@ pub trait PrintCompletion {
 }
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    cmd: GolemInitCommand<ProfileAdd>,
-    cli_kind: CliKind,
-    config_dir: PathBuf,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
-    print_completion: Box<dyn PrintCompletion>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let res = match cmd.command {
+    args: InitArgs<GolemInitCommand<ProfileAdd>>,
+) -> Result<GolemResult, GolemError> {
+    let InitArgs {
+        cli_kind,
+        config_dir,
+        command,
+        profile_auth,
+        print_completion,
+    } = args;
+
+    match command.command {
         InitCommand::Init {} => {
             let profile_name = ProfileName::default(cli_kind);
 
@@ -214,14 +232,6 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         _ => Err(GolemError(
             "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
         )),
-    };
-
-    match res {
-        Ok(res) => {
-            res.print(cmd.format);
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
     }
 }
 

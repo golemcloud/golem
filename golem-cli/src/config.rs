@@ -15,7 +15,7 @@
 use crate::cloud::CloudAuthenticationConfig;
 use crate::init::CliKind;
 use crate::model::text::TextFormat;
-use crate::model::{Format, GolemError};
+use crate::model::{Format, GolemError, HasFormatConfig};
 use derive_more::FromStr;
 use indoc::printdoc;
 use itertools::Itertools;
@@ -28,6 +28,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
 use url::Url;
+
+pub fn get_config_dir() -> PathBuf {
+    let home = dirs::home_dir().unwrap();
+    let default_conf_dir = home.join(".golem");
+
+    std::env::var("GOLEM_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(default_conf_dir)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -116,6 +125,12 @@ pub struct OssProfile {
     pub allow_insecure: bool,
     #[serde(default)]
     pub config: ProfileConfig,
+}
+
+impl HasFormatConfig for OssProfile {
+    fn format(&self) -> Option<Format> {
+        Some(self.config.default_format)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]

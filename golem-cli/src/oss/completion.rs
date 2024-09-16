@@ -10,7 +10,7 @@ pub fn print_completion(generator: clap_complete::Shell) {
     clap_complete::generate(generator, &mut cmd, cmd_name, &mut std::io::stdout());
 }
 
-pub struct PrintOssCompletion();
+pub struct PrintOssCompletion;
 
 impl PrintCompletion for PrintOssCompletion {
     fn print_completion(&self, generator: clap_complete::Shell) {
