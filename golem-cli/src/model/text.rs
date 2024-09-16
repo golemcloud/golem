@@ -254,49 +254,51 @@ impl TextFormat for Vec<ExampleDescription> {
     }
 }
 
+fn component_view_fields(view: &ComponentView) -> Vec<(&'static str, String)> {
+    let mut fields = FieldsBuilder::new();
+
+    fields
+        .fmt_field("Component URN", &view.component_urn, format_main_id)
+        .fmt_field("Component name", &view.component_name, format_id)
+        .fmt_field("Component version", &view.component_version, format_id)
+        .fmt_field_option("Project ID", &view.project_id, format_id)
+        .fmt_field("Component size", &view.component_size, format_binary_size)
+        .fmt_field_option("Created at", &view.created_at, |d| d.to_string())
+        .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()));
+
+    fields.build()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentAddView(pub ComponentView);
 
-impl TextFormat for ComponentAddView {
-    fn print(&self) {
-        printdoc!(
-            "
-            New component created with URN {}, version {}, and size of {} bytes.
-            Component name: {}.
-            Exports:
-            ",
-            self.0.component_urn,
-            self.0.component_version,
-            self.0.component_size,
-            self.0.component_name
-        );
+impl MessageWithFields for ComponentAddView {
+    fn message(&self) -> String {
+        format!(
+            "Added new component {}",
+            format_message_highlight(&self.0.component_name)
+        )
+    }
 
-        for export in &self.0.exports {
-            println!("\t{export}")
-        }
+    fn fields(&self) -> Vec<(&'static str, String)> {
+        component_view_fields(&self.0)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentUpdateView(pub ComponentView);
 
-impl TextFormat for ComponentUpdateView {
-    fn print(&self) {
-        printdoc!(
-            "
-            Updated component with URN {}. New version: {}. Component size is {} bytes.
-            Component name: {}.
-            Exports:
-            ",
-            self.0.component_urn,
-            self.0.component_version,
-            self.0.component_size,
-            self.0.component_name
-        );
+impl MessageWithFields for ComponentUpdateView {
+    fn message(&self) -> String {
+        format!(
+            "Updated component {} to version {}",
+            format_message_highlight(&self.0.component_name),
+            format_message_highlight(&self.0.component_version),
+        )
+    }
 
-        for export in &self.0.exports {
-            println!("\t{export}")
-        }
+    fn fields(&self) -> Vec<(&'static str, String)> {
+        component_view_fields(&self.0)
     }
 }
 
@@ -305,44 +307,16 @@ pub struct ComponentGetView(pub ComponentView);
 
 impl MessageWithFields for ComponentGetView {
     fn message(&self) -> String {
-        format!("Metadata for component: {}", self.0.component_name.bold())
+        format!(
+            "Got metadata for component {}",
+            format_message_highlight(&self.0.component_name)
+        )
     }
 
     fn fields(&self) -> Vec<(&'static str, String)> {
-        let mut fields = FieldsBuilder::new();
-
-        fields
-            .fmt_field("Component URN", &self.0.component_urn, format_main_id)
-            .fmt_field("Component name", &self.0.component_name, format_id)
-            .fmt_field("Component version", &self.0.component_version, format_id)
-            .fmt_field_option("Project ID", &self.0.project_id, format_id)
-            .fmt_field("Component size", &self.0.component_size, format_binary_size)
-            .fmt_field_option("Created at", &self.0.created_at, |d| d.to_string())
-            .fmt_field("Exports", &self.0.exports, |e| format_exports(e.as_slice()));
-
-        fields.build()
+        component_view_fields(&self.0)
     }
 }
-
-/*impl TextFormat for ComponentGetView {
-    fn print(&self) {
-        printdoc!(
-            "
-            Component with URN {}. Version: {}. Component size is {} bytes.
-            Component name: {}.
-            Exports:
-            ",
-            self.0.component_urn,
-            self.0.component_version,
-            self.0.component_size,
-            self.0.component_name
-        );
-
-        for export in &self.0.exports {
-            println!("\t{export}")
-        }
-    }
-}*/
 
 #[derive(Table)]
 struct ComponentListView {
@@ -448,8 +422,8 @@ impl TextFormat for InvokeResultView {
 impl MessageWithFields for WorkerMetadataView {
     fn message(&self) -> String {
         format!(
-            "Metadata for worker: {}",
-            self.worker_urn.id.worker_name.bold()
+            "Got metadata for worker {}",
+            format_message_highlight(&self.worker_urn.id.worker_name)
         )
     }
 
@@ -669,6 +643,10 @@ pub fn format_warn<T: ToString>(s: &T) -> String {
     s.to_string().yellow().to_string()
 }
 
+pub fn format_message_highlight<T: ToString>(s: &T) -> String {
+    s.to_string().green().bold().to_string()
+}
+
 pub fn format_stack(stack: &str) -> String {
     stack
         .lines()
@@ -729,7 +707,7 @@ static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
     "tuple"
 };
 
-// A very naive highlighter
+// A very naive highlighter for basic coloring of builtin types and user defined names
 pub fn format_export(export: &str) -> String {
     let separator =
         Regex::new(r"[ :/.{}()<>]").expect("Failed to compile export separator pattern");
