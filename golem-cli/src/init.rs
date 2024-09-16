@@ -23,7 +23,7 @@ use crate::model::{
     ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
 };
 use crate::oss::command::GolemOssCommand;
-use crate::oss::completion::PrintCompletion;
+use crate::completion::PrintCompletion;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use crate::{diagnose, examples, InitArgs};

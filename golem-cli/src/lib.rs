@@ -16,7 +16,7 @@ use crate::config::ProfileName;
 use crate::init::CliKind;
 use crate::model::text::format_error;
 use crate::model::{Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity};
-use crate::oss::completion::PrintCompletion;
+use completion::PrintCompletion;
 use crate::service::version::{VersionCheckResult, VersionService};
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
@@ -42,6 +42,7 @@ pub mod model;
 pub mod oss;
 pub mod service;
 pub mod stubgen;
+pub mod completion;
 
 const VERSION: &str = golem_version!();
 
