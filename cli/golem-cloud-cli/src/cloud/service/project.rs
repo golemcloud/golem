@@ -10,6 +10,7 @@ use golem_common::uri::cloud::uri::ProjectUri;
 use golem_common::uri::cloud::url::ProjectUrl;
 use golem_common::uri::cloud::urn::ProjectUrn;
 use indoc::formatdoc;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait ProjectService {
@@ -131,7 +132,7 @@ impl ProjectService for ProjectServiceLive {
 }
 
 pub struct CloudProjectResolver {
-    pub service: Box<dyn ProjectService + Send + Sync>,
+    pub service: Arc<dyn ProjectService + Send + Sync>,
 }
 
 #[async_trait]

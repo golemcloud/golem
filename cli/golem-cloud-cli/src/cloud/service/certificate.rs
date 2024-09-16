@@ -8,6 +8,7 @@ use golem_cloud_client::model::CertificateRequest;
 use std::fs::File;
 use std::io;
 use std::io::{BufReader, Read};
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[async_trait]
@@ -33,7 +34,7 @@ pub trait CertificateService {
 
 pub struct CertificateServiceLive {
     pub client: Box<dyn CertificateClient + Send + Sync>,
-    pub projects: Box<dyn ProjectService + Send + Sync>,
+    pub projects: Arc<dyn ProjectService + Send + Sync>,
 }
 
 fn read_as_string<R: Read>(mut r: R, source: &str) -> Result<String, GolemError> {

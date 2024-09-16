@@ -4,6 +4,7 @@ use crate::cloud::model::ProjectRef;
 use crate::cloud::service::project::ProjectService;
 use async_trait::async_trait;
 use golem_cli::model::{GolemError, GolemResult};
+use std::sync::Arc;
 
 #[async_trait]
 pub trait DomainService {
@@ -22,7 +23,7 @@ pub trait DomainService {
 
 pub struct DomainServiceLive {
     pub client: Box<dyn DomainClient + Send + Sync>,
-    pub projects: Box<dyn ProjectService + Send + Sync>,
+    pub projects: Arc<dyn ProjectService + Send + Sync>,
 }
 
 #[async_trait]

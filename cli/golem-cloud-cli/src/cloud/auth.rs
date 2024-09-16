@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::cloud::clients::login::LoginClient;
 use crate::cloud::clients::CloudAuthentication;
-use golem_cli::config::{CloudProfile, Config, Profile, ProfileName};
+use golem_cli::config::{Config, Profile, ProfileName};
 use golem_cli::model::GolemError;
 
 #[async_trait]
@@ -18,7 +18,7 @@ pub trait Auth {
         &self,
         manual_token: Option<Uuid>,
         profile_name: &ProfileName,
-        profile: &CloudProfile,
+        auth_config: &Option<CloudAuthenticationConfig>,
         config_dir: &Path,
     ) -> Result<CloudAuthentication, GolemError>;
 }
@@ -107,10 +107,10 @@ impl AuthLive {
     async fn profile_authentication(
         &self,
         profile_name: &ProfileName,
-        profile: &CloudProfile,
+        auth_config: &Option<CloudAuthenticationConfig>,
         config_dir: &Path,
     ) -> Result<CloudAuthentication, GolemError> {
-        if let Some(data) = &profile.auth {
+        if let Some(data) = auth_config {
             Ok(data.into())
         } else {
             self.oauth2(profile_name, config_dir).await
@@ -143,7 +143,7 @@ impl Auth for AuthLive {
         &self,
         manual_token: Option<Uuid>,
         profile_name: &ProfileName,
-        profile: &CloudProfile,
+        auth_config: &Option<CloudAuthenticationConfig>,
         config_dir: &Path,
     ) -> Result<CloudAuthentication, GolemError> {
         if let Some(manual_token) = manual_token {
@@ -154,7 +154,7 @@ impl Auth for AuthLive {
 
             Ok(CloudAuthentication(UnsafeToken { data, secret }))
         } else {
-            self.profile_authentication(profile_name, profile, config_dir)
+            self.profile_authentication(profile_name, auth_config, config_dir)
                 .await
         }
     }
