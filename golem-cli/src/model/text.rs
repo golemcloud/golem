@@ -24,12 +24,12 @@ pub trait TextFormat {
     fn print(&self);
 }
 
-pub trait MessageWithFieldsTextFormat {
+pub trait MessageWithFields {
     fn message(&self) -> String;
     fn fields(&self) -> Vec<(&'static str, String)>;
 }
 
-impl<T: MessageWithFieldsTextFormat> TextFormat for T {
+impl<T: MessageWithFields> TextFormat for T {
     fn print(&self) {
         println!("{}\n", self.message());
 
@@ -303,7 +303,7 @@ impl TextFormat for ComponentUpdateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentGetView(pub ComponentView);
 
-impl MessageWithFieldsTextFormat for ComponentGetView {
+impl MessageWithFields for ComponentGetView {
     fn message(&self) -> String {
         format!("Metadata for component: {}", self.0.component_name.bold())
     }
@@ -445,7 +445,7 @@ impl TextFormat for InvokeResultView {
     }
 }
 
-impl MessageWithFieldsTextFormat for WorkerMetadataView {
+impl MessageWithFields for WorkerMetadataView {
     fn message(&self) -> String {
         format!(
             "Metadata for worker: {}",
