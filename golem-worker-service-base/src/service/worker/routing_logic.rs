@@ -453,6 +453,10 @@ impl IsRetriableError for CallWorkerExecutorError {
             CallWorkerExecutorError::FailedToConnectToPod(status) => status.is_retriable(),
         }
     }
+
+    fn as_loggable(&self) -> Option<String> {
+        Some(self.to_string())
+    }
 }
 
 struct RetryState<'a> {

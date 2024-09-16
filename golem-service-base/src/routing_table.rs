@@ -84,6 +84,10 @@ impl IsRetriableError for RoutingTableError {
             RoutingTableError::NoResult => true,
         }
     }
+
+    fn as_loggable(&self) -> Option<String> {
+        Some(self.to_string())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

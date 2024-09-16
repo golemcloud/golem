@@ -1354,9 +1354,8 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
         let mut first_error = None;
         let result = loop {
             let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
-            match oplog_entry.first_key_value()
-                .unwrap_or_else(|| panic!("Internal error: oplog for {} has size greater than zero but no entry at last index", owned_worker_id.worker_id)) {
-                (_, OplogEntry::Error { error, .. }) => {
+            match oplog_entry.first_key_value() {
+                Some((_, OplogEntry::Error { error, .. })) => {
                     retry_count += 1;
                     if first_error.is_none() {
                         first_error = Some(error.clone());
@@ -1365,40 +1364,44 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                         idx = idx.previous();
                         continue;
                     } else {
-                        break Some(
-                            LastError {
-                                error: first_error.unwrap(),
-                                retry_count,
-                                stderr: recover_stderr_logs(this, owned_worker_id, idx).await
-                            }
-                        );
+                        break Some(LastError {
+                            error: first_error.unwrap(),
+                            retry_count,
+                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await,
+                        });
                     }
                 }
-                (_, entry) if entry.is_hint() => {
+                Some((_, entry)) if entry.is_hint() => {
                     // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
                     if idx > OplogIndex::INITIAL {
                         idx = idx.previous();
                         continue;
                     } else {
                         match first_error {
-                            Some(error) => break Some(LastError {
-                                error,
-                                retry_count,
-                                stderr: recover_stderr_logs(this, owned_worker_id, idx).await
-                                }),
-                            None => break None
+                            Some(error) => {
+                                break Some(LastError {
+                                    error,
+                                    retry_count,
+                                    stderr: recover_stderr_logs(this, owned_worker_id, idx).await,
+                                })
+                            }
+                            None => break None,
                         }
                     }
                 }
-                _ => {
-                    match first_error {
-                        Some(error) => break Some(LastError {
+                Some((_, _)) => match first_error {
+                    Some(error) => {
+                        break Some(LastError {
                             error,
                             retry_count,
-                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await
-                        }),
-                        None => break None
+                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await,
+                        })
                     }
+                    None => break None,
+                },
+                None => {
+                    // This is possible if the oplog has been deleted between the get_last_index and the read call
+                    break None;
                 }
             }
         };
