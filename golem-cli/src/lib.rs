@@ -216,9 +216,9 @@ pub async fn check_for_newer_server_version(
                 eprintln!("{}", line.as_ref().yellow());
             }
 
-            warn(format!("Warning: golem-cli version ({cli_version}) is older than the targeted Golem server version ({server_version})!"));
+            warn(format!("\nWarning: golem-cli version ({cli_version}) is older than the targeted Golem server version ({server_version})!"));
             warn("Download and install the latest version: https://github.com/golemcloud/golem-cloud-releases/releases");
-            warn("(For more information see: https://learn.golem.cloud/docs/quickstart)");
+            warn("(For more information see: https://learn.golem.cloud/docs/quickstart)\n");
         }
         Err(error) => {
             warn!("{}", error.0)
