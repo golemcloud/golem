@@ -128,6 +128,7 @@ pub trait ComponentService {
             data: Some(Data::Header(CreateComponentRequestHeader {
                 project_id: None,
                 component_name: name.to_string(),
+                component_type: None,
             })),
         }];
 
@@ -198,6 +199,7 @@ pub trait ComponentService {
             data: Some(update_component_request::Data::Header(
                 UpdateComponentRequestHeader {
                     component_id: Some(component_id.clone().into()),
+                    component_type: None,
                 },
             )),
         }];

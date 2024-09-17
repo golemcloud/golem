@@ -81,6 +81,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         name: ComponentName,
         path: PathBufOrStdin,
         _project: &Option<Self::ProjectContext>,
+        component_type: golem_client::model::ComponentType,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {path:?}");
 
@@ -90,7 +91,9 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
-                self.client.create_component(&name.0, file).await?
+                self.client
+                    .create_component(&name.0, Some(&component_type), file)
+                    .await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -99,7 +102,9 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .read_to_end(&mut bytes) // TODO: steaming request from stdin
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.create_component(&name.0, bytes).await?
+                self.client
+                    .create_component(&name.0, Some(&component_type), bytes)
+                    .await?
             }
         };
 
@@ -110,6 +115,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         &self,
         urn: ComponentUrn,
         path: PathBufOrStdin,
+        component_type: Option<golem_client::model::ComponentType>,
     ) -> Result<Component, GolemError> {
         info!("Updating component {urn} from {path:?}");
 
@@ -119,7 +125,9 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
-                self.client.update_component(&urn.id.0, file).await?
+                self.client
+                    .update_component(&urn.id.0, component_type.as_ref(), file)
+                    .await?
             }
             PathBufOrStdin::Stdin => {
                 let mut bytes = Vec::new();
@@ -128,7 +136,9 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .read_to_end(&mut bytes)
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
-                self.client.update_component(&urn.id.0, bytes).await?
+                self.client
+                    .update_component(&urn.id.0, component_type.as_ref(), bytes)
+                    .await?
             }
         };
 

@@ -4,6 +4,7 @@ package golem.component;
 
 import "golem/common/project_id.proto";
 import "golem/component/component_metadata.proto";
+import "golem/component/component_type.proto";
 import "golem/component/versioned_component_id.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -14,4 +15,5 @@ message Component {
   ComponentMetadata metadata = 6;
   golem.common.ProjectId project_id = 7;
   google.protobuf.Timestamp created_at = 8;
+  optional ComponentType component_type = 9;
 }

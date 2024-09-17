@@ -106,7 +106,8 @@ mod tests {
 
     use golem_client::model::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedResourceMode,
-        AnalysedType, ComponentMetadata, InvokeResult, TypeBool, TypeHandle, VersionedComponentId,
+        AnalysedType, ComponentMetadata, ComponentType, InvokeResult, TypeBool, TypeHandle,
+        VersionedComponentId,
     };
 
     use crate::model::component::Component;
@@ -147,6 +148,7 @@ mod tests {
             },
             component_name: String::new(),
             component_size: 0,
+            component_type: ComponentType::Durable,
             metadata: ComponentMetadata {
                 producers: Vec::new(),
                 exports: vec![AnalysedExport::Function(AnalysedFunction {

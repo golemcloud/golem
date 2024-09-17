@@ -142,6 +142,7 @@ mod tests {
                     memories: vec![],
                 },
                 created_at: Some(Utc::now()),
+                component_type: None,
             }
         }
 

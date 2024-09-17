@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use futures_util::TryStreamExt;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_component_service_base::service::component::{
     ComponentError as ComponentServiceError, ComponentService,
 };
@@ -65,6 +65,7 @@ impl TraceErrorKind for ComponentError {
 #[derive(Multipart)]
 pub struct UploadPayload {
     name: ComponentName,
+    component_type: Option<ComponentType>,
     component: Upload,
 }
 
@@ -123,6 +124,7 @@ impl ComponentApi {
     /// Create a new component
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+    /// If the component type is not specified, it will be considered as a `Durable` component.
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
         let record =
@@ -134,6 +136,7 @@ impl ComponentApi {
                 .create(
                     &ComponentId::new_v4(),
                     &component_name,
+                    payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
                 )
@@ -155,6 +158,10 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
+
+        /// Type of the new version of the component - if not specified, the type of the previous version
+        /// is used.
+        component_type: Query<Option<ComponentType>>,
     ) -> Result<Json<Component>> {
         let record = recorded_http_api_request!(
             "update_component",
@@ -163,7 +170,12 @@ impl ComponentApi {
         let response = {
             let data = wasm.0.into_vec().await?;
             self.component_service
-                .update(&component_id.0, data, &DefaultNamespace::default())
+                .update(
+                    &component_id.0,
+                    data,
+                    component_type.0,
+                    &DefaultNamespace::default(),
+                )
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())

@@ -24,5 +24,5 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.7"
+golem-openapi-client-generator = "0.0.8"
 relative-path = "1.9.2"

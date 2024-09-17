@@ -34,7 +34,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::Component;
 use golem_common::grpc::proto_component_id_string;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component;
@@ -155,12 +155,13 @@ impl ComponentGrpcApi {
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
     ) -> Result<Component, ComponentError> {
-        let name = golem_service_base::model::ComponentName(request.component_name);
+        let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
             .component_service
             .create(
                 &ComponentId::new_v4(),
                 &name,
+                request.component_type().into(),
                 data,
                 &DefaultNamespace::default(),
             )
@@ -177,9 +178,16 @@ impl ComponentGrpcApi {
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let component_type = match request.component_type {
+            Some(n) => Some(
+                ComponentType::try_from(n)
+                    .map_err(|_| bad_request_error("Invalid component type"))?,
+            ),
+            None => None,
+        };
         let result = self
             .component_service
-            .update(&id, data, &DefaultNamespace::default())
+            .update(&id, data, component_type, &DefaultNamespace::default())
             .await?;
         Ok(result.into())
     }

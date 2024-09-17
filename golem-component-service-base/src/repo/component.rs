@@ -17,15 +17,15 @@ use std::ops::Deref;
 use std::result::Result;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::ComponentId;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
-use sqlx::{Database, Pool, Row};
-use uuid::Uuid;
-
 use crate::model::Component;
 use crate::repo::RepoError;
+use async_trait::async_trait;
+use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::{ComponentId, ComponentType};
+use golem_service_base::model::{ComponentName, VersionedComponentId};
+use sqlx::{Database, Pool, Row};
+use tracing::{debug, error};
+use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
@@ -36,6 +36,7 @@ pub struct ComponentRecord {
     pub version: i64,
     pub metadata: Vec<u8>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: i32,
 }
 
 impl<Namespace> TryFrom<ComponentRecord> for Component<Namespace>
@@ -58,6 +59,7 @@ where
             metadata,
             versioned_component_id,
             created_at: value.created_at,
+            component_type: ComponentType::try_from(value.component_type)?,
         })
     }
 }
@@ -87,6 +89,7 @@ where
             version: value.versioned_component_id.version as i64,
             metadata: metadata.into(),
             created_at: value.created_at,
+            component_type: value.component_type as i32,
         })
     }
 }
@@ -133,6 +136,99 @@ impl<DB: Database> DbComponentRepo<DB> {
     }
 }
 
+pub struct LoggedComponentRepo<Repo: ComponentRepo> {
+    repo: Repo,
+}
+
+impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
+    pub fn new(repo: Repo) -> Self {
+        Self { repo }
+    }
+
+    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
+        match &result {
+            Ok(_) => debug!("{}", message),
+            Err(error) => error!(error = error.to_string(), "{message}"),
+        }
+        result
+    }
+
+    fn logged_with_id<R>(
+        message: &'static str,
+        component_id: &Uuid,
+        result: Result<R, RepoError>,
+    ) -> Result<R, RepoError> {
+        match &result {
+            Ok(_) => debug!(component_id = component_id.to_string(), "{}", message),
+            Err(error) => error!(
+                component_id = component_id.to_string(),
+                error = error.to_string(),
+                "{message}"
+            ),
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Repo> {
+    async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+        let result = self.repo.create(component).await;
+        Self::logged_with_id("create", &component.component_id, result)
+    }
+
+    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+        let result = self.repo.get(component_id).await;
+        Self::logged_with_id("get", component_id, result)
+    }
+
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
+        let result = self.repo.get_all(namespace).await;
+        Self::logged("get_all", result)
+    }
+
+    async fn get_latest_version(
+        &self,
+        component_id: &Uuid,
+    ) -> Result<Option<ComponentRecord>, RepoError> {
+        let result = self.repo.get_latest_version(component_id).await;
+        Self::logged_with_id("get_latest_version", component_id, result)
+    }
+
+    async fn get_by_version(
+        &self,
+        component_id: &Uuid,
+        version: u64,
+    ) -> Result<Option<ComponentRecord>, RepoError> {
+        let result = self.repo.get_by_version(component_id, version).await;
+        Self::logged_with_id("get_by_version", component_id, result)
+    }
+
+    async fn get_by_name(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        let result = self.repo.get_by_name(namespace, name).await;
+        Self::logged("get_by_name", result)
+    }
+
+    async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
+        let result = self.repo.get_id_by_name(namespace, name).await;
+        Self::logged("get_id_by_name", result)
+    }
+
+    async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError> {
+        let result = self.repo.get_namespace(component_id).await;
+        Self::logged_with_id("get_namespace", component_id, result)
+    }
+
+    async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
+        let result = self.repo.delete(namespace, component_id).await;
+        Self::logged_with_id("delete", component_id, result)
+    }
+}
+
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
@@ -170,9 +266,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at)
+                (component_id, version, size, metadata, created_at, component_type)
               VALUES
-                ($1, $2, $3, $4, $5)
+                ($1, $2, $3, $4, $5, $6)
                "#,
         )
         .bind(component.component_id)
@@ -180,6 +276,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
         .bind(component.size)
         .bind(component.metadata.clone())
         .bind(component.created_at)
+        .bind(component.component_type)
         .execute(&mut *transaction)
         .await?;
 
@@ -199,6 +296,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at AS created_at
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -220,7 +318,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at AS created_at
+                    cv.created_at AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -245,7 +344,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at AS created_at
+                    cv.created_at AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -272,7 +372,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at AS created_at
+                    cv.created_at AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2
@@ -299,7 +400,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Sqlite> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at AS created_at
+                    cv.created_at AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -393,9 +495,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at)
+                (component_id, version, size, metadata, created_at, component_type)
               VALUES
-                ($1, $2, $3, $4, $5)
+                ($1, $2, $3, $4, $5, $6)
                "#,
         )
         .bind(component.component_id)
@@ -403,6 +505,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(component.size)
         .bind(component.metadata.clone())
         .bind(component.created_at)
+        .bind(component.component_type)
         .execute(&mut *transaction)
         .await?;
 
@@ -421,7 +524,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at::timestamptz AS created_at
+                    cv.created_at::timestamptz AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -443,7 +547,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at::timestamptz AS created_at
+                    cv.created_at::timestamptz AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -468,7 +573,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at::timestamptz AS created_at
+                    cv.created_at::timestamptz AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1
@@ -495,7 +601,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at::timestamptz AS created_at
+                    cv.created_at::timestamptz AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2
@@ -522,7 +629,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.version AS version,
                     cv.size AS size,
                     cv.metadata AS metadata,
-                    cv.created_at::timestamptz AS created_at
+                    cv.created_at::timestamptz AS created_at,
+                    cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
