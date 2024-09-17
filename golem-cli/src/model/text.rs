@@ -1,5 +1,6 @@
 pub mod fmt {
     use cli_table::{print_stdout, Row, Title, WithTitle};
+    use colored::control::SHOULD_COLORIZE;
     use colored::Colorize;
     use golem_client::model::WorkerStatus;
     use itertools::Itertools;
@@ -166,7 +167,9 @@ pub mod fmt {
 
     // A very naive highlighter for basic coloring of builtin types and user defined names
     pub fn format_export(export: &str) -> String {
-        // TODO: if no color defined, then early exit
+        if !SHOULD_COLORIZE.should_colorize() {
+            return export.to_string();
+        }
 
         let separator =
             Regex::new(r"[ :/.{}()<>]").expect("Failed to compile export separator pattern");
