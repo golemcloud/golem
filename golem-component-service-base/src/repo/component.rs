@@ -17,15 +17,14 @@ use std::ops::Deref;
 use std::result::Result;
 use std::sync::Arc;
 
+use crate::model::Component;
+use crate::repo::RepoError;
 use async_trait::async_trait;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
-
-use crate::model::Component;
-use crate::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
@@ -36,6 +35,7 @@ pub struct ComponentRecord {
     pub version: i64,
     pub metadata: Vec<u8>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: i32,
 }
 
 impl<Namespace> TryFrom<ComponentRecord> for Component<Namespace>
@@ -58,6 +58,7 @@ where
             metadata,
             versioned_component_id,
             created_at: value.created_at,
+            component_type: ComponentType::try_from(value.component_type)?,
         })
     }
 }
@@ -87,6 +88,7 @@ where
             version: value.versioned_component_id.version as i64,
             metadata: metadata.into(),
             created_at: value.created_at,
+            component_type: value.component_type as i32,
         })
     }
 }

@@ -9,7 +9,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 
@@ -217,6 +217,7 @@ impl ComponentServiceNoop {
                 memories: vec![],
             },
             created_at: Some(Utc::now()),
+            component_type: Some(ComponentType::Durable),
         }
     }
 }

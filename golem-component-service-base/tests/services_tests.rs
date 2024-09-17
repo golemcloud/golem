@@ -5,7 +5,7 @@ mod tests {
     use golem_service_base::config::ComponentStoreLocalConfig;
     use golem_service_base::db;
 
-    use golem_common::model::ComponentId;
+    use golem_common::model::{ComponentId, ComponentType};
     use golem_component_service_base::model::Component;
     use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
     use golem_component_service_base::service::component::{
@@ -46,7 +46,7 @@ mod tests {
     impl Default for SqliteDb {
         fn default() -> Self {
             Self {
-                db_path: format!("/tmp/golem-component-{}.db", uuid::Uuid::new_v4()),
+                db_path: format!("/tmp/golem-component-{}.db", Uuid::new_v4()),
             }
         }
     }
@@ -109,7 +109,7 @@ mod tests {
             Arc::new(
                 component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
                     root_path: "/tmp/component".to_string(),
-                    object_prefix: uuid::Uuid::new_v4().to_string(),
+                    object_prefix: Uuid::new_v4().to_string(),
                 })
                 .unwrap(),
             );
@@ -131,6 +131,7 @@ mod tests {
             .create(
                 &ComponentId::new_v4(),
                 &component_name1,
+                ComponentType::Durable,
                 get_component_data("shopping-cart"),
                 &DefaultNamespace::default(),
             )
@@ -141,6 +142,7 @@ mod tests {
             .create(
                 &ComponentId::new_v4(),
                 &component_name2,
+                ComponentType::Durable,
                 get_component_data("rust-echo"),
                 &DefaultNamespace::default(),
             )
@@ -189,6 +191,7 @@ mod tests {
             .update(
                 &component1.versioned_component_id.component_id,
                 get_component_data("shopping-cart"),
+                None,
                 &DefaultNamespace::default(),
             )
             .await
@@ -281,13 +284,19 @@ mod tests {
             .find_id_by_name(&component1.component_name, &DefaultNamespace::default())
             .await
             .unwrap();
-        assert!(component1_result == Some(component1.versioned_component_id.component_id.clone()));
+        assert_eq!(
+            component1_result,
+            Some(component1.versioned_component_id.component_id.clone())
+        );
 
         let component2_result = component_service
             .find_id_by_name(&component2.component_name, &DefaultNamespace::default())
             .await
             .unwrap();
-        assert!(component2_result == Some(component2.versioned_component_id.component_id.clone()));
+        assert_eq!(
+            component2_result,
+            Some(component2.versioned_component_id.component_id.clone())
+        );
 
         let component1_result = component_service
             .find_by_name(
@@ -296,7 +305,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(component1_result == vec![component1.clone(), component1v2.clone()]);
+        assert_eq!(
+            component1_result,
+            vec![component1.clone(), component1v2.clone()]
+        );
 
         let component2_result = component_service
             .find_by_name(
@@ -305,13 +317,13 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(component2_result == vec![component2.clone()]);
+        assert_eq!(component2_result, vec![component2.clone()]);
 
         let component_result = component_service
             .find_by_name(None, &DefaultNamespace::default())
             .await
             .unwrap();
-        assert!(component_result.len() == 3);
+        assert_eq!(component_result.len(), 3);
 
         component_service
             .delete(
@@ -354,9 +366,14 @@ mod tests {
         let component_name1 = ComponentName("shopping-cart1".to_string());
         let data = get_component_data("shopping-cart");
 
-        let component1 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace1)
-                .unwrap();
+        let component1 = create_new_component(
+            &ComponentId::new_v4(),
+            &component_name1,
+            ComponentType::Durable,
+            &data,
+            &namespace1,
+        )
+        .unwrap();
 
         let result1 = component_repo
             .create(&component1.clone().try_into().unwrap())
@@ -389,12 +406,22 @@ mod tests {
         let component_name1 = ComponentName("shopping-cart1".to_string());
         let data = get_component_data("shopping-cart");
 
-        let component1 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace1)
-                .unwrap();
-        let component2 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace2)
-                .unwrap();
+        let component1 = create_new_component(
+            &ComponentId::new_v4(),
+            &component_name1,
+            ComponentType::Durable,
+            &data,
+            &namespace1,
+        )
+        .unwrap();
+        let component2 = create_new_component(
+            &ComponentId::new_v4(),
+            &component_name1,
+            ComponentType::Durable,
+            &data,
+            &namespace2,
+        )
+        .unwrap();
 
         let result1 = component_repo
             .create(&component1.clone().try_into().unwrap())
@@ -424,9 +451,14 @@ mod tests {
         let component_name1 = ComponentName("shopping-cart1".to_string());
         let data = get_component_data("shopping-cart");
 
-        let component1 =
-            create_new_component(&ComponentId::new_v4(), &component_name1, &data, &namespace1)
-                .unwrap();
+        let component1 = create_new_component(
+            &ComponentId::new_v4(),
+            &component_name1,
+            ComponentType::Durable,
+            &data,
+            &namespace1,
+        )
+        .unwrap();
 
         let result1 = component_repo
             .create(&component1.clone().try_into().unwrap())

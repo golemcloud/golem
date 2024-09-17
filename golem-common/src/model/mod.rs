@@ -2183,6 +2183,51 @@ impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Enum)]
+#[repr(i32)]
+pub enum ComponentType {
+    Durable = 0,
+    Ephemeral = 1,
+}
+
+impl TryFrom<i32> for ComponentType {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ComponentType::Durable),
+            1 => Ok(ComponentType::Ephemeral),
+            _ => Err(format!("Unknown Component Type: {}", value)),
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::component::ComponentType> for ComponentType {
+    fn from(value: golem_api_grpc::proto::golem::component::ComponentType) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::component::ComponentType::Durable => {
+                ComponentType::Durable
+            }
+            golem_api_grpc::proto::golem::component::ComponentType::Ephemeral => {
+                ComponentType::Ephemeral
+            }
+        }
+    }
+}
+
+impl From<ComponentType> for golem_api_grpc::proto::golem::component::ComponentType {
+    fn from(value: ComponentType) -> Self {
+        match value {
+            ComponentType::Durable => {
+                golem_api_grpc::proto::golem::component::ComponentType::Durable
+            }
+            ComponentType::Ephemeral => {
+                golem_api_grpc::proto::golem::component::ComponentType::Ephemeral
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
