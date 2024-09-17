@@ -20,6 +20,7 @@ use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
+use golem_client::model::ComponentType;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -40,6 +41,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: PathBufOrStdin, // TODO: validate exists
 
+        /// The component type. If none specified, the command creates a Durable component.
+        #[command(flatten)]
+        component_type: ComponentTypeArg,
+
         /// Do not ask for confirmation for performing an update in case the component already exists
         #[arg(short = 'y', long)]
         non_interactive: bool,
@@ -55,6 +60,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// The WASM file to be used as a new version of the Golem component
         #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
         component_file: PathBufOrStdin, // TODO: validate exists
+
+        /// The updated component's type. If none specified, the previous version's type is used.
+        #[command(flatten)]
+        component_type: UpdatedComponentTypeArg,
 
         /// Try to automatically update all existing workers to the new version
         #[arg(long, default_value_t = false)]
@@ -115,6 +124,52 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
     },
 }
 
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+pub struct ComponentTypeArg {
+    /// Create an Ephemeral component. If not specified, the command creates a Durable component.
+    #[arg(long, group = "component-type-flag")]
+    ephemeral: bool,
+
+    /// Create a Durable component. This is the default.
+    #[arg(long, group = "component-type-flag")]
+    durable: bool,
+}
+
+impl ComponentTypeArg {
+    pub fn component_type(&self) -> ComponentType {
+        if self.ephemeral {
+            ComponentType::Ephemeral
+        } else {
+            ComponentType::Durable
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+pub struct UpdatedComponentTypeArg {
+    /// Create an Ephemeral component. If not specified, the previous version's type will be used.
+    #[arg(long, group = "component-type-flag")]
+    ephemeral: bool,
+
+    /// Create a Durable component. If not specified, the previous version's type will be used.
+    #[arg(long, group = "component-type-flag")]
+    durable: bool,
+}
+
+impl UpdatedComponentTypeArg {
+    pub fn optional_component_type(&self) -> Option<ComponentType> {
+        if self.ephemeral {
+            Some(ComponentType::Ephemeral)
+        } else if self.durable {
+            Some(ComponentType::Durable)
+        } else {
+            None
+        }
+    }
+}
+
 impl<
         ProjectRef: clap::Args + Send + Sync + 'static,
         ComponentRef: ComponentRefSplit<ProjectRef> + clap::Args,
@@ -132,6 +187,7 @@ impl<
                 project_ref,
                 component_name,
                 component_file,
+                component_type,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
@@ -139,6 +195,7 @@ impl<
                     .add(
                         component_name,
                         component_file,
+                        component_type.component_type(),
                         Some(project_id),
                         non_interactive,
                         format,
@@ -148,6 +205,7 @@ impl<
             ComponentSubCommand::Update {
                 component_name_or_uri,
                 component_file,
+                component_type,
                 try_update_workers,
                 update_mode,
                 non_interactive,
@@ -158,6 +216,7 @@ impl<
                     .update(
                         component_name_or_uri.clone(),
                         component_file,
+                        component_type.optional_component_type(),
                         project_id.clone(),
                         non_interactive,
                         format,

@@ -17,6 +17,7 @@ use crate::model::component::{Component, ComponentView};
 use crate::model::text::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
+use golem_client::model::ComponentType;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
@@ -33,6 +34,7 @@ pub trait ComponentService {
         &self,
         component_name: ComponentName,
         component_file: PathBufOrStdin,
+        component_type: ComponentType,
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
@@ -41,6 +43,7 @@ pub trait ComponentService {
         &self,
         component_uri: ComponentUri,
         component_file: PathBufOrStdin,
+        component_type: Option<ComponentType>,
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
@@ -86,13 +89,19 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         &self,
         component_name: ComponentName,
         component_file: PathBufOrStdin,
+        component_type: ComponentType,
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
     ) -> Result<GolemResult, GolemError> {
         let result = self
             .client
-            .add(component_name.clone(), component_file.clone(), &project)
+            .add(
+                component_name.clone(),
+                component_file.clone(),
+                &project,
+                component_type.clone(),
+            )
             .await;
 
         let can_fallback = format == Format::Text;
@@ -117,7 +126,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                             name: component_name.0.clone(),
                         });
                         let urn = self.resolve_uri(component_uri, &project).await?;
-                        self.client.update(urn, component_file).await.map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into()))))
+                        self.client.update(urn, component_file, Some(component_type)).await.map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into()))))
 
                     }
                     Ok(false) => Err(GolemError(message)),
@@ -137,6 +146,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         &self,
         component_uri: ComponentUri,
         component_file: PathBufOrStdin,
+        component_type: Option<ComponentType>,
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
@@ -166,7 +176,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                                 ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
                                 _ => unreachable!(),
                             };
-                            self.client.add(component_name, component_file, &project).await.map(|component| {
+                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable)).await.map(|component| {
                                 GolemResult::Ok(Box::new(ComponentAddView(component.into())))
                             })
 
@@ -178,7 +188,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
             Err(other) => Err(other),
             Ok(urn) => self
                 .client
-                .update(urn, component_file.clone())
+                .update(urn, component_file.clone(), component_type)
                 .await
                 .map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))),
         }?;
