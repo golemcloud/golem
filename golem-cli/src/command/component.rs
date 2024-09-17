@@ -63,7 +63,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
 
         /// The updated component's type. If none specified, the previous version's type is used.
         #[command(flatten)]
-        component_type: ComponentTypeArg,
+        component_type: UpdatedComponentTypeArg,
 
         /// Try to automatically update all existing workers to the new version
         #[arg(long, default_value_t = false)]
@@ -131,17 +131,34 @@ pub struct ComponentTypeArg {
     #[arg(long, group = "component-type-flag")]
     ephemeral: bool,
 
-    /// Create a Durable component. If not specified, the command creates an Ephemeral component.
+    /// Create a Durable component. This is the default.
     #[arg(long, group = "component-type-flag")]
     durable: bool,
 }
 
 impl ComponentTypeArg {
     pub fn component_type(&self) -> ComponentType {
-        self.optional_component_type()
-            .unwrap_or(ComponentType::Durable)
+        if self.ephemeral {
+            ComponentType::Ephemeral
+        } else {
+            ComponentType::Durable
+        }
     }
+}
 
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+pub struct UpdatedComponentTypeArg {
+    /// Create an Ephemeral component. If not specified, the previous version's type will be used.
+    #[arg(long, group = "component-type-flag")]
+    ephemeral: bool,
+
+    /// Create a Durable component. If not specified, the previous version's type will be used.
+    #[arg(long, group = "component-type-flag")]
+    durable: bool,
+}
+
+impl UpdatedComponentTypeArg {
     pub fn optional_component_type(&self) -> Option<ComponentType> {
         if self.ephemeral {
             Some(ComponentType::Ephemeral)
