@@ -1,4 +1,5 @@
 use crate::cli::{Cli, CliLive};
+use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_test_framework::config::TestDependencies;
