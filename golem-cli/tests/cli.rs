@@ -128,6 +128,7 @@ impl CliLive {
         );
 
         let output = Command::new(&self.golem_cli_path)
+            .env("NO_COLOR", "1")
             .env("GOLEM_CONFIG_DIR", self.config_dir.to_str().unwrap())
             .env("GOLEM_CONNECT_TIMEOUT", "PT10S")
             .env("GOLEM_READ_TIMEOUT", "PT5M")

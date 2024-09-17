@@ -298,7 +298,7 @@ pub mod api_definition {
     impl MessageWithFields for ApiDefinitionGetView {
         fn message(&self) -> String {
             format!(
-                "Got API definition {} version {}",
+                "Got metadata for API definition {} version {}",
                 format_message_highlight(&self.0.id),
                 format_message_highlight(&self.0.version),
             )
