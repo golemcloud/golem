@@ -14,10 +14,8 @@
 
 use crate::cloud::CloudAuthenticationConfig;
 use crate::init::CliKind;
-use crate::model::text::TextFormat;
 use crate::model::{Format, GolemError, HasFormatConfig};
 use derive_more::FromStr;
-use indoc::printdoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -143,17 +141,6 @@ impl HasFormatConfig for OssProfile {
 pub struct ProfileConfig {
     #[serde(default)]
     pub default_format: Format,
-}
-
-impl TextFormat for ProfileConfig {
-    fn print(&self) {
-        printdoc!(
-            "
-            Default output format: {}
-            ",
-            self.default_format
-        )
-    }
 }
 
 impl Config {

@@ -23,7 +23,7 @@ use crate::model::conversions::{
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::{WorkerAddView, WorkerGetView};
+use crate::model::text::worker::{WorkerAddView, WorkerGetView};
 use crate::model::{
     Format, GolemError, GolemResult, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponseView,

@@ -16,10 +16,8 @@ use crate::config::{
     CloudProfile, Config, NamedProfile, OssProfile, Profile, ProfileConfig, ProfileName,
 };
 use crate::init::{CliKind, ProfileAuth};
-use crate::model::text::TextFormat;
 use crate::model::{Format, GolemError, GolemResult};
 use clap::Subcommand;
-use colored::Colorize;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -467,48 +465,5 @@ impl ProfileView {
                 config,
             },
         }
-    }
-}
-
-impl TextFormat for Vec<ProfileView> {
-    fn print(&self) {
-        let res = self
-            .iter()
-            .map(|p| {
-                if p.is_active {
-                    format!(" * {}", p.name.to_string().bold())
-                } else {
-                    format!("   {}", p.name)
-                }
-            })
-            .join("\n");
-
-        println!("{}", res)
-    }
-}
-
-impl TextFormat for ProfileView {
-    fn print(&self) {
-        match self.typ {
-            ProfileType::Golem => println!("Golem profile '{}':", self.name),
-            ProfileType::GolemCloud => println!("Golem Cloud profile '{}':", self.name),
-        }
-
-        if let Some(url) = &self.url {
-            if let Some(worker_url) = &self.worker_url {
-                println!("Component service URL: {url}");
-                println!("Worker service URL: {worker_url}")
-            } else {
-                println!("Service URL: {url}");
-            }
-        }
-
-        if self.allow_insecure {
-            println!("Accept invalid certificates!")
-        }
-
-        println!("Default output format: {}", self.config.default_format);
-
-        println!("Active profile: {}", self.is_active);
     }
 }

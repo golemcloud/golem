@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::cloud::AccountId;
-use crate::model::text::TextFormat;
+use crate::model::text::fmt::TextFormat;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Error, FromArgMatches};
