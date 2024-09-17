@@ -14,6 +14,7 @@
 
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
 
+use colored::Colorize;
 use golem_examples::model::GuestLanguage;
 use indoc::indoc;
 use regex::Regex;
@@ -100,7 +101,7 @@ impl SelectedLanguage {
                             .to_path_buf(),
                         detected_by_reason: Some(format!(
                             "Detected project file: {}",
-                            path.to_string_lossy()
+                            path.to_string_lossy().green().bold()
                         )),
                     })
                 })
@@ -259,12 +260,12 @@ impl VersionRelation {
 impl Display for VersionRelation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            VersionRelation::OkEqual => f.write_str("equal: ok"),
-            VersionRelation::OkNewer => f.write_str("newer: ok"),
-            VersionRelation::KoNotEqual => f.write_str("<--->: !!"),
-            VersionRelation::KoNewer => f.write_str("newer: !!"),
-            VersionRelation::KoOlder => f.write_str("older: !!"),
-            VersionRelation::Error => f.write_str("error: !!"),
+            VersionRelation::OkEqual => f.write_str("[equal: ok]".green().to_string().as_str()),
+            VersionRelation::OkNewer => f.write_str("[newer: ok]".green().to_string().as_str()),
+            VersionRelation::KoNotEqual => f.write_str("[<--->: !!]".red().to_string().as_str()),
+            VersionRelation::KoNewer => f.write_str("[newer: !!]".red().to_string().as_str()),
+            VersionRelation::KoOlder => f.write_str("[older: !!]".red().to_string().as_str()),
+            VersionRelation::Error => f.write_str("[error: !!]".red().to_string().as_str()),
         }
     }
 }
@@ -708,7 +709,7 @@ pub fn diagnose(command: cli::Command) {
                     println!("{}", reason);
                     println!(
                         "Detected language: {} (to explicitly specify the language use the --language flag)",
-                        selected_language.language,
+                        selected_language.language.to_string().bold().green(),
                     );
                 }
                 None => {
@@ -720,7 +721,7 @@ pub fn diagnose(command: cli::Command) {
             }
             println!("Online language setup guide(s):");
             for url in selected_language.language.language_guide_setup_url() {
-                println!("  {url}");
+                println!("  {}", url.bold().underline());
             }
             println!();
 
@@ -782,7 +783,7 @@ fn report_tools(all_tools: Vec<DetectedTool>) {
     println!("Installed tool versions:");
     for tool in &all_tools {
         println!(
-            "  {: <name_padding$} [{}] {: <version_padding$}{}",
+            "  {: <name_padding$} {} {: <version_padding$}{}",
             format!("{}:", tool.metadata.short_name),
             tool.version_relation,
             tool.version.clone().unwrap_or_else(|| "".to_string()),
@@ -797,17 +798,21 @@ fn report_tools(all_tools: Vec<DetectedTool>) {
         .collect();
 
     if non_ok_tools.is_empty() {
-        println!("All tools are ok.")
+        println!("{}", "All tools are ok.".green())
     } else {
-        println!("Recommended steps:");
+        println!("{}", "Recommended steps:".yellow());
         for tool in &non_ok_tools {
             println!();
             println!(
-                "  {}: {}",
-                tool.metadata.short_name, tool.metadata.description
+                "  {}",
+                format!(
+                    "{}: {}",
+                    tool.metadata.short_name, tool.metadata.description
+                )
+                .underline()
             );
             println!(
-                "    Problem: [{}] {}",
+                "    Problem: {} {}",
                 tool.version_relation,
                 tool.version
                     .clone()
@@ -816,7 +821,7 @@ fn report_tools(all_tools: Vec<DetectedTool>) {
             println!();
             println!("    Instructions:");
             for line in tool.metadata.instructions.lines() {
-                println!("      {}", line);
+                println!("      {}", line.yellow());
             }
         }
     }
