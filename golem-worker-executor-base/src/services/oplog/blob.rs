@@ -163,6 +163,20 @@ impl OplogArchiveService for BlobOplogArchiveService {
             ))
         }
     }
+
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        let entries = BlobOplogArchive::entries(
+            owned_worker_id.clone(),
+            self.blob_storage.clone(),
+            self.level,
+        )
+        .await;
+        entries
+            .keys()
+            .last()
+            .copied()
+            .unwrap_or_else(|| OplogIndex::from_u64(0))
+    }
 }
 
 #[derive(Debug)]
@@ -189,7 +203,7 @@ impl BlobOplogArchive {
         level: usize,
     ) -> Self {
         let exists = blob_storage
-            .with("blob_oplog", "new")
+            .with("blob_oplog", "exists")
             .exists(
                 BlobStorageNamespace::CompressedOplog {
                     account_id: owned_worker_id.account_id(),
@@ -209,7 +223,7 @@ impl BlobOplogArchive {
 
         if !exists {
             blob_storage
-                .with("blob_oplog", "exists")
+                .with("blob_oplog", "new")
                 .create_dir(
                     BlobStorageNamespace::CompressedOplog {
                         account_id: owned_worker_id.account_id(),
@@ -227,29 +241,9 @@ impl BlobOplogArchive {
                 });
         }
 
-        let paths = blob_storage.with("blob_oplog",
-                                      "new").list_dir(
-            BlobStorageNamespace::CompressedOplog {
-                account_id: owned_worker_id.account_id(),
-                component_id: owned_worker_id.component_id(),
-                level
-            },
-            Path::new(&owned_worker_id.worker_name()),
-        ).await.unwrap_or_else(|err| {
-                panic!(
-                    "failed to list entries of compressed oplog for worker {} in blob storage: {err}",
-                    owned_worker_id.worker_id
-                )
-            });
-
-        let entries = paths
-            .into_iter()
-            .map(|path| {
-                let idx = Self::path_to_oplog_index(&path);
-                (idx, path)
-            })
-            .collect::<BTreeMap<OplogIndex, PathBuf>>();
-        let entries = Arc::new(RwLock::new(entries));
+        let entries = Arc::new(RwLock::new(
+            Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await,
+        ));
 
         BlobOplogArchive {
             owned_worker_id,
@@ -258,6 +252,38 @@ impl BlobOplogArchive {
             entries,
             cache: RwLock::new(EvictingCacheMap::new()),
         }
+    }
+
+    pub(crate) async fn entries(
+        owned_worker_id: OwnedWorkerId,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        level: usize,
+    ) -> BTreeMap<OplogIndex, PathBuf> {
+        let paths = blob_storage
+            .with("blob_oplog", "new")
+            .list_dir(
+                BlobStorageNamespace::CompressedOplog {
+                    account_id: owned_worker_id.account_id(),
+                    component_id: owned_worker_id.component_id(),
+                    level,
+                },
+                Path::new(&owned_worker_id.worker_name()),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                "failed to list entries of compressed oplog for worker {} in blob storage: {err}",
+                owned_worker_id.worker_id
+            )
+            });
+
+        paths
+            .into_iter()
+            .map(|path| {
+                let idx = Self::path_to_oplog_index(&path);
+                (idx, path)
+            })
+            .collect::<BTreeMap<OplogIndex, PathBuf>>()
     }
 
     pub(crate) fn path_to_oplog_index(path: &Path) -> OplogIndex {
@@ -466,5 +492,9 @@ impl OplogArchive for BlobOplogArchive {
     async fn length(&self) -> u64 {
         let entries = self.entries.read().await;
         entries.len() as u64
+    }
+
+    async fn get_last_index(&self) -> OplogIndex {
+        self.current_oplog_index().await
     }
 }

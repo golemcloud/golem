@@ -15,7 +15,15 @@
 use tonic::{Code, Status};
 
 pub trait IsRetriableError {
+    /// Returns true if the error is retriable.
     fn is_retriable(&self) -> bool;
+
+    /// Returns a loggable string representation of the error. If it returns None, the error
+    /// will not be logged and traced.
+    ///
+    /// This is useful to accept some errors as the expected response (such as a not-found result
+    /// when looking for a resource).
+    fn as_loggable(&self) -> Option<String>;
 }
 
 impl IsRetriableError for Status {
@@ -39,5 +47,9 @@ impl IsRetriableError for Status {
             | Code::Internal
             | Code::Unavailable => true,
         }
+    }
+
+    fn as_loggable(&self) -> Option<String> {
+        Some(self.to_string())
     }
 }

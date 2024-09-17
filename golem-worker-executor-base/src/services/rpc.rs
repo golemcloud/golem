@@ -157,7 +157,7 @@ struct LoggingDemand {
 
 impl LoggingDemand {
     pub fn new(worker_id: WorkerId) -> Self {
-        log::info!("Initializing RPC connection for worker {}", worker_id);
+        log::debug!("Initializing RPC connection for worker {}", worker_id);
         Self { worker_id }
     }
 }
@@ -166,7 +166,7 @@ impl RpcDemand for LoggingDemand {}
 
 impl Drop for LoggingDemand {
     fn drop(&mut self) {
-        log::info!("Dropping RPC connection for worker {}", self.worker_id);
+        log::debug!("Dropping RPC connection for worker {}", self.worker_id);
     }
 }
 

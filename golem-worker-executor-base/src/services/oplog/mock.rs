@@ -53,10 +53,6 @@ impl OplogService for OplogServiceMock {
         unimplemented!()
     }
 
-    async fn get_first_index(&self, _owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        unimplemented!()
-    }
-
     async fn get_last_index(&self, _owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         unimplemented!()
     }

@@ -148,23 +148,6 @@ impl OplogService for PrimaryOplogService {
             .await
     }
 
-    async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        record_oplog_call("get_first_index");
-
-        OplogIndex::from_u64(
-            self.indexed_storage
-                .with_entity("oplog", "get_first_index", "entry")
-                .first_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to get first oplog index for worker {owned_worker_id} from indexed storage: {err}"
-                    )
-                })
-                .unwrap_or_default()
-        )
-    }
-
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
         record_oplog_call("get_last_index");
 

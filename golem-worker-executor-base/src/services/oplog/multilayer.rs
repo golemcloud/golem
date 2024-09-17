@@ -22,7 +22,7 @@ use bytes::Bytes;
 use nonempty_collections::{NEVec, NonEmptyIterator};
 use prometheus::core::{Atomic, AtomicU64};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::{debug, error, warn, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
@@ -59,6 +59,9 @@ pub trait OplogArchiveService: Debug {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+
+    /// Gets the last stored oplog entry's id in the archive
+    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -98,6 +101,9 @@ pub trait OplogArchive: Debug {
 
     /// Gets the total number of entries in this oplog archive
     async fn length(&self) -> u64;
+
+    /// Gets the last index in this oplog archive
+    async fn get_last_index(&self) -> OplogIndex;
 }
 
 #[derive(Debug)]
@@ -211,12 +217,18 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
-    async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        self.primary.get_first_index(owned_worker_id).await
-    }
-
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        self.primary.get_last_index(owned_worker_id).await
+        let mut result = self.primary.get_last_index(owned_worker_id).await;
+        if result == OplogIndex::NONE {
+            for layer in &self.lower {
+                let idx = layer.get_last_index(owned_worker_id).await;
+                if idx != OplogIndex::NONE {
+                    result = idx;
+                    break;
+                }
+            }
+        }
+        result
     }
 
     async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
@@ -423,7 +435,7 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                 } => {
-                    debug!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer");
+                    info!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer");
                     debug!("Reading entries from the primary oplog");
 
                     let transfer = BackgroundTransferFromPrimary::new(
@@ -444,7 +456,7 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                 } => {
-                    debug!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer");
+                    info!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer");
                     debug!("Reading entries from oplog layer {source}");
 
                     let transfer = BackgroundTransferBetweenLowers::new(
@@ -700,6 +712,10 @@ impl OplogArchive for WrappedOplogArchive {
 
     async fn length(&self) -> u64 {
         self.entry_count.get()
+    }
+
+    async fn get_last_index(&self) -> OplogIndex {
+        self.archive.get_last_index().await
     }
 }
 

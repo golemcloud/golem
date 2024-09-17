@@ -52,17 +52,23 @@ macro_rules! test_blob_storage {
                 let data = Bytes::from("test-data");
 
                 let result1 = storage
-                    .get_raw("test-target", "test-op", namespace.clone(), path)
+                    .get_raw("get_put_get_root", "get-raw", namespace.clone(), path)
                     .await
                     .unwrap();
 
                 storage
-                    .put_raw("test-target", "test-op", namespace.clone(), path, &data)
+                    .put_raw(
+                        "get_put_get_root",
+                        "put-raw",
+                        namespace.clone(),
+                        path,
+                        &data,
+                    )
                     .await
                     .unwrap();
 
                 let result2 = storage
-                    .get_raw("test-target", "test-op", namespace.clone(), path)
+                    .get_raw("get_put_get_root", "get-raw-2", namespace.clone(), path)
                     .await
                     .unwrap();
 
@@ -81,17 +87,23 @@ macro_rules! test_blob_storage {
                 let data = Bytes::from("test-data");
 
                 let result1 = storage
-                    .get_raw("test-target", "test-op", namespace.clone(), path)
+                    .get_raw("get_put_get_new_dir", "get-raw", namespace.clone(), path)
                     .await
                     .unwrap();
 
                 storage
-                    .put_raw("test-target", "test-op", namespace.clone(), path, &data)
+                    .put_raw(
+                        "get_put_get_new_dir",
+                        "put-raw",
+                        namespace.clone(),
+                        path,
+                        &data,
+                    )
                     .await
                     .unwrap();
 
                 let result2 = storage
-                    .get_raw("test-target", "test-op", namespace.clone(), path)
+                    .get_raw("get_put_get_new_dir", "get-raw-2", namespace.clone(), path)
                     .await
                     .unwrap();
 
@@ -109,23 +121,48 @@ macro_rules! test_blob_storage {
                 let path = Path::new("test-dir");
 
                 let result1 = storage
-                    .exists("test-target", "test-op", namespace.clone(), path)
+                    .exists(
+                        "create_delete_exists_dir",
+                        "exists",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 storage
-                    .create_dir("test-target", "test-op", namespace.clone(), path)
+                    .create_dir(
+                        "create_delete_exists_dir",
+                        "create-dir",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 let result2 = storage
-                    .exists("test-target", "test-op", namespace.clone(), path)
+                    .exists(
+                        "create_delete_exists_dir",
+                        "exists-2",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 storage
-                    .delete_dir("test-target", "test-op", namespace.clone(), path)
+                    .delete_dir(
+                        "create_delete_exists_dir",
+                        "delete-dir",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 let result3 = storage
-                    .exists("test-target", "test-op", namespace.clone(), path)
+                    .exists(
+                        "create_delete_exists_dir",
+                        "exists-3",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
 
@@ -144,17 +181,27 @@ macro_rules! test_blob_storage {
                 let path = Path::new("test-dir");
 
                 let result1 = storage
-                    .exists("test-target", "test-op", namespace.clone(), path)
+                    .exists(
+                        "create_delete_exists_dir_and_file",
+                        "exists",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 storage
-                    .create_dir("test-target", "test-op", namespace.clone(), path)
+                    .create_dir(
+                        "create_delete_exists_dir_and_file",
+                        "create-dir",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 storage
                     .put_raw(
-                        "test-target",
-                        "test-op",
+                        "create_delete_exists_dir_and_file",
+                        "put-raw",
                         namespace.clone(),
                         &path.join("test-file"),
                         &Bytes::from("test-data"),
@@ -162,24 +209,39 @@ macro_rules! test_blob_storage {
                     .await
                     .unwrap();
                 let result2 = storage
-                    .exists("test-target", "test-op", namespace.clone(), path)
+                    .exists(
+                        "create_delete_exists_dir_and_file",
+                        "exists-2",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 let result3 = storage
                     .exists(
-                        "test-target",
-                        "test-op",
+                        "create_delete_exists_dir_and_file",
+                        "exists-3",
                         namespace.clone(),
                         &path.join("test-file"),
                     )
                     .await
                     .unwrap();
                 storage
-                    .delete_dir("test-target", "test-op", namespace.clone(), path)
+                    .delete_dir(
+                        "create_delete_exists_dir_and_file",
+                        "delete-dir",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
                 let result4 = storage
-                    .exists("test-target", "test-op", namespace.clone(), path)
+                    .exists(
+                        "create_delete_exists_dir_and_file",
+                        "exists-4",
+                        namespace.clone(),
+                        path,
+                    )
                     .await
                     .unwrap();
 
@@ -198,13 +260,13 @@ macro_rules! test_blob_storage {
 
                 let path = Path::new("test-dir");
                 storage
-                    .create_dir("test-target", "test-op", namespace.clone(), path)
+                    .create_dir("list_dir", "create-dir", namespace.clone(), path)
                     .await
                     .unwrap();
                 storage
                     .put_raw(
-                        "test-target",
-                        "test-op",
+                        "list_dir",
+                        "put-raw",
                         namespace.clone(),
                         &path.join("test-file1"),
                         &Bytes::from("test-data1"),
@@ -213,8 +275,8 @@ macro_rules! test_blob_storage {
                     .unwrap();
                 storage
                     .put_raw(
-                        "test-target",
-                        "test-op",
+                        "list_dir",
+                        "put-raw",
                         namespace.clone(),
                         &path.join("test-file2"),
                         &Bytes::from("test-data2"),
@@ -223,15 +285,15 @@ macro_rules! test_blob_storage {
                     .unwrap();
                 storage
                     .create_dir(
-                        "test-target",
-                        "test-op",
+                        "list_dir",
+                        "create-dir",
                         namespace.clone(),
                         &path.join("inner-dir"),
                     )
                     .await
                     .unwrap();
                 let mut entries = storage
-                    .list_dir("test-target", "test-op", namespace.clone(), path)
+                    .list_dir("list_dir", "entries", namespace.clone(), path)
                     .await
                     .unwrap();
 
@@ -256,8 +318,8 @@ macro_rules! test_blob_storage {
 
                 storage
                     .put_raw(
-                        "test-target",
-                        "test-op",
+                        "list_dir_root",
+                        "put-raw",
                         namespace.clone(),
                         Path::new("test-file1"),
                         &Bytes::from("test-data1"),
@@ -266,8 +328,8 @@ macro_rules! test_blob_storage {
                     .unwrap();
                 storage
                     .put_raw(
-                        "test-target",
-                        "test-op",
+                        "list_dir_root",
+                        "put-raw-2",
                         namespace.clone(),
                         Path::new("test-file2"),
                         &Bytes::from("test-data2"),
@@ -276,15 +338,20 @@ macro_rules! test_blob_storage {
                     .unwrap();
                 storage
                     .create_dir(
-                        "test-target",
-                        "test-op",
+                        "list_dir_root",
+                        "create-dir",
                         namespace.clone(),
                         Path::new("inner-dir"),
                     )
                     .await
                     .unwrap();
                 let mut entries = storage
-                    .list_dir("test-target", "test-op", namespace.clone(), Path::new(""))
+                    .list_dir(
+                        "list_dir_root",
+                        "list-dir",
+                        namespace.clone(),
+                        Path::new(""),
+                    )
                     .await
                     .unwrap();
 
@@ -296,6 +363,74 @@ macro_rules! test_blob_storage {
                             Path::new("inner-dir").to_path_buf(),
                             Path::new("test-file1").to_path_buf(),
                             Path::new("test-file2").to_path_buf(),
+                        ]
+                );
+            }
+
+            #[tokio::test]
+            #[tracing::instrument]
+            async fn list_dir_same_prefix() {
+                let test = $init().await;
+                let storage = test.get_blob_storage();
+                let namespace = $ns();
+
+                let path1 = Path::new("test-dir");
+                let path2 = Path::new("test-dir2");
+                let path3 = Path::new("test-dir3");
+                storage
+                    .create_dir("list_dir", "create-dir", namespace.clone(), path1)
+                    .await
+                    .unwrap();
+                storage
+                    .create_dir("list_dir", "create-dir-2", namespace.clone(), path2)
+                    .await
+                    .unwrap();
+                storage
+                    .create_dir("list_dir", "create-dir-3", namespace.clone(), path3)
+                    .await
+                    .unwrap();
+                storage
+                    .put_raw(
+                        "list_dir_same_prefix",
+                        "put-raw",
+                        namespace.clone(),
+                        &path1.join("test-file1"),
+                        &Bytes::from("test-data1"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .put_raw(
+                        "list_dir_same_prefix",
+                        "put-raw",
+                        namespace.clone(),
+                        &path1.join("test-file2"),
+                        &Bytes::from("test-data2"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .create_dir(
+                        "list_dir_same_prefix",
+                        "create-dir",
+                        namespace.clone(),
+                        &path1.join("inner-dir"),
+                    )
+                    .await
+                    .unwrap();
+                let mut entries = storage
+                    .list_dir("list_dir_same_prefix", "entries", namespace.clone(), path1)
+                    .await
+                    .unwrap();
+
+                entries.sort();
+
+                check!(
+                    entries
+                        == vec![
+                            Path::new("test-dir/inner-dir").to_path_buf(),
+                            Path::new("test-dir/test-file1").to_path_buf(),
+                            Path::new("test-dir/test-file2").to_path_buf(),
                         ]
                 );
             }

@@ -74,7 +74,6 @@ pub trait OplogService: Debug {
     async fn open(&self, owned_worker_id: &OwnedWorkerId)
         -> Arc<dyn Oplog + Send + Sync + 'static>;
 
-    async fn get_first_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
 
     async fn delete(&self, owned_worker_id: &OwnedWorkerId);
