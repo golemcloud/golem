@@ -24,7 +24,9 @@ use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 
 use crate::config::ComponentServiceConfig;
-use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo, LoggedComponentRepo};
+use golem_component_service_base::repo::component::{
+    ComponentRepo, DbComponentRepo, LoggedComponentRepo,
+};
 use golem_component_service_base::service::component::{
     ComponentService, ComponentServiceDefault, ComponentServiceNoop,
 };
@@ -43,13 +45,17 @@ impl Services {
                 let db_pool = db::create_postgres_pool(&c)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(db_pool.clone().into())))
+                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                    db_pool.clone().into(),
+                )))
             }
             DbConfig::Sqlite(c) => {
                 let db_pool = db::create_sqlite_pool(&c)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(db_pool.clone().into())))
+                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                    db_pool.clone().into(),
+                )))
             }
         };
 
