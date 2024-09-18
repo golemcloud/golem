@@ -17,17 +17,15 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use bincode::{Decode, Encode};
-use golem_wasm_rpc::wasmtime::EncodingError;
-use serde::{Deserialize, Serialize};
-use tonic::Status;
-
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use golem_wasm_rpc::wasmtime::EncodingError;
+use tonic::Status;
 
 use crate::model::InterruptKind;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum GolemError {
     InvalidRequest {
         details: String,

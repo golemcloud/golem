@@ -229,7 +229,9 @@ impl From<u64> for Timestamp {
 
 pub type ComponentVersion = u64;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
     pub worker_name: String,
@@ -238,11 +240,6 @@ pub struct WorkerId {
 impl WorkerId {
     pub fn slug(&self) -> String {
         format!("{}/{}", self.component_id, self.worker_name)
-    }
-
-    pub fn to_json_string(&self) -> String {
-        serde_json::to_string(self)
-            .unwrap_or_else(|_| panic!("failed to serialize worker id {self}"))
     }
 
     pub fn to_redis_key(&self) -> String {
@@ -305,7 +302,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
 }
 
 /// Associates a worker-id with its owner account
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct OwnedWorkerId {
     pub account_id: AccountId,
     pub worker_id: WorkerId,
@@ -342,23 +339,15 @@ impl Display for OwnedWorkerId {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct PromiseId {
     pub worker_id: WorkerId,
     pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
-    pub fn from_json_string(s: &str) -> PromiseId {
-        serde_json::from_str(s)
-            .unwrap_or_else(|err| panic!("failed to deserialize promise id: {s}: {err}"))
-    }
-
-    pub fn to_json_string(&self) -> String {
-        serde_json::to_string(self)
-            .unwrap_or_else(|err| panic!("failed to serialize promise id {self}: {err}"))
-    }
-
     pub fn to_redis_key(&self) -> String {
         format!("{}:{}", self.worker_id.to_redis_key(), self.oplog_idx)
     }

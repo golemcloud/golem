@@ -4,6 +4,7 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
@@ -30,6 +31,7 @@ use crate::model::{
     Encode,
     Decode,
     Default,
+    NewType,
 )]
 pub struct OplogIndex(u64);
 

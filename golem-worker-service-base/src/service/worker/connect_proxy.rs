@@ -19,8 +19,7 @@ use std::{
 
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::WorkerEvent;
-use golem_service_base::model::WorkerId;
+use golem_common::model::{WorkerEvent, WorkerId};
 use poem::web::websocket::Message;
 use tonic::Status;
 use tracing::{error, info};
