@@ -20,7 +20,6 @@ mod test_lib;
 mod text;
 mod worker;
 
-
 #[derive(Debug, Copy, Clone, EnumIter)]
 pub enum RefKind {
     Name,
