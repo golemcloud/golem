@@ -18,18 +18,21 @@ use combine::sep_by;
 use combine::{between, Parser};
 
 use crate::parser::rib_expr::rib_expr;
-use combine::stream::easy;
 
-pub fn sequence<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        between(
-            char('['),
-            char(']'),
-            sep_by(rib_expr(), char(',').skip(spaces())),
+pub fn sequence<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    spaces()
+        .with(
+            between(
+                char('['),
+                char(']'),
+                sep_by(rib_expr(), char(',').skip(spaces())),
+            )
+            .map(Expr::sequence),
         )
-        .map(Expr::sequence)
-        .message("Unable to parse sequece"),
-    )
+        .message("Invalid syntax for sequence type")
 }
 
 #[cfg(test)]

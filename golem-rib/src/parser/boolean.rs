@@ -15,15 +15,17 @@
 use crate::expr::Expr;
 use combine::parser::char::spaces;
 use combine::parser::char::string;
-use combine::{choice, easy, Parser};
+use combine::{attempt, Parser};
 
-pub fn boolean_literal<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    choice((
-        string("true").map(|_| Expr::boolean(true)),
-        string("false").map(|_| Expr::boolean(false)),
-    ))
-    .skip(spaces())
-    .message("Unable to parse boolean literal")
+pub fn boolean_literal<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    attempt(string("true"))
+        .map(|_| Expr::boolean(true))
+        .or(attempt(string("false")).map(|_| Expr::boolean(false)))
+        .skip(spaces())
+        .message("Unable to parse boolean literal")
 }
 
 #[cfg(test)]

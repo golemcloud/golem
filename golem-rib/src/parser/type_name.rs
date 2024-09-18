@@ -18,7 +18,7 @@ use combine::parser;
 use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
-use combine::{attempt, between, easy, sep_by, Parser, Stream};
+use combine::{attempt, between, sep_by, Parser};
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
 use golem_api_grpc::proto::golem::rib::{
     BasicTypeName, ListType, OptionType, TupleType, TypeName as ProtoTypeName,
@@ -188,7 +188,10 @@ impl From<TypeName> for InferredType {
     }
 }
 
-pub fn parse_basic_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
+pub fn parse_basic_type<Input>() -> impl Parser<Input, Output = TypeName>
+where
+    Input: combine::Stream<Token = char>,
+{
     choice((
         attempt(string("bool").map(|_| TypeName::Bool)),
         attempt(string("s8").map(|_| TypeName::S8)),
@@ -207,7 +210,10 @@ pub fn parse_basic_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Typ
     .skip(spaces())
 }
 
-pub fn parse_list_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
+pub fn parse_list_type<Input>() -> impl Parser<Input, Output = TypeName>
+where
+    Input: combine::Stream<Token = char>,
+{
     string("list")
         .skip(spaces())
         .with(between(
@@ -218,7 +224,10 @@ pub fn parse_list_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Type
         .map(|inner_type| TypeName::List(Box::new(inner_type)))
 }
 
-pub fn parse_option_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
+pub fn parse_option_type<Input>() -> impl Parser<Input, Output = TypeName>
+where
+    Input: combine::Stream<Token = char>,
+{
     string("option")
         .skip(spaces())
         .with(between(
@@ -229,7 +238,10 @@ pub fn parse_option_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Ty
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
 }
 
-pub fn parse_tuple_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
+pub fn parse_tuple_type<Input>() -> impl Parser<Input, Output = TypeName>
+where
+    Input: combine::Stream<Token = char>,
+{
     string("tuple")
         .skip(spaces())
         .with(between(
@@ -240,7 +252,10 @@ pub fn parse_tuple_type<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Typ
         .map(TypeName::Tuple)
 }
 
-pub fn parse_type_name_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = TypeName> {
+pub fn parse_type_name_<Input>() -> impl Parser<Input, Output = TypeName>
+where
+    Input: combine::Stream<Token = char>,
+{
     spaces().with(choice((
         attempt(parse_basic_type()),
         attempt(parse_list_type()),
@@ -250,10 +265,8 @@ pub fn parse_type_name_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Typ
 }
 
 parser! {
-    pub fn parse_type_name['t]()(easy::Stream<&'t str>) -> TypeName
-    where [
-        easy::Stream<&'t str>: Stream<Token = char>,
-    ]
+    pub fn parse_type_name[Input]()(Input) -> TypeName
+     where [Input: combine::Stream<Token = char>]
     {
        parse_type_name_()
     }

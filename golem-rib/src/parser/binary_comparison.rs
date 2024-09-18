@@ -15,85 +15,40 @@
 use crate::expr::Expr;
 use crate::InferredType;
 use combine::parser::char::{spaces, string};
-use combine::stream::easy;
-use combine::Parser;
+use combine::{attempt, choice, Parser};
 
-pub fn greater_than<'t>(
-    rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-    rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn binary<Input>(
+    left_expr: impl Parser<Input, Output = Expr>,
+    right_expr: impl Parser<Input, Output = Expr>,
+) -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     spaces().with(
         (
-            rib_expr1.skip(spaces()),
-            string(">").skip(spaces()),
-            rib_expr2.skip(spaces()),
+            left_expr.skip(spaces()),
+            choice((
+                attempt(string(">=")),
+                attempt(string("<=")),
+                string("<"),
+                string(">"),
+                string("=="),
+            ))
+            .skip(spaces()),
+            right_expr.skip(spaces()),
         )
-            .map(|(left, _, right)| {
-                Expr::GreaterThan(Box::new(left), Box::new(right), InferredType::Bool)
-            }),
-    )
-}
-
-pub fn greater_than_or_equal_to<'t>(
-    rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-    rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (
-            rib_expr1.skip(spaces()),
-            string(">=").skip(spaces()),
-            rib_expr2,
-        )
-            .map(|(left, _, right)| {
-                Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
-            }),
-    )
-}
-
-pub fn less_than<'t>(
-    rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-    rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (
-            rib_expr1.skip(spaces()),
-            string("<").skip(spaces()),
-            rib_expr2,
-        )
-            .map(|(left, _, right)| {
-                Expr::LessThan(Box::new(left), Box::new(right), InferredType::Bool)
-            }),
-    )
-}
-
-pub fn less_than_or_equal_to<'t>(
-    rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-    rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (
-            rib_expr1.skip(spaces()),
-            string("<=").skip(spaces()),
-            rib_expr2,
-        )
-            .map(|(left, _, right)| {
-                Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
-            }),
-    )
-}
-
-pub fn equal_to<'t>(
-    rib_expr1: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-    rib_expr2: impl Parser<easy::Stream<&'t str>, Output = Expr>,
-) -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (
-            rib_expr1.skip(spaces()),
-            string("==").skip(spaces()),
-            rib_expr2,
-        )
-            .map(|(left, _, right)| {
-                Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+            .message("Expected a valid expression of the form x > y")
+            .map(|(left, str, right)| match str {
+                ">" => Expr::GreaterThan(Box::new(left), Box::new(right), InferredType::Bool),
+                "<" => Expr::LessThan(Box::new(left), Box::new(right), InferredType::Bool),
+                "==" => Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool),
+                ">=" => {
+                    Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+                }
+                "<=" => {
+                    Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
+                }
+                _ => unreachable!(),
             }),
     )
 }
@@ -172,17 +127,14 @@ mod test {
     #[test]
     fn test_binary_op_in_if_condition() {
         let input = "if true then foo > bar  else  bar == foo";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input).unwrap();
         assert_eq!(
             result,
-            Ok((
-                Expr::cond(
-                    Expr::boolean(true),
-                    Expr::greater_than(Expr::identifier("foo"), Expr::identifier("bar")),
-                    Expr::equal_to(Expr::identifier("bar"), Expr::identifier("foo")),
-                ),
-                ""
-            ))
+            Expr::cond(
+                Expr::boolean(true),
+                Expr::greater_than(Expr::identifier("foo"), Expr::identifier("bar")),
+                Expr::equal_to(Expr::identifier("bar"), Expr::identifier("foo")),
+            ),
         );
     }
 

@@ -15,11 +15,13 @@
 use crate::expr::Expr;
 use crate::parser::identifier::identifier;
 use combine::parser::char::{char as char_, spaces};
-use combine::stream::easy;
 use combine::{attempt, choice, many1, optional, Parser};
 use internal::*;
 
-pub fn select_index<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn select_index<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     spaces().with(
         (
             base_expr().skip(spaces()),
@@ -44,7 +46,7 @@ mod internal {
 
     use crate::parser::number::number;
     use crate::parser::sequence::sequence;
-    use combine::error::StreamError;
+
     use combine::parser::char::char as char_;
 
     pub(crate) fn build_select_index_from(base_expr: Expr, indices: Vec<usize>) -> Expr {
@@ -55,7 +57,10 @@ mod internal {
         result
     }
 
-    pub(crate) fn nested_indices<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Vec<usize>> {
+    pub(crate) fn nested_indices<Input>() -> impl Parser<Input, Output = Vec<usize>>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         many1(
             (
                 char_('[').skip(spaces()),
@@ -67,24 +72,26 @@ mod internal {
         .map(|result: Vec<usize>| result)
     }
 
-    pub(crate) fn pos_num<'t>() -> impl Parser<easy::Stream<&'t str>, Output = usize> {
-        number().and_then(|s: Expr| match s {
+    pub(crate) fn pos_num<Input>() -> impl Parser<Input, Output = usize>
+    where
+        Input: combine::Stream<Token = char>,
+    {
+        number().map(|s: Expr| match s {
             Expr::Number(number, _, _) => {
                 if number.value < 0.0 {
-                    Err(easy::Error::message_static_message(
-                        "Cannot use a negative number to index",
-                    ))
+                    panic!("Cannot use a negative number to index",)
                 } else {
-                    Ok(number.value as usize)
+                    number.value as usize
                 }
             }
-            _ => Err(easy::Error::message_static_message(
-                "Cannot use a float number to index",
-            )),
+            _ => panic!("Cannot use a float number to index",),
         })
     }
 
-    pub(crate) fn base_expr<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+    pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         choice((attempt(sequence()), attempt(identifier())))
     }
 }

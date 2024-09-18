@@ -1617,7 +1617,7 @@ mod tests {
         let noop_executor = DefaultEvaluator::noop();
 
         let expr = rib::from_string(
-            "${let err_n: u64 = 2; match err(\"afsal\") { ok(_) => ok(\"1\"), err(msg) => err(err_n) }}",
+            "${let xyz: u64 = 2; match err(\"afsal\") { ok(_) => ok(\"1\"), err(msg) => err(xyz) }}",
         )
         .unwrap();
 

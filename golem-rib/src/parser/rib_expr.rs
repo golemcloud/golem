@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::expr::Expr;
-use crate::parser::identifier::identifier;
-use crate::parser::literal::literal;
-use crate::parser::not::not;
-use crate::parser::sequence::sequence;
 use combine::parser::char;
 use combine::parser::char::{char, spaces};
 use combine::parser::choice::choice;
-use combine::{attempt, Parser, Stream};
+use combine::{attempt, eof, Parser, Stream};
 use combine::{parser, sep_by};
 
-use super::binary_comparison::{
-    equal_to, greater_than, greater_than_or_equal_to, less_than, less_than_or_equal_to,
-};
+use crate::expr::Expr;
+use crate::parser::boolean::boolean_literal;
+use crate::parser::call::call;
+use crate::parser::identifier::identifier;
+use crate::parser::literal::literal;
+use crate::parser::multi_line_code_block::multi_line_block;
+use crate::parser::not::not;
+use crate::parser::sequence::sequence;
+
+use super::binary_comparison::binary;
 use super::cond::conditional;
 use super::flag::flag;
 use super::let_binding::let_binding;
@@ -37,22 +39,25 @@ use super::result::result;
 use super::select_field::select_field;
 use super::select_index::select_index;
 use super::tuple::tuple;
-use crate::parser::boolean::boolean_literal;
-use crate::parser::call::call;
-use crate::parser::multi_line_code_block::multi_line_block;
-use combine::stream::easy;
 
 // Parse a full Rib Program.
 // This is kept outside for a reason, to avoid the conditions that lead to stack over-flow
 // Please don't refactor and inline this with `parser!` macros below.
-pub fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(|expressions: Vec<Expr>| {
-        if expressions.len() == 1 {
-            expressions.first().unwrap().clone()
-        } else {
-            Expr::multiple(expressions)
-        }
-    })
+pub fn rib_program<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    spaces().with(
+        sep_by(rib_expr().skip(spaces()), char(';').skip(spaces()))
+            .map(|expressions: Vec<Expr>| {
+                if expressions.len() == 1 {
+                    expressions.first().unwrap().clone()
+                } else {
+                    Expr::multiple(expressions)
+                }
+            })
+            .skip(eof()),
+    )
 }
 
 // To handle recursion based on docs
@@ -60,91 +65,95 @@ pub fn rib_program<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
 // Therefore we copy the parser without these binary parsers in the attempt list to build the binary comparison parsers.
 // This may not be intuitive however will work!
 parser! {
-    pub fn rib_expr['t]()(easy::Stream<&'t str>) -> Expr
-    where [
-        easy::Stream<&'t str>: Stream<Token = char>,
-    ]
+    pub fn rib_expr[Input]()(Input) -> Expr
+    where [Input: combine::Stream<Token = char>]
     {
        rib_expr_()
     }
 }
 
-pub fn rib_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    choice((
-        attempt(pattern_match()),
-        attempt(let_binding()),
-        attempt(conditional()),
-        attempt(greater_than_or_equal_to(
-            comparison_operands(),
-            comparison_operands(),
-        )),
-        attempt(greater_than(comparison_operands(), comparison_operands())),
-        attempt(less_than_or_equal_to(
-            comparison_operands(),
-            comparison_operands(),
-        )),
-        attempt(less_than(comparison_operands(), comparison_operands())),
-        attempt(equal_to(comparison_operands(), comparison_operands())),
-        selection_expr(),
-        attempt(flag()),
-        attempt(record()),
-        attempt(multi_line_block()),
-        attempt(tuple()),
-        attempt(sequence()),
-        attempt(literal()),
-        attempt(not()),
-        attempt(option()),
-        attempt(result()),
-        attempt(call()),
-        attempt(number()),
-        attempt(boolean_literal()),
-        attempt(identifier()),
-    ))
+pub fn rib_expr_<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    spaces()
+        .with(choice((
+            pattern_match(),
+            let_binding(),
+            conditional(),
+            binary_rib(),
+            selection_expr(),
+            flag_or_record(),
+            multi_line_block(),
+            tuple(),
+            sequence(),
+            boolean_literal(),
+            literal(),
+            not(),
+            option(),
+            result(),
+            attempt(call()),
+            number(),
+            identifier(),
+        )))
+        .skip(spaces())
 }
 
-fn selection_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn binary_rib<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    attempt(binary(comparison_operands(), comparison_operands()))
+}
+
+pub fn flag_or_record<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    choice((attempt(flag()), attempt(record()))).message("Unable to parse flag or record")
+}
+
+fn selection_expr_<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     choice((attempt(select_field()), attempt(select_index())))
+        .message("Unable to parse selection expression")
 }
 
 parser! {
-    fn selection_expr['t]()(easy::Stream<&'t str>) -> Expr
-    where [
-        easy::Stream<&'t str>: Stream<Token = char>,
-    ]
+    fn selection_expr[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>]
     {
         selection_expr_()
     }
 }
 
-fn simple_expr_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    choice((
-        attempt(literal()),
-        attempt(not()),
-        attempt(number()),
-        attempt(boolean_literal()),
-        attempt(identifier()),
-    ))
+fn simple_expr_<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    choice((literal(), not(), number(), boolean_literal(), identifier()))
 }
 
 parser! {
-    fn simple_expr['t]()(easy::Stream<&'t str>) -> Expr
-    where [
-        easy::Stream<&'t str>: Stream<Token = char>,
-    ]
+    fn simple_expr[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>]
     {
         simple_expr_()
     }
 }
 
-fn comparison_operands_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+fn comparison_operands_<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     selection_expr().or(simple_expr())
 }
 
 parser! {
-    fn comparison_operands['t]()(easy::Stream<&'t str>) -> Expr
-    where [
-        easy::Stream<&'t str>: Stream<Token = char>,
-    ]
+    fn comparison_operands[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>]
     {
         comparison_operands_()
     }
@@ -152,13 +161,15 @@ parser! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use combine::EasyParser;
+
     use crate::expr::ArmPattern;
     use crate::expr::MatchArm;
     use crate::function_name::ParsedFunctionName;
     use crate::function_name::ParsedFunctionReference::RawResourceStaticMethod;
     use crate::function_name::ParsedFunctionSite::PackagedInterface;
-    use combine::EasyParser;
+
+    use super::*;
 
     fn program() -> String {
         r#"
@@ -293,8 +304,8 @@ mod tests {
     #[test]
     fn test_complex_rib_program() {
         let binding = program();
-        let result = rib_program().easy_parse(binding.as_ref());
-        assert_eq!(result, Ok((expected(), "")));
+        let result = Expr::from_text(binding.as_ref());
+        assert_eq!(result, Ok(expected()));
     }
 
     #[test]

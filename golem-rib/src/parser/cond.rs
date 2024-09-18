@@ -15,20 +15,22 @@
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
 use combine::parser::char::{spaces, string};
-use combine::stream::easy;
-use combine::Parser;
+use combine::{attempt, Parser};
 
-pub fn conditional<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
+pub fn conditional<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    // Use attempt only for the initial "if" to resolve ambiguity with identifiers
+    attempt(string("if").skip(spaces())).with(
         (
-            string("if").skip(spaces()),
             rib_expr().skip(spaces()),
             string("then").skip(spaces()),
             rib_expr().skip(spaces()),
             string("else").skip(spaces()),
             rib_expr().skip(spaces()),
         )
-            .map(|(_, cond, _, then_expr, _, else_expr)| Expr::cond(cond, then_expr, else_expr)),
+            .map(|(cond, _, then_expr, _, else_expr)| Expr::cond(cond, then_expr, else_expr)),
     )
 }
 

@@ -22,22 +22,26 @@ use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
 
-use combine::stream::easy;
-
-pub fn tuple<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        between(
-            char('('),
-            char(')'),
-            sep_by(rib_expr(), char(',').skip(spaces())),
+pub fn tuple<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    spaces()
+        .with(
+            between(
+                char('('),
+                char(')'),
+                sep_by(rib_expr(), char(',').skip(spaces())),
+            )
+            .map(Expr::tuple),
         )
-        .map(Expr::tuple),
-    )
+        .message("Invalid syntax for tuple type")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use combine::stream::position;
     use combine::EasyParser;
 
     #[test]
@@ -50,8 +54,10 @@ mod tests {
     #[test]
     fn test_singleton_tuple() {
         let input = "(foo)";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::tuple(vec![Expr::identifier("foo")]), "")));
+        let result = rib_expr()
+            .easy_parse(position::Stream::new(input))
+            .map(|x| x.0);
+        assert_eq!(result, Ok(Expr::tuple(vec![Expr::identifier("foo")])));
     }
 
     #[test]

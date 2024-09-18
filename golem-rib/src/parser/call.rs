@@ -16,7 +16,6 @@ use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::stream::easy;
 
 use combine::{any, attempt, between, choice, many1, optional, parser, token, Parser};
 
@@ -28,26 +27,30 @@ use crate::parser::rib_expr::rib_expr;
 use combine::sep_by;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
-pub fn call<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (
-            function_name().skip(spaces()),
-            between(
-                char('(').skip(spaces()),
-                char(')').skip(spaces()),
-                sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
-            ),
-        )
-            .map(|(name, args)| Expr::call(name, args))
-            .message("Unable to parse call"),
+pub fn call<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    (
+        function_name().skip(spaces()),
+        between(
+            char('(').skip(spaces()),
+            char(')').skip(spaces()),
+            sep_by(rib_expr().skip(spaces()), char(',').skip(spaces())),
+        ),
     )
+        .map(|(name, args)| Expr::call(name, args))
+        .message("Invalid function call")
 }
 
 // TODO;  Reusing function_name between Rib and internals of GOLEM may be a surface level requirement
 // as users can form function name in various other ways.
 // Example: Arguments to a resource can be partial because they may come from request parameters
 // and these are not represented using the current structure of ParsedFunctionName
-pub fn function_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = ParsedFunctionName> {
+pub fn function_name<Input>() -> impl Parser<Input, Output = ParsedFunctionName>
+where
+    Input: combine::Stream<Token = char>,
+{
     let identifier = || many1(alpha_num().or(token('-'))).map(|string: String| string);
     let namespace = many1(identifier()).message("namespace");
     let package = many1(identifier()).message("package");
@@ -56,7 +59,7 @@ pub fn function_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Parsed
 
     let capture_resource_params = || {
         parser(|input| {
-            let _: &mut easy::Stream<&str> = input;
+            let _: &mut Input = input;
             let mut nesting = 1;
             let mut current_param = String::new();
             let mut result = Vec::new();
@@ -94,9 +97,9 @@ pub fn function_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Parsed
 
     let version = attempt(token('@'))
         .with(take_until(attempt(string(".{"))))
-        .and_then(|v: String| {
+        .map(|v: String| {
             let stripped = v.strip_suffix('.').unwrap_or(&v);
-            semver::Version::parse(stripped)
+            semver::Version::parse(stripped).expect("Failed to parse version")
         })
         .message("version");
 
@@ -200,6 +203,7 @@ mod function_call_tests {
     use crate::function_name::{
         ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
     };
+
     use crate::parser::rib_expr::rib_expr;
 
     #[test]
@@ -782,25 +786,22 @@ mod function_call_tests {
     #[test]
     fn test_call_with_function_name_method_syntax_sugar() {
         let input = "ns:name/interface.{resource1.do-something}({bar, baz})";
-        let result = rib_expr().easy_parse(input);
-        let expected = Ok((
-            Expr::call(
-                ParsedFunctionName {
-                    site: ParsedFunctionSite::PackagedInterface {
-                        namespace: "ns".to_string(),
-                        package: "name".to_string(),
-                        interface: "interface".to_string(),
-                        version: None,
-                    },
-                    function: ParsedFunctionReference::RawResourceMethod {
-                        resource: "resource1".to_string(),
-                        method: "do-something".to_string(),
-                    },
+        let result = Expr::from_text(input).unwrap();
+        let expected = Expr::call(
+            ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface {
+                    namespace: "ns".to_string(),
+                    package: "name".to_string(),
+                    interface: "interface".to_string(),
+                    version: None,
                 },
-                vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            ),
-            "",
-        ));
+                function: ParsedFunctionReference::RawResourceMethod {
+                    resource: "resource1".to_string(),
+                    method: "do-something".to_string(),
+                },
+            },
+            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
+        );
         assert_eq!(result, expected);
     }
 

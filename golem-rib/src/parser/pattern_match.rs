@@ -17,26 +17,30 @@ use match_arm::*;
 use crate::expr::Expr;
 use crate::parser::rib_expr::rib_expr;
 use combine::parser::char::{char, spaces, string};
-use combine::stream::easy;
-use combine::{sep_by1, Parser};
+use combine::{attempt, sep_by1, Parser};
 
-pub fn pattern_match<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+pub fn pattern_match<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
     let arms = sep_by1(match_arm().skip(spaces()), char(',').skip(spaces()));
 
-    spaces().with(
-        (
-            string("match").skip(spaces()),
-            rib_expr().skip(spaces()),
-            char('{').skip(spaces()),
-            arms.skip(spaces()),
-            char('}').skip(spaces()),
+    attempt(string("match"))
+        .skip(spaces())
+        .with(
+            (
+                rib_expr().skip(spaces()),
+                char('{').skip(spaces()),
+                arms.skip(spaces()),
+                char('}').skip(spaces()),
+            )
+                .map(|(expr, _, arms, _)| Expr::pattern_match(expr, arms)),
         )
-            .map(|(_, expr, _, arms, _)| Expr::pattern_match(expr, arms)),
-    )
+        .message("Invalid syntax for pattern match")
 }
 
 mod match_arm {
-    use combine::{easy, parser::char::string, Parser};
+    use combine::{parser::char::string, Parser};
 
     use combine::parser::char::spaces;
 
@@ -46,7 +50,10 @@ mod match_arm {
     use crate::parser::rib_expr::rib_expr;
 
     // RHS of a match arm
-    pub(crate) fn match_arm<'t>() -> impl Parser<easy::Stream<&'t str>, Output = MatchArm> {
+    pub(crate) fn match_arm<Input>() -> impl Parser<Input, Output = MatchArm>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         (
             //LHS
             arm_pattern().skip(spaces()),
@@ -69,10 +76,11 @@ mod arm_pattern {
     use combine::attempt;
     use combine::parser::char::spaces;
 
-    use combine::stream::easy;
-
     // LHS of a match arm
-    fn arm_pattern_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
+    fn arm_pattern_<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         choice((
             attempt(arm_pattern_constructor()),
             attempt(char('_').map(|_| ArmPattern::WildCard)),
@@ -89,15 +97,15 @@ mod arm_pattern {
     }
 
     parser! {
-        pub(crate) fn arm_pattern['t]()(easy::Stream<&'t str>) -> ArmPattern
-        where [easy::Stream<&'t str>: Stream<Token = char>,]{
+        pub(crate) fn arm_pattern[Input]()(Input) -> ArmPattern
+         where [Input: Stream<Token = char>]{
             arm_pattern_()
         }
     }
 }
 
 mod internal {
-    use combine::{choice, easy};
+    use combine::choice;
     use combine::{parser::char::char as char_, Parser};
 
     use crate::expr::ArmPattern;
@@ -107,14 +115,15 @@ mod internal {
 
     use crate::parser::pattern_match::arm_pattern::*;
     use combine::attempt;
-    use combine::error::StreamError;
     use combine::many1;
     use combine::parser::char::{char, digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
 
-    pub(crate) fn arm_pattern_constructor<'t>(
-    ) -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
+    pub(crate) fn arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         choice((
             attempt(option().map(|expr| ArmPattern::Literal(Box::new(expr)))),
             attempt(result().map(|expr| ArmPattern::Literal(Box::new(expr)))),
@@ -123,28 +132,26 @@ mod internal {
         ))
     }
 
-    pub(crate) fn arm_pattern_literal<'t>(
-    ) -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
+    pub(crate) fn arm_pattern_literal<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         rib_expr().map(|lit| ArmPattern::Literal(Box::new(lit)))
     }
 
-    pub(crate) fn alias_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
+    pub(crate) fn alias_name<Input>() -> impl Parser<Input, Output = String>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         many1(letter().or(digit()).or(char_('_')))
-            .and_then(|s: Vec<char>| {
-                if s.first().map_or(false, |&c| c.is_alphabetic()) {
-                    Ok(s)
-                } else {
-                    Err(easy::Error::message_static_message(
-                        "Alias name must start with a letter",
-                    ))
-                }
-            })
             .map(|s: Vec<char>| s.into_iter().collect())
             .message("Unable to parse alias name")
     }
 
-    fn custom_arm_pattern_constructor<'t>(
-    ) -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern> {
+    fn custom_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         (
             constructor_type_name().skip(spaces()),
             string("(").skip(spaces()),
@@ -154,7 +161,9 @@ mod internal {
             .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
     }
 
-    fn tuple_arm_pattern_constructor<'t>() -> impl Parser<easy::Stream<&'t str>, Output = ArmPattern>
+    fn tuple_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
     {
         (
             string("(").skip(spaces()),
@@ -164,17 +173,11 @@ mod internal {
             .map(|(_, patterns, _)| ArmPattern::TupleConstructor(patterns))
     }
 
-    fn constructor_type_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
+    fn constructor_type_name<Input>() -> impl Parser<Input, Output = String>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         many1(letter().or(digit()).or(char_('_')).or(char('-')))
-            .and_then(|s: Vec<char>| {
-                if s.first().map_or(false, |&c| c.is_alphabetic()) {
-                    Ok(s)
-                } else {
-                    Err(easy::Error::message_static_message(
-                        "Constructor type name must start with a letter",
-                    ))
-                }
-            })
             .map(|s: Vec<char>| s.into_iter().collect())
             .message("Unable to parse custom constructor name")
     }
@@ -186,6 +189,7 @@ mod tests {
     use crate::expr::ArmPattern;
     use crate::expr::Expr;
     use crate::expr::MatchArm;
+    use combine::stream::position;
     use combine::EasyParser;
 
     #[test]
@@ -206,26 +210,25 @@ mod tests {
 
     #[test]
     fn test_simple_pattern_with_wild_card() {
-        let input = "match foo { foo(_, _, iden) => bar }";
-        let result = rib_expr().easy_parse(input);
+        let input = "match foo { foo(_, _, iden)  => bar }";
+        let result = rib_expr()
+            .easy_parse(position::Stream::new(input))
+            .map(|x| x.0);
         assert_eq!(
             result,
-            Ok((
-                Expr::pattern_match(
-                    Expr::identifier("foo"),
-                    vec![MatchArm::new(
-                        ArmPattern::custom_constructor(
-                            "foo",
-                            vec![
-                                ArmPattern::WildCard,
-                                ArmPattern::WildCard,
-                                ArmPattern::identifier("iden")
-                            ]
-                        ),
-                        Expr::identifier("bar")
-                    )]
-                ),
-                ""
+            Ok(Expr::pattern_match(
+                Expr::identifier("foo"),
+                vec![MatchArm::new(
+                    ArmPattern::custom_constructor(
+                        "foo",
+                        vec![
+                            ArmPattern::WildCard,
+                            ArmPattern::WildCard,
+                            ArmPattern::identifier("iden")
+                        ]
+                    ),
+                    Expr::identifier("bar")
+                )]
             ))
         );
     }

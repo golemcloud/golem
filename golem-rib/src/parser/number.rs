@@ -12,40 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::{many1, optional, Parser};
+use combine::{many1, optional, ParseError, Parser};
 
 use crate::expr::Expr;
 use combine::parser::char::{char, digit, spaces};
 
-use combine::stream::easy;
-
 use crate::parser::type_name::{parse_basic_type, TypeName};
-use combine::error::StreamError;
 
-pub fn number<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        (
-            many1(digit().or(char('-')).or(char('.'))),
-            optional(parse_basic_type()),
-        )
-            .map(|(s, typ_name): (Vec<char>, Option<TypeName>)| {
-                let primitive = s.into_iter().collect::<String>();
+pub fn number<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+{
+    spaces()
+        .with(
+            (
+                many1(digit().or(char('-')).or(char('.'))),
+                optional(parse_basic_type()),
+            )
+                .map(|(s, typ_name): (Vec<char>, Option<TypeName>)| {
+                    let primitive = s
+                        .into_iter()
+                        .collect::<String>()
+                        .parse::<f64>()
+                        .expect("digit");
 
-                if let Ok(f64) = primitive.parse::<f64>() {
                     if let Some(typ_name) = typ_name {
-                        Ok(Expr::number_with_type_name(f64, typ_name.clone()))
+                        Expr::number_with_type_name(primitive, typ_name.clone())
                     } else {
-                        Ok(Expr::number(f64))
+                        Expr::number(primitive)
                     }
-                } else {
-                    Err(easy::Error::message_static_message(
-                        "Unable to parse number",
-                    ))
-                }
-            })
-            .and_then(|result| result) // Unwrap the result from the map closure
-            .message("Unable to parse number"),
-    )
+                }),
+        )
+        .message("Unable to parse number")
 }
 
 #[cfg(test)]

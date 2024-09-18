@@ -21,40 +21,47 @@ use combine::{
 use crate::expr::Expr;
 
 use super::rib_expr::rib_expr;
-use combine::stream::easy;
 
 parser! {
-    pub fn record['t]()(easy::Stream<&'t str>) -> Expr
+    pub fn record[Input]()(Input) -> Expr
     where [
-        easy::Stream<&'t str>: Stream<Token = char>,
+        Input: Stream<Token = char>
     ]
     {
        record_()
     }
 }
 
-pub fn record_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
-    spaces().with(
-        between(
-            char_('{').skip(spaces()),
-            char_('}').skip(spaces()),
-            sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
-        )
-        .map(|fields: Vec<Field>| {
-            Expr::record(
-                fields
-                    .iter()
-                    .map(|f| (f.key.clone(), f.value.clone()))
-                    .collect::<Vec<_>>(),
+pub fn record_<Input>() -> impl Parser<Input, Output = Expr>
+where
+    Input: combine::Stream<Token = char>,
+{
+    spaces()
+        .with(
+            between(
+                char_('{').skip(spaces()),
+                char_('}').skip(spaces()),
+                sep_by1(field().skip(spaces()), char_(',').skip(spaces())),
             )
-        }),
-    )
+            .map(|fields: Vec<Field>| {
+                Expr::record(
+                    fields
+                        .iter()
+                        .map(|f| (f.key.clone(), f.value.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            }),
+        )
+        .message("Invalid syntax for record type")
 }
 
-fn field_key<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
+fn field_key<Input>() -> impl Parser<Input, Output = String>
+where
+    Input: combine::Stream<Token = char>,
+{
     many1(letter().or(char_('_').or(char_('-'))))
         .map(|s: Vec<char>| s.into_iter().collect())
-        .message("Unable to parse identifier")
+        .message("Invalid identifier")
 }
 
 struct Field {
@@ -62,7 +69,10 @@ struct Field {
     value: Expr,
 }
 
-fn field<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Field> {
+fn field<Input>() -> impl Parser<Input, Output = Field>
+where
+    Input: combine::Stream<Token = char>,
+{
     (
         field_key().skip(spaces()),
         char_(':').skip(spaces()),

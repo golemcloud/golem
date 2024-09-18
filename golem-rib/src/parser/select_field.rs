@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{char as char_, letter, spaces};
-use combine::stream::easy;
-use combine::{attempt, choice, many1, Parser, Stream};
+use combine::parser::char::spaces;
+use combine::{attempt, choice, Parser, Stream};
 
 use crate::expr::Expr;
 use crate::parser::record::record;
@@ -25,10 +24,8 @@ use combine::parser;
 use internal::*;
 
 parser! {
-    pub fn select_field['t]()(easy::Stream<&'t str>) -> Expr
-    where [
-        easy::Stream<&'t str>: Stream<Token = char>,
-    ]
+    pub fn select_field[Input]()(Input) -> Expr
+    where [Input: Stream<Token = char>]
     {
         select_field_()
     }
@@ -38,13 +35,16 @@ mod internal {
     use crate::parser::select_index::select_index;
 
     use super::*;
-    use combine::error::StreamError;
     use combine::parser::char::char;
-    use combine::parser::char::digit;
+
+    use crate::parser::identifier;
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
-    pub(crate) fn select_field_<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+    pub(crate) fn select_field_<Input>() -> impl Parser<Input, Output = Expr>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         spaces().with(
             (
                 base_expr(),
@@ -55,10 +55,8 @@ mod internal {
                     attempt(identifier()),
                 )),
             )
-                .and_then(|(base, _, opt)| {
-                    build_selector(base, opt).ok_or(easy::Error::message_static_message(
-                        "Invalid field/index selection",
-                    ))
+                .map(|(base, _, opt)| {
+                    build_selector(base, opt).expect("Invalid field/index selection")
                 }),
         )
     }
@@ -86,7 +84,10 @@ mod internal {
         }
     }
 
-    pub(crate) fn base_expr<'t>() -> impl Parser<easy::Stream<&'t str>, Output = Expr> {
+    pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
+    where
+        Input: combine::Stream<Token = char>,
+    {
         choice((
             attempt(select_index()),
             attempt(record()),
@@ -94,10 +95,11 @@ mod internal {
         ))
     }
 
-    pub(crate) fn field_name<'t>() -> impl Parser<easy::Stream<&'t str>, Output = String> {
-        many1(letter().or(digit()).or(char_('-')).or(char_('_')))
-            .map(|s: Vec<char>| s.into_iter().collect())
-            .message("Unable to parse field name")
+    pub(crate) fn field_name<Input>() -> impl Parser<Input, Output = String>
+    where
+        Input: combine::Stream<Token = char>,
+    {
+        identifier::identifier_text().message("Unable to parse field name")
     }
 }
 
