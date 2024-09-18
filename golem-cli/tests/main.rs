@@ -9,14 +9,17 @@ use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 
+pub mod cli;
+
 mod api_definition;
 mod api_deployment;
-pub mod cli;
 mod component;
 mod get;
 mod profile;
+mod test_lib;
 mod text;
 mod worker;
+
 
 #[derive(Debug, Copy, Clone, EnumIter)]
 pub enum RefKind {
