@@ -811,7 +811,7 @@ mod tests {
             "urn:worker:679ae459-8700-41d9-920c-7e2887459c94/my%3Aworker%2F1/fn+a"
         );
     }
-    
+
     #[test]
     pub fn api_definition_urn_to_urn() {
         let typed = ApiDefinitionUrn {
