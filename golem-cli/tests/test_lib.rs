@@ -21,7 +21,7 @@ impl<T: TrimDateTime> TrimDateTime for Vec<T> {
 
 impl TrimDateTime for DateTime<Utc> {
     fn trim_date_time_ms(self) -> Self {
-        self.with_nanosecond((self.timestamp_millis() * 1_000_000) as u32)
+        self.with_nanosecond(self.timestamp_subsec_millis() * 1_000_000)
             .expect("Failed to set nanoseconds while trimming")
     }
 }
