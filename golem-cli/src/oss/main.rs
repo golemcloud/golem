@@ -13,39 +13,42 @@
 // limitations under the License.
 
 use crate::command::profile::UniversalProfileAdd;
+use crate::completion::PrintCompletion;
 use crate::config::{OssProfile, ProfileName};
 use crate::diagnose::diagnose;
 use crate::factory::ServiceFactory;
-use crate::init::{init_profile, CliKind, PrintCompletion, ProfileAuth};
+use crate::init::{init_profile, DummyProfileAuth, ProfileAuth};
 use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use crate::oss::command::{GolemOssCommand, OssCommand};
 use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
-use crate::{check_for_newer_server_version, examples};
+use crate::{check_for_newer_server_version, examples, ConfiguredMainArgs, MainArgs, VERSION};
 use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
-use std::path::PathBuf;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    cmd: GolemOssCommand<ProfileAdd>,
-    profile: OssProfile,
-    cli_kind: CliKind,
-    config_dir: PathBuf,
-    print_completion: Box<dyn PrintCompletion>,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let format = cmd.format.unwrap_or(profile.config.default_format);
+    args: ConfiguredMainArgs<OssProfile, GolemOssCommand<ProfileAdd>>,
+) -> Result<GolemResult, GolemError> {
+    let format = args.format();
+    let ConfiguredMainArgs {
+        profile,
+        profile_name: _,
+        command,
+        cli_kind,
+        config_dir,
+    } = args;
+
+    let profile_auth = &DummyProfileAuth;
+
     let factory = || async {
         let factory = OssServiceFactory::from_profile(&profile)?;
         check_for_newer_server_version(factory.version_service().as_ref(), VERSION).await;
         Ok::<OssServiceFactory, GolemError>(factory)
     };
 
-    let res = match cmd.command {
+    match command.command {
         OssCommand::Component { subcommand } => {
             let factory = factory().await?;
 
@@ -100,15 +103,12 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
                 .await
         }
         OssCommand::Profile { subcommand } => {
-            subcommand
-                .handle(cli_kind, &config_dir, profile_auth.as_ref())
-                .await
+            subcommand.handle(cli_kind, &config_dir, profile_auth).await
         }
         OssCommand::Init {} => {
             let profile_name = ProfileName::default(cli_kind);
 
-            let res =
-                init_profile(cli_kind, profile_name, &config_dir, profile_auth.as_ref()).await?;
+            let res = init_profile(cli_kind, profile_name, &config_dir, profile_auth).await?;
 
             if res.auth_required {
                 profile_auth.auth(&res.profile_name, &config_dir).await?
@@ -122,21 +122,13 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             get_resource_by_uri(uri, &factory).await
         }
         OssCommand::Completion { generator } => {
-            print_completion.print_completion(generator);
+            GolemOssCommand::<ProfileAdd>::print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
         OssCommand::Diagnose { command } => {
             diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
-    };
-
-    match res {
-        Ok(res) => {
-            res.print(format);
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
     }
 }
 

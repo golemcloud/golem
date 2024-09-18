@@ -23,10 +23,10 @@ use crate::model::conversions::{
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::WorkerAddView;
+use crate::model::text::worker::{WorkerAddView, WorkerGetView};
 use crate::model::{
-    Format, GolemError, GolemResult, IdempotencyKey, WorkerMetadata, WorkerMetadataView,
-    WorkerName, WorkerUpdateMode, WorkersMetadataResponseView,
+    Format, GolemError, GolemResult, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
+    WorkersMetadataResponseView,
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
@@ -656,7 +656,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
     ) -> Result<GolemResult, GolemError> {
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
-        let response: WorkerMetadataView = self.client.get_metadata(worker_urn).await?.into();
+        let response: WorkerGetView = self.client.get_metadata(worker_urn).await?.into();
 
         Ok(GolemResult::Ok(Box::new(response)))
     }

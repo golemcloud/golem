@@ -28,24 +28,6 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
-use anyhow::anyhow;
-use async_trait::async_trait;
-use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
-use golem_common::redis::RedisPool;
-use humansize::{ISizeFormatter, BINARY};
-use nonempty_collections::NEVec;
-use prometheus::Registry;
-use std::sync::Arc;
-use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use storage::sqlite_types::SqlitePool;
-use tokio::runtime::Handle;
-use tonic::transport::Server;
-use tracing::info;
-use uuid::Uuid;
-use wasmtime::component::Linker;
-use wasmtime::{Config, Engine, WasmBacktraceDetails};
-
 use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -80,6 +62,26 @@ use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
+use async_trait::async_trait;
+use golem_api_grpc::proto;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
+use golem_common::golem_version;
+use golem_common::redis::RedisPool;
+use humansize::{ISizeFormatter, BINARY};
+use nonempty_collections::NEVec;
+use prometheus::Registry;
+use std::sync::Arc;
+use storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use storage::sqlite_types::SqlitePool;
+use tokio::runtime::Handle;
+use tonic::transport::Server;
+use tracing::info;
+use uuid::Uuid;
+use wasmtime::component::Linker;
+use wasmtime::{Config, Engine, WasmBacktraceDetails};
+
+const VERSION: &str = golem_version!();
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
 /// of its services.

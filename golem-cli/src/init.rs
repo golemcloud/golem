@@ -17,14 +17,19 @@ use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
 use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
+use crate::completion::PrintCompletion;
 use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, ProfileName};
 use crate::diagnose::diagnose;
-use crate::model::{ComponentUriArg, Format, GolemError, GolemResult};
+use crate::model::{
+    ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
+};
+use crate::oss::command::GolemOssCommand;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
-use crate::{diagnose, examples};
+use crate::{diagnose, examples, InitMainArgs};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
 use colored::Colorize;
 use golem_common::uri::oss::uri::ResourceUri;
@@ -32,7 +37,7 @@ use indoc::formatdoc;
 use inquire::{Confirm, CustomType, Select};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -116,7 +121,7 @@ pub enum InitCommand<ProfileAdd: clap::Args> {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about = "Your Golem is not configured. Please run `golem-cli init`", long_about = None, rename_all = "kebab-case")]
+#[command(author, version = crate::VERSION, about = "Your Golem is not configured. Please run `golem-cli init`", long_about = None, rename_all = "kebab-case")]
 /// Your Golem is not configured. Please run `golem-cli init`
 pub struct GolemInitCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
@@ -129,10 +134,28 @@ pub struct GolemInitCommand<ProfileAdd: clap::Args> {
     pub command: InitCommand<ProfileAdd>,
 }
 
+impl<ProfileAdd: clap::Args> HasFormatConfig for GolemInitCommand<ProfileAdd> {
+    fn format(&self) -> Option<Format> {
+        Some(self.format)
+    }
+}
+
+impl<ProfileAdd: clap::Args> HasVerbosity for GolemInitCommand<ProfileAdd> {
+    fn verbosity(&self) -> Verbosity {
+        self.verbosity.clone()
+    }
+}
+
+impl<ProfileAdd: clap::Args> PrintCompletion for GolemInitCommand<ProfileAdd> {
+    fn print_completion(shell: Shell) {
+        GolemOssCommand::<ProfileAdd>::print_completion(shell);
+    }
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CliKind {
     Universal,
-    Golem,
+    Oss,
     Cloud,
 }
 
@@ -142,7 +165,7 @@ pub trait ProfileAuth {
     async fn auth(&self, profile_name: &ProfileName, config_dir: &Path) -> Result<(), GolemError>;
 }
 
-pub struct DummyProfileAuth {}
+pub struct DummyProfileAuth;
 
 #[async_trait]
 impl ProfileAuth for DummyProfileAuth {
@@ -159,23 +182,22 @@ impl ProfileAuth for DummyProfileAuth {
     }
 }
 
-pub trait PrintCompletion {
-    fn print_completion(&self, shell: clap_complete::Shell);
-}
-
 pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    cmd: GolemInitCommand<ProfileAdd>,
-    cli_kind: CliKind,
-    config_dir: PathBuf,
-    profile_auth: Box<dyn ProfileAuth + Send + Sync + 'static>,
-    print_completion: Box<dyn PrintCompletion>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let res = match cmd.command {
+    args: InitMainArgs<GolemInitCommand<ProfileAdd>>,
+) -> Result<GolemResult, GolemError> {
+    let InitMainArgs {
+        cli_kind,
+        config_dir,
+        command,
+    } = args;
+
+    let profile_auth = &DummyProfileAuth;
+
+    match command.command {
         InitCommand::Init {} => {
             let profile_name = ProfileName::default(cli_kind);
 
-            let res =
-                init_profile(cli_kind, profile_name, &config_dir, profile_auth.as_ref()).await?;
+            let res = init_profile(cli_kind, profile_name, &config_dir, profile_auth).await?;
 
             if res.auth_required {
                 profile_auth.auth(&res.profile_name, &config_dir).await?
@@ -184,9 +206,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             Ok(GolemResult::Str("Profile created".to_string()))
         }
         InitCommand::Profile { subcommand } => {
-            subcommand
-                .handle(cli_kind, &config_dir, profile_auth.as_ref())
-                .await
+            subcommand.handle(cli_kind, &config_dir, profile_auth).await
         }
         InitCommand::Examples(golem_examples::cli::Command::New {
             name_or_language,
@@ -202,7 +222,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             language,
         }) => examples::process_list_examples(min_tier, language),
         InitCommand::Completion { generator } => {
-            print_completion.print_completion(generator);
+            GolemInitCommand::<ProfileAdd>::print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
         InitCommand::Diagnose { command } => {
@@ -214,14 +234,6 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         _ => Err(GolemError(
             "Your Golem CLI is not configured. Please run `golem-cli init`".to_owned(),
         )),
-    };
-
-    match res {
-        Ok(res) => {
-            res.print(cmd.format);
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
     }
 }
 
@@ -500,7 +512,7 @@ pub async fn init_profile(
     validate_profile_override(&profile_name, config_dir)?;
     let typ = match cli_kind {
         CliKind::Universal => select_type()?,
-        CliKind::Golem => select_oss_type()?,
+        CliKind::Oss => select_oss_type()?,
         CliKind::Cloud => ProfileType::Cloud,
     };
 

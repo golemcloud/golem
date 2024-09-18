@@ -1,5 +1,6 @@
 use crate::api_definition::{golem_def, make_golem_file, make_shopping_cart_component};
 use crate::cli::{Cli, CliLive};
+use assert2::assert;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};

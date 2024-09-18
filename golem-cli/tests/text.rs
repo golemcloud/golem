@@ -3,10 +3,12 @@ use crate::api_definition::{
 };
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_component;
+use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
-use golem_common::uri::oss::urn::WorkerUrn;
+use golem_common::model::WorkerId;
+use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
 use libtest_mimic::{Failed, Trial};
@@ -143,7 +145,7 @@ fn text_component_add(
     let component_name = format!("{name} text component add");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component_res = cli.with_format(Format::Text).run_string(&[
+    let res = cli.with_format(Format::Text).run_string(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -151,27 +153,11 @@ fn text_component_add(
         env_service.to_str().unwrap(),
     ])?;
 
-    let lines = component_res.lines().collect::<Vec<_>>();
-
-    let regex_header = Regex::new(
-        "New component created with URN ([^ ]+), version 0, and size of ([0-9]+) bytes.",
-    )
-    .unwrap();
-    assert!(regex_header.is_match(lines.first().unwrap()));
-
-    assert_eq!(
-        *lines.get(1).unwrap(),
-        format!("Component name: {component_name}.")
-    );
-    assert_eq!(*lines.get(2).unwrap(), "Exports:");
-    assert_eq!(
-        *lines.get(3).unwrap(),
-        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
-    );
-    assert_eq!(
-        *lines.get(4).unwrap(),
-        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
-    );
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Added new component {component_name}$")
+    ));
+    assert_component_fields(&res, None, &component_name, Some(0));
 
     Ok(())
 }
@@ -194,7 +180,7 @@ fn text_component_update(
         env_service.to_str().unwrap(),
     ])?;
 
-    let update_res = cli.with_format(Format::Text).run_string(&[
+    let res = cli.with_format(Format::Text).run_string(&[
         "component",
         "update",
         &cfg.arg('C', "component"),
@@ -202,27 +188,15 @@ fn text_component_update(
         env_service.to_str().unwrap(),
     ])?;
 
-    let lines = update_res.lines().collect::<Vec<_>>();
-
-    assert_eq!(
-        *lines.first().unwrap(),
-        format!(
-            "Updated component with URN {}. New version: 1. Component size is 71828 bytes.",
-            component.component_urn
-        )
-    );
-    assert_eq!(
-        *lines.get(1).unwrap(),
-        format!("Component name: {component_name}.")
-    );
-    assert_eq!(*lines.get(2).unwrap(), "Exports:");
-    assert_eq!(
-        *lines.get(3).unwrap(),
-        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
-    );
-    assert_eq!(
-        *lines.get(4).unwrap(),
-        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Updated component {component_name} to version 1$")
+    ));
+    assert_component_fields(
+        &res,
+        Some(component.component_urn),
+        &component_name,
+        Some(1),
     );
 
     Ok(())
@@ -246,34 +220,22 @@ fn text_component_get(
         env_service.to_str().unwrap(),
     ])?;
 
-    let get_res = cli.with_format(Format::Text).run_string(&[
+    let res = cli.with_format(Format::Text).run_string(&[
         "component",
         "get",
         &cfg.arg('c', "component-name"),
         &component_name,
     ])?;
 
-    let lines = get_res.lines().collect::<Vec<_>>();
-
-    assert_eq!(
-        *lines.first().unwrap(),
-        format!(
-            "Component with URN {}. Version: 0. Component size is 71828 bytes.",
-            component.component_urn
-        )
-    );
-    assert_eq!(
-        *lines.get(1).unwrap(),
-        format!("Component name: {component_name}.")
-    );
-    assert_eq!(*lines.get(2).unwrap(), "Exports:");
-    assert_eq!(
-        *lines.get(3).unwrap(),
-        "\tgolem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
-    );
-    assert_eq!(
-        *lines.get(4).unwrap(),
-        "\tgolem:it/api.{get-arguments}() -> result<list<string>, string>"
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Got metadata for component {component_name}$")
+    ));
+    assert_component_fields(
+        &res,
+        Some(component.component_urn),
+        &component_name,
+        Some(0),
     );
 
     Ok(())
@@ -341,21 +303,31 @@ fn text_worker_add(
         &component_urn.to_string(),
     ])?;
 
-    let regex_res =
-        Regex::new("New worker created for component ([^ ]+), with name ([^ ]+).\n").unwrap();
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Added worker {}$", worker_name),
+    ));
 
-    let matched = regex_res.captures(&res);
-
-    assert!(matched.is_some());
-
-    assert_eq!(
-        matched.as_ref().unwrap().get(1).unwrap().as_str(),
-        component_urn.to_string()
-    );
-    assert_eq!(
-        matched.as_ref().unwrap().get(2).unwrap().as_str(),
-        worker_name
-    );
+    assert!(regex_contains(
+        &res,
+        &format!(
+            "(?m)^Worker URN:.+{}$",
+            WorkerUrn {
+                id: WorkerId {
+                    component_id: component_urn.id.clone(),
+                    worker_name: worker_name.clone()
+                }
+            }
+        ),
+    ));
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Component URN:.+{}$", component_urn),
+    ));
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Worker name:.+{}$", worker_name),
+    ));
 
     Ok(())
 }
@@ -433,19 +405,40 @@ fn text_worker_get(
         &component_urn.to_string(),
     ])?;
 
-    let expected = formatdoc!(
-        r#"
-            Worker "{worker_name}" of component {component_urn} with component version 0.
-            URN: urn:worker:{}/{worker_name}.
-            Status: Idle.
-            Startup arguments: .
-            Environment variables: .
-            Retry count: 0.
-            "#,
-        component_urn.id.0
-    );
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Got metadata for worker {}$", worker_name),
+    ));
 
-    assert_eq!(res, expected);
+    assert!(regex_contains(
+        &res,
+        &format!(
+            "(?m)^Worker URN:.+{}$",
+            WorkerUrn {
+                id: WorkerId {
+                    component_id: component_urn.id.clone(),
+                    worker_name: worker_name.clone()
+                }
+            }
+        ),
+    ));
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Component URN:.+{}$", component_urn),
+    ));
+    assert!(regex_contains(
+        &res,
+        &format!("(?m)^Worker name:.+{}$", worker_name),
+    ));
+    assert!(regex_contains(&res, "(?m)^Component version:.+0$"));
+    assert!(regex_contains(&res, "(?m)^Created at:.+$"));
+    assert!(regex_contains(&res, "(?m)^Component size:.+[0-9]+.*$"));
+    assert!(regex_contains(
+        &res,
+        "(?m)^Total linear memory size:.+[0-9]+.*$"
+    ));
+    assert!(regex_contains(&res, "(?m)^Status:.+Idle$"));
+    assert!(regex_contains(&res, "(?m)^Retry count:.+0$"));
 
     Ok(())
 }
@@ -481,18 +474,17 @@ fn text_worker_list(
         "true",
     ])?;
 
-    let expected =
-        formatdoc!(
-            "
-            +----------------------------------------------------+-----------------------+--------+-------------------+
-            | Component                                          | Name                  | Status | Component version |
-            +----------------------------------------------------+-----------------------+--------+-------------------+
-            | {component_urn} | {worker_name} |   Idle |                 0 |
-            +----------------------------------------------------+-----------------------+--------+-------------------+
-            "
-        );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(&res, r"\|[^|]+Component[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+Name[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+version[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+Status[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+Create at[^|]+|"));
+    assert!(regex_contains(
+        &res,
+        &format!(r"\|\W+{}\W+|", component_urn)
+    ));
+    assert!(regex_contains(&res, &format!(r"\|\W+{}\W+|", worker_name)));
+    assert!(regex_contains(&res, r"\|\W+Idle\W+|"));
 
     Ok(())
 }
@@ -511,27 +503,13 @@ fn text_example_list(
         "zig",
     ])?;
 
-    let expected = formatdoc!(
-        "
-            +---------------------+----------+-------+----------------------+
-            | Name                | Language | Tier  | Description          |
-            +---------------------+----------+-------+----------------------+
-            | zig-default         | Zig      | tier1 | A stateful Golem     |
-            |                     |          |       | worker written in    |
-            |                     |          |       | Zig with full access |
-            |                     |          |       | to WASI and the      |
-            |                     |          |       | Golem runtime APIs   |
-            +---------------------+----------+-------+----------------------+
-            | zig-default-minimal | Zig      | tier1 | A simple stateful    |
-            |                     |          |       | Golem worker written |
-            |                     |          |       | in Zig with no       |
-            |                     |          |       | dependencies on      |
-            |                     |          |       | external services    |
-            +---------------------+----------+-------+----------------------+
-            "
-    );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(&res, r"\|[^|]+Name[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+Language[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+Tier[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+Description[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+zig-default[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+zig[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]+zig-default-minimal[^|]+|"));
 
     Ok(())
 }
@@ -555,21 +533,14 @@ fn text_api_definition_import(
         path.to_str().unwrap(),
     ])?;
 
-    let component_end = &component_id[component_id.len() - 12..];
-
-    let expected = formatdoc!(
-        "
-            API Definition imported with ID {component_name} and version 0.1.0.
-            Routes:
-            +--------+------------------------------+---------------+-------------+
-            | Method | Path                         | Component URN | Worker Name |
-            +--------+------------------------------+---------------+-------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
-            +--------+------------------------------+---------------+-------------+
-            "
-    );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(
+        &res,
+        &format!(
+            r"(?m)^Imported API definition {} with version {}",
+            component_name, "0.1.0"
+        )
+    ));
+    assert_api_definition_fields(&res, &component_name);
 
     Ok(())
 }
@@ -593,21 +564,14 @@ fn text_api_definition_add(
         path.to_str().unwrap(),
     ])?;
 
-    let component_end = &component_id[component_id.len() - 12..];
-
-    let expected = formatdoc!(
-        "
-            API Definition created with ID {component_name} and version 0.1.0.
-            Routes:
-            +--------+------------------------------+---------------+-------------+
-            | Method | Path                         | Component URN | Worker Name |
-            +--------+------------------------------+---------------+-------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
-            +--------+------------------------------+---------------+-------------+
-            "
-    );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(
+        &res,
+        &format!(
+            r"(?m)^Added API definition {} with version {}",
+            component_name, "0.1.0"
+        )
+    ));
+    assert_api_definition_fields(&res, &component_name);
 
     Ok(())
 }
@@ -633,21 +597,14 @@ fn text_api_definition_update(
         path.to_str().unwrap(),
     ])?;
 
-    let component_end = &component_id[component_id.len() - 12..];
-
-    let expected = formatdoc!(
-        "
-            API Definition updated with ID {component_name} and version 0.1.0.
-            Routes:
-            +--------+------------------------------+---------------+-------------+
-            | Method | Path                         | Component URN | Worker Name |
-            +--------+------------------------------+---------------+-------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
-            +--------+------------------------------+---------------+-------------+
-            "
-    );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(
+        &res,
+        &format!(
+            r"(?m)^Updated API definition {} with version {}",
+            component_name, "0.1.0"
+        )
+    ));
+    assert_api_definition_fields(&res, &component_name);
 
     Ok(())
 }
@@ -676,17 +633,14 @@ fn text_api_definition_list(
         &component_name,
     ])?;
 
-    let expected = formatdoc!(
-        "
-            +-----------------------------------+---------+--------------+
-            | ID                                | Version | Routes count |
-            +-----------------------------------+---------+--------------+
-            | {component_name} | 0.1.0   |            1 |
-            +-----------------------------------+---------+--------------+
-            "
-    );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(&res, r"\|[^|]ID[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]Version[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]Routes count[^|]+|"));
+    assert!(regex_contains(&res, r"\|[^|]0.1.0[^|]+|"));
+    assert!(regex_contains(
+        &res,
+        &format!(r"\|[^|]{}[^|]+|", component_name)
+    ));
 
     Ok(())
 }
@@ -718,21 +672,14 @@ fn text_api_definition_get(
         "0.1.0",
     ])?;
 
-    let component_end = &component_id[component_id.len() - 12..];
-
-    let expected = formatdoc!(
-        "
-            API Definition with ID {component_name} and version 0.1.0.
-            Routes:
-            +--------+------------------------------+---------------+-------------+
-            | Method | Path                         | Component URN | Worker Name |
-            +--------+------------------------------+---------------+-------------+
-            | Get    | /{{user-id}}/get-cart-contents | *{component_end} | foo         |
-            +--------+------------------------------+---------------+-------------+
-            "
-    );
-
-    assert_eq!(strip_ansi_escapes::strip_str(res), expected);
+    assert!(regex_contains(
+        &res,
+        &format!(
+            r"(?m)^Got metadata for API definition {} version {}",
+            component_name, "0.1.0"
+        )
+    ));
+    assert_api_definition_fields(&res, &component_name);
 
     Ok(())
 }
@@ -869,4 +816,61 @@ fn text_api_deployment_list(
     assert_eq!(strip_ansi_escapes::strip_str(res), expected);
 
     Ok(())
+}
+
+fn regex_contains(s: &str, regex: &str) -> bool {
+    Regex::new(regex)
+        .unwrap_or_else(|err| panic!("Failed to parse regex: {}: {}", regex, err))
+        .is_match(s)
+}
+
+fn assert_component_fields(
+    res: &str,
+    component_urn: Option<ComponentUrn>,
+    component_name: &str,
+    component_version: Option<u64>,
+) {
+    match component_urn {
+        Some(component_urn) => {
+            assert!(regex_contains(
+                res,
+                &format!("(?m)^Component URN:.+{}$", component_urn)
+            ));
+        }
+        None => {
+            assert!(regex_contains(res, "(?m)^Component URN:.+$"));
+        }
+    }
+
+    assert!(regex_contains(
+        res,
+        &format!("(?m)^Component name:.+{}$", component_name)
+    ));
+    match component_version {
+        Some(component_version) => {
+            assert!(regex_contains(
+                res,
+                &format!("(?m)^Component version:.*{}$", component_version)
+            ));
+        }
+        None => {
+            assert!(regex_contains(res, "(?m)^Component version:.*[0-9]+$"));
+        }
+    }
+    assert!(regex_contains(res, "(?m)^Component size:.*[0-9]+.+$"));
+    assert!(regex_contains(res, "(?m)^Created at:.+$"));
+    assert!(res.contains(
+        "golem:it/api.{get-environment}() -> result<list<tuple<string, string>>, string>"
+    ));
+    assert!(res.contains("golem:it/api.{get-arguments}() -> result<list<string>, string>"));
+}
+
+fn assert_api_definition_fields(res: &str, id: &str) {
+    assert!(regex_contains(res, &format!(r"(?m)^ID:.+{}$", id)));
+    assert!(regex_contains(res, r"(?m)^Version:.+0.1.0$"));
+    assert!(regex_contains(res, "(?m)^Created at:.+$"));
+    assert!(regex_contains(res, "(?m)^Routes:$"));
+    assert!(regex_contains(res, r"\|[^|]Method[^|]+|"));
+    assert!(regex_contains(res, r"\|[^|]Path[^|]+|"));
+    assert!(regex_contains(res, r"\|[^|]Component URN[^|]+|"));
 }

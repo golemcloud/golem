@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::golem_version;
+
 pub mod api;
 pub mod config;
 pub mod grpcapi;
 pub mod metrics;
 pub mod service;
+
+const VERSION: &str = golem_version!();

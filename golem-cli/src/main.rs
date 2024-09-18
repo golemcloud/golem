@@ -16,23 +16,16 @@ extern crate derive_more;
 
 use clap::Parser;
 use golem_cli::command::profile::OssProfileAdd;
-use golem_cli::config::{Config, NamedProfile, Profile};
-use golem_cli::init::{CliKind, DummyProfileAuth, GolemInitCommand};
+use golem_cli::config::{get_config_dir, Config, NamedProfile, Profile};
+use golem_cli::init::{CliKind, GolemInitCommand};
 use golem_cli::oss::command::GolemOssCommand;
-use golem_cli::oss::completion::PrintOssCompletion;
-use golem_cli::{init_tracing, oss};
+use golem_cli::{oss, run_main, ConfiguredMainArgs, InitMainArgs};
 use indoc::eprintdoc;
-use std::path::PathBuf;
-use tracing::info;
+use std::process::ExitCode;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let home = dirs::home_dir().unwrap();
-    let default_conf_dir = home.join(".golem");
-    let config_dir = std::env::var("GOLEM_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or(default_conf_dir);
-
-    let cli_kind = CliKind::Golem;
+fn main() -> ExitCode {
+    let config_dir = get_config_dir();
+    let cli_kind = CliKind::Oss;
 
     let oss_profile = match Config::get_active_profile(cli_kind, &config_dir) {
         Some(NamedProfile {
@@ -59,40 +52,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
-    if let Some((name, p)) = oss_profile {
-        let command = GolemOssCommand::<OssProfileAdd>::parse();
-
-        init_tracing(&command.verbosity);
-        info!("Golem CLI with profile: {}", name);
-
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(oss::main::async_main(
-                command,
-                p,
+    if let Some((profile_name, profile)) = oss_profile {
+        run_main(
+            oss::main::async_main,
+            ConfiguredMainArgs {
                 cli_kind,
                 config_dir,
-                Box::new(PrintOssCompletion()),
-                Box::new(DummyProfileAuth {}),
-            ))
+                profile_name,
+                profile,
+                command: GolemOssCommand::<OssProfileAdd>::parse(),
+            },
+        )
     } else {
-        let command = GolemInitCommand::<OssProfileAdd>::parse();
-
-        init_tracing(&command.verbosity);
-        info!("Golem Init CLI");
-
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(golem_cli::init::async_main(
-                command,
+        run_main(
+            golem_cli::init::async_main,
+            InitMainArgs {
                 cli_kind,
                 config_dir,
-                Box::new(DummyProfileAuth {}),
-                Box::new(PrintOssCompletion()),
-            ))
+                command: GolemInitCommand::<OssProfileAdd>::parse(),
+            },
+        )
     }
 }
