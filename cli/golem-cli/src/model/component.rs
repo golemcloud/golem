@@ -2,6 +2,7 @@ use crate::cloud::ProjectId;
 use crate::model::conversions::analysed_function_client_to_model;
 use crate::model::wave::function_wave_compatible;
 use crate::model::GolemError;
+use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedInstance,
     AnalysedResourceMode, AnalysedType, ComponentMetadata, ComponentType, NameOptionTypePair,
@@ -55,6 +56,7 @@ pub struct ComponentView {
     pub component_version: u64,
     pub component_name: String,
     pub component_size: u64,
+    pub created_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub project_id: Option<ProjectId>,
@@ -76,6 +78,7 @@ impl From<&Component> for ComponentView {
             component_version: value.versioned_component_id.version,
             component_name: value.component_name.to_string(),
             component_size: value.component_size,
+            created_at: value.created_at,
             project_id: value.project_id,
             exports: value
                 .metadata

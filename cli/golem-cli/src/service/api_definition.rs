@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::clients::api_definition::ApiDefinitionClient;
-use crate::model::text::{
-    ApiDefinitionAddRes, ApiDefinitionGetRes, ApiDefinitionImportRes, ApiDefinitionUpdateRes,
+use crate::model::text::api_definition::{
+    ApiDefinitionAddView, ApiDefinitionGetView, ApiDefinitionImportView, ApiDefinitionUpdateView,
 };
 use crate::model::{
     ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult, PathBufOrStdin,
@@ -75,7 +75,7 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let definition = self.client.get(id, version, project).await?;
-        Ok(GolemResult::Ok(Box::new(ApiDefinitionGetRes(definition))))
+        Ok(GolemResult::Ok(Box::new(ApiDefinitionGetView(definition))))
     }
 
     async fn add(
@@ -84,7 +84,7 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let definition = self.client.create(definition, project).await?;
-        Ok(GolemResult::Ok(Box::new(ApiDefinitionAddRes(definition))))
+        Ok(GolemResult::Ok(Box::new(ApiDefinitionAddView(definition))))
     }
 
     async fn update(
@@ -93,7 +93,7 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let definition = self.client.update(definition, project).await?;
-        Ok(GolemResult::Ok(Box::new(ApiDefinitionUpdateRes(
+        Ok(GolemResult::Ok(Box::new(ApiDefinitionUpdateView(
             definition,
         ))))
     }
@@ -104,7 +104,7 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         project: &Self::ProjectContext,
     ) -> Result<GolemResult, GolemError> {
         let definition = self.client.import(definition, project).await?;
-        Ok(GolemResult::Ok(Box::new(ApiDefinitionImportRes(
+        Ok(GolemResult::Ok(Box::new(ApiDefinitionImportView(
             definition,
         ))))
     }

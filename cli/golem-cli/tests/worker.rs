@@ -1,5 +1,6 @@
 use crate::cli::{Cli, CliConfig, CliLive};
 use crate::RefKind;
+use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
 use golem_client::model::UpdateRecord;
@@ -779,7 +780,7 @@ fn worker_list(
     }
 
     for worker_urn in worker_urns {
-        let result: WorkersMetadataResponseView = cli.run(&[
+        let result: WorkersMetadataResponseView = cli.run_trimmed(&[
             "worker",
             "list",
             &component_ref_key(cfg, ref_kind),
@@ -796,7 +797,7 @@ fn worker_list(
         assert!(result.cursor.is_none());
     }
 
-    let result: WorkersMetadataResponseView = cli.run(&[
+    let result: WorkersMetadataResponseView = cli.run_trimmed(&[
         "worker",
         "list",
         &component_ref_key(cfg, ref_kind),
@@ -817,7 +818,7 @@ fn worker_list(
         result.cursor.as_ref().unwrap().layer,
         result.cursor.as_ref().unwrap().cursor
     );
-    let result2: WorkersMetadataResponseView = cli.run(&[
+    let result2: WorkersMetadataResponseView = cli.run_trimmed(&[
         "worker",
         "list",
         &component_ref_key(cfg, ref_kind),
@@ -836,7 +837,7 @@ fn worker_list(
 
     if let Some(cursor2) = result2.cursor {
         let cursor2 = format!("{}/{}", cursor2.layer, cursor2.cursor);
-        let result3: WorkersMetadataResponseView = cli.run(&[
+        let result3: WorkersMetadataResponseView = cli.run_trimmed(&[
             "worker",
             "list",
             &component_ref_key(cfg, ref_kind),
@@ -876,7 +877,7 @@ fn worker_update(
     let worker_name = format!("{name}_worker_update");
 
     let workers_list = || -> Result<WorkersMetadataResponseView, Failed> {
-        cli.run(&[
+        cli.run_trimmed(&[
             "worker",
             "list",
             &component_ref_key(cfg, ref_kind),

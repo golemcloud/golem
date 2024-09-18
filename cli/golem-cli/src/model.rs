@@ -27,10 +27,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::cloud::AccountId;
-use crate::model::text::TextFormat;
+use crate::model::text::fmt::TextFormat;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Error, FromArgMatches};
+use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
 use golem_common::model::{ComponentId, WorkerId};
@@ -237,6 +238,10 @@ impl FromStr for Format {
             }
         }
     }
+}
+
+pub trait HasFormatConfig {
+    fn format(&self) -> Option<Format>;
 }
 
 impl FromArgMatches for ComponentUriArg {
@@ -656,4 +661,8 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
             created_at: value.created_at,
         }
     }
+}
+
+pub trait HasVerbosity {
+    fn verbosity(&self) -> Verbosity;
 }

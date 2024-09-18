@@ -17,10 +17,13 @@ use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
 use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
+use crate::completion;
+use crate::completion::PrintCompletion;
 use crate::diagnose;
-use crate::model::{ComponentUriArg, Format};
+use crate::model::{ComponentUriArg, Format, HasFormatConfig, HasVerbosity};
 use crate::oss::model::OssContext;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
 use golem_common::uri::oss::uri::ResourceUri;
 
@@ -102,7 +105,7 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version = option_env ! ("VERSION").unwrap_or(env ! ("CARGO_PKG_VERSION")), about, long_about, rename_all = "kebab-case")]
+#[command(author, version = crate::VERSION, about, long_about, rename_all = "kebab-case")]
 /// Command line interface for OSS version of Golem.
 pub struct GolemOssCommand<ProfileAdd: clap::Args> {
     #[command(flatten)]
@@ -113,4 +116,22 @@ pub struct GolemOssCommand<ProfileAdd: clap::Args> {
 
     #[command(subcommand)]
     pub command: OssCommand<ProfileAdd>,
+}
+
+impl<ProfileAdd: clap::Args> HasFormatConfig for GolemOssCommand<ProfileAdd> {
+    fn format(&self) -> Option<Format> {
+        self.format
+    }
+}
+
+impl<ProfileAdd: clap::Args> HasVerbosity for GolemOssCommand<ProfileAdd> {
+    fn verbosity(&self) -> Verbosity {
+        self.verbosity.clone()
+    }
+}
+
+impl<ProfileAdd: clap::Args> PrintCompletion for GolemOssCommand<ProfileAdd> {
+    fn print_completion(shell: Shell) {
+        completion::print_completion(GolemOssCommand::<ProfileAdd>::command(), shell)
+    }
 }

@@ -14,7 +14,7 @@
 
 use crate::clients::component::ComponentClient;
 use crate::model::component::{Component, ComponentView};
-use crate::model::text::{ComponentAddView, ComponentGetView, ComponentUpdateView};
+use crate::model::text::component::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
 use golem_client::model::ComponentType;

@@ -14,10 +14,8 @@
 
 use crate::cloud::CloudAuthenticationConfig;
 use crate::init::CliKind;
-use crate::model::text::TextFormat;
-use crate::model::{Format, GolemError};
+use crate::model::{Format, GolemError, HasFormatConfig};
 use derive_more::FromStr;
-use indoc::printdoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -28,6 +26,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
 use url::Url;
+
+pub fn get_config_dir() -> PathBuf {
+    let home = dirs::home_dir().unwrap();
+    let default_conf_dir = home.join(".golem");
+
+    std::env::var("GOLEM_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or(default_conf_dir)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -50,7 +57,7 @@ impl Display for ProfileName {
 impl ProfileName {
     pub fn default(cli_kind: CliKind) -> ProfileName {
         match cli_kind {
-            CliKind::Universal | CliKind::Golem => ProfileName("default".to_string()),
+            CliKind::Universal | CliKind::Oss => ProfileName("default".to_string()),
             CliKind::Cloud => ProfileName("cloud_default".to_string()),
         }
     }
@@ -107,6 +114,12 @@ pub struct CloudProfile {
     pub auth: Option<CloudAuthenticationConfig>,
 }
 
+impl HasFormatConfig for CloudProfile {
+    fn format(&self) -> Option<Format> {
+        Some(self.config.default_format)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OssProfile {
     pub url: Url,
@@ -118,21 +131,16 @@ pub struct OssProfile {
     pub config: ProfileConfig,
 }
 
+impl HasFormatConfig for OssProfile {
+    fn format(&self) -> Option<Format> {
+        Some(self.config.default_format)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
 pub struct ProfileConfig {
     #[serde(default)]
     pub default_format: Format,
-}
-
-impl TextFormat for ProfileConfig {
-    fn print(&self) {
-        printdoc!(
-            "
-            Default output format: {}
-            ",
-            self.default_format
-        )
-    }
 }
 
 impl Config {
@@ -191,7 +199,7 @@ impl Config {
                     }
                 }
                 Profile::GolemCloud(_) => {
-                    if cli_kind == CliKind::Golem {
+                    if cli_kind == CliKind::Oss {
                         return Err(GolemError(format!("Profile {profile_name} is a Cloud profile. Use `golem-cloud-cli` instead of `golem-cli` for this profile. You can also install universal version of `golem-cli` using `cargo install golem-cloud-cli --features universal`")));
                     }
                 }
@@ -204,7 +212,7 @@ impl Config {
         }
 
         match cli_kind {
-            CliKind::Universal | CliKind::Golem => config.active_profile = Some(profile_name),
+            CliKind::Universal | CliKind::Oss => config.active_profile = Some(profile_name),
             CliKind::Cloud => config.active_cloud_profile = Some(profile_name),
         }
 
@@ -217,7 +225,7 @@ impl Config {
         let mut config = Self::read_from_file(config_dir);
 
         let name = match cli_kind {
-            CliKind::Universal | CliKind::Golem => config
+            CliKind::Universal | CliKind::Oss => config
                 .active_profile
                 .unwrap_or_else(|| ProfileName::default(cli_kind)),
             CliKind::Cloud => config
