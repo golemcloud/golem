@@ -1,5 +1,6 @@
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_component_from_file;
+use assert2::assert;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
 use golem_client::model::{

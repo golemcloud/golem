@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::cli::{Cli, CliLive};
+use assert2::assert;
 use golem_cli::command::profile::{ProfileType, ProfileView};
 use golem_cli::config::{ProfileConfig, ProfileName};
 use golem_cli::model::Format;

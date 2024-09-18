@@ -3,6 +3,7 @@ use crate::api_definition::{
 };
 use crate::cli::{Cli, CliLive};
 use crate::worker::make_component;
+use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
