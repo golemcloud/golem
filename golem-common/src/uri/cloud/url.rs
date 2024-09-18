@@ -1,7 +1,7 @@
 use crate::model::ComponentVersion;
 use crate::uri::cloud::{ACCOUNT_TYPE_NAME, PROJECT_TYPE_NAME};
 use crate::uri::{
-    try_from_golem_url, urlencode, GolemUrl, GolemUrlTransformError, TypedGolemUrl,
+    try_from_golem_url, urldecode, urlencode, GolemUrl, GolemUrlTransformError, TypedGolemUrl,
     API_DEFINITION_TYPE_NAME, API_DEPLOYMENT_TYPE_NAME, COMPONENT_TYPE_NAME, WORKER_TYPE_NAME,
 };
 use crate::url_from_into;
@@ -272,7 +272,7 @@ url_from_into!(ComponentOrVersionUrl);
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WorkerUrl {
     pub component_name: String,
-    pub worker_name: String,
+    pub worker_name: Option<String>,
     pub project: Option<ProjectUrl>,
 }
 
@@ -299,20 +299,42 @@ impl TypedGolemUrl for WorkerUrl {
     where
         Self: Sized,
     {
-        let (component_name, worker_name) = Self::expect_path2(path)?;
+        let path = path
+            .strip_prefix('/')
+            .ok_or(Self::invalid_path("path is not started with '/'"))?;
+        let segments = path.split('/').collect::<Vec<_>>();
 
-        let project = Self::expect_project_query(query)?;
+        if segments.len() != 1 && segments.len() != 2 {
+            Err(Self::invalid_path(format!(
+                "1 or 2 segments expected, but got {} segments",
+                segments.len()
+            )))
+        } else {
+            let project = Self::expect_project_query(query)?;
 
-        Ok(Self {
-            component_name,
-            worker_name,
-            project,
-        })
+            let component_name = urldecode(segments[0]);
+            if segments.len() == 2 {
+                Ok(Self {
+                    component_name,
+                    worker_name: Some(urldecode(segments[1])),
+                    project,
+                })
+            } else {
+                Ok(Self {
+                    component_name,
+                    worker_name: None,
+                    project,
+                })
+            }
+        }
     }
 
     fn to_parts(&self) -> (String, Option<String>) {
         (
-            Self::make_path2(&self.component_name, &self.worker_name),
+            match &self.worker_name {
+                Some(worker_name) => Self::make_path2(&self.component_name, worker_name),
+                None => Self::make_path1(&self.component_name),
+            },
             to_project_query(&self.project),
         )
     }
@@ -795,7 +817,7 @@ mod tests {
     pub fn worker_url_to_url() {
         let typed = WorkerUrl {
             component_name: "my component".to_string(),
-            worker_name: "my worker".to_string(),
+            worker_name: Some("my worker".to_string()),
             project: None,
         };
 
@@ -804,12 +826,33 @@ mod tests {
     }
 
     #[test]
+    pub fn worker_url_to_url_no_name() {
+        let typed = WorkerUrl {
+            component_name: "my component".to_string(),
+            worker_name: None,
+            project: None,
+        };
+
+        let untyped: GolemUrl = typed.into();
+        assert_eq!(untyped.to_string(), "worker:///my+component");
+    }
+
+    #[test]
     pub fn worker_url_from_url() {
         let untyped = GolemUrl::from_str("worker:///my+component/my+worker").unwrap();
         let typed: WorkerUrl = untyped.try_into().unwrap();
 
         assert_eq!(typed.component_name, "my component");
-        assert_eq!(typed.worker_name, "my worker");
+        assert_eq!(typed.worker_name, Some("my worker".to_string()));
+    }
+
+    #[test]
+    pub fn worker_url_from_url_no_name() {
+        let untyped = GolemUrl::from_str("worker:///my+component").unwrap();
+        let typed: WorkerUrl = untyped.try_into().unwrap();
+
+        assert_eq!(typed.component_name, "my component");
+        assert_eq!(typed.worker_name, None);
     }
 
     #[test]
@@ -817,7 +860,15 @@ mod tests {
         let typed = WorkerUrl::from_str("worker:///my+component/my+worker").unwrap();
 
         assert_eq!(typed.component_name, "my component");
-        assert_eq!(typed.worker_name, "my worker");
+        assert_eq!(typed.worker_name, Some("my worker".to_string()));
+    }
+
+    #[test]
+    pub fn worker_url_from_str_no_name() {
+        let typed = WorkerUrl::from_str("worker:///my+component").unwrap();
+
+        assert_eq!(typed.component_name, "my component");
+        assert_eq!(typed.worker_name, None);
     }
 
     #[test]
@@ -856,7 +907,7 @@ mod tests {
     pub fn worker_or_function_url_to_url() {
         let typed_w = WorkerOrFunctionUrl::Worker(WorkerUrl {
             component_name: "my component".to_string(),
-            worker_name: "my worker".to_string(),
+            worker_name: Some("my worker".to_string()),
             project: None,
         });
         let typed_f = WorkerOrFunctionUrl::Function(WorkerFunctionUrl {

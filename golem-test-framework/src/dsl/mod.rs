@@ -351,7 +351,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
-                worker_id: Some(worker_id.clone().into()),
+                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
                 idempotency_key: None,
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
@@ -383,7 +383,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
-                worker_id: Some(worker_id.clone().into()),
+                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
@@ -458,7 +458,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let invoke_response = self
             .worker_service()
             .invoke_and_await(InvokeAndAwaitRequest {
-                worker_id: Some(worker_id.clone().into()),
+                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
@@ -495,7 +495,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let invoke_response = self
             .worker_service()
             .invoke_and_await_json(InvokeAndAwaitJsonRequest {
-                worker_id: Some(worker_id.clone().into()),
+                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
                 function: function_name.to_string(),
                 invoke_parameters: params,

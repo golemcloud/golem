@@ -252,7 +252,11 @@ pub struct WorkerConnectOptions {
 
 #[derive(Subcommand, Debug)]
 #[command()]
-pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
+pub enum WorkerSubcommand<
+    ComponentRef: clap::Args,
+    WorkerRef: clap::Args,
+    TargetWorkerRef: clap::Args,
+> {
     /// Creates a new idle worker
     #[command(alias = "start", alias = "create")]
     Add {
@@ -281,7 +285,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     #[command()]
     InvokeAndAwait {
         #[command(flatten)]
-        worker_ref: WorkerRef,
+        worker_ref: TargetWorkerRef,
 
         /// A pre-generated idempotency key
         #[arg(short = 'k', long)]
@@ -306,7 +310,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
     #[command()]
     Invoke {
         #[command(flatten)]
-        worker_ref: WorkerRef,
+        worker_ref: TargetWorkerRef,
 
         /// A pre-generated idempotency key
         #[arg(short = 'k', long)]
@@ -449,7 +453,9 @@ impl WorkerRefSplit<OssContext> for OssWorkerUriArg {
     }
 }
 
-impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<ComponentRef, WorkerRef> {
+impl<ComponentRef: clap::Args, WorkerRef: clap::Args, TargetWorkerRef: clap::Args>
+    WorkerSubcommand<ComponentRef, WorkerRef, TargetWorkerRef>
+{
     pub async fn handle<
         ProjectRef: Send + Sync + 'static,
         ProjectContext: Clone + Send + Sync + 'static,
@@ -462,6 +468,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
     where
         ComponentRef: ComponentRefSplit<ProjectRef>,
         WorkerRef: WorkerRefSplit<ProjectRef>,
+        TargetWorkerRef: WorkerRefSplit<ProjectRef>,
     {
         match self {
             WorkerSubcommand::Add {

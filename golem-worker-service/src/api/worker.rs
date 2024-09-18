@@ -130,7 +130,7 @@ impl WorkerApi {
     async fn invoke_and_await_function(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        worker_name: Path<Option<String>>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         params: Json<InvokeParameters>,
@@ -174,7 +174,7 @@ impl WorkerApi {
     async fn invoke_function(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        worker_name: Path<Option<String>>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         function: Query<String>,
         params: Json<InvokeParameters>,
