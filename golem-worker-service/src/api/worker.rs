@@ -1,6 +1,6 @@
 use crate::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
-use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter};
+use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -529,9 +529,13 @@ fn make_worker_id(
     component_id: ComponentId,
     worker_name: String,
 ) -> std::result::Result<WorkerId, WorkerApiBaseError> {
-    WorkerId::new(component_id, worker_name).map_err(|error| {
+    validate_worker_name(&worker_name).map_err(|error| {
         WorkerApiBaseError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid worker name: {error}")],
         }))
+    })?;
+    Ok(WorkerId {
+        component_id,
+        worker_name,
     })
 }

@@ -31,8 +31,9 @@ impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
 mod internal {
     use crate::empty_worker_metadata;
     use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
-    use golem_service_base::model::WorkerId;
 
+    use golem_common::model::WorkerId;
+    use golem_service_base::model::validate_worker_name;
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
     };
@@ -42,11 +43,15 @@ mod internal {
         default_executor: &UnauthorisedWorkerRequestExecutor,
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+        validate_worker_name(&worker_request_params.worker_name)?;
         let worker_name = worker_request_params.worker_name;
 
         let component_id = worker_request_params.component_id;
 
-        let worker_id = WorkerId::new(component_id.clone(), worker_name.clone())?;
+        let worker_id = WorkerId {
+            component_id: component_id.clone(),
+            worker_name: worker_name.clone(),
+        };
 
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",

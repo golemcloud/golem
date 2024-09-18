@@ -29,12 +29,10 @@ use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
-use golem_common::model::{Pod, ShardId};
+use golem_common::model::{Pod, ShardId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
-use golem_service_base::model::{
-    GolemError, GolemErrorInvalidShardId, GolemErrorUnknown, WorkerId,
-};
+use golem_service_base::model::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_service_base::routing_table::{HasRoutingTableService, RoutingTableError};
 
 use crate::service::worker::WorkerServiceError;
@@ -86,40 +84,8 @@ pub trait CallOnExecutor<Out: Send + 'static> {
     fn tracing_kind() -> &'static str;
 }
 
-// TODO; Delete the WorkerId in service-base in favour of WorkerId in golem-common
 #[async_trait]
 impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
-    type ResultOut = Out;
-
-    async fn call_on_worker_executor<F>(
-        &self,
-        context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
-        f: F,
-    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
-    where
-        F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
-            + Send
-            + Sync
-            + Clone
-            + 'static,
-    {
-        let worker_id = golem_common::model::WorkerId {
-            component_id: self.component_id.clone(),
-            worker_name: self.worker_name.to_string(),
-        };
-        worker_id.call_on_worker_executor(context, f).await
-    }
-
-    fn tracing_kind() -> &'static str {
-        "WorkerId"
-    }
-}
-
-#[async_trait]
-impl<Out: Send + 'static> CallOnExecutor<Out> for golem_common::model::WorkerId {
     type ResultOut = Out;
 
     async fn call_on_worker_executor<F>(

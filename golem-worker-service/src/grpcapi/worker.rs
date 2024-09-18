@@ -42,6 +42,7 @@ use golem_common::grpc::{
 use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::model::validate_worker_name;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::service::worker::ConnectWorkerStream;
 
@@ -459,7 +460,7 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        let worker_id = make_worker_id(component_id, request.name)?;
+        let worker_id = validated_worker_id(component_id, request.name)?;
 
         let worker = self
             .worker_service
@@ -473,14 +474,11 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok((
-            worker.into(),
-            latest_component.versioned_component_id.version,
-        ))
+        Ok((worker, latest_component.versioned_component_id.version))
     }
 
     async fn delete_worker(&self, request: DeleteWorkerRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
             .delete(
@@ -497,7 +495,7 @@ impl WorkerGrpcApi {
         &self,
         request: CompletePromiseRequest,
     ) -> Result<bool, GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let parameters = request
             .complete_parameters
@@ -521,7 +519,7 @@ impl WorkerGrpcApi {
         &self,
         request: GetWorkerMetadataRequest,
     ) -> Result<WorkerMetadata, GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let metadata = self
             .worker_service
@@ -575,7 +573,7 @@ impl WorkerGrpcApi {
         &self,
         request: InterruptWorkerRequest,
     ) -> Result<(), GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
             .interrupt(
@@ -590,7 +588,7 @@ impl WorkerGrpcApi {
     }
 
     async fn invoke(&self, request: InvokeRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -611,7 +609,7 @@ impl WorkerGrpcApi {
     }
 
     async fn invoke_json(&self, request: InvokeJsonRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
@@ -638,7 +636,7 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAndAwaitRequest,
     ) -> Result<InvokeResult, GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -663,7 +661,7 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAndAwaitJsonRequest,
     ) -> Result<String, GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
         let idempotency_key = request
@@ -695,7 +693,7 @@ impl WorkerGrpcApi {
     }
 
     async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
             .resume(
@@ -712,7 +710,7 @@ impl WorkerGrpcApi {
         &self,
         request: ConnectWorkerRequest,
     ) -> Result<ConnectWorkerStream, GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let stream = self
             .worker_service
             .connect(
@@ -726,7 +724,7 @@ impl WorkerGrpcApi {
     }
 
     async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = make_crate_worker_id(request.worker_id.clone())?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id.clone())?;
 
         self.worker_service
             .update(
@@ -742,23 +740,26 @@ impl WorkerGrpcApi {
     }
 }
 
-fn make_worker_id(
+fn validated_worker_id(
     component_id: golem_common::model::ComponentId,
     worker_name: String,
-) -> Result<golem_service_base::model::WorkerId, GrpcWorkerError> {
-    golem_service_base::model::WorkerId::new(component_id, worker_name)
-        .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))
+) -> Result<WorkerId, GrpcWorkerError> {
+    validate_worker_name(&worker_name)
+        .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
+    Ok(WorkerId {
+        component_id,
+        worker_name,
+    })
 }
 
-fn make_crate_worker_id(
+fn validate_protobuf_worker_id(
     worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
-) -> Result<golem_service_base::model::WorkerId, GrpcWorkerError> {
-    let result: golem_service_base::model::WorkerId = worker_id
-        .ok_or_else(|| bad_request_error("Missing worker id"))?
+) -> Result<WorkerId, GrpcWorkerError> {
+    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
+    let worker_id: WorkerId = worker_id
         .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid worker name: {e}")))?;
-
-    Ok(result)
+        .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
+    validated_worker_id(worker_id.component_id, worker_id.worker_name)
 }
 
 fn bad_request_error<T>(error: T) -> GrpcWorkerError

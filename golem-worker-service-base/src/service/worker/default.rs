@@ -35,13 +35,13 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, ScanCursor,
     Timestamp, WorkerFilter, WorkerStatus,
 };
-use golem_service_base::model::{
-    GolemErrorUnknown, PromiseId, ResourceLimits, WorkerId, WorkerMetadata,
-};
+use golem_common::model::{PromiseId, WorkerId};
+use golem_service_base::model::{GolemErrorUnknown, ResourceLimits, WorkerMetadata};
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
     model::{Component, GolemError},
@@ -292,7 +292,7 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream> {
         let worker_id = worker_id.clone();
-        let worker_id_err: golem_common::model::WorkerId = worker_id.clone().into();
+        let worker_id_err: golem_common::model::WorkerId = worker_id.clone();
         let stream = self
             .call_worker_executor(
                 worker_id.clone(),
@@ -420,7 +420,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal
+            WorkerServiceError::internal,
         ).await?;
 
         Ok(invoke_response)
@@ -480,7 +480,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal
+            WorkerServiceError::internal,
         ).await?;
 
         Ok(invoke_response)
@@ -589,7 +589,7 @@ where
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
-            oplog_idx: oplog_id,
+            oplog_idx: OplogIndex::from_u64(oplog_id),
         };
 
         let result = self
@@ -627,7 +627,7 @@ where
                         }
                     }
                 },
-                WorkerServiceError::internal
+                WorkerServiceError::internal,
             )
             .await?;
         Ok(result)
@@ -710,7 +710,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal
+            WorkerServiceError::internal,
         ).await?;
 
         Ok(metadata)
@@ -906,7 +906,7 @@ where
                     }
                 }).collect::<Result<Vec<_>, ResponseMapResult>>()
             },
-            WorkerServiceError::internal
+            WorkerServiceError::internal,
         ).await?;
 
         Ok(result.into_iter().flatten().collect())
@@ -1011,7 +1011,10 @@ where
         _metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId> {
-        Ok(WorkerId::new(ComponentId::new_v4(), "no-op".to_string()).unwrap())
+        Ok(WorkerId {
+            component_id: ComponentId::new_v4(),
+            worker_name: "no-op".to_string(),
+        })
     }
 
     async fn connect(

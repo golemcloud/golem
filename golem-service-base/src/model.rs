@@ -15,8 +15,8 @@
 use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter,
-    WorkerStatus,
+    ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
+    WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -105,108 +105,21 @@ impl std::fmt::Display for VersionedComponentId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct Empty {}
 
-// NOTE: different from golem_common::model::WorkerId because of field name annotations
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerId {
-    pub component_id: ComponentId,
-    pub worker_name: Id,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
-pub struct Id(String);
-
-impl TryFrom<String> for Id {
-    type Error = &'static str;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let _ = valid_id(value.as_str())?;
-        Ok(Self(value))
-    }
-}
-
-impl Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.clone())
-    }
-}
-
-impl WorkerId {
-    pub fn new(component_id: ComponentId, worker_name: String) -> Result<Self, &'static str> {
-        Ok(Self {
-            component_id,
-            worker_name: worker_name.try_into()?,
-        })
-    }
-}
-
-fn valid_id(identifier: &str) -> Result<&str, &'static str> {
-    let length = identifier.len();
+pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
+    let length = name.len();
     if !(1..=100).contains(&length) {
-        Err("Identifier must be between 1 and 100 characters")
-    } else if identifier.contains(' ') {
-        Err("Identifier must not contain spaces")
-    } else if !identifier
+        Err("Worker name must be between 1 and 100 characters")
+    } else if name.contains(' ') {
+        Err("Worker name must not contain spaces")
+    } else if !name
         .chars()
         .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
     {
-        Err("Identifier must contain only alphanumeric characters, underscores, and dashes")
-    } else if identifier.starts_with('-') {
-        Err("Identifier must not start with a dash")
+        Err("Worker name must contain only alphanumeric characters, underscores, and dashes")
+    } else if name.starts_with('-') {
+        Err("Worker name must not start with a dash")
     } else {
-        Ok(identifier)
-    }
-}
-
-impl From<golem_common::model::WorkerId> for WorkerId {
-    fn from(value: golem_common::model::WorkerId) -> Self {
-        Self {
-            component_id: value.component_id,
-            worker_name: Id(value.worker_name),
-        }
-    }
-}
-
-impl From<WorkerId> for golem_common::model::WorkerId {
-    fn from(value: WorkerId) -> Self {
-        Self {
-            component_id: value.component_id,
-            worker_name: value.worker_name.0,
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::WorkerId,
-    ) -> Result<Self, Self::Error> {
-        let worker_name: Id = value.name.try_into().map_err(String::from)?;
-
-        Ok(Self {
-            component_id: value
-                .component_id
-                .ok_or("Missing component_id")?
-                .try_into()?,
-            worker_name,
-        })
-    }
-}
-
-impl From<WorkerId> for golem_api_grpc::proto::golem::worker::WorkerId {
-    fn from(value: WorkerId) -> Self {
-        Self {
-            component_id: Some(value.component_id.into()),
-            name: value.worker_name.0,
-        }
-    }
-}
-
-impl std::fmt::Display for WorkerId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.component_id, self.worker_name.0)
+        Ok(())
     }
 }
 
@@ -224,45 +137,6 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
             oplog_idx: value.oplog_idx,
             data: value.data,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct PromiseId {
-    pub worker_id: WorkerId,
-    pub oplog_idx: u64,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::PromiseId> for PromiseId {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::PromiseId,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            worker_id: value
-                .worker_id
-                .ok_or("Missing field: worker_id")?
-                .try_into()?,
-            oplog_idx: value.oplog_idx,
-        })
-    }
-}
-
-impl From<PromiseId> for golem_api_grpc::proto::golem::worker::PromiseId {
-    fn from(value: PromiseId) -> Self {
-        Self {
-            worker_id: Some(value.worker_id.into()),
-            oplog_idx: value.oplog_idx,
-        }
-    }
-}
-
-impl Display for PromiseId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.worker_id, self.oplog_idx)
     }
 }
 
