@@ -146,7 +146,7 @@ fn top_level_get_component(
     let component_name = "top_level_get_component";
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -158,10 +158,10 @@ fn top_level_get_component(
         name: component.component_name.to_string(),
     };
 
-    let res: ComponentView = cli.run(&["get", &url.to_string()])?;
+    let res: ComponentView = cli.run_trimmed(&["get", &url.to_string()])?;
     assert_eq!(res, component);
 
-    let res: ComponentView = cli.run(&["get", &component.component_urn.to_string()])?;
+    let res: ComponentView = cli.run_trimmed(&["get", &component.component_urn.to_string()])?;
     assert_eq!(res, component);
 
     Ok(())
