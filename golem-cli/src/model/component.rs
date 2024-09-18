@@ -5,8 +5,8 @@ use crate::model::GolemError;
 use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedInstance,
-    AnalysedResourceMode, AnalysedType, ComponentMetadata, NameOptionTypePair, NameTypePair,
-    TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
+    AnalysedResourceMode, AnalysedType, ComponentMetadata, ComponentType, NameOptionTypePair,
+    NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
 };
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
@@ -20,6 +20,7 @@ pub struct Component {
     pub versioned_component_id: VersionedComponentId,
     pub component_name: String,
     pub component_size: u64,
+    pub component_type: ComponentType,
     pub metadata: ComponentMetadata,
     pub project_id: Option<ProjectId>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -31,6 +32,7 @@ impl From<golem_client::model::Component> for Component {
             versioned_component_id,
             component_name,
             component_size,
+            component_type,
             metadata,
             created_at,
         } = value;
@@ -39,6 +41,7 @@ impl From<golem_client::model::Component> for Component {
             versioned_component_id,
             component_name,
             component_size,
+            component_type: component_type.unwrap_or(ComponentType::Durable),
             metadata,
             project_id: None,
             created_at,

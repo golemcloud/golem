@@ -1598,7 +1598,9 @@ paths:
       tags:
       - Component
       summary: Create a new component
-      description: The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+      description: |-
+        The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+        If the component type is not specified, it will be considered as a `Durable` component.
       operationId: create_component
       requestBody:
         content:
@@ -1608,6 +1610,8 @@ paths:
               properties:
                 name:
                   type: string
+                component_type:
+                  $ref: '#/components/schemas/ComponentType'
                 component:
                   type: string
                   format: binary
@@ -1674,6 +1678,16 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: component_type
+        description: |-
+          Type of the new version of the component - if not specified, the type of the previous version
+          is used.
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/ComponentType'
+        explode: true
+        style: form
       requestBody:
         content:
           application/octet-stream:
@@ -3856,6 +3870,8 @@ components:
         createdAt:
           type: string
           format: date-time
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
       required:
       - versionedComponentId
       - componentName
@@ -3880,6 +3896,11 @@ components:
       - exports
       - producers
       - memories
+    ComponentType:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
     LinearMemory:
       type: object
       properties:

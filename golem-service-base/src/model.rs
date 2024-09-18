@@ -15,7 +15,8 @@
 use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{
-    ComponentId, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerStatus,
+    ComponentId, ComponentType, ComponentVersion, ScanCursor, ShardId, Timestamp, WorkerFilter,
+    WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem_openapi::{Enum, NewType, Object, Union};
@@ -1530,6 +1531,7 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub component_type: Option<ComponentType>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1538,9 +1540,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
     fn try_from(
         value: golem_api_grpc::proto::golem::component::Component,
     ) -> Result<Self, Self::Error> {
-        let created_at = match value.created_at {
+        let created_at = match &value.created_at {
             Some(t) => {
-                let t = SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp")?;
+                let t =
+                    SystemTime::try_from(t.clone()).map_err(|_| "Failed to convert timestamp")?;
                 Some(t.into())
             }
             None => None,
@@ -1548,12 +1551,22 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
+                .clone()
                 .ok_or("Missing versioned_component_id")?
                 .try_into()?,
-            component_name: ComponentName(value.component_name),
+            component_name: ComponentName(value.component_name.clone()),
             component_size: value.component_size,
-            metadata: value.metadata.ok_or("Missing metadata")?.try_into()?,
+            metadata: value
+                .metadata
+                .clone()
+                .ok_or("Missing metadata")?
+                .try_into()?,
             created_at,
+            component_type: if value.component_type.is_some() {
+                Some(value.component_type().into())
+            } else {
+                None
+            },
         })
     }
 }
@@ -1569,6 +1582,10 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             created_at: value
                 .created_at
                 .map(|t| prost_types::Timestamp::from(SystemTime::from(t))),
+            component_type: value.component_type.map(|c| {
+                let c: golem_api_grpc::proto::golem::component::ComponentType = c.into();
+                c.into()
+            }),
         }
     }
 }

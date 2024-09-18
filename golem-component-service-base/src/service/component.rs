@@ -20,7 +20,7 @@ use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 use tap::TapFallible;
 use tracing::{error, info};
 
@@ -65,6 +65,7 @@ impl From<RepoError> for ComponentError {
 pub fn create_new_component<Namespace>(
     component_id: &ComponentId,
     component_name: &ComponentName,
+    component_type: ComponentType,
     data: &[u8],
     namespace: &Namespace,
 ) -> Result<Component<Namespace>, ComponentProcessingError>
@@ -85,6 +86,7 @@ where
         metadata,
         created_at: Utc::now(),
         versioned_component_id,
+        component_type,
     })
 }
 
@@ -94,6 +96,7 @@ pub trait ComponentService<Namespace> {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
+        component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;
@@ -102,6 +105,7 @@ pub trait ComponentService<Namespace> {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
+        component_type: Option<ComponentType>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;
 
@@ -198,6 +202,7 @@ where
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
+        component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
@@ -207,7 +212,13 @@ where
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let component = create_new_component(component_id, component_name, &data, namespace)?;
+        let component = create_new_component(
+            component_id,
+            component_name,
+            component_type,
+            &data,
+            namespace,
+        )?;
 
         info!(namespace = %namespace,"Uploaded component - exports {:?}",component.metadata.exports
         );
@@ -234,6 +245,7 @@ where
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
+        component_type: Option<ComponentType>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
@@ -269,6 +281,7 @@ where
             component_size,
             metadata,
             created_at,
+            component_type: component_type.unwrap_or(next_component.component_type),
             ..next_component
         };
         let record = component
@@ -594,6 +607,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
+        component_type: ComponentType,
         _data: Vec<u8>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
@@ -611,6 +625,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
                 version: 0,
             },
             created_at: Utc::now(),
+            component_type,
         };
 
         Ok(fake_component)
@@ -620,6 +635,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
         &self,
         component_id: &ComponentId,
         _data: Vec<u8>,
+        _component_type: Option<ComponentType>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
         let fake_component = Component {
@@ -636,6 +652,7 @@ impl<Namespace: Display + Eq + Clone + Send + Sync> ComponentService<Namespace>
                 version: 0,
             },
             created_at: Utc::now(),
+            component_type: ComponentType::Durable,
         };
 
         Ok(fake_component)

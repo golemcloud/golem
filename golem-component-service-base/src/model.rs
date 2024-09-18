@@ -1,4 +1,5 @@
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::ComponentType;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -11,6 +12,7 @@ pub struct Component<Namespace> {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub component_type: ComponentType,
 }
 
 impl<Namespace> Component<Namespace> {
@@ -34,12 +36,15 @@ impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Compon
             component_size: value.component_size,
             metadata: value.metadata,
             created_at: Some(value.created_at),
+            component_type: Some(value.component_type),
         }
     }
 }
 
 impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::component::Component {
     fn from(value: Component<Namespace>) -> Self {
+        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+            value.component_type.clone().into();
         Self {
             versioned_component_id: Some(value.versioned_component_id.into()),
             component_name: value.component_name.0,
@@ -49,6 +54,7 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                 value.created_at,
             ))),
+            component_type: Some(component_type.into()),
         }
     }
 }
