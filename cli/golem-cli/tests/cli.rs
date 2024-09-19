@@ -1,5 +1,5 @@
-use crate::test_lib::TrimDateTime;
 use golem_cli::model::Format;
+use golem_common::model::trim_date::TrimDateTime;
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;

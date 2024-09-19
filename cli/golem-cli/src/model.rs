@@ -34,6 +34,7 @@ use clap::{Arg, ArgMatches, Error, FromArgMatches};
 use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
+use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
@@ -509,6 +510,15 @@ pub struct WorkerMetadataView {
     pub owned_resources: HashMap<String, golem_client::model::ResourceMetadata>,
 }
 
+impl TrimDateTime for WorkerMetadataView {
+    fn trim_date_time_ms(self) -> Self {
+        Self {
+            created_at: self.created_at.trim_date_time_ms(),
+            ..self
+        }
+    }
+}
+
 impl From<WorkerMetadata> for WorkerMetadataView {
     fn from(value: WorkerMetadata) -> Self {
         let WorkerMetadata {
@@ -611,6 +621,15 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
 pub struct WorkersMetadataResponseView {
     pub workers: Vec<WorkerMetadataView>,
     pub cursor: Option<ScanCursor>,
+}
+
+impl TrimDateTime for WorkersMetadataResponseView {
+    fn trim_date_time_ms(self) -> Self {
+        Self {
+            workers: self.workers.trim_date_time_ms(),
+            ..self
+        }
+    }
 }
 
 impl From<WorkersMetadataResponse> for WorkersMetadataResponseView {
