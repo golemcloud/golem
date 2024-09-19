@@ -15,16 +15,20 @@
 use combine::{
     between,
     parser::char::{char, spaces},
-    sep_by, Parser,
+    sep_by, ParseError, Parser,
 };
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
 
 pub fn tuple<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     spaces()
         .with(
@@ -40,9 +44,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use combine::stream::position;
     use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_empty_tuple() {

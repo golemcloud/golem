@@ -12,31 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser::char::alpha_num;
+use combine::parser::char::spaces;
 use combine::{
-    attempt, between,
+    attempt, choice, not_followed_by,
     parser::char::{char, string},
-    Parser,
+    ParseError, Parser,
 };
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
 
 pub fn option<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
-    attempt(string("some"))
-        .with(between(char('('), char(')'), rib_expr()))
-        .map(|expr| Expr::option(Some(expr)))
-        .or(attempt(string("none")).map(|_| Expr::option(None)))
-        .message("Invalid syntax for Option type")
+    choice((
+        attempt(string("some").skip(char('('))).with(
+            rib_expr()
+                .skip(spaces())
+                .skip(char(')'))
+                .map(|expr| Expr::option(Some(expr))),
+        ),
+        (attempt(string("none").skip(not_followed_by(alpha_num().or(char('-')).or(char('_')))))
+            .map(|_| Expr::option(None))),
+    ))
+    .message("Invalid syntax for Option type")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_some() {

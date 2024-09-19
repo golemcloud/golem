@@ -12,22 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::digit;
+use combine::parser::char::{alpha_num, char};
 use combine::{
-    attempt, many1, optional,
-    parser::char::{char as char_, letter, spaces, string},
-    Parser,
+    attempt, not_followed_by, optional,
+    parser::char::{char as char_, spaces, string},
+    ParseError, Parser,
 };
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::parser::identifier::identifier_text;
 use crate::parser::rib_expr::rib_expr;
 use crate::parser::type_name::parse_type_name;
 
 pub fn let_binding<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
-    attempt(string("let")).skip(spaces()).with(
+    attempt(
+        string("let").skip(not_followed_by(alpha_num().or(char('-')).or(char('_'))).skip(spaces())),
+    )
+    .with(
         (
             let_variable().skip(spaces()),
             optional(
@@ -52,18 +60,22 @@ where
 fn let_variable<Input>() -> impl Parser<Input, Output = String>
 where
     Input: combine::Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
-    many1(letter().or(digit()).or(char_('_')))
-        .map(|s: Vec<char>| s.into_iter().collect())
-        .message("Unable to parse binding variable")
+    identifier_text().message("Unable to parse binding variable")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use combine::EasyParser;
+
     use crate::parser::type_name::TypeName;
     use crate::{InferredType, VariableId};
-    use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_let_binding() {

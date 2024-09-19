@@ -12,38 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser;
 use combine::parser::char::spaces;
-use combine::{attempt, choice, Parser, Stream};
+use combine::{attempt, choice, ParseError, Parser, Stream};
+
+use internal::*;
 
 use crate::expr::Expr;
-use crate::parser::record::record;
-
+use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier;
-
-use combine::parser;
-use internal::*;
+use crate::parser::record::record;
 
 parser! {
     pub fn select_field[Input]()(Input) -> Expr
-    where [Input: Stream<Token = char>]
+    where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
     {
         select_field_()
     }
 }
 
 mod internal {
+    use combine::parser::char::{char, digit, letter};
+    use combine::{many1, ParseError};
+
+    use crate::parser::errors::RibParseError;
     use crate::parser::select_index::select_index;
 
     use super::*;
-    use combine::parser::char::char;
-
-    use crate::parser::identifier;
 
     // We make base_expr and the children strict enough carefully, to avoid
     // stack overflow without affecting the grammer.
     pub(crate) fn select_field_<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         spaces().with(
             (
@@ -84,9 +88,12 @@ mod internal {
         }
     }
 
-    pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
+    fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         choice((
             attempt(select_index()),
@@ -95,19 +102,31 @@ mod internal {
         ))
     }
 
-    pub(crate) fn field_name<Input>() -> impl Parser<Input, Output = String>
+    fn field_name<Input>() -> impl Parser<Input, Output = String>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
-        identifier::identifier_text().message("Unable to parse field name")
+        text().message("Unable to parse field name")
+    }
+
+    fn text<Input>() -> impl Parser<Input, Output = String>
+    where
+        Input: Stream<Token = char>,
+    {
+        many1(letter().or(digit()).or(char('_').or(char('-'))))
+            .map(|s: Vec<char>| s.into_iter().collect::<String>())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use combine::EasyParser;
+
     use crate::expr::*;
     use crate::parser::rib_expr::rib_expr;
-    use combine::EasyParser;
 
     #[test]
     fn test_select_field() {

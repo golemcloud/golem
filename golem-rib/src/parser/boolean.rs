@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::expr::Expr;
 use combine::parser::char::spaces;
 use combine::parser::char::string;
-use combine::{attempt, Parser};
+use combine::{attempt, ParseError, Parser};
+
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 
 pub fn boolean_literal<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     attempt(string("true"))
         .map(|_| Expr::boolean(true))
@@ -30,9 +35,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::parser::rib_expr::rib_expr;
     use combine::EasyParser;
+
+    use crate::parser::rib_expr::rib_expr;
+
+    use super::*;
 
     #[test]
     fn test_boolean_true() {

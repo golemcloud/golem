@@ -12,47 +12,58 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser::char::{alpha_num, char, spaces, string};
+use combine::{attempt, not_followed_by, sep_by1, ParseError, Parser};
+
 use match_arm::*;
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
-use combine::parser::char::{char, spaces, string};
-use combine::{attempt, sep_by1, Parser};
 
 pub fn pattern_match<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     let arms = sep_by1(match_arm().skip(spaces()), char(',').skip(spaces()));
 
-    attempt(string("match"))
-        .skip(spaces())
-        .with(
-            (
-                rib_expr().skip(spaces()),
-                char('{').skip(spaces()),
-                arms.skip(spaces()),
-                char('}').skip(spaces()),
-            )
-                .map(|(expr, _, arms, _)| Expr::pattern_match(expr, arms)),
+    attempt(
+        string("match")
+            .skip(not_followed_by(alpha_num().or(char('_')).or(char('-'))))
+            .skip(spaces()),
+    )
+    .with(
+        (
+            rib_expr().skip(spaces()),
+            char('{').skip(spaces()),
+            arms.skip(spaces()),
+            char('}').skip(spaces()),
         )
-        .message("Invalid syntax for pattern match")
+            .map(|(expr, _, arms, _)| Expr::pattern_match(expr, arms)),
+    )
+    .message("Invalid syntax for pattern match")
 }
 
 mod match_arm {
-    use combine::{parser::char::string, Parser};
-
     use combine::parser::char::spaces;
-
-    use super::arm_pattern::*;
+    use combine::{parser::char::string, ParseError, Parser};
 
     use crate::expr::MatchArm;
+    use crate::parser::errors::RibParseError;
     use crate::parser::rib_expr::rib_expr;
+
+    use super::arm_pattern::*;
 
     // RHS of a match arm
     pub(crate) fn match_arm<Input>() -> impl Parser<Input, Output = MatchArm>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         (
             //LHS
@@ -67,19 +78,21 @@ mod match_arm {
 
 // Keep the module structure same to avoid recursion related compiler errors
 mod arm_pattern {
-    use combine::{choice, parser, parser::char::char, Parser, Stream};
-
-    use crate::parser::pattern_match::internal::*;
-
-    use crate::expr::ArmPattern;
-
     use combine::attempt;
     use combine::parser::char::spaces;
+    use combine::{choice, parser, parser::char::char, ParseError, Parser, Stream};
+
+    use crate::expr::ArmPattern;
+    use crate::parser::errors::RibParseError;
+    use crate::parser::pattern_match::internal::*;
 
     // LHS of a match arm
     fn arm_pattern_<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         choice((
             attempt(arm_pattern_constructor()),
@@ -98,31 +111,34 @@ mod arm_pattern {
 
     parser! {
         pub(crate) fn arm_pattern[Input]()(Input) -> ArmPattern
-         where [Input: Stream<Token = char>]{
+         where [Input: Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]{
             arm_pattern_()
         }
     }
 }
 
 mod internal {
-    use combine::choice;
-    use combine::{parser::char::char as char_, Parser};
-
-    use crate::expr::ArmPattern;
-    use crate::parser::optional::option;
-    use crate::parser::result::result;
-    use crate::parser::rib_expr::rib_expr;
-
-    use crate::parser::pattern_match::arm_pattern::*;
     use combine::attempt;
     use combine::many1;
     use combine::parser::char::{char, digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
+    use combine::{choice, ParseError};
+    use combine::{parser::char::char as char_, Parser};
+
+    use crate::expr::ArmPattern;
+    use crate::parser::errors::RibParseError;
+    use crate::parser::optional::option;
+    use crate::parser::pattern_match::arm_pattern::*;
+    use crate::parser::result::result;
+    use crate::parser::rib_expr::rib_expr;
 
     pub(crate) fn arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         choice((
             attempt(option().map(|expr| ArmPattern::Literal(Box::new(expr)))),
@@ -135,6 +151,9 @@ mod internal {
     pub(crate) fn arm_pattern_literal<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         rib_expr().map(|lit| ArmPattern::Literal(Box::new(lit)))
     }
@@ -142,6 +161,9 @@ mod internal {
     pub(crate) fn alias_name<Input>() -> impl Parser<Input, Output = String>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         many1(letter().or(digit()).or(char_('_')))
             .map(|s: Vec<char>| s.into_iter().collect())
@@ -151,6 +173,9 @@ mod internal {
     fn custom_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         (
             constructor_type_name().skip(spaces()),
@@ -164,6 +189,9 @@ mod internal {
     fn tuple_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         (
             string("(").skip(spaces()),
@@ -176,6 +204,9 @@ mod internal {
     fn constructor_type_name<Input>() -> impl Parser<Input, Output = String>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         many1(letter().or(digit()).or(char_('_')).or(char('-')))
             .map(|s: Vec<char>| s.into_iter().collect())
@@ -185,12 +216,14 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use combine::stream::position;
+    use combine::EasyParser;
+
     use crate::expr::ArmPattern;
     use crate::expr::Expr;
     use crate::expr::MatchArm;
-    use combine::stream::position;
-    use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_simple_pattern_match() {
