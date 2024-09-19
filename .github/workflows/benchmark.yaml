@@ -19,6 +19,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           ref: ${{ steps.get-branch.outputs.branch }}
           submodules: recursive
       - name: Setup Rust
