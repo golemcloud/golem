@@ -37,8 +37,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
-          fetch-depth: "0"
       - name: Prepare
         run: |
           platform=${{ matrix.platform.platform }}
@@ -82,8 +83,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
-          fetch-depth: "0"
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -210,6 +212,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -241,6 +245,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -280,6 +286,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -307,6 +315,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -336,6 +346,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -365,6 +377,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -403,6 +417,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -457,6 +473,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          fetch-tags: true
           submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.rust-target }}
