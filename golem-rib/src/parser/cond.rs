@@ -12,17 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser::char::{alpha_num, char, spaces, string};
+use combine::{attempt, not_followed_by, ParseError, Parser};
+
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
-use combine::parser::char::{spaces, string};
-use combine::{attempt, Parser};
 
 pub fn conditional<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     // Use attempt only for the initial "if" to resolve ambiguity with identifiers
-    attempt(string("if").skip(spaces())).with(
+    attempt(
+        string("if")
+            .skip(not_followed_by(alpha_num().or(char('-')).or(char('_'))))
+            .skip(spaces()),
+    )
+    .with(
         (
             rib_expr().skip(spaces()),
             string("then").skip(spaces()),
@@ -36,8 +46,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_conditional() {

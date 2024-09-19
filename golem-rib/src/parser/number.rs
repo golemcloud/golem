@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser::char::{char, digit, spaces};
 use combine::{many1, optional, ParseError, Parser};
 
 use crate::expr::Expr;
-use combine::parser::char::{char, digit, spaces};
-
+use crate::parser::errors::RibParseError;
 use crate::parser::type_name::{parse_basic_type, TypeName};
 
 pub fn number<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     spaces()
         .with(
@@ -30,17 +33,20 @@ where
                 many1(digit().or(char('-')).or(char('.'))),
                 optional(parse_basic_type()),
             )
-                .map(|(s, typ_name): (Vec<char>, Option<TypeName>)| {
-                    let primitive = s
-                        .into_iter()
-                        .collect::<String>()
-                        .parse::<f64>()
-                        .expect("digit");
+                .and_then(|(s, typ_name): (Vec<char>, Option<TypeName>)| {
+                    let primitive = s.into_iter().collect::<String>().parse::<f64>();
 
-                    if let Some(typ_name) = typ_name {
-                        Expr::number_with_type_name(primitive, typ_name.clone())
-                    } else {
-                        Expr::number(primitive)
+                    match primitive {
+                        Ok(primitive) => {
+                            if let Some(typ_name) = typ_name {
+                                Ok(Expr::number_with_type_name(primitive, typ_name.clone()))
+                            } else {
+                                Ok(Expr::number(primitive))
+                            }
+                        }
+                        Err(_) => {
+                            Err(RibParseError::Message("Unable to parse number".to_string()).into())
+                        }
                     }
                 }),
         )
@@ -49,8 +55,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_number() {
