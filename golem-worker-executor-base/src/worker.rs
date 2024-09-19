@@ -37,12 +37,12 @@ use crate::services::{
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
-use golem_common::model::exports;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::{exports, ComponentType};
 use golem_common::model::{
     ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -1421,7 +1421,19 @@ impl RunningWorker {
                                                                     )
                                                                     .await
                                                                     .unwrap(); // TODO: handle this error
-                                                                false // do not break
+
+                                                                if store
+                                                                    .data_mut()
+                                                                    .component_metadata()
+                                                                    .component_type
+                                                                    == ComponentType::Ephemeral
+                                                                {
+                                                                    final_decision =
+                                                                        RetryDecision::None;
+                                                                    true // stop after the invocation
+                                                                } else {
+                                                                    false // continue processing the queue
+                                                                }
                                                             }
                                                             Err(error) => {
                                                                 let trap_type =
