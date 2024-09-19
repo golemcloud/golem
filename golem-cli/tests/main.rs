@@ -16,7 +16,6 @@ mod api_deployment;
 mod component;
 mod get;
 mod profile;
-mod test_lib;
 mod text;
 mod worker;
 
