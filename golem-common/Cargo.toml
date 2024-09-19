@@ -20,13 +20,14 @@ golem-rib = { path = "../golem-rib", version = "0.0.0" }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 console-subscriber = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 futures-core = { workspace = true }
-git-version = {workspace = true }
+git-version = { workspace = true }
 humantime-serde = { workspace = true }
 http_02 = { workspace = true }
 iso8601-timestamp = { workspace = true }

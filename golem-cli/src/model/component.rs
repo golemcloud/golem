@@ -14,6 +14,7 @@ use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use golem_common::model::trim_date::TrimDateTime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
@@ -61,6 +62,15 @@ pub struct ComponentView {
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
+}
+
+impl TrimDateTime for ComponentView {
+    fn trim_date_time_ms(self) -> Self {
+        Self {
+            created_at: self.created_at.trim_date_time_ms(),
+            ..self
+        }
+    }
 }
 
 impl From<Component> for ComponentView {

@@ -48,6 +48,7 @@ pub mod component_metadata;
 pub mod exports;
 pub mod oplog;
 pub mod regions;
+pub mod trim_date;
 
 use crate::uri::oss::urn::WorkerUrn;
 use golem_api_grpc::proto::golem::shardmanager::{
