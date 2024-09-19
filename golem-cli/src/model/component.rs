@@ -8,13 +8,13 @@ use golem_client::model::{
     AnalysedResourceMode, AnalysedType, ComponentMetadata, ComponentType, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
 };
+use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
 use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use tracing::info;
-use golem_common::model::trim_date::TrimDateTime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
