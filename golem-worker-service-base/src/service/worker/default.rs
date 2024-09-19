@@ -358,7 +358,7 @@ where
 
     async fn invoke_and_await_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -427,7 +427,7 @@ where
 
     async fn invoke_and_await_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -487,7 +487,7 @@ where
 
     async fn invoke_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -535,7 +535,7 @@ where
 
     async fn invoke_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -1038,7 +1038,7 @@ where
 
     async fn invoke_and_await_function_json(
         &self,
-        _worker_id: &WorkerId,
+        _worker_id: &TargetWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Vec<TypeAnnotatedValue>,
@@ -1053,7 +1053,7 @@ where
 
     async fn invoke_and_await_function_proto(
         &self,
-        _worker_id: &WorkerId,
+        _worker_id: &TargetWorkerId,
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,
@@ -1065,7 +1065,7 @@ where
 
     async fn invoke_function_json(
         &self,
-        _worker_id: &WorkerId,
+        _worker_id: &TargetWorkerId,
         _idempotency_key: Option<IdempotencyKey>,
         _function_name: String,
         _params: Vec<TypeAnnotatedValue>,
@@ -1077,7 +1077,7 @@ where
 
     async fn invoke_function_proto(
         &self,
-        _worker_id: &WorkerId,
+        _worker_id: &TargetWorkerId,
         _idempotency_key: Option<ProtoIdempotencyKey>,
         _function_name: String,
         _params: Vec<ProtoVal>,

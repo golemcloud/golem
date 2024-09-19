@@ -334,11 +334,94 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/invoke-and-await:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function and await its resolution on a new worker with a random generated name
+      description: |-
+        Ideal for invoking ephemeral components, but works with durable ones as well.
+        Supply the parameters in the request body as JSON.
+      operationId: invoke_and_await_function_without_name
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
       - Worker
-      summary: Invoke a function and await it's resolution
+      summary: Invoke a function and await its resolution
       description: Supply the parameters in the request body as JSON.
       operationId: invoke_and_await_function
       parameters:
@@ -423,12 +506,95 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/invoke:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function
+      description: |-
+        Ideal for invoking ephemeral components, but works with durable ones as well.
+        Triggers the execution of a function and immediately returns.
+      operationId: invoke_function_without_name
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
       - Worker
       summary: Invoke a function
-      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+      description: Triggers the execution of a function and immediately returns.
       operationId: invoke_function
       parameters:
       - in: path
@@ -520,7 +686,7 @@ paths:
       description: |-
         Completes a promise with a given custom array of bytes.
         The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
-        The data field is sent back to the worker and it has no predefined meaning.
+        The data field is sent back to the worker, and it has no predefined meaning.
       operationId: complete_promise
       parameters:
       - in: path

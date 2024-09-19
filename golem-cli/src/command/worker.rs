@@ -16,7 +16,7 @@ use crate::command::ComponentRefSplit;
 use clap::builder::ValueParser;
 use clap::{ArgMatches, Args, Error, FromArgMatches, Subcommand};
 use golem_client::model::ScanCursor;
-use golem_common::model::WorkerId;
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
@@ -123,9 +123,9 @@ impl From<&OssWorkerNameOrUriArg> for OssWorkerUriArg {
                 match &value.component {
                     Some(ComponentUri::URN(component_urn)) => {
                         let uri = WorkerUri::URN(WorkerUrn {
-                            id: WorkerId {
+                            id: TargetWorkerId {
                                 component_id: component_urn.id.clone(),
-                                worker_name,
+                                worker_name: Some(worker_name),
                             },
                         });
                         OssWorkerUriArg {
@@ -137,7 +137,7 @@ impl From<&OssWorkerNameOrUriArg> for OssWorkerUriArg {
                     Some(ComponentUri::URL(component_url)) => {
                         let uri = WorkerUri::URL(WorkerUrl {
                             component_name: component_url.name.to_string(),
-                            worker_name,
+                            worker_name: Some(worker_name),
                         });
 
                         OssWorkerUriArg {
@@ -150,7 +150,7 @@ impl From<&OssWorkerNameOrUriArg> for OssWorkerUriArg {
                         let component_name = value.component_name.clone().unwrap();
                         let uri = WorkerUri::URL(WorkerUrl {
                             component_name,
-                            worker_name,
+                            worker_name: Some(worker_name),
                         });
 
                         OssWorkerUriArg {
@@ -185,7 +185,11 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
                         worker: None,
                         component: Some(component_uri),
                         component_name: None,
-                        worker_name: Some(WorkerName(urn.id.worker_name.to_string())),
+                        worker_name: urn
+                            .id
+                            .worker_name
+                            .as_ref()
+                            .map(|n| WorkerName(n.to_string())),
                     }
                 }
                 WorkerUri::URL(url) => {
@@ -194,7 +198,10 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
                             worker: None,
                             component: None,
                             component_name: Some(url.component_name.to_string()),
-                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                            worker_name: url
+                                .worker_name
+                                .as_ref()
+                                .map(|n| WorkerName(n.to_string())),
                         }
                     } else {
                         let component_uri = ComponentUri::URL(ComponentUrl {
@@ -205,7 +212,10 @@ impl From<&OssWorkerUriArg> for OssWorkerNameOrUriArg {
                             worker: None,
                             component: Some(component_uri),
                             component_name: None,
-                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                            worker_name: url
+                                .worker_name
+                                .as_ref()
+                                .map(|n| WorkerName(n.to_string())),
                         }
                     }
                 }

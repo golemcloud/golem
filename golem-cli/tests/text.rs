@@ -7,7 +7,7 @@ use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
-use golem_common::model::WorkerId;
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
@@ -313,9 +313,9 @@ fn text_worker_add(
         &format!(
             "(?m)^Worker URN:.+{}$",
             WorkerUrn {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: component_urn.id.clone(),
-                    worker_name: worker_name.clone()
+                    worker_name: Some(worker_name.clone())
                 }
             }
         ),
@@ -415,9 +415,9 @@ fn text_worker_get(
         &format!(
             "(?m)^Worker URN:.+{}$",
             WorkerUrn {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: component_urn.id.clone(),
-                    worker_name: worker_name.clone()
+                    worker_name: Some(worker_name.clone())
                 }
             }
         ),

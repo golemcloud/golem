@@ -159,7 +159,13 @@ async fn get_resource_by_urn(
         ResourceUrn::WorkerFunction(f) => {
             factory
                 .worker_service()
-                .get_function(WorkerUri::URN(WorkerUrn { id: f.id }), &f.function, None)
+                .get_function(
+                    WorkerUri::URN(WorkerUrn {
+                        id: f.id.into_target_worker_id(),
+                    }),
+                    &f.function,
+                    None,
+                )
                 .await
         }
         ResourceUrn::ApiDefinition(ad) => {
@@ -206,7 +212,7 @@ async fn get_resource_by_url(
                 .get_function(
                     WorkerUri::URL(WorkerUrl {
                         component_name: f.component_name,
-                        worker_name: f.worker_name,
+                        worker_name: Some(f.worker_name),
                     }),
                     &f.function,
                     None,

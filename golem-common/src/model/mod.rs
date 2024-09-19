@@ -357,6 +357,14 @@ impl TargetWorkerId {
         WorkerUrn { id: self.clone() }.to_string()
     }
 
+    /// Converts a `TargetWorkerId` to a `WorkerId` if the worker name is specified
+    pub fn try_into_worker_id(self) -> Option<WorkerId> {
+        self.worker_name.map(|worker_name| WorkerId {
+            component_id: self.component_id,
+            worker_name,
+        })
+    }
+
     /// Converts a `TargetWorkerId` to a `WorkerId`. If the worker name was not specified,
     /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
     /// that the generated worker ID will belong to one of the provided shards.
