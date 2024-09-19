@@ -1984,6 +1984,9 @@ fn calculate_latest_worker_status(
             OplogEntry::Log { .. } => {
                 result = WorkerStatus::Running;
             }
+            OplogEntry::Restart { .. } => {
+                result = WorkerStatus::Idle;
+            }
         }
     }
     result

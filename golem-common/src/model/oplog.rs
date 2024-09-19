@@ -353,6 +353,10 @@ pub enum OplogEntry {
         context: String,
         message: String,
     },
+    /// Marks the point where the worker was restarted from clean initial state
+    Restart {
+        timestamp: Timestamp,
+    },
 }
 
 impl OplogEntry {
@@ -524,6 +528,12 @@ impl OplogEntry {
         }
     }
 
+    pub fn restart() -> OplogEntry {
+        OplogEntry::Restart {
+            timestamp: Timestamp::now_utc(),
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -572,6 +582,7 @@ impl OplogEntry {
                 | OplogEntry::DropResource { .. }
                 | OplogEntry::DescribeResource { .. }
                 | OplogEntry::Log { .. }
+                | OplogEntry::Restart { .. }
         )
     }
 
@@ -599,8 +610,9 @@ impl OplogEntry {
             | OplogEntry::GrowMemory { timestamp, .. }
             | OplogEntry::CreateResource { timestamp, .. }
             | OplogEntry::DropResource { timestamp, .. }
-            | OplogEntry::DescribeResource { timestamp, .. } => *timestamp,
-            OplogEntry::Log { timestamp, .. } => *timestamp,
+            | OplogEntry::DescribeResource { timestamp, .. }
+            | OplogEntry::Log { timestamp, .. }
+            | OplogEntry::Restart { timestamp } => *timestamp,
         }
     }
 }
