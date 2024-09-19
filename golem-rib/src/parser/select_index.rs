@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::expr::Expr;
-use crate::parser::identifier::identifier;
 use combine::parser::char::{char as char_, spaces};
-use combine::{attempt, choice, many1, optional, Parser};
+use combine::{attempt, choice, many1, optional, ParseError, Parser};
+
 use internal::*;
+
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
+use crate::parser::identifier::identifier;
 
 pub fn select_index<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     spaces().with(
         (
@@ -42,12 +48,12 @@ where
 }
 
 mod internal {
-    use super::*;
+    use combine::parser::char::char as char_;
 
     use crate::parser::number::number;
     use crate::parser::sequence::sequence;
 
-    use combine::parser::char::char as char_;
+    use super::*;
 
     pub(crate) fn build_select_index_from(base_expr: Expr, indices: Vec<usize>) -> Expr {
         let mut result = base_expr;
@@ -60,6 +66,9 @@ mod internal {
     pub(crate) fn nested_indices<Input>() -> impl Parser<Input, Output = Vec<usize>>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         many1(
             (
@@ -75,6 +84,9 @@ mod internal {
     pub(crate) fn pos_num<Input>() -> impl Parser<Input, Output = usize>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         number().map(|s: Expr| match s {
             Expr::Number(number, _, _) => {
@@ -91,6 +103,9 @@ mod internal {
     pub(crate) fn base_expr<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         choice((attempt(sequence()), attempt(identifier())))
     }
@@ -98,9 +113,10 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use combine::EasyParser;
+
     use crate::expr::*;
     use crate::parser::rib_expr::rib_expr;
-    use combine::EasyParser;
 
     #[test]
     fn test_select_index() {

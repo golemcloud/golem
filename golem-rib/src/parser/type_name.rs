@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::InferredType;
+use std::fmt::Display;
+use std::ops::Deref;
+
 use bincode::{Decode, Encode};
-use combine::parser;
 use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
 use combine::{attempt, between, sep_by, Parser};
+use combine::{parser, ParseError};
+
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
 use golem_api_grpc::proto::golem::rib::{
     BasicTypeName, ListType, OptionType, TupleType, TypeName as ProtoTypeName,
 };
-use std::fmt::Display;
-use std::ops::Deref;
+
+use crate::parser::errors::RibParseError;
+use crate::InferredType;
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum TypeName {
@@ -191,6 +195,9 @@ impl From<TypeName> for InferredType {
 pub fn parse_basic_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     choice((
         attempt(string("bool").map(|_| TypeName::Bool)),
@@ -213,6 +220,9 @@ where
 pub fn parse_list_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     string("list")
         .skip(spaces())
@@ -227,6 +237,9 @@ where
 pub fn parse_option_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     string("option")
         .skip(spaces())
@@ -241,6 +254,9 @@ where
 pub fn parse_tuple_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     string("tuple")
         .skip(spaces())
@@ -255,6 +271,9 @@ where
 pub fn parse_type_name_<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     spaces().with(choice((
         attempt(parse_basic_type()),
@@ -266,7 +285,7 @@ where
 
 parser! {
     pub fn parse_type_name[Input]()(Input) -> TypeName
-     where [Input: combine::Stream<Token = char>]
+     where [Input: combine::Stream<Token = char>, RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,]
     {
        parse_type_name_()
     }
@@ -274,8 +293,9 @@ parser! {
 
 #[cfg(test)]
 mod type_name_parser_tests {
-    use super::*;
     use combine::EasyParser;
+
+    use super::*;
 
     fn parse_and_compare(input: &str, expected: TypeName) {
         let result = parse_type_name().easy_parse(input);

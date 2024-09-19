@@ -15,17 +15,19 @@
 use combine::{
     between, many1, parser,
     parser::char::{char as char_, letter, spaces},
-    sep_by1, Parser, Stream,
+    sep_by1, ParseError, Parser, Stream,
 };
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 
 use super::rib_expr::rib_expr;
 
 parser! {
     pub fn record[Input]()(Input) -> Expr
     where [
-        Input: Stream<Token = char>
+        Input: Stream<Token = char>,
+        RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,
     ]
     {
        record_()
@@ -35,6 +37,9 @@ parser! {
 pub fn record_<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     spaces()
         .with(
@@ -58,6 +63,9 @@ where
 fn field_key<Input>() -> impl Parser<Input, Output = String>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     many1(letter().or(char_('_').or(char_('-'))))
         .map(|s: Vec<char>| s.into_iter().collect())
@@ -72,6 +80,9 @@ struct Field {
 fn field<Input>() -> impl Parser<Input, Output = Field>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     (
         field_key().skip(spaces()),
@@ -86,8 +97,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use combine::EasyParser;
+
+    use super::*;
 
     #[test]
     fn test_singleton_record() {
@@ -194,6 +206,19 @@ mod tests {
             result,
             Ok((
                 Expr::record(vec![("foo".to_string(), Expr::ok(Expr::identifier("bar")))]),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_record_keys_can_be_key_words() {
+        let input = "{err: bar}";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::record(vec![("err".to_string(), Expr::identifier("bar"))]),
                 ""
             ))
         );

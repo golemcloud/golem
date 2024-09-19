@@ -16,20 +16,23 @@ use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-
-use combine::{any, attempt, between, choice, many1, optional, parser, token, Parser};
+use combine::sep_by;
+use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
 
 use crate::expr::Expr;
 use crate::function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
+use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
-use combine::sep_by;
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     (
         function_name().skip(spaces()),
@@ -50,6 +53,9 @@ where
 pub fn function_name<Input>() -> impl Parser<Input, Output = ParsedFunctionName>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     let identifier = || many1(alpha_num().or(token('-'))).map(|string: String| string);
     let namespace = many1(identifier()).message("namespace");
@@ -97,9 +103,12 @@ where
 
     let version = attempt(token('@'))
         .with(take_until(attempt(string(".{"))))
-        .map(|v: String| {
+        .and_then(|v: String| {
             let stripped = v.strip_suffix('.').unwrap_or(&v);
-            semver::Version::parse(stripped).expect("Failed to parse version")
+            match semver::Version::parse(stripped) {
+                Ok(version) => Ok(version),
+                Err(_) => Err(RibParseError::Message("Invalid version".to_string()).into()),
+            }
         })
         .message("version");
 
@@ -196,14 +205,12 @@ where
 
 #[cfg(test)]
 mod function_call_tests {
-
     use combine::EasyParser;
 
     use crate::expr::Expr;
     use crate::function_name::{
         ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
     };
-
     use crate::parser::rib_expr::rib_expr;
 
     #[test]

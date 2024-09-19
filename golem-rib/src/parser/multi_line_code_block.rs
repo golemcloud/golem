@@ -15,14 +15,18 @@
 use combine::{
     between,
     parser::char::{char as char_, spaces},
-    Parser,
+    ParseError, Parser,
 };
 
 use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 
 pub fn multi_line_block<Input>() -> impl Parser<Input, Output = Expr>
 where
     Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
 {
     spaces().with(between(
         char_('{').skip(spaces()),
@@ -32,15 +36,20 @@ where
 }
 
 mod internal {
+    use combine::parser::char::{char, spaces};
+    use combine::{sep_by, ParseError, Parser};
+
+    use crate::parser::errors::RibParseError;
     use crate::parser::rib_expr::rib_expr;
     use crate::Expr;
-    use combine::parser::char::{char, spaces};
-    use combine::{sep_by, Parser};
 
     // A block is different to a complete rib-program that the it may not be the end of the stream
     pub fn block<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         spaces().with(
             sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(

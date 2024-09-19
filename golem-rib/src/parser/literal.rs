@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::expr::Expr;
+use combine::{parser, ParseError, Stream};
 
+use crate::expr::Expr;
+use crate::parser::errors::RibParseError;
 use crate::parser::literal::internal::literal_;
-use combine::{parser, Stream};
 
 parser! {
     pub fn literal[Input]()(Input) -> Expr
     where [
-        Input: Stream<Token = char>
+        Input: Stream<Token = char>,
+        RibParseError: Into<<Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError>,
     ]
     {
         literal_()
@@ -28,18 +30,22 @@ parser! {
 }
 
 mod internal {
-    use crate::expr::Expr;
-    use crate::parser::rib_expr::rib_expr;
     use combine::parser::char::{char as char_, char, letter, space};
     use combine::parser::char::{digit, spaces};
     use combine::parser::repeat::many;
+    use combine::{between, choice, many1, sep_by, ParseError, Parser};
 
-    use combine::{between, choice, many1, sep_by, Parser};
+    use crate::expr::Expr;
+    use crate::parser::errors::RibParseError;
+    use crate::parser::rib_expr::rib_expr;
 
     // Literal can handle string interpolation
     pub fn literal_<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         spaces()
             .with(
@@ -64,6 +70,9 @@ mod internal {
     fn static_part<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         many1(
             letter().or(space()).or(digit()).or(char_('_').or(char_('-')
@@ -78,6 +87,9 @@ mod internal {
     fn interpolation<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         between(
             char_('$').with(char_('{')).skip(spaces()),
@@ -89,6 +101,9 @@ mod internal {
     pub fn block<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         spaces().with(
             sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(
@@ -106,10 +121,12 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::parser::rib_expr::{rib_expr, rib_program};
     use combine::stream::position;
     use combine::EasyParser;
+
+    use crate::parser::rib_expr::{rib_expr, rib_program};
+
+    use super::*;
 
     #[test]
     fn test_empty_literal() {
