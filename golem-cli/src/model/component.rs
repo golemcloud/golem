@@ -8,6 +8,7 @@ use golem_client::model::{
     AnalysedResourceMode, AnalysedType, ComponentMetadata, ComponentType, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
 };
+use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
 use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
@@ -61,6 +62,15 @@ pub struct ComponentView {
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
+}
+
+impl TrimDateTime for ComponentView {
+    fn trim_date_time_ms(self) -> Self {
+        Self {
+            created_at: self.created_at.trim_date_time_ms(),
+            ..self
+        }
+    }
 }
 
 impl From<Component> for ComponentView {

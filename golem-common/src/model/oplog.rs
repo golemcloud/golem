@@ -354,9 +354,7 @@ pub enum OplogEntry {
         message: String,
     },
     /// Marks the point where the worker was restarted from clean initial state
-    Restart {
-        timestamp: Timestamp,
-    },
+    Restart { timestamp: Timestamp },
 }
 
 impl OplogEntry {
