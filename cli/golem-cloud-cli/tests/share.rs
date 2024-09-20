@@ -1,7 +1,9 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
-use golem_cloud_cli::cloud::model::text::{
-    AccountViewAdd, ProjectGrantView, ProjectPolicyView, ProjectView,
+use assert2::assert;
+use golem_cloud_cli::cloud::model::text::account::AccountAddView;
+use golem_cloud_cli::cloud::model::text::project::{
+    ProjectAddView, ProjectPolicyAddView, ProjectPolicyGetView, ProjectShareView,
 };
 use golem_cloud_client::model::ProjectAction;
 use libtest_mimic::{Failed, Trial};
@@ -55,7 +57,7 @@ fn share_policy(
     let name = format!("share policy {name}");
     let email = format!("share_policy_{name}@example.com");
 
-    let account: AccountViewAdd = cli.run(&[
+    let account: AccountAddView = cli.run(&[
         "account",
         "add",
         &cfg.arg('n', "account-name"),
@@ -64,10 +66,10 @@ fn share_policy(
         &email,
     ])?;
 
-    let project: ProjectView =
+    let project: ProjectAddView =
         cli.run(&["project", "add", &cfg.arg('p', "project-name"), &name])?;
 
-    let policy: ProjectPolicyView = cli.run(&[
+    let policy: ProjectPolicyAddView = cli.run(&[
         "project-policy",
         "add",
         "--project-policy-name",
@@ -76,10 +78,10 @@ fn share_policy(
         "DeleteWorker",
     ])?;
 
-    let res: ProjectGrantView = cli.run(&[
+    let res: ProjectShareView = cli.run(&[
         "share",
         &cfg.arg('P', "project"),
-        &project.project_urn.to_string(),
+        &project.0.project_urn.to_string(),
         "--recipient-account-id",
         &account.0.id,
         "--project-policy-id",
@@ -87,7 +89,7 @@ fn share_policy(
     ])?;
 
     assert_eq!(res.0.data.grantee_account_id, account.0.id);
-    assert_eq!(res.0.data.grantor_project_id, project.project_urn.id.0);
+    assert_eq!(res.0.data.grantor_project_id, project.0.project_urn.id.0);
     assert_eq!(res.0.data.project_policy_id, policy.0.id);
 
     Ok(())
@@ -104,7 +106,7 @@ fn share_actions(
     let name = format!("share policy {name}");
     let email = format!("share_policy_{name}@example.com");
 
-    let account: AccountViewAdd = cli.run(&[
+    let account: AccountAddView = cli.run(&[
         "account",
         "add",
         &cfg.arg('n', "account-name"),
@@ -113,13 +115,13 @@ fn share_actions(
         &email,
     ])?;
 
-    let project: ProjectView =
+    let project: ProjectAddView =
         cli.run(&["project", "add", &cfg.arg('p', "project-name"), &name])?;
 
-    let res: ProjectGrantView = cli.run(&[
+    let res: ProjectShareView = cli.run(&[
         "share",
         &cfg.arg('P', "project"),
-        &project.project_urn.to_string(),
+        &project.0.project_urn.to_string(),
         "--recipient-account-id",
         &account.0.id,
         &cfg.arg('A', "project-actions"),
@@ -129,9 +131,9 @@ fn share_actions(
     ])?;
 
     assert_eq!(res.0.data.grantee_account_id, account.0.id);
-    assert_eq!(res.0.data.grantor_project_id, project.project_urn.id.0);
+    assert_eq!(res.0.data.grantor_project_id, project.0.project_urn.id.0);
 
-    let policy: ProjectPolicyView = cli.run(&[
+    let policy: ProjectPolicyGetView = cli.run(&[
         "project-policy",
         "get",
         &res.0.data.project_policy_id.to_string(),

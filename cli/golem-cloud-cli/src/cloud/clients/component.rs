@@ -8,9 +8,11 @@ use tokio::fs::File;
 use tracing::info;
 
 use crate::cloud::clients::errors::CloudGolemError;
-use crate::cloud::model::ToCli;
+use crate::cloud::model::to_cli::ToCli;
+use crate::cloud::model::to_cloud::ToCloud;
 use golem_cli::model::component::Component;
 use golem_cli::model::{ComponentName, GolemError, PathBufOrStdin};
+use golem_client::model::ComponentType;
 use golem_common::uri::oss::urn::ComponentUrn;
 
 #[derive(Debug, Clone)]
@@ -75,12 +77,14 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         name: ComponentName,
         file: PathBufOrStdin,
         project: &Option<Self::ProjectContext>,
+        component_type: ComponentType,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {file:?}");
 
         let query = ComponentQuery {
             project_id: project.map(|ProjectId(id)| id),
             component_name: name.0,
+            component_type: Some(component_type.to_cloud()),
         };
 
         let component = match file {
@@ -115,6 +119,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         &self,
         urn: ComponentUrn,
         file: PathBufOrStdin,
+        component_type: Option<ComponentType>,
     ) -> Result<Component, GolemError> {
         info!("Updating component {urn} from {file:?}");
 
@@ -125,7 +130,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, file)
+                    .update_component(&urn.id.0, component_type.to_cloud().as_ref(), file)
                     .await
                     .map_err(CloudGolemError::from)?
             }
@@ -137,7 +142,7 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, bytes)
+                    .update_component(&urn.id.0, component_type.to_cloud().as_ref(), bytes)
                     .await
                     .map_err(CloudGolemError::from)?
             }

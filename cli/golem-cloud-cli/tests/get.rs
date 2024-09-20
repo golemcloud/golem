@@ -21,7 +21,8 @@ use crate::worker::make_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
 use golem_client::model::HttpApiDefinitionWithTypeInfo;
-use golem_cloud_cli::cloud::model::text::{AccountViewGet, ProjectView};
+use golem_cloud_cli::cloud::model::text::account::AccountGetView;
+use golem_cloud_cli::cloud::model::text::project::{ProjectAddView, ProjectGetView};
 use golem_common::model::AccountId;
 use golem_common::uri::cloud::url::AccountUrl;
 use golem_common::uri::cloud::urn::AccountUrn;
@@ -78,9 +79,9 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
 fn top_level_get_account(
     (_, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
 ) -> Result<(), Failed> {
-    let account: AccountViewGet = cli.run(&["account", "get"])?;
+    let account: AccountGetView = cli.run(&["account", "get"])?;
 
-    let res1: AccountViewGet = cli.run(&[
+    let res1: AccountGetView = cli.run(&[
         "get",
         &AccountUrn {
             id: AccountId {
@@ -92,7 +93,7 @@ fn top_level_get_account(
 
     assert_eq!(res1, account);
 
-    let res2: AccountViewGet = cli.run(&[
+    let res2: AccountGetView = cli.run(&[
         "get",
         &AccountUrl {
             name: account.0.id.clone(),
@@ -110,15 +111,15 @@ fn top_level_get_project(
 ) -> Result<(), Failed> {
     let name = "top level get project";
 
-    let project: ProjectView = cli.run(&["project", "add", "--project-name", name])?;
+    let project: ProjectAddView = cli.run(&["project", "add", "--project-name", name])?;
 
-    let res1: ProjectView = cli.run(&["get", &project.project_urn.to_string()])?;
+    let res1: ProjectGetView = cli.run(&["get", &project.0.project_urn.to_string()])?;
 
-    assert_eq!(res1, project);
+    assert_eq!(res1.0, project.0);
 
-    let res2: ProjectView = cli.run(&["get", &project.project_urn.to_string()])?;
+    let res2: ProjectGetView = cli.run(&["get", &project.0.project_urn.to_string()])?;
 
-    assert_eq!(res2, project);
+    assert_eq!(res2.0, project.0);
 
     Ok(())
 }
@@ -163,7 +164,7 @@ fn top_level_get_component(
     let component_name = "top_level_get_component";
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -175,10 +176,10 @@ fn top_level_get_component(
         name: component.component_name.to_string(),
     };
 
-    let res: ComponentView = cli.run(&["get", &url.to_string()])?;
+    let res: ComponentView = cli.run_trimmed(&["get", &url.to_string()])?;
     assert_eq!(res, component);
 
-    let res: ComponentView = cli.run(&["get", &component.component_urn.to_string()])?;
+    let res: ComponentView = cli.run_trimmed(&["get", &component.component_urn.to_string()])?;
     assert_eq!(res, component);
 
     Ok(())

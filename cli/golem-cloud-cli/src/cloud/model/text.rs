@@ -1,351 +1,453 @@
-use crate::cloud::model::Role;
-use chrono::{DateTime, Utc};
-use cli_table::{print_stdout, Table, WithTitle};
-use colored::Colorize;
-use golem_cli::model::text::TextFormat;
-use golem_cloud_client::model::{
-    Account, Project, ProjectGrant, ProjectPolicy, ProjectType, Token, UnsafeToken,
-};
-use golem_cloud_client::model::{ApiDomain, Certificate};
-use golem_common::model::ProjectId;
-use golem_common::uri::cloud::urn::ProjectUrn;
-use indoc::printdoc;
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+pub mod account {
+    use crate::cloud::model::Role;
+    use golem_cli::model::text::fmt::*;
+    use golem_cloud_client::model::Account;
+    use serde::{Deserialize, Serialize};
 
-fn print_account(account: &Account, action: &str) {
-    printdoc!(
-        "
-        Account{action} with id {} for name {} with email {}.
-        ",
-        account.id,
-        account.name,
-        account.email,
-    )
-}
+    fn account_fields(account: &Account) -> Vec<(&'static str, String)> {
+        let mut fields = FieldsBuilder::new();
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AccountViewGet(pub Account);
+        fields
+            .fmt_field("Account ID", &account.id, format_main_id)
+            .fmt_field("E-mail", &account.email, format_id)
+            .field("Name", &account.name);
 
-impl TextFormat for AccountViewGet {
-    fn print(&self) {
-        print_account(&self.0, "")
+        fields.build()
     }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountViewAdd(pub Account);
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct AccountGetView(pub Account);
 
-impl TextFormat for AccountViewAdd {
-    fn print(&self) {
-        print_account(&self.0, " created")
+    impl MessageWithFields for AccountGetView {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for account {}",
+                format_message_highlight(&self.0.id)
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            account_fields(&self.0)
+        }
     }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountViewUpdate(pub Account);
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AccountAddView(pub Account);
 
-impl TextFormat for AccountViewUpdate {
-    fn print(&self) {
-        print_account(&self.0, " updated")
+    impl MessageWithFields for AccountAddView {
+        fn message(&self) -> String {
+            format!("Added account {}", format_message_highlight(&self.0.id))
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            account_fields(&self.0)
+        }
     }
-}
 
-#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectView {
-    pub project_urn: ProjectUrn,
-    pub name: String,
-    pub owner_account_id: String,
-    pub description: String,
-    pub default_environment_id: String,
-    pub project_type: ProjectType,
-}
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AccountUpdateView(pub Account);
 
-impl From<Project> for ProjectView {
-    fn from(value: Project) -> Self {
-        let project_urn = ProjectUrn {
-            id: ProjectId(value.project_id),
-        };
+    impl MessageWithFields for AccountUpdateView {
+        fn message(&self) -> String {
+            format!("Updated account {}", format_message_highlight(&self.0.id))
+        }
 
-        Self {
-            project_urn,
-            name: value.project_data.name.to_string(),
-            owner_account_id: value.project_data.owner_account_id.to_string(),
-            description: value.project_data.description.to_string(),
-            default_environment_id: value.project_data.default_environment_id.to_string(),
-            project_type: value.project_data.project_type.clone(),
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            account_fields(&self.0)
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct GrantGetView(pub Vec<Role>);
+
+    impl TextFormat for GrantGetView {
+        fn print(&self) {
+            if self.0.is_empty() {
+                println!("No roles granted")
+            } else {
+                println!("Granted roles:");
+                for role in &self.0 {
+                    println!("  - {}", role);
+                }
+            }
         }
     }
 }
 
-impl TextFormat for ProjectView {
-    fn print(&self) {
-        printdoc!(
-            r#"
-            Project "{}" with URN {}.
-            Description: "{}".
-            Owner: {}, environment: {}, type: {}
-            "#,
-            self.name,
-            self.project_urn,
-            self.description,
-            self.owner_account_id,
-            self.default_environment_id,
-            self.project_type,
-        )
+pub mod api_domain {
+    use cli_table::Table;
+    use golem_cli::model::text::fmt::*;
+    use golem_cloud_client::model::ApiDomain;
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ApiDomainAddView(pub ApiDomain);
+
+    impl MessageWithFields for ApiDomainAddView {
+        fn message(&self) -> String {
+            format!(
+                "Added API domain {}",
+                format_message_highlight(&self.0.domain_name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields
+                .fmt_field("Domain name", &self.0.domain_name, format_main_id)
+                .fmt_field("Project ID", &self.0.project_id, format_id)
+                .fmt_field_option("Created at", &self.0.created_at, |d| d.to_string())
+                .fmt_field_optional(
+                    "Name servers",
+                    &self.0.name_servers,
+                    !self.0.name_servers.is_empty(),
+                    |ns| ns.join("\n"),
+                );
+
+            fields.build()
+        }
     }
-}
 
-#[derive(Table)]
-struct ProjectListView {
-    #[table(title = "URN")]
-    pub project_urn: String,
-    #[table(title = "Name")]
-    pub name: String,
-    #[table(title = "Description")]
-    pub description: String,
-}
+    #[derive(Table)]
+    struct ApiDomainTableView {
+        #[table(title = "Domain")]
+        pub domain_name: String,
+        #[table(title = "Project")]
+        pub project_id: Uuid,
+        #[table(title = "Servers")]
+        pub name_servers: String,
+    }
 
-impl From<&ProjectView> for ProjectListView {
-    fn from(value: &ProjectView) -> Self {
-        ProjectListView {
-            project_urn: value.project_urn.to_string(),
-            name: value.name.to_string(),
-            description: textwrap::wrap(&value.description, 30).join("\n"),
+    impl From<&ApiDomain> for ApiDomainTableView {
+        fn from(value: &ApiDomain) -> Self {
+            ApiDomainTableView {
+                domain_name: value.domain_name.to_string(),
+                project_id: value.project_id,
+                name_servers: value.name_servers.join("\n"),
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ApiDomainListView(pub Vec<ApiDomain>);
+
+    impl TextFormat for ApiDomainListView {
+        fn print(&self) {
+            print_table::<_, ApiDomainTableView>(&self.0);
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectVecView(pub Vec<ProjectView>);
+pub mod certificate {
+    use cli_table::Table;
+    use golem_cli::model::text::fmt::*;
+    use golem_cloud_client::model::Certificate;
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
 
-impl TextFormat for ProjectVecView {
-    fn print(&self) {
-        print_stdout(
-            self.0
-                .iter()
-                .map(ProjectListView::from)
-                .collect::<Vec<_>>()
-                .with_title(),
-        )
-        .unwrap()
+    fn certificate_fields(certificate: &Certificate) -> Vec<(&'static str, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Certificate ID", &certificate.id, format_main_id)
+            .fmt_field("Domain name", &certificate.domain_name, format_main_id)
+            .fmt_field("Project ID", &certificate.project_id, format_id)
+            .fmt_field_option("Created at", &certificate.created_at, |d| d.to_string());
+
+        fields.build()
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RoleVecView(pub Vec<Role>);
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct CertificateAddView(pub Certificate);
 
-impl TextFormat for RoleVecView {
-    fn print(&self) {
-        println!(
-            "Available roles: {}.",
-            self.0.iter().map(|r| r.to_string()).join(", ")
-        )
+    impl MessageWithFields for CertificateAddView {
+        fn message(&self) -> String {
+            format!(
+                "Added certificate {}",
+                format_message_highlight(&self.0.domain_name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            certificate_fields(&self.0)
+        }
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UnsafeTokenView(pub UnsafeToken);
-
-impl TextFormat for UnsafeTokenView {
-    fn print(&self) {
-        printdoc!(
-            "
-            New token created with id {} and expiration date {}.
-            Please save this token secret, you can't get this data later:
-            {}
-            ",
-            self.0.data.id,
-            self.0.data.expires_at,
-            self.0.secret.value.to_string().bold()
-        )
+    #[derive(Table)]
+    struct CertificateTableView {
+        #[table(title = "Domain")]
+        pub domain_name: String,
+        #[table(title = "Certificate ID")]
+        pub id: Uuid,
+        #[table(title = "Project")]
+        pub project_id: Uuid,
     }
-}
 
-#[derive(Table)]
-struct TokenListView {
-    #[table(title = "ID")]
-    pub id: Uuid,
-    #[table(title = "Created at")]
-    pub created_at: DateTime<Utc>,
-    #[table(title = "Expires at")]
-    pub expires_at: DateTime<Utc>,
-    #[table(title = "Account")]
-    pub account_id: String,
-}
+    impl From<&Certificate> for CertificateTableView {
+        fn from(value: &Certificate) -> Self {
+            CertificateTableView {
+                domain_name: value.domain_name.to_string(),
+                id: value.id,
+                project_id: value.project_id,
+            }
+        }
+    }
 
-impl From<&Token> for TokenListView {
-    fn from(value: &Token) -> Self {
-        TokenListView {
-            id: value.id,
-            created_at: value.created_at,
-            expires_at: value.expires_at,
-            account_id: value.account_id.to_string(),
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct CertificateListView(pub Vec<Certificate>);
+
+    impl TextFormat for CertificateListView {
+        fn print(&self) {
+            print_table::<_, CertificateTableView>(&self.0);
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TokenVecView(pub Vec<Token>);
+pub mod project {
+    use crate::cloud::model::ProjectView;
+    use cli_table::Table;
+    use golem_cli::model::text::fmt::*;
+    use golem_cloud_client::model::{Project, ProjectGrant, ProjectPolicy, ProjectType};
+    use itertools::Itertools;
+    use serde::{Deserialize, Serialize};
 
-impl TextFormat for TokenVecView {
-    fn print(&self) {
-        print_stdout(
-            self.0
-                .iter()
-                .map(TokenListView::from)
-                .collect::<Vec<_>>()
-                .with_title(),
-        )
-        .unwrap()
+    fn project_fields(project: &ProjectView) -> Vec<(&'static str, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Project URN", &project.project_urn, format_main_id)
+            .fmt_field("Account ID", &project.owner_account_id, format_id)
+            .fmt_field("Environment ID", &project.default_environment_id, format_id)
+            .field("Name ", &project.name)
+            .field(
+                "Default project",
+                &(project.project_type == ProjectType::Default),
+            )
+            .field("Description", &project.description);
+
+        fields.build()
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectGrantView(pub ProjectGrant);
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectGetView(pub ProjectView);
 
-impl TextFormat for ProjectGrantView {
-    fn print(&self) {
-        printdoc!(
-            "
-            Project grant {}.
-            Account: {}.
-            Project: {}.
-            Policy: {}
-            ",
-            self.0.id,
-            self.0.data.grantee_account_id,
-            self.0.data.grantor_project_id,
-            self.0.data.project_policy_id,
-        )
+    impl MessageWithFields for ProjectGetView {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for project {}",
+                format_message_highlight(&self.0.name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            project_fields(&self.0)
+        }
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectPolicyView(pub ProjectPolicy);
-
-impl TextFormat for ProjectPolicyView {
-    fn print(&self) {
-        printdoc!(
-            "
-            Project policy {} with id {}.
-            Actions: {}.
-            ",
-            self.0.name,
-            self.0.id,
-            self.0
-                .project_actions
-                .actions
-                .iter()
-                .map(|a| a.to_string())
-                .join(", ")
-        )
+    impl From<Project> for ProjectGetView {
+        fn from(value: Project) -> Self {
+            ProjectGetView(value.into())
+        }
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CertificateView(pub Certificate);
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ProjectAddView(pub ProjectView);
 
-impl TextFormat for CertificateView {
-    fn print(&self) {
-        printdoc!(
-            "
-            Certificate with id {} for domain {} on project {}.
-            ",
-            self.0.id,
-            self.0.domain_name,
-            self.0.project_id
-        )
+    impl From<Project> for ProjectAddView {
+        fn from(value: Project) -> Self {
+            ProjectAddView(value.into())
+        }
     }
-}
 
-#[derive(Table)]
-struct CertificateListView {
-    #[table(title = "Domain")]
-    pub domain_name: String,
-    #[table(title = "ID")]
-    pub id: Uuid,
-    #[table(title = "Project")]
-    pub project_id: Uuid,
-}
+    impl MessageWithFields for ProjectAddView {
+        fn message(&self) -> String {
+            format!("Added project {}", format_message_highlight(&self.0.name))
+        }
 
-impl From<&Certificate> for CertificateListView {
-    fn from(value: &Certificate) -> Self {
-        CertificateListView {
-            domain_name: value.domain_name.to_string(),
-            id: value.id,
-            project_id: value.project_id,
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            project_fields(&self.0)
+        }
+    }
+
+    #[derive(Table)]
+    struct ProjectTableView {
+        #[table(title = "Project URN")]
+        pub project_urn: String,
+        #[table(title = "Name")]
+        pub name: String,
+        #[table(title = "Description")]
+        pub description: String,
+    }
+
+    impl From<&ProjectView> for ProjectTableView {
+        fn from(value: &ProjectView) -> Self {
+            ProjectTableView {
+                project_urn: value.project_urn.to_string(),
+                name: value.name.clone(),
+                description: textwrap::wrap(&value.description, 30).join("\n"),
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectListView(pub Vec<ProjectView>);
+
+    impl From<Vec<Project>> for ProjectListView {
+        fn from(value: Vec<Project>) -> Self {
+            ProjectListView(value.into_iter().map(|v| v.into()).collect())
+        }
+    }
+
+    impl TextFormat for ProjectListView {
+        fn print(&self) {
+            print_table::<_, ProjectTableView>(&self.0);
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectShareView(pub ProjectGrant);
+
+    impl MessageWithFields for ProjectShareView {
+        fn message(&self) -> String {
+            "Shared project".to_string()
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            let mut field = FieldsBuilder::new();
+
+            field
+                .fmt_field("Project grant ID", &self.0.id, format_main_id)
+                .fmt_field("Project ID", &self.0.data.grantor_project_id, format_id)
+                .fmt_field("Account ID", &self.0.data.grantee_account_id, format_id)
+                .fmt_field("Policy ID", &self.0.data.project_policy_id, format_id);
+
+            field.build()
+        }
+    }
+
+    fn project_policy_fields(policy: &ProjectPolicy) -> Vec<(&'static str, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        fields
+            .fmt_field("Policy ID", &policy.id, format_main_id)
+            .field("Policy name", &policy.name)
+            .fmt_field_optional(
+                "Actions",
+                &policy.project_actions,
+                !policy.project_actions.actions.is_empty(),
+                |actions| {
+                    actions
+                        .actions
+                        .iter()
+                        .map(|a| format!("- {}", a))
+                        .join("\n")
+                },
+            );
+
+        fields.build()
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectPolicyAddView(pub ProjectPolicy);
+
+    impl MessageWithFields for ProjectPolicyAddView {
+        fn message(&self) -> String {
+            format!(
+                "Added project policy {}",
+                format_message_highlight(&self.0.name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            project_policy_fields(&self.0)
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ProjectPolicyGetView(pub ProjectPolicy);
+
+    impl MessageWithFields for ProjectPolicyGetView {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for project policy {}",
+                format_message_highlight(&self.0.name)
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            project_policy_fields(&self.0)
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CertificateVecView(pub Vec<Certificate>);
+pub mod token {
+    use chrono::{DateTime, Utc};
+    use cli_table::Table;
+    use colored::Colorize;
+    use golem_cli::model::text::fmt::*;
+    use golem_cloud_client::model::{Token, UnsafeToken};
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
 
-impl TextFormat for CertificateVecView {
-    fn print(&self) {
-        print_stdout(
-            self.0
-                .iter()
-                .map(CertificateListView::from)
-                .collect::<Vec<_>>()
-                .with_title(),
-        )
-        .unwrap()
-    }
-}
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct UnsafeTokenView(pub UnsafeToken);
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApiDomainView(pub ApiDomain);
+    impl MessageWithFields for UnsafeTokenView {
+        fn message(&self) -> String {
+            format!(
+                "Created new token\n{}",
+                format_warn("Save this token secret, you can't get this data later!")
+            )
+        }
 
-impl TextFormat for ApiDomainView {
-    fn print(&self) {
-        printdoc!(
-            "
-            Domain {} on project {}.
-            Servers: {}.
-            ",
-            self.0.domain_name,
-            self.0.project_id,
-            self.0.name_servers.join(", ")
-        )
-    }
-}
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            let mut fields = FieldsBuilder::new();
 
-#[derive(Table)]
-struct DomainListView {
-    #[table(title = "Domain")]
-    pub domain_name: String,
-    #[table(title = "Project")]
-    pub project_id: Uuid,
-    #[table(title = "Servers")]
-    pub name_servers: String,
-}
+            fields
+                .fmt_field("Token ID", &self.0.data.id, format_main_id)
+                .fmt_field("Account ID", &self.0.data.id, format_id)
+                .field("Created at", &self.0.data.created_at)
+                .field("Expires at", &self.0.data.expires_at)
+                .fmt_field("Secret (SAVE THIS)", &self.0.secret.value, |s| {
+                    s.to_string().bold().red().to_string()
+                });
 
-impl From<&ApiDomain> for DomainListView {
-    fn from(value: &ApiDomain) -> Self {
-        DomainListView {
-            domain_name: value.domain_name.to_string(),
-            project_id: value.project_id,
-            name_servers: value.name_servers.join("\n"),
+            fields.build()
         }
     }
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApiDomainVecView(pub Vec<ApiDomain>);
+    #[derive(Table)]
+    struct TokenTableView {
+        #[table(title = "ID")]
+        pub id: Uuid,
+        #[table(title = "Created at")]
+        pub created_at: DateTime<Utc>,
+        #[table(title = "Expires at")]
+        pub expires_at: DateTime<Utc>,
+        #[table(title = "Account")]
+        pub account_id: String,
+    }
 
-impl TextFormat for ApiDomainVecView {
-    fn print(&self) {
-        print_stdout(
-            self.0
-                .iter()
-                .map(DomainListView::from)
-                .collect::<Vec<_>>()
-                .with_title(),
-        )
-        .unwrap()
+    impl From<&Token> for TokenTableView {
+        fn from(value: &Token) -> Self {
+            TokenTableView {
+                id: value.id,
+                created_at: value.created_at,
+                expires_at: value.expires_at,
+                account_id: value.account_id.to_string(),
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct TokenListView(pub Vec<Token>);
+
+    impl TextFormat for TokenListView {
+        fn print(&self) {
+            print_table::<_, TokenTableView>(&self.0);
+        }
     }
 }

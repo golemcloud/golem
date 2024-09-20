@@ -1,6 +1,9 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
-use golem_cloud_cli::cloud::model::text::{ProjectVecView, ProjectView};
+use assert2::assert;
+use golem_cloud_cli::cloud::model::text::project::{
+    ProjectAddView, ProjectGetView, ProjectListView,
+};
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
 
@@ -68,9 +71,9 @@ fn project_get_default(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let project: ProjectView = cli.run(&["project", "get-default"])?;
+    let project: ProjectGetView = cli.run(&["project", "get-default"])?;
 
-    assert_eq!(project.name, "default-project");
+    assert_eq!(project.0.name, "default-project");
 
     Ok(())
 }
@@ -86,16 +89,16 @@ fn project_list(
 
     let name = format!("project list {name}");
 
-    let projects: ProjectVecView = cli.run(&["project", "list"])?;
+    let projects: ProjectListView = cli.run(&["project", "list"])?;
 
     assert!(projects.0.iter().all(|p| p.name != name));
 
-    let project: ProjectView =
+    let project: ProjectAddView =
         cli.run(&["project", "add", &cfg.arg('p', "project-name"), &name])?;
 
-    assert_eq!(project.name, name);
+    assert_eq!(project.0.name, name);
 
-    let projects: ProjectVecView = cli.run(&["project", "list"])?;
+    let projects: ProjectListView = cli.run(&["project", "list"])?;
 
     assert!(projects.0.iter().any(|p| p.name == name));
 

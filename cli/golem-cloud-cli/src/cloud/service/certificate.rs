@@ -1,5 +1,5 @@
 use crate::cloud::clients::certificate::CertificateClient;
-use crate::cloud::model::text::{CertificateVecView, CertificateView};
+use crate::cloud::model::text::certificate::{CertificateAddView, CertificateListView};
 use crate::cloud::model::ProjectRef;
 use crate::cloud::service::project::ProjectService;
 use async_trait::async_trait;
@@ -74,7 +74,7 @@ impl CertificateService for CertificateServiceLive {
             .get(project_urn, certificate_id.as_ref())
             .await?;
 
-        Ok(GolemResult::Ok(Box::new(CertificateVecView(res))))
+        Ok(GolemResult::Ok(Box::new(CertificateListView(res))))
     }
 
     async fn add(
@@ -95,7 +95,7 @@ impl CertificateService for CertificateServiceLive {
 
         let res = self.client.create(request).await?;
 
-        Ok(GolemResult::Ok(Box::new(CertificateView(res))))
+        Ok(GolemResult::Ok(Box::new(CertificateAddView(res))))
     }
 
     async fn delete(

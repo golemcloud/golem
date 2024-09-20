@@ -1,5 +1,6 @@
 use crate::components::{TestDependencies, ROOT_TOKEN};
 use golem_cli::model::Format;
+use golem_common::model::trim_date::TrimDateTime;
 use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -28,6 +29,10 @@ impl CliConfig {
 
 pub trait Cli {
     fn run<T: DeserializeOwned, S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<T, Failed>;
+    fn run_trimmed<T: DeserializeOwned + TrimDateTime, S: AsRef<OsStr> + Debug>(
+        &self,
+        args: &[S],
+    ) -> Result<T, Failed>;
     fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed>;
     fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed>;
     fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed>;
@@ -134,6 +139,7 @@ impl CliLive {
         );
 
         let output = Command::new(&self.golem_cli_path)
+            .env("NO_COLOR", "1")
             .env("GOLEM_CONFIG_DIR", self.config_dir.to_str().unwrap())
             .arg(self.config.arg('F', "format"))
             .arg(self.format.to_string())
@@ -169,6 +175,14 @@ impl Cli for CliLive {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
+    }
+
+    fn run_trimmed<'a, T: DeserializeOwned + TrimDateTime, S: AsRef<OsStr> + Debug>(
+        &self,
+        args: &[S],
+    ) -> Result<T, Failed> {
+        let stdout = self.run_inner(args)?;
+        Ok(serde_json::from_str::<T>(&stdout)?.trim_date_time_ms())
     }
 
     fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed> {

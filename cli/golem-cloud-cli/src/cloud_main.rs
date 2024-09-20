@@ -2,51 +2,39 @@ extern crate derive_more;
 
 use clap::Parser;
 use golem_cli::command::profile::CloudProfileAdd;
-use golem_cli::config::{CloudProfile, Config, NamedProfile, Profile, ProfileName};
-use std::path::{Path, PathBuf};
-use tracing::info;
-
+use golem_cli::config::{get_config_dir, CloudProfile, Config, NamedProfile, Profile, ProfileName};
 use golem_cli::init::CliKind;
-use golem_cli::init_tracing;
+use golem_cli::{run_main, ConfiguredMainArgs};
 use golem_cloud_cli::cloud;
 use golem_cloud_cli::cloud::command::GolemCloudCommand;
-use golem_cloud_cli::cloud::completion::PrintCloudCompletion;
+use std::path::Path;
+use std::process::ExitCode;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let home = dirs::home_dir().unwrap();
-    let default_conf_dir = home.join(".golem");
-    let config_dir = std::env::var("GOLEM_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or(default_conf_dir);
+fn main() -> ExitCode {
+    let config_dir = get_config_dir();
+    let cli_kind = CliKind::Cloud;
 
-    let (name, cloud_profile) =
-        if let Some(p) = Config::get_active_profile(CliKind::Cloud, &config_dir) {
-            let NamedProfile { name, profile } = p;
-            match profile {
-                Profile::Golem(_) => make_default_profile(&config_dir),
-                Profile::GolemCloud(profile) => (name, profile),
-            }
-        } else {
-            make_default_profile(&config_dir)
-        };
+    let (profile_name, profile) = if let Some(p) = Config::get_active_profile(cli_kind, &config_dir)
+    {
+        let NamedProfile { name, profile } = p;
+        match profile {
+            Profile::Golem(_) => make_default_profile(&config_dir),
+            Profile::GolemCloud(profile) => (name, profile),
+        }
+    } else {
+        make_default_profile(&config_dir)
+    };
 
-    let command = GolemCloudCommand::<CloudProfileAdd>::parse();
-
-    init_tracing(&command.verbosity);
-    info!("Golem Cloud CLI with profile: {}", name);
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(cloud::main::async_main(
-            command,
-            name,
-            cloud_profile,
-            CliKind::Cloud,
+    run_main(
+        cloud::main::async_main,
+        ConfiguredMainArgs {
+            cli_kind,
             config_dir,
-            Box::new(PrintCloudCompletion()),
-        ))
+            profile_name,
+            profile,
+            command: GolemCloudCommand::<CloudProfileAdd>::parse(),
+        },
+    )
 }
 
 fn make_default_profile(config_dir: &Path) -> (ProfileName, CloudProfile) {

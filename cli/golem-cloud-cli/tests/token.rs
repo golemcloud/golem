@@ -1,7 +1,8 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use assert2::assert;
 use chrono::{DateTime, FixedOffset};
-use golem_cloud_cli::cloud::model::text::{TokenVecView, UnsafeTokenView};
+use golem_cloud_cli::cloud::model::text::token::{TokenListView, UnsafeTokenView};
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
 
@@ -88,7 +89,7 @@ fn token_list(
 ) -> Result<(), Failed> {
     let token: UnsafeTokenView = cli.run(&["token", "add"])?;
 
-    let tokens: TokenVecView = cli.run(&["token", "list"])?;
+    let tokens: TokenListView = cli.run(&["token", "list"])?;
 
     assert!(tokens.0.iter().any(|t| t.id == token.0.data.id));
 
@@ -104,13 +105,13 @@ fn token_delete(
 ) -> Result<(), Failed> {
     let token: UnsafeTokenView = cli.run(&["token", "add"])?;
 
-    let tokens: TokenVecView = cli.run(&["token", "list"])?;
+    let tokens: TokenListView = cli.run(&["token", "list"])?;
 
     assert!(tokens.0.iter().any(|t| t.id == token.0.data.id));
 
     cli.run_unit(&["token", "delete", &token.0.data.id.to_string()])?;
 
-    let tokens: TokenVecView = cli.run(&["token", "list"])?;
+    let tokens: TokenListView = cli.run(&["token", "list"])?;
 
     assert!(tokens.0.iter().all(|t| t.id != token.0.data.id));
 

@@ -1,6 +1,7 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
-use golem_cloud_cli::cloud::model::text::ProjectPolicyView;
+use assert2::assert;
+use golem_cloud_cli::cloud::model::text::project::{ProjectPolicyAddView, ProjectPolicyGetView};
 use golem_cloud_client::model::ProjectAction;
 use libtest_mimic::{Failed, Trial};
 use std::sync::Arc;
@@ -51,7 +52,7 @@ fn policy_add(
 ) -> Result<(), Failed> {
     let name = format!("policy add {name}");
 
-    let policy: ProjectPolicyView = cli.run(&[
+    let policy: ProjectPolicyAddView = cli.run(&[
         "project-policy",
         "add",
         "--project-policy-name",
@@ -84,7 +85,7 @@ fn policy_get(
 ) -> Result<(), Failed> {
     let name = format!("policy list {name}");
 
-    let policy: ProjectPolicyView = cli.run(&[
+    let policy: ProjectPolicyAddView = cli.run(&[
         "project-policy",
         "add",
         "--project-policy-name",
@@ -93,7 +94,7 @@ fn policy_get(
         "DeleteWorker",
     ])?;
 
-    let policy: ProjectPolicyView =
+    let policy: ProjectPolicyGetView =
         cli.run(&["project-policy", "get", &policy.0.id.to_string()])?;
 
     assert_eq!(policy.0.name, name);

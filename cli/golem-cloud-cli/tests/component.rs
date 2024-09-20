@@ -1,5 +1,6 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_common::uri::oss::url::ComponentUrl;
 use libtest_mimic::{Failed, Trial};
@@ -90,14 +91,14 @@ fn component_add_and_find_all(
     let component_name = format!("{name} component add and find all");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
-    let res: Vec<ComponentView> = cli.run(&["component", "list"])?;
+    let res: Vec<ComponentView> = cli.run_trimmed(&["component", "list"])?;
     assert!(res.contains(&component), "{res:?}.contains({component:?})");
     Ok(())
 }
@@ -113,21 +114,21 @@ fn component_add_and_find_by_name(
     let component_name = format!("{name} component add and find by name");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let _: ComponentView = cli.run(&[
+    let _: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
         &component_name_other,
         env_service.to_str().unwrap(),
     ])?;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
-    let res: Vec<ComponentView> = cli.run(&[
+    let res: Vec<ComponentView> = cli.run_trimmed(&[
         "component",
         "list",
         &cfg.arg('c', "component-name"),
@@ -148,14 +149,14 @@ fn component_update(
     let component_name = format!("{name} component update");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
-    let _: ComponentView = cli.run(&[
+    let _: ComponentView = cli.run_trimmed(&[
         "component",
         "update",
         &cfg.arg('c', "component-name"),
@@ -175,7 +176,7 @@ fn component_update_urn(
     let component_name = format!("{name} component update urn");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -183,7 +184,7 @@ fn component_update_urn(
         env_service.to_str().unwrap(),
     ])?;
 
-    let _: ComponentView = cli.run(&[
+    let _: ComponentView = cli.run_trimmed(&[
         "component",
         "update",
         &cfg.arg('C', "component"),
@@ -203,7 +204,7 @@ fn component_update_url(
     let component_name = format!("{name} component update url");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -215,7 +216,7 @@ fn component_update_url(
         name: component.component_name.to_string(),
     };
 
-    let _: ComponentView = cli.run(&[
+    let _: ComponentView = cli.run_trimmed(&[
         "component",
         "update",
         &cfg.arg('C', "component"),
@@ -235,14 +236,14 @@ fn component_add_and_get(
     let component_name = format!("{name} component add and get");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
         &component_name,
         env_service.to_str().unwrap(),
     ])?;
-    let res: ComponentView = cli.run(&[
+    let res: ComponentView = cli.run_trimmed(&[
         "component",
         "get",
         &cfg.arg('c', "component-name"),
@@ -262,7 +263,7 @@ fn component_add_and_get_urn(
     let component_name = format!("{name} component add and get urn");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -270,7 +271,7 @@ fn component_add_and_get_urn(
         env_service.to_str().unwrap(),
     ])?;
 
-    let res: ComponentView = cli.run(&[
+    let res: ComponentView = cli.run_trimmed(&[
         "component",
         "get",
         &cfg.arg('C', "component"),
@@ -290,7 +291,7 @@ fn component_add_and_get_url(
     let component_name = format!("{name} component add and get url");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let component: ComponentView = cli.run(&[
+    let component: ComponentView = cli.run_trimmed(&[
         "component",
         "add",
         &cfg.arg('c', "component-name"),
@@ -302,7 +303,7 @@ fn component_add_and_get_url(
         name: component.component_name.to_string(),
     };
 
-    let res: ComponentView = cli.run(&[
+    let res: ComponentView = cli.run_trimmed(&[
         "component",
         "get",
         &cfg.arg('C', "component"),

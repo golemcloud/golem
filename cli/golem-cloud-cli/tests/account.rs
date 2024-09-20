@@ -1,7 +1,9 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
-use golem_cloud_cli::cloud::model::text::{
-    AccountViewAdd, AccountViewGet, AccountViewUpdate, RoleVecView,
+use assert2::assert;
+use golem_cloud_cli::cloud::model::text::account::GrantGetView;
+use golem_cloud_cli::cloud::model::text::account::{
+    AccountAddView, AccountGetView, AccountUpdateView,
 };
 use golem_cloud_cli::cloud::model::Role;
 use libtest_mimic::{Failed, Trial};
@@ -66,7 +68,7 @@ fn account_get_self(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let account: AccountViewGet = cli.run(&["account", "get"])?;
+    let account: AccountGetView = cli.run(&["account", "get"])?;
 
     assert_eq!(account.0.name, "Initial User");
 
@@ -85,7 +87,7 @@ fn account_add(
     let name = format!("account add {name}");
     let email = format!("account_add_{name}@example.com");
 
-    let account: AccountViewAdd = cli.run(&[
+    let account: AccountAddView = cli.run(&[
         "account",
         "add",
         &cfg.arg('n', "account-name"),
@@ -97,7 +99,7 @@ fn account_add(
     assert_eq!(account.0.name, name);
     assert_eq!(account.0.email, email);
 
-    let account: AccountViewGet =
+    let account: AccountGetView =
         cli.run(&["account", "get", &cfg.arg('A', "account-id"), &account.0.id])?;
 
     assert_eq!(account.0.name, name);
@@ -118,7 +120,7 @@ fn account_update(
     let name = format!("account update init {name}");
     let email = format!("account_update_init_{name}@example.com");
 
-    let account: AccountViewAdd = cli.run(&[
+    let account: AccountAddView = cli.run(&[
         "account",
         "add",
         &cfg.arg('n', "account-name"),
@@ -133,7 +135,7 @@ fn account_update(
     let name = format!("account update new {name}");
     let email = format!("account_update_new_{name}@example.com");
 
-    let account: AccountViewUpdate = cli.run(&[
+    let account: AccountUpdateView = cli.run(&[
         "account",
         "update",
         &cfg.arg('n', "account-name"),
@@ -147,7 +149,7 @@ fn account_update(
     assert_eq!(account.0.name, name);
     assert_eq!(account.0.email, email);
 
-    let account: AccountViewGet =
+    let account: AccountGetView =
         cli.run(&["account", "get", &cfg.arg('A', "account-id"), &account.0.id])?;
 
     assert_eq!(account.0.name, name);
@@ -168,7 +170,7 @@ fn account_delete(
     let name = format!("account delete {name}");
     let email = format!("account_delete_{name}@example.com");
 
-    let account: AccountViewAdd = cli.run(&[
+    let account: AccountAddView = cli.run(&[
         "account",
         "add",
         &cfg.arg('n', "account-name"),
@@ -206,7 +208,7 @@ fn account_grant(
     let name = format!("account grant {name}");
     let email = format!("account_grant_{name}@example.com");
 
-    let account: AccountViewAdd = cli.run(&[
+    let account: AccountAddView = cli.run(&[
         "account",
         "add",
         &cfg.arg('n', "account-name"),
@@ -215,7 +217,7 @@ fn account_grant(
         &email,
     ])?;
 
-    let roles: RoleVecView = cli.run(&[
+    let roles: GrantGetView = cli.run(&[
         "account",
         "grant",
         "get",
@@ -234,7 +236,7 @@ fn account_grant(
         "Admin",
     ])?;
 
-    let roles: RoleVecView = cli.run(&[
+    let roles: GrantGetView = cli.run(&[
         "account",
         "grant",
         "get",
@@ -254,7 +256,7 @@ fn account_grant(
         "Admin",
     ])?;
 
-    let roles: RoleVecView = cli.run(&[
+    let roles: GrantGetView = cli.run(&[
         "account",
         "grant",
         "get",

@@ -1,5 +1,5 @@
 use crate::cloud::clients::grant::GrantClient;
-use crate::cloud::model::text::RoleVecView;
+use crate::cloud::model::text::account::GrantGetView;
 use crate::cloud::model::Role;
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
@@ -31,7 +31,7 @@ impl GrantService for GrantServiceLive {
         let account_id = account_id.as_ref().unwrap_or(&self.account_id);
         let roles = self.client.get_all(account_id).await?;
 
-        Ok(GolemResult::Ok(Box::new(RoleVecView(roles))))
+        Ok(GolemResult::Ok(Box::new(GrantGetView(roles))))
     }
 
     async fn add(

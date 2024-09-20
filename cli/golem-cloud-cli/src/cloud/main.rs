@@ -1,44 +1,55 @@
 use crate::cloud::command::{CloudCommand, GolemCloudCommand};
 use crate::cloud::factory::{CloudProfileAuth, CloudServiceFactory};
 use crate::cloud::model::ProjectRef;
-use golem_cli::check_for_newer_server_version;
+use crate::VERSION;
 use golem_cli::cloud::{AccountId, ProjectId};
 use golem_cli::command::profile::UniversalProfileAdd;
+use golem_cli::completion::PrintCompletion;
 use golem_cli::config::{CloudProfile, ProfileName};
 use golem_cli::diagnose::diagnose;
-use golem_cli::examples;
 use golem_cli::factory::ServiceFactory;
-use golem_cli::init::{CliKind, PrintCompletion, ProfileAuth};
+use golem_cli::init::{CliKind, ProfileAuth};
 use golem_cli::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult};
 use golem_cli::stubgen::handle_stubgen;
+use golem_cli::{check_for_newer_server_version, MainArgs};
+use golem_cli::{examples, ConfiguredMainArgs};
 use golem_common::uri::cloud::uri::{
     ApiDefinitionUri, ComponentUri, ProjectUri, ResourceUri, ToOssUri, WorkerUri,
 };
 use golem_common::uri::cloud::url::{ComponentUrl, ProjectUrl, ResourceUrl, WorkerUrl};
 use golem_common::uri::cloud::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub async fn async_main<ProfileAdd>(
+    args: ConfiguredMainArgs<CloudProfile, GolemCloudCommand<ProfileAdd>>,
+) -> Result<GolemResult, GolemError>
+where
+    ProfileAdd: Into<UniversalProfileAdd> + clap::Args,
+    GolemCloudCommand<ProfileAdd>: PrintCompletion,
+{
+    let format = args.format();
 
-pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
-    cmd: GolemCloudCommand<ProfileAdd>,
-    profile_name: ProfileName,
-    profile: CloudProfile,
-    cli_kind: CliKind,
-    config_dir: PathBuf,
-    print_completion: Box<dyn PrintCompletion>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let format = cmd.format.unwrap_or(profile.config.default_format);
+    let ConfiguredMainArgs {
+        cli_kind,
+        config_dir,
+        profile_name,
+        profile,
+        command,
+    } = args;
 
     let factory = || async {
-        let factory =
-            CloudServiceFactory::from_profile(&profile_name, &profile, &config_dir, cmd.auth_token)
-                .await?;
+        let factory = CloudServiceFactory::from_profile(
+            &profile_name,
+            &profile,
+            &config_dir,
+            command.auth_token,
+        )
+        .await?;
         check_for_newer_server_version(factory.version_service().as_ref(), VERSION).await;
         Ok::<CloudServiceFactory, GolemError>(factory)
     };
 
-    let res = match cmd.command {
+    match command.command {
         CloudCommand::Component { subcommand } => {
             let factory = factory().await?;
             subcommand
@@ -158,21 +169,13 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
         }
         CloudCommand::Init {} => init(cli_kind, &config_dir, &CloudProfileAuth()).await,
         CloudCommand::Completion { generator } => {
-            print_completion.print_completion(generator);
+            GolemCloudCommand::<ProfileAdd>::print_completion(generator);
             Ok(GolemResult::Str("".to_string()))
         }
         CloudCommand::Diagnose { command } => {
             diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
-    };
-
-    match res {
-        Ok(res) => {
-            res.print(format);
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
     }
 }
 

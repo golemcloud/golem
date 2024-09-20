@@ -1,5 +1,5 @@
 use crate::cloud::clients::project::ProjectClient;
-use crate::cloud::model::text::{ProjectVecView, ProjectView};
+use crate::cloud::model::text::project::{ProjectAddView, ProjectGetView, ProjectListView};
 use crate::cloud::model::ProjectRef;
 use async_trait::async_trait;
 use golem_cli::cloud::{AccountId, ProjectId};
@@ -66,20 +66,18 @@ impl ProjectService for ProjectServiceLive {
             .create(&self.account_id, project_name, project_description)
             .await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectView::from(project))))
+        Ok(GolemResult::Ok(Box::new(ProjectAddView::from(project))))
     }
 
     async fn list(&self, project_name: Option<String>) -> Result<GolemResult, GolemError> {
         let projects = self.client.find(project_name).await?;
-
-        let projects = projects.into_iter().map(ProjectView::from).collect();
-        Ok(GolemResult::Ok(Box::new(ProjectVecView(projects))))
+        Ok(GolemResult::Ok(Box::new(ProjectListView::from(projects))))
     }
 
     async fn get_default(&self) -> Result<GolemResult, GolemError> {
         let project = self.find_default().await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectView::from(project))))
+        Ok(GolemResult::Ok(Box::new(ProjectGetView::from(project))))
     }
 
     async fn get(&self, uri: ProjectUri) -> Result<GolemResult, GolemError> {
@@ -92,7 +90,7 @@ impl ProjectService for ProjectServiceLive {
             .expect("Unexpected default project");
         let project = self.client.get(urn).await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectView::from(project))))
+        Ok(GolemResult::Ok(Box::new(ProjectGetView::from(project))))
     }
 
     async fn find_default(&self) -> Result<Project, GolemError> {

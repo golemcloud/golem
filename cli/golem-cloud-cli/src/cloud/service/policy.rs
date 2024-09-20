@@ -1,5 +1,5 @@
 use crate::cloud::clients::policy::ProjectPolicyClient;
-use crate::cloud::model::text::ProjectPolicyView;
+use crate::cloud::model::text::project::{ProjectPolicyAddView, ProjectPolicyGetView};
 use crate::cloud::model::{ProjectAction, ProjectPolicyId};
 use async_trait::async_trait;
 use golem_cli::model::{GolemError, GolemResult};
@@ -30,12 +30,12 @@ impl ProjectPolicyService for ProjectPolicyServiceLive {
             .create(project_policy_name, project_actions)
             .await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectPolicyView(policy))))
+        Ok(GolemResult::Ok(Box::new(ProjectPolicyAddView(policy))))
     }
 
     async fn get(&self, project_policy_id: ProjectPolicyId) -> Result<GolemResult, GolemError> {
         let policy = self.client.get(project_policy_id).await?;
 
-        Ok(GolemResult::Ok(Box::new(ProjectPolicyView(policy))))
+        Ok(GolemResult::Ok(Box::new(ProjectPolicyGetView(policy))))
     }
 }

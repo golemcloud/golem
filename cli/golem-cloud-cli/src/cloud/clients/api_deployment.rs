@@ -6,7 +6,7 @@ use golem_cloud_client::model::{ApiDefinitionInfo, ApiSite};
 use tracing::info;
 
 use crate::cloud::clients::errors::CloudGolemError;
-use crate::cloud::model::ToCli;
+use crate::cloud::model::to_cli::ToCli;
 use golem_cli::model::{ApiDefinitionId, ApiDefinitionIdWithVersion, ApiDeployment, GolemError};
 
 #[derive(Clone)]

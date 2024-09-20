@@ -5,16 +5,18 @@ use crate::cloud::command::policy::ProjectPolicySubcommand;
 use crate::cloud::command::project::ProjectSubcommand;
 use crate::cloud::command::token::TokenSubcommand;
 use crate::cloud::model::{CloudComponentUriOrName, ProjectAction, ProjectPolicyId, ProjectRef};
-use clap::{ArgMatches, Error, FromArgMatches, Parser, Subcommand};
+use clap::{ArgMatches, CommandFactory, Error, FromArgMatches, Parser, Subcommand};
+use clap_complete::Shell;
 use clap_verbosity_flag::Verbosity;
 use golem_cli::cloud::AccountId;
 use golem_cli::command::api_definition::ApiDefinitionSubcommand;
 use golem_cli::command::api_deployment::ApiDeploymentSubcommand;
 use golem_cli::command::component::ComponentSubCommand;
-use golem_cli::command::profile::ProfileSubCommand;
+use golem_cli::command::profile::{CloudProfileAdd, ProfileSubCommand, UniversalProfileAdd};
 use golem_cli::command::worker::{WorkerRefSplit, WorkerSubcommand};
-use golem_cli::diagnose;
-use golem_cli::model::{Format, WorkerName};
+use golem_cli::completion::PrintCompletion;
+use golem_cli::model::{Format, HasFormatConfig, HasVerbosity, WorkerName};
+use golem_cli::{completion, diagnose};
 use golem_common::model::WorkerId;
 use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ResourceUri, ToOssUri, WorkerUri};
 use golem_common::uri::cloud::url::{ComponentUrl, ProjectUrl, WorkerUrl};
@@ -452,7 +454,7 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Command line interface for Golem Cloud.", long_about = None, rename_all = "kebab-case")]
+#[command(author, version = crate::VERSION, about = "Command line interface for Golem Cloud.", long_about = None, rename_all = "kebab-case")]
 pub struct GolemCloudCommand<ProfileAdd: clap::Args> {
     #[arg(short = 'T', long, global = true)]
     pub auth_token: Option<Uuid>,
@@ -465,4 +467,28 @@ pub struct GolemCloudCommand<ProfileAdd: clap::Args> {
 
     #[command(subcommand)]
     pub command: CloudCommand<ProfileAdd>,
+}
+
+impl<ProfileAdd: clap::Args> HasFormatConfig for GolemCloudCommand<ProfileAdd> {
+    fn format(&self) -> Option<Format> {
+        self.format
+    }
+}
+
+impl<ProfileAdd: clap::Args> HasVerbosity for GolemCloudCommand<ProfileAdd> {
+    fn verbosity(&self) -> Verbosity {
+        self.verbosity.clone()
+    }
+}
+
+impl PrintCompletion for GolemCloudCommand<CloudProfileAdd> {
+    fn print_completion(shell: Shell) {
+        completion::print_completion(GolemCloudCommand::<CloudProfileAdd>::command(), shell)
+    }
+}
+
+impl PrintCompletion for GolemCloudCommand<UniversalProfileAdd> {
+    fn print_completion(shell: Shell) {
+        completion::print_completion(GolemCloudCommand::<UniversalProfileAdd>::command(), shell)
+    }
 }

@@ -1,5 +1,5 @@
 use crate::cloud::clients::domain::DomainClient;
-use crate::cloud::model::text::{ApiDomainVecView, ApiDomainView};
+use crate::cloud::model::text::api_domain::{ApiDomainAddView, ApiDomainListView};
 use crate::cloud::model::ProjectRef;
 use crate::cloud::service::project::ProjectService;
 use async_trait::async_trait;
@@ -33,7 +33,7 @@ impl DomainService for DomainServiceLive {
 
         let res = self.client.get(project_urn).await?;
 
-        Ok(GolemResult::Ok(Box::new(ApiDomainVecView(res))))
+        Ok(GolemResult::Ok(Box::new(ApiDomainListView(res))))
     }
 
     async fn add(
@@ -45,7 +45,7 @@ impl DomainService for DomainServiceLive {
 
         let res = self.client.update(project_urn, domain_name).await?;
 
-        Ok(GolemResult::Ok(Box::new(ApiDomainView(res))))
+        Ok(GolemResult::Ok(Box::new(ApiDomainAddView(res))))
     }
 
     async fn delete(

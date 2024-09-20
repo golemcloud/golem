@@ -1,6 +1,7 @@
 use crate::cli::{Cli, CliConfig, CliLive};
 use crate::components::TestDependencies;
 use crate::RefKind;
+use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
 use golem_client::model::UpdateRecord;

@@ -1,5 +1,5 @@
 use crate::cloud::clients::project_grant::ProjectGrantClient;
-use crate::cloud::model::text::ProjectGrantView;
+use crate::cloud::model::text::project::ProjectShareView;
 use crate::cloud::model::{ProjectAction, ProjectPolicyId, ProjectRef};
 use crate::cloud::service::project::ProjectService;
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ impl ProjectGrantService for ProjectGrantServiceLive {
                     .create_actions(project_urn, recipient_account_id, actions)
                     .await?;
 
-                Ok(GolemResult::Ok(Box::new(ProjectGrantView(grant))))
+                Ok(GolemResult::Ok(Box::new(ProjectShareView(grant))))
             }
             Some(policy_id) => {
                 let grant = self
@@ -50,7 +50,7 @@ impl ProjectGrantService for ProjectGrantServiceLive {
                     .create(project_urn, recipient_account_id, policy_id)
                     .await?;
 
-                Ok(GolemResult::Ok(Box::new(ProjectGrantView(grant))))
+                Ok(GolemResult::Ok(Box::new(ProjectShareView(grant))))
             }
         }
     }

@@ -1,5 +1,5 @@
 use crate::cloud::clients::token::TokenClient;
-use crate::cloud::model::text::{TokenVecView, UnsafeTokenView};
+use crate::cloud::model::text::token::{TokenListView, UnsafeTokenView};
 use crate::cloud::model::TokenId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -31,7 +31,7 @@ impl TokenService for TokenServiceLive {
     async fn list(&self, account_id: Option<AccountId>) -> Result<GolemResult, GolemError> {
         let account_id = account_id.as_ref().unwrap_or(&self.account_id);
         let token = self.client.get_all(account_id).await?;
-        Ok(GolemResult::Ok(Box::new(TokenVecView(token))))
+        Ok(GolemResult::Ok(Box::new(TokenListView(token))))
     }
 
     async fn add(

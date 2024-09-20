@@ -1,5 +1,5 @@
 use crate::cloud::clients::account::AccountClient;
-use crate::cloud::model::text::{AccountViewAdd, AccountViewGet, AccountViewUpdate};
+use crate::cloud::model::text::account::{AccountAddView, AccountGetView, AccountUpdateView};
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
 use golem_cli::model::{GolemError, GolemResult};
@@ -32,7 +32,7 @@ impl AccountService for AccountServiceLive {
     async fn get(&self, account_id: Option<AccountId>) -> Result<GolemResult, GolemError> {
         let account_id = account_id.as_ref().unwrap_or(&self.account_id);
         let account = self.client.get(account_id).await?;
-        Ok(GolemResult::Ok(Box::new(AccountViewGet(account))))
+        Ok(GolemResult::Ok(Box::new(AccountGetView(account))))
     }
 
     async fn update(
@@ -47,7 +47,7 @@ impl AccountService for AccountServiceLive {
         let email = account_email.unwrap_or(existing.email);
         let updated = AccountData { name, email };
         let account = self.client.put(account_id, updated).await?;
-        Ok(GolemResult::Ok(Box::new(AccountViewUpdate(account))))
+        Ok(GolemResult::Ok(Box::new(AccountUpdateView(account))))
     }
 
     async fn add(
@@ -62,7 +62,7 @@ impl AccountService for AccountServiceLive {
 
         let account = self.client.post(data).await?;
 
-        Ok(GolemResult::Ok(Box::new(AccountViewAdd(account))))
+        Ok(GolemResult::Ok(Box::new(AccountAddView(account))))
     }
 
     async fn delete(&self, account_id: Option<AccountId>) -> Result<GolemResult, GolemError> {
