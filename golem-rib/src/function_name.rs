@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{text, CompilerOutput, Expr, Interpreter, RibInterpreterResult};
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use golem_wasm_rpc::Value;
+use poem_openapi::types::ToJSON;
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -265,6 +268,122 @@ pub enum ParsedFunctionReference {
         resource_params: Vec<String>,
     },
 }
+
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub(crate) enum DynamicParsedFunctionReference {
+    Function {
+        function: String,
+    },
+    RawResourceConstructor {
+        resource: String,
+    },
+    RawResourceDrop {
+        resource: String,
+    },
+    RawResourceMethod {
+        resource: String,
+        method: String,
+    },
+    RawResourceStaticMethod {
+        resource: String,
+        method: String,
+    },
+    IndexedResourceConstructor {
+        resource: String,
+        resource_params: Vec<ResourceParam>,
+    },
+    IndexedResourceMethod {
+        resource: String,
+        resource_params: Vec<ResourceParam>,
+        method: String,
+    },
+    IndexedResourceStaticMethod {
+        resource: String,
+        resource_params: Vec<ResourceParam>,
+        method: String,
+    },
+    IndexedResourceDrop {
+        resource: String,
+        resource_params: Vec<ResourceParam>,
+    },
+}
+
+impl DynamicParsedFunctionReference {
+    fn to_static(&self) -> ParsedFunctionReference {
+        match self {
+            Self::Function { function } => ParsedFunctionReference::Function {
+                function: function.clone(),
+            },
+            Self::RawResourceConstructor { resource } => {
+                ParsedFunctionReference::RawResourceConstructor {
+                    resource: resource.clone(),
+                }
+            }
+            Self::RawResourceDrop { resource } => ParsedFunctionReference::RawResourceDrop {
+                resource: resource.clone(),
+            },
+            Self::RawResourceMethod { resource, method } => {
+                ParsedFunctionReference::RawResourceMethod {
+                    resource: resource.clone(),
+                    method: method.clone(),
+                }
+            }
+            Self::RawResourceStaticMethod { resource, method } => {
+                ParsedFunctionReference::RawResourceStaticMethod {
+                    resource: resource.clone(),
+                    method: method.clone(),
+                }
+            }
+            Self::IndexedResourceConstructor {
+                resource,
+                resource_params,
+            } => ParsedFunctionReference::IndexedResourceConstructor {
+                resource: resource.clone(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|param| text::to_raw_string(&param.0))
+                    .collect(),
+            },
+            Self::IndexedResourceMethod {
+                resource,
+                resource_params,
+                method,
+            } => ParsedFunctionReference::IndexedResourceMethod {
+                resource: resource.clone(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|param| text::to_raw_string(&param.0))
+                    .collect(),
+                method: method.clone(),
+            },
+            Self::IndexedResourceStaticMethod {
+                resource,
+                resource_params,
+                method,
+            } => ParsedFunctionReference::IndexedResourceStaticMethod {
+                resource: resource.clone(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|param| text::to_raw_string(&param.0))
+                    .collect(),
+                method: method.clone(),
+            },
+            Self::IndexedResourceDrop {
+                resource,
+                resource_params,
+            } => ParsedFunctionReference::IndexedResourceDrop {
+                resource: resource.clone(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|param| text::to_raw_string(&param.0))
+                    .collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub struct ResourceParam(pub Expr);
 
 impl Display for ParsedFunctionReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -598,6 +717,51 @@ pub struct ParsedFunctionName {
     pub function: ParsedFunctionReference,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+pub(crate) struct DynamicParsedFunctionName {
+    pub site: ParsedFunctionSite,
+    pub function: DynamicParsedFunctionReference,
+}
+
+impl TryFrom<DynamicParsedFunctionName> for ParsedFunctionName {
+    type Error = String;
+
+    fn try_from(value: DynamicParsedFunctionName) -> Result<Self, Self::Error> {
+        Ok(ParsedFunctionName {
+            site: value.site,
+            function: value.function.try_into()?,
+        })
+    }
+}
+
+impl DynamicParsedFunctionName {
+    pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
+        let name = name.as_ref();
+
+        let mut parser = crate::parser::call::function_name();
+
+        let result: Result<(DynamicParsedFunctionName, &str), easy::ParseError<&str>> =
+            parser.easy_parse(name);
+
+        match result {
+            Ok((parsed, _)) => Ok(parsed),
+            Err(error) => {
+                let error_message = error
+                    .map_position(|p| p.translate_position(name))
+                    .to_string();
+                Err(error_message)
+            }
+        }
+    }
+
+    fn to_static(&self) -> ParsedFunctionName {
+        ParsedFunctionName {
+            site: self.site.clone(),
+            function: self.function.to_static(),
+        }
+    }
+}
+
 impl Serialize for ParsedFunctionName {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let function_name = self.to_string();
@@ -651,7 +815,7 @@ impl ParsedFunctionName {
 
         let mut parser = crate::parser::call::function_name();
 
-        let result: Result<(ParsedFunctionName, &str), easy::ParseError<&str>> =
+        let result: Result<(DynamicParsedFunctionName, &str), easy::ParseError<&str>> =
             parser.easy_parse(name);
 
         match result {

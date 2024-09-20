@@ -135,8 +135,12 @@ impl Interpreter {
                     internal::run_select_index_instruction(&mut self.stack, index)?;
                 }
 
-                RibIR::InvokeFunction(parsed_function_name, arity, _) => {
-                    internal::run_call_instruction(parsed_function_name, arity, self).await?;
+                RibIR::CreateFunctionName(site, function_type) => {
+                    internal::run_create_function_name_instruction(site, function_type, self)?;
+                }
+
+                RibIR::InvokeFunction(arity, _) => {
+                    internal::run_call_instruction(arity, self).await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
@@ -210,13 +214,16 @@ mod internal {
     use crate::interpreter::result::RibInterpreterResult;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        GetLiteralValue, InstructionId, Interpreter, ParsedFunctionName, RibIR, VariableId,
+        FunctionReferenceType, GetLiteralValue, InstructionId, Interpreter, ParsedFunctionName,
+        ParsedFunctionReference, ParsedFunctionSite, RibIR, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::typed_result::ResultValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedRecord, TypedTuple};
+    use golem_wasm_rpc::type_annotated_value_to_string;
+    use poem_openapi::types::ToJSON;
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -559,9 +566,202 @@ mod internal {
         }
     }
 
+    pub(crate) fn run_create_function_name_instruction(
+        site: ParsedFunctionSite,
+        function_type: FunctionReferenceType,
+        interpreter: &mut Interpreter,
+    ) -> Result<(), String> {
+        match function_type {
+            FunctionReferenceType::Function(parsed_fn_name) => {
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::Function {
+                        function: parsed_fn_name,
+                    },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+
+            FunctionReferenceType::RawResourceConstructor(resource) => {
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::RawResourceConstructor { resource },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::RawResourceDrop(resource) => {
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::RawResourceDrop { resource },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::RawResourceMethod(resource, meethod) => {
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::RawResourceMethod { resource, method },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::RawResourceStaticMethod(resource, method) => {
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::RawResourceStaticMethod { resource, method },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::IndexedResourceConstructor(resource, resource_params_size) => {
+                let last_n_elements = interpreter
+                    .stack
+                    .pop_n(resource_params_size)
+                    .ok_or("Failed to get values from the stack".to_string())?;
+
+                let type_anntoated_values = last_n_elements
+                    .iter()
+                    .map(|interpreter_result| {
+                        interpreter_result
+                            .get_val()
+                            .ok_or("Failed to get value from the stack".to_string())
+                    })
+                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::IndexedResourceConstructor {
+                        resource,
+                        resource_params: type_anntoated_values
+                            .iter()
+                            .map(type_annotated_value_to_string)
+                            .collect()?,
+                    },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::IndexedResourceMethod(
+                resource,
+                resource_params_size,
+                method,
+            ) => {
+                let last_n_elements = interpreter
+                    .stack
+                    .pop_n(resource_params_size)
+                    .ok_or("Failed to get values from the stack".to_string())?;
+
+                let type_anntoated_values = last_n_elements
+                    .iter()
+                    .map(|interpreter_result| {
+                        interpreter_result
+                            .get_val()
+                            .ok_or("Failed to get value from the stack".to_string())
+                    })
+                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::IndexedResourceMethod {
+                        resource,
+                        resource_params: type_anntoated_values
+                            .iter()
+                            .map(type_annotated_value_to_string)
+                            .collect()?,
+                        method,
+                    },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::IndexedResourceStaticMethod(
+                resource,
+                resource_params_size,
+                method,
+            ) => {
+                let last_n_elements = interpreter
+                    .stack
+                    .pop_n(resource_params_size)
+                    .ok_or("Failed to get values from the stack".to_string())?;
+
+                let type_anntoated_values = last_n_elements
+                    .iter()
+                    .map(|interpreter_result| {
+                        interpreter_result
+                            .get_val()
+                            .ok_or("Failed to get value from the stack".to_string())
+                    })
+                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::IndexedResourceStaticMethod {
+                        resource,
+                        resource_params: type_anntoated_values
+                            .iter()
+                            .map(type_annotated_value_to_string)
+                            .collect()?,
+                        method,
+                    },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+            FunctionReferenceType::IndexedResourceDrop(resource, resource_params) => {
+                let last_n_elements = interpreter
+                    .stack
+                    .pop_n(resource_params)
+                    .ok_or("Failed to get values from the stack".to_string())?;
+
+                let type_anntoated_values = last_n_elements
+                    .iter()
+                    .map(|interpreter_result| {
+                        interpreter_result
+                            .get_val()
+                            .ok_or("Failed to get value from the stack".to_string())
+                    })
+                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+
+                let parsed_function_name = ParsedFunctionName {
+                    site,
+                    function: ParsedFunctionReference::IndexedResourceDrop {
+                        resource,
+                        resource_params: type_anntoated_values
+                            .iter()
+                            .map(type_annotated_value_to_string)
+                            .collect()?,
+                    },
+                };
+
+                interpreter
+                    .stack
+                    .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
+            }
+        }
+
+        Ok(())
+    }
+
     // Separate variant
     pub(crate) async fn run_call_instruction(
-        parsed_function_name: ParsedFunctionName,
         argument_size: usize,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
@@ -579,9 +779,14 @@ mod internal {
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
+        let function_name = interpreter
+            .stack
+            .pop_str()
+            .ok_or("Failed to get a function name from the stack".to_string())?;
+
         let result = interpreter
             .env
-            .invoke_worker_function_async(parsed_function_name, type_anntoated_values)
+            .invoke_worker_function_async(function_name, type_anntoated_values)
             .await?;
 
         let interpreter_result = match result {

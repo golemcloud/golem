@@ -92,7 +92,7 @@ mod internal {
             .invoke_and_await_function_json(
                 &worker_id,
                 worker_request_params.idempotency_key,
-                worker_request_params.function_name.to_string(),
+                worker_request_params.function_name,
                 invoke_parameters,
                 None,
                 empty_worker_metadata(),

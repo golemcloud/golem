@@ -63,6 +63,13 @@ impl InterpreterStack {
         Some(results)
     }
 
+    pub fn pop_str(&mut self) -> Option<String> {
+        self.pop_val().and_then(|v| match v {
+            TypeAnnotatedValue::Str(s) => Some(s),
+            _ => None,
+        })
+    }
+
     pub fn pop_val(&mut self) -> Option<TypeAnnotatedValue> {
         self.stack.pop().and_then(|v| v.get_val())
     }

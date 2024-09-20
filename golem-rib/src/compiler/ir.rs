@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{AnalysedTypeWithUnit, ParsedFunctionName, VariableId};
+use crate::{AnalysedTypeWithUnit, ParsedFunctionName, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{
@@ -51,13 +51,27 @@ pub enum RibIR {
     Jump(InstructionId),
     Label(InstructionId),
     Deconstruct,
-    InvokeFunction(ParsedFunctionName, usize, AnalysedTypeWithUnit),
+    CreateFunctionName(ParsedFunctionSite, FunctionReferenceType),
+    InvokeFunction(usize, AnalysedTypeWithUnit),
     PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
     PushEnum(String, AnalysedType),
     Throw(String),
     GetTag,
     Concat(usize),
     Negate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub enum FunctionReferenceType {
+    Function(String),
+    RawResourceConstructor(String),
+    RawResourceDrop(String),
+    RawResourceMethod(String, String),
+    RawResourceStaticMethod(String, String),
+    IndexedResourceConstructor(String, usize),
+    IndexedResourceMethod(String, usize, String),
+    IndexedResourceStaticMethod(String, usize, String),
+    IndexedResourceDrop(String, usize),
 }
 
 // Every instruction can have a unique ID, and the compiler

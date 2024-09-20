@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::ParsedFunctionName;
+use crate::{DynamicParsedFunctionName, ParsedFunctionName};
 use bincode::{Decode, Encode};
 use std::convert::TryFrom;
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum CallType {
-    Function(ParsedFunctionName),
+    Function(DynamicParsedFunctionName),
     VariantConstructor(String),
     EnumConstructor(String),
 }

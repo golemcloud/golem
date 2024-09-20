@@ -27,7 +27,7 @@ pub struct InterpreterEnv {
 
 pub type RibFunctionInvoke = Arc<
     dyn Fn(
-            ParsedFunctionName,
+            String,
             Vec<TypeAnnotatedValue>,
         ) -> Pin<Box<dyn Future<Output = Result<TypeAnnotatedValue, String>> + Send>>
         + Send
@@ -56,7 +56,7 @@ impl InterpreterEnv {
 
     pub fn invoke_worker_function_async(
         &self,
-        function_name: ParsedFunctionName,
+        function_name: String,
         args: Vec<TypeAnnotatedValue>,
     ) -> Pin<Box<dyn Future<Output = Result<TypeAnnotatedValue, String>> + Send>> {
         (self.call_worker_function_async)(function_name, args)

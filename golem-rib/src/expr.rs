@@ -17,7 +17,7 @@ use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{text, type_inference, InferredType, VariableId};
+use crate::{text, type_inference, DynamicParsedFunctionName, InferredType, VariableId};
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
@@ -30,7 +30,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, InferredType),
@@ -256,9 +256,9 @@ impl Expr {
         cond
     }
 
-    pub fn call(parsed_fn_name: ParsedFunctionName, args: Vec<Expr>) -> Self {
+    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, args: Vec<Expr>) -> Self {
         Expr::Call(
-            CallType::Function(parsed_fn_name),
+            CallType::Function(dynamic_parsed_fn_name),
             args,
             InferredType::Unknown,
         )
@@ -692,7 +692,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Number {
     pub value: f64, // Change to bigdecimal
 }
@@ -721,7 +721,7 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,
@@ -735,7 +735,7 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
