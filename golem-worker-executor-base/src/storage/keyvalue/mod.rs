@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod cassandra;
 pub mod memory;
 pub mod redis;
 pub mod sqlite;

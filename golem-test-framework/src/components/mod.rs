@@ -26,6 +26,7 @@ use tracing::{error, warn, Level};
 use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
 use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
 
+pub mod cassandra;
 pub mod component_compilation_service;
 pub mod component_service;
 mod docker;

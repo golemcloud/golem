@@ -19,6 +19,8 @@ use golem_common::redis::RedisPool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::config::TestDependencies;
+use golem_worker_executor_base::cassandra::CassandraSession;
+use golem_worker_executor_base::storage::keyvalue::cassandra::CassandraKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::sqlite::SqliteKeyValueStorage;
@@ -109,6 +111,31 @@ pub(crate) async fn sqlite_storage() -> impl GetKeyValueStorage {
 
     let kvs = SqliteKeyValueStorage::new(pool);
     SqliteKeyValueStorageWrapper { kvs }
+}
+
+struct CassandraKeyValueStorageWrapper {
+    kvs: CassandraKeyValueStorage,
+}
+
+impl GetKeyValueStorage for CassandraKeyValueStorageWrapper {
+    fn get_key_value_storage(&self) -> &dyn KeyValueStorage {
+        &self.kvs
+    }
+}
+
+pub(crate) async fn cassandra_storage() -> impl GetKeyValueStorage {
+    let cassandra = BASE_DEPS.cassandra();
+    cassandra.assert_valid();
+    let test_keyspace = format!("golem_test_{}", &Uuid::new_v4().to_string()[..8]);
+    let session = cassandra.get_session(None).await;
+    let cassandra_session = CassandraSession::new(session, true, &test_keyspace);
+    if let Err(err_msg) = cassandra_session.create_docker_schema().await {
+        cassandra.kill();
+        panic!("Cannot create schema : {}", err_msg);
+    }
+
+    let kvs = CassandraKeyValueStorage::new(cassandra_session);
+    CassandraKeyValueStorageWrapper { kvs }
 }
 
 pub fn ns() -> KeyValueStorageNamespace {
@@ -771,6 +798,13 @@ test_kv_storage!(
 test_kv_storage!(
     sqllite,
     crate::key_value_storage::sqlite_storage,
+    crate::key_value_storage::ns2,
+    crate::key_value_storage::ns
+);
+
+test_kv_storage!(
+    cassandra,
+    crate::key_value_storage::cassandra_storage,
     crate::key_value_storage::ns2,
     crate::key_value_storage::ns
 );

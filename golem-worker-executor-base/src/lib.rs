@@ -17,6 +17,7 @@ pub mod error;
 pub mod grpc;
 pub mod http_server;
 
+pub mod cassandra;
 pub mod function_result_interpreter;
 pub mod invocation;
 pub mod metrics;
@@ -64,6 +65,7 @@ use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use cassandra::CassandraSession;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::golem_version;
@@ -72,6 +74,7 @@ use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use std::sync::Arc;
+use storage::keyvalue::cassandra::CassandraKeyValueStorage;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use storage::sqlite_types::SqlitePool;
 use tokio::runtime::Handle;
@@ -195,6 +198,18 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                     .map_err(|err| anyhow!(err))?;
                 let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
                     Arc::new(SqliteKeyValueStorage::new(pool.clone()));
+                (None, key_value_storage)
+            }
+            KeyValueStorageConfig::Cassandra(cassandra) => {
+                info!(
+                    "Using Cassandra for key-value storage at {:?}",
+                    cassandra.nodes
+                );
+                let session = CassandraSession::configured(cassandra)
+                    .await
+                    .map_err(|err| anyhow!(err))?;
+                let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                    Arc::new(CassandraKeyValueStorage::new(session.clone()));
                 (None, key_value_storage)
             }
         };

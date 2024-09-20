@@ -199,6 +199,7 @@ wasmtime = { version = "=21.0.1", features = ["component-model"] }
 wasmtime-wasi = { version = "=21.0.1" }
 wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { version = "0.26.0" }
+scylla = "0.14.0"
 
 [patch.crates-io]
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }

@@ -27,6 +27,7 @@ cli-table = { workspace = true }
 chrono = { workspace = true }
 colored = "2.1.0"
 console-subscriber = { workspace = true }
+futures = { workspace = true }
 itertools = { workspace = true }
 k8s-openapi = { workspace = true }
 kill_tree = { version = "0.2.4", features = ["tokio"] }
@@ -35,6 +36,7 @@ kube-derive = { workspace = true }
 once_cell = { workspace = true }
 postgres = { workspace = true }
 redis = { workspace = true }
+scylla = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

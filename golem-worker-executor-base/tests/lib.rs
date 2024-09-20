@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ctor::{ctor, dtor};
+use golem_test_framework::components::cassandra::docker::DockerCassandra;
+use golem_test_framework::components::cassandra::Cassandra;
 use tracing::Level;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
@@ -67,6 +69,7 @@ pub(crate) struct WorkerExecutorPerTestDependencies {
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     component_directory: PathBuf,
+    cassandra: Arc<dyn Cassandra + Send + Sync + 'static>,
 }
 
 impl TestDependencies for WorkerExecutorPerTestDependencies {
@@ -107,6 +110,10 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         panic!("Not supported")
     }
+
+    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
+        self.cassandra.clone()
+    }
 }
 
 struct WorkerExecutorTestDependencies {
@@ -114,6 +121,7 @@ struct WorkerExecutorTestDependencies {
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     component_directory: PathBuf,
+    cassandra: Arc<dyn Cassandra + Send + Sync + 'static>,
 }
 
 impl WorkerExecutorTestDependencies {
@@ -131,11 +139,13 @@ impl WorkerExecutorTestDependencies {
         let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
             FileSystemComponentService::new(Path::new("data/components")),
         );
+        let cassandra = Arc::new(DockerCassandra::new(false));
         Self {
             redis,
             redis_monitor,
             component_directory,
             component_service,
+            cassandra,
         }
     }
 
@@ -166,6 +176,7 @@ impl WorkerExecutorTestDependencies {
             worker_service,
             component_service: self.component_service().clone(),
             component_directory: self.component_directory.clone(),
+            cassandra: self.cassandra.clone(),
         }
     }
 }
@@ -208,6 +219,10 @@ impl TestDependencies for WorkerExecutorTestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         panic!("Not supported")
     }
+
+    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
+        self.cassandra.clone()
+    }
 }
 
 #[ctor]
@@ -219,6 +234,7 @@ unsafe fn drop_base_deps() {
     let base_deps_ptr = base_deps_ptr as *mut WorkerExecutorTestDependencies;
     (*base_deps_ptr).redis().kill();
     (*base_deps_ptr).redis_monitor().kill();
+    (*base_deps_ptr).cassandra().kill();
 }
 
 struct Tracing;

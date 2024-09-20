@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::components::cassandra::Cassandra;
 use crate::components::component_compilation_service::ComponentCompilationService;
 pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
@@ -44,6 +45,7 @@ pub trait TestDependencies {
     ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static>;
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
+    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static>;
 
     fn kill_all(&self) {
         self.worker_executor_cluster().kill_all();
@@ -54,6 +56,7 @@ pub trait TestDependencies {
         self.rdb().kill();
         self.redis_monitor().kill();
         self.redis().kill();
+        self.cassandra().kill();
     }
 }
 

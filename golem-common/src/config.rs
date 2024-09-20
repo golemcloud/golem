@@ -17,6 +17,7 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
 use figment::Figment;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
@@ -466,4 +467,31 @@ pub struct DbPostgresConfig {
     pub port: u16,
     pub max_connections: u32,
     pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CassandraConfig {
+    pub nodes: Vec<SocketAddr>,
+    #[serde(default = "default_cassandra_keyspace")]
+    pub keyspace: String,
+    pub tracing: bool,
+    pub pool_size_per_host: usize,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+fn default_cassandra_keyspace() -> String {
+    String::from("__golem")
+}
+
+impl Default for CassandraConfig {
+    fn default() -> Self {
+        Self {
+            nodes: vec!["127.0.0.1:9042".parse().unwrap()],
+            keyspace: default_cassandra_keyspace(),
+            tracing: false,
+            pool_size_per_host: 3,
+            username: None,
+            password: None,
+        }
+    }
 }

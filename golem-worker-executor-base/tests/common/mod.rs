@@ -2,6 +2,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use ctor::ctor;
 
+use golem_test_framework::components::cassandra::Cassandra;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
@@ -234,6 +235,10 @@ impl TestDependencies for TestWorkerExecutor {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.deps.worker_executor_cluster()
+    }
+
+    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
+        self.deps.cassandra()
     }
 }
 

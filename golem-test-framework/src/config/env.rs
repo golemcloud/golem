@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::components;
+use crate::components::cassandra::Cassandra;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
@@ -512,6 +513,9 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
+    }
+    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
+        panic!("Not supported")
     }
 }
 
