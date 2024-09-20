@@ -4,7 +4,7 @@ pub use git_version::git_version;
 macro_rules! golem_version {
     () => {{
         let version = golem_common::golem_version::git_version!(
-            args = ["--tags", "--long"],
+            args = ["--tags"],
             cargo_prefix = "",
             fallback = "0.0.0"
         );
