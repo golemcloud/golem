@@ -2,7 +2,7 @@ use crate::service::auth::CloudNamespace;
 use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_service_base::model::WorkerId;
+use golem_common::model::WorkerId;
 use golem_worker_service_base::service::worker::ConnectWorkerStream as BaseWorkerStream;
 use std::sync::Arc;
 use tonic::Status;

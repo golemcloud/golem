@@ -10,9 +10,9 @@ use cloud_api_grpc::proto::golem::cloud::limit::v1::{
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, WorkerId};
 use golem_common::retries::with_retries;
-use golem_service_base::model::{ResourceLimits, WorkerId};
+use golem_service_base::model::ResourceLimits;
 use std::fmt::Display;
 use tonic::transport::Channel;
 use tonic::Status;

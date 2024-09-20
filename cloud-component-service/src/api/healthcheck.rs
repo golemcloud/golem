@@ -2,9 +2,9 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 
 use crate::api::ApiTags;
-pub struct HealthcheckApi;
+use crate::VERSION;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub struct HealthcheckApi;
 
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize, Object,

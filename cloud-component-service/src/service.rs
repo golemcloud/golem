@@ -9,7 +9,9 @@ use crate::service::limit::{LimitService, LimitServiceDefault};
 use crate::service::project::{ProjectService, ProjectServiceDefault};
 use golem_common::config::DbConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+use golem_component_service_base::repo::component::{
+    ComponentRepo, DbComponentRepo, LoggedComponentRepo,
+};
 use golem_component_service_base::service::component::{
     ComponentService as BaseComponentService,
     ComponentServiceDefault as BaseComponentServiceDefault,
@@ -36,13 +38,17 @@ impl Services {
                 let db_pool = db::create_postgres_pool(&c)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(DbComponentRepo::new(db_pool.clone().into()))
+                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                    db_pool.clone().into(),
+                )))
             }
             DbConfig::Sqlite(c) => {
                 let db_pool = db::create_sqlite_pool(&c)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(DbComponentRepo::new(db_pool.clone().into()))
+                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                    db_pool.clone().into(),
+                )))
             }
         };
 

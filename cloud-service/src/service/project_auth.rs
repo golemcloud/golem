@@ -135,8 +135,8 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
                     let policies = self.project_policy_service.get_all(policy_ids).await?;
 
                     let actions = policies
-                        .iter()
-                        .flat_map(|p| p.clone().project_actions.actions)
+                        .into_iter()
+                        .flat_map(|p| p.project_actions.actions)
                         .collect::<HashSet<ProjectAction>>();
 
                     ProjectActions { actions }

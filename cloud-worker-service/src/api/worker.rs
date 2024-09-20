@@ -5,7 +5,7 @@ use crate::service::auth::{AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::GolemSecurityScheme;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter};
+use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
@@ -236,7 +236,7 @@ impl WorkerApi {
 
             let WorkerCreationRequest { name, args, env } = request.0;
 
-            let worker_id = make_worker_id(component_id, name)?;
+            let worker_id = validated_worker_id(component_id, name)?;
 
             let _worker = self
                 .worker_service
@@ -274,7 +274,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
@@ -307,7 +307,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
             "invoke_and_await_function",
@@ -352,7 +352,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!(
             "invoke_function",
@@ -397,7 +397,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("complete_promise", worker_id = worker_id.to_string());
@@ -436,7 +436,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
@@ -481,7 +481,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::WorkerMetadata>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record =
             recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
@@ -650,7 +650,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
         let response = self
@@ -678,7 +678,7 @@ impl WorkerApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
 
@@ -699,10 +699,14 @@ impl WorkerApi {
     }
 }
 
-fn make_worker_id(
+fn validated_worker_id(
     component_id: ComponentId,
     worker_name: String,
 ) -> std::result::Result<WorkerId, WorkerError> {
-    WorkerId::new(component_id, worker_name)
-        .map_err(|error| WorkerError::bad_request(format!("Invalid worker name: {error}")))
+    validate_worker_name(&worker_name)
+        .map_err(|error| WorkerError::bad_request(format!("Invalid worker name: {error}")))?;
+    Ok(WorkerId {
+        component_id,
+        worker_name,
+    })
 }

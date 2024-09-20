@@ -5,8 +5,8 @@ use crate::service::component::{ComponentError as ComponentServiceError, Compone
 use cloud_common::auth::GolemSecurityScheme;
 use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::*;
 use poem::error::ReadBodyError;
@@ -160,6 +160,9 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
+        /// Type of the new version of the component - if not specified, the type of the previous version
+        /// is used.
+        component_type: Query<Option<ComponentType>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<crate::model::Component>> {
         let auth = CloudAuthCtx::new(token.secret());
@@ -170,7 +173,7 @@ impl ComponentApi {
         let response = {
             let data = wasm.0.into_vec().await?;
             self.component_service
-                .update(&component_id.0, data, &auth)
+                .update(&component_id.0, component_type.0, data, &auth)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -182,6 +185,7 @@ impl ComponentApi {
     /// Create a new component
     ///
     /// The request body is encoded as multipart/form-data containing metadata and the WASM binary.
+    /// If the component type is not specified, it will be considered as a `Durable` component.
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(
         &self,
@@ -199,7 +203,17 @@ impl ComponentApi {
             let component_name = payload.query.0.component_name;
             let project_id = payload.query.0.project_id;
             self.component_service
-                .create(project_id, &component_name, data, &auth)
+                .create(
+                    project_id,
+                    &component_name,
+                    payload
+                        .query
+                        .0
+                        .component_type
+                        .unwrap_or(ComponentType::Durable),
+                    data,
+                    &auth,
+                )
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())

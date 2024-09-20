@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_service_base::model::WorkerId;
+use golem_common::model::WorkerId;
+use golem_service_base::model::validate_worker_name;
 use golem_worker_service_base::worker_bridge_execution::{
     WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
 };
@@ -46,28 +47,27 @@ async fn execute(
     default_executor: &CloudWorkerRequestToHttpResponse,
     worker_request_params: WorkerRequest,
 ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-    let auth = CloudAuthCtx::new(TokenSecret::new(default_executor.access_token));
-    let worker_name = worker_request_params.worker_name;
-    let component_id = worker_request_params.component_id;
-
-    let worker_id = WorkerId::new(component_id.clone(), worker_name.clone())?;
-
     info!(
         "Executing request for component: {}, worker: {}, function: {}",
-        component_id,
-        worker_name.clone(),
+        worker_request_params.component_id,
+        worker_request_params.worker_name,
         worker_request_params.function_name
     );
 
-    let invoke_parameters = worker_request_params.function_params;
+    validate_worker_name(&worker_request_params.worker_name)?;
+
+    let auth = CloudAuthCtx::new(TokenSecret::new(default_executor.access_token));
 
     let type_annotated_value = default_executor
         .worker_service
         .invoke_and_await_function_json(
-            &worker_id,
+            &WorkerId {
+                component_id: worker_request_params.component_id,
+                worker_name: worker_request_params.worker_name,
+            },
             worker_request_params.idempotency_key,
             worker_request_params.function_name.to_string(),
-            invoke_parameters,
+            worker_request_params.function_params,
             None,
             &auth,
         )

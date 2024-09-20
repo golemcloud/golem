@@ -100,8 +100,8 @@ impl AccountSummaryGrpcApi {
             .await?;
 
         let accounts = values
-            .iter()
-            .map(|a| a.clone().into())
+            .into_iter()
+            .map(|a| a.into())
             .collect::<Vec<AccountSummary>>();
 
         Ok(GetAccountsSuccessResponse { accounts })

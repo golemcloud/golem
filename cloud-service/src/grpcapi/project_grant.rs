@@ -137,8 +137,8 @@ impl ProjectGrantGrpcApi {
             .await?;
 
         let grants = values
-            .iter()
-            .map(|a| a.clone().into())
+            .into_iter()
+            .map(|a| a.into())
             .collect::<Vec<ProjectGrant>>();
 
         Ok(GetProjectGrantsSuccessResponse { data: grants })

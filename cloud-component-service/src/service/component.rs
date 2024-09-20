@@ -10,8 +10,8 @@ use cloud_api_grpc::proto::golem::cloud::project::v1::project_error;
 use cloud_common::model::ProjectAction;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::component_metadata::ComponentProcessingError;
-use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_component_service_base::repo::RepoError;
 use golem_component_service_base::service::component::{
     ComponentError as BaseComponentError, ComponentService as BaseComponentService,
@@ -128,6 +128,7 @@ pub trait ComponentService {
         &self,
         project_id: Option<ProjectId>,
         component_name: &ComponentName,
+        component_type: ComponentType,
         data: Vec<u8>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError>;
@@ -135,6 +136,7 @@ pub trait ComponentService {
     async fn update(
         &self,
         component_id: &ComponentId,
+        component_type: Option<ComponentType>,
         data: Vec<u8>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError>;
@@ -221,6 +223,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         project_id: Option<ProjectId>,
         component_name: &ComponentName,
+        component_type: ComponentType,
         data: Vec<u8>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
@@ -255,7 +258,13 @@ impl ComponentService for ComponentServiceDefault {
 
         let component = self
             .base_component_service
-            .create(&component_id, component_name, data.clone(), &namespace)
+            .create(
+                &component_id,
+                component_name,
+                component_type,
+                data.clone(),
+                &namespace,
+            )
             .await?;
 
         Ok(component.into())
@@ -264,6 +273,7 @@ impl ComponentService for ComponentServiceDefault {
     async fn update(
         &self,
         component_id: &ComponentId,
+        component_type: Option<ComponentType>,
         data: Vec<u8>,
         auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
@@ -287,7 +297,7 @@ impl ComponentService for ComponentServiceDefault {
 
         let component = self
             .base_component_service
-            .update(component_id, data.clone(), &namespace)
+            .update(component_id, data.clone(), component_type, &namespace)
             .await?;
 
         Ok(component.into())
@@ -484,6 +494,7 @@ impl ComponentService for ComponentServiceNoop {
         &self,
         project_id: Option<ProjectId>,
         _component_name: &ComponentName,
+        component_type: ComponentType,
         _data: Vec<u8>,
         _auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
@@ -502,6 +513,7 @@ impl ComponentService for ComponentServiceNoop {
                 version: 0,
             },
             created_at: Some(Utc::now()),
+            component_type: Some(component_type),
         };
 
         Ok(fake_component)
@@ -510,6 +522,7 @@ impl ComponentService for ComponentServiceNoop {
     async fn update(
         &self,
         component_id: &ComponentId,
+        component_type: Option<ComponentType>,
         _data: Vec<u8>,
         _auth: &CloudAuthCtx,
     ) -> Result<crate::model::Component, ComponentError> {
@@ -527,6 +540,7 @@ impl ComponentService for ComponentServiceNoop {
                 version: 0,
             },
             created_at: Some(Utc::now()),
+            component_type,
         };
 
         Ok(fake_component)

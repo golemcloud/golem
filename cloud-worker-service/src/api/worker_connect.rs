@@ -4,9 +4,9 @@ use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use cloud_common::auth::WrappedGolemSecuritySchema;
 use cloud_common::model::TokenSecret;
 use futures_util::StreamExt;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, WorkerId};
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::{ErrorsBody, WorkerId};
+use golem_service_base::model::{validate_worker_name, ErrorsBody};
 use golem_worker_service_base::service::worker::proxy_worker_connection;
 use poem::web::websocket::WebSocket;
 use poem::web::{Data, Path};
@@ -64,12 +64,17 @@ async fn get_worker_stream(
     worker_name: String,
     token: TokenSecret,
 ) -> Result<(WorkerId, ConnectWorkerStream), Response> {
-    let worker_id = WorkerId::new(component_id, worker_name).map_err(|e| {
+    validate_worker_name(&worker_name).map_err(|e| {
         let error = WorkerError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid worker id: {e}")],
         }));
         error.into_response()
     })?;
+
+    let worker_id = WorkerId {
+        component_id: component_id.clone(),
+        worker_name: worker_name.clone(),
+    };
 
     let record = recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
 

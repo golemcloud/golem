@@ -1,3 +1,4 @@
+use crate::VERSION;
 use lazy_static::lazy_static;
 use prometheus::*;
 
@@ -8,11 +9,7 @@ lazy_static! {
 }
 
 pub fn register_all() -> Registry {
-    VERSION_INFO.with_label_values(&[version()]).inc();
+    VERSION_INFO.with_label_values(&[VERSION]).inc();
 
     default_registry().clone()
-}
-
-fn version() -> &'static str {
-    option_env!("CARGO_VERSION_INFO").unwrap_or(env!("CARGO_PKG_VERSION"))
 }

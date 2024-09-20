@@ -8,7 +8,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, ProjectId, ScanCursor, Timestamp,
-    WorkerFilter, WorkerStatus,
+    WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
 use golem_worker_service_base::service::worker::{

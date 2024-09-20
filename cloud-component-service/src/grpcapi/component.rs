@@ -23,8 +23,8 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::Component;
 use golem_common::grpc::proto_component_id_string;
-use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_service_base::stream::ByteStream;
@@ -215,11 +215,18 @@ impl ComponentGrpcApi {
         metadata: MetadataMap,
     ) -> Result<Component, ComponentError> {
         let auth = self.auth(metadata)?;
-        let project_id: Option<ProjectId> = request.project_id.and_then(|id| id.try_into().ok());
-        let name = golem_service_base::model::ComponentName(request.component_name);
+        let project_id: Option<ProjectId> =
+            request.project_id.clone().and_then(|id| id.try_into().ok());
+        let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
             .component_service
-            .create(project_id, &name, data, &auth)
+            .create(
+                project_id,
+                &name,
+                request.component_type().into(),
+                data,
+                &auth,
+            )
             .await?;
         Ok(result.into())
     }
@@ -235,7 +242,17 @@ impl ComponentGrpcApi {
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
-        let result = self.component_service.update(&id, data, &auth).await?;
+        let component_type = match request.component_type {
+            Some(n) => Some(
+                ComponentType::try_from(n)
+                    .map_err(|_| bad_request_error("Invalid component type"))?,
+            ),
+            None => None,
+        };
+        let result = self
+            .component_service
+            .update(&id, component_type, data, &auth)
+            .await?;
         Ok(result.into())
     }
 }

@@ -3,10 +3,9 @@ use poem_openapi::*;
 
 use crate::api::ApiTags;
 use crate::model::{HealthcheckResponse, VersionInfo};
+use crate::VERSION;
 
 pub struct HealthcheckApi;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[OpenApi(prefix_path = "/", tag = ApiTags::HealthCheck)]
 impl HealthcheckApi {
