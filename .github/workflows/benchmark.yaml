@@ -20,9 +20,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: true
           ref: ${{ steps.get-branch.outputs.branch }}
           submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
