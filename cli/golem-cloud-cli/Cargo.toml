@@ -29,9 +29,11 @@ harness = false
 
 [dependencies]
 golem-cloud-client = { path = "../golem-cloud-client", version = "0.0.0" }
-golem-client = { workspace = true }
-golem-cli = { workspace = true }
-golem-common = { workspace = true }
+
+# NOTE: these cannot be workspace (git) deps, as that breaks publishing
+golem-client = "=1.0.15"
+golem-cli = "=1.0.15"
+golem-common = "=1.0.15"
 
 assert2 = { workspace = true }
 async-trait = { workspace = true }
@@ -95,7 +97,9 @@ strip-ansi-escapes = "0.2.0"
 once_cell = "1.19.0"
 golem-api-grpc = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
-golem-test-framework = { workspace = true }
+
+# NOTE: these cannot be workspace (git) deps, as that breaks publishing
+golem-test-framework = "=1.0.15"
 
 
 [features]
