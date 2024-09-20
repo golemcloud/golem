@@ -37,9 +37,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey, ScanCursor,
-    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatusRecord,
+    ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, ScanCursor,
+    SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
@@ -53,6 +53,7 @@ use uuid::Uuid;
 #[async_trait]
 pub trait TestDsl {
     async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
@@ -94,46 +95,46 @@ pub trait TestDsl {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<(), Error>>;
     async fn invoke_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<(), Error>>;
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_custom_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
     async fn invoke_and_await_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<serde_json::Value>,
     ) -> crate::Result<Result<serde_json::Value, Error>>;
@@ -172,7 +173,20 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         let component_id = self
             .component_service()
-            .get_or_add_component(&source_path)
+            .get_or_add_component(&source_path, ComponentType::Durable)
+            .await;
+
+        let _ = log_and_save_component_metadata(&source_path).await;
+
+        component_id
+    }
+
+    async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+
+        let component_id = self
+            .component_service()
+            .get_or_add_component(&source_path, ComponentType::Ephemeral)
             .await;
 
         let _ = log_and_save_component_metadata(&source_path).await;
@@ -186,7 +200,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let uuid = Uuid::new_v4();
         let unique_name = format!("{name}-{uuid}");
         self.component_service()
-            .add_component_with_name(&source_path, &unique_name)
+            .add_component_with_name(&source_path, &unique_name, ComponentType::Durable)
             .await
             .expect("Failed to store unique component")
     }
@@ -194,7 +208,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component_unverified(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .get_or_add_component(&source_path)
+            .get_or_add_component(&source_path, ComponentType::Durable)
             .await
     }
 
@@ -202,7 +216,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let _ = dump_component_info(&source_path);
         self.component_service()
-            .update_component(component_id, &source_path)
+            .update_component(component_id, &source_path, ComponentType::Durable)
             .await
     }
 
@@ -344,14 +358,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<(), Error>> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
-                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
+                worker_id: Some(target_worker_id.into()),
                 idempotency_key: None,
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
@@ -375,15 +390,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<(), Error>> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
             .invoke(InvokeRequest {
-                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
+                worker_id: Some(target_worker_id.into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
@@ -407,7 +423,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
@@ -416,7 +432,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke_and_await_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
@@ -433,7 +449,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke_and_await_custom(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
@@ -450,15 +466,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke_and_await_custom_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
             .invoke_and_await(InvokeAndAwaitRequest {
-                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
+                worker_id: Some(target_worker_id.into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 function: function_name.to_string(),
                 invoke_parameters: Some(InvokeParameters {
@@ -487,15 +504,16 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn invoke_and_await_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<serde_json::Value>,
     ) -> crate::Result<Result<serde_json::Value, Error>> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
         let params = params.into_iter().map(|p| p.to_string()).collect();
         let invoke_response = self
             .worker_service()
             .invoke_and_await_json(InvokeAndAwaitJsonRequest {
-                worker_id: Some(worker_id.clone().into_target_worker_id().into()),
+                worker_id: Some(target_worker_id.into()),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
                 function: function_name.to_string(),
                 invoke_parameters: params,
@@ -544,10 +562,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn capture_output_forever(
         &self,
         worker_id: &WorkerId,
-    ) -> (
-        UnboundedReceiver<Option<LogEvent>>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
+    ) -> (UnboundedReceiver<Option<LogEvent>>, Sender<()>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let cloned_service = self.worker_service().clone();
         let worker_id = worker_id.clone();
@@ -1081,6 +1096,7 @@ async fn log_and_save_component_metadata(path: &Path) {
 #[async_trait]
 pub trait TestDslUnsafe {
     async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
@@ -1118,33 +1134,33 @@ pub trait TestDslUnsafe {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<(), Error>;
     async fn invoke_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<(), Error>;
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error>;
     async fn invoke_and_await_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<serde_json::Value>,
     ) -> Result<serde_json::Value, Error>;
@@ -1172,6 +1188,10 @@ pub trait TestDslUnsafe {
 impl<T: TestDsl + Sync> TestDslUnsafe for T {
     async fn store_component(&self, name: &str) -> ComponentId {
         <T as TestDsl>::store_component(self, name).await
+    }
+
+    async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
+        <T as TestDsl>::store_ephemeral_component(self, name).await
     }
 
     async fn store_unique_component(&self, name: &str) -> ComponentId {
@@ -1253,7 +1273,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn invoke(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<(), Error> {
@@ -1264,7 +1284,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn invoke_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
@@ -1276,7 +1296,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn invoke_and_await(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error> {
@@ -1287,7 +1307,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn invoke_and_await_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<serde_json::Value>,
     ) -> Result<serde_json::Value, Error> {
@@ -1298,7 +1318,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn invoke_and_await_with_key(
         &self,
-        worker_id: &WorkerId,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,

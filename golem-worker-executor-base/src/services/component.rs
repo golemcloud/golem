@@ -779,13 +779,20 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError> {
-        let path = self
-            .root
-            .join(format!("{}-{}.wasm", component_id, component_version));
-
         let metadata = self
             .get_metadata(component_id, Some(component_version))
             .await?;
+
+        let postfix = match metadata.component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
+
+        let path = self.root.join(format!(
+            "{}-{}{postfix}.wasm",
+            component_id, component_version
+        ));
+
         Ok((
             self.get_from_path(&path, engine, component_id, component_version)
                 .await?,

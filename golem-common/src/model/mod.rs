@@ -422,6 +422,18 @@ impl Display for TargetWorkerId {
     }
 }
 
+impl From<WorkerId> for TargetWorkerId {
+    fn from(value: WorkerId) -> Self {
+        value.into_target_worker_id()
+    }
+}
+
+impl From<&WorkerId> for TargetWorkerId {
+    fn from(value: &WorkerId) -> Self {
+        value.clone().into_target_worker_id()
+    }
+}
+
 impl TryFrom<golem::worker::TargetWorkerId> for TargetWorkerId {
     type Error = String;
 

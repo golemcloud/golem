@@ -234,7 +234,7 @@ impl WorkerService for DefaultWorkerService {
     }
 
     async fn get_running_workers_in_shards(&self) -> Vec<WorkerMetadata> {
-        let shard_assignment = self.shard_service.opt_current_assignment();
+        let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<WorkerMetadata> = vec![];
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids {
