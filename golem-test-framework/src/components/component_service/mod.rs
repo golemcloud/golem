@@ -30,8 +30,9 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use tokio::time::sleep;
 use tonic::transport::Channel;
-use tracing::{info, Level};
+use tracing::{debug, info, Level};
 
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_common::model::{ComponentId, ComponentType};
@@ -54,9 +55,17 @@ pub trait ComponentService {
         local_path: &Path,
         component_type: ComponentType,
     ) -> ComponentId {
-        let mut retries = 3;
+        let mut retries = 5;
         loop {
-            let file_name = local_path.file_name().unwrap().to_string_lossy();
+            let mut file_name: String = local_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            if component_type == ComponentType::Ephemeral {
+                file_name = format!("{}-ephemeral", file_name);
+            }
+
             let mut client = self.client().await;
             let response = client
                 .get_components(GetComponentsRequest {
@@ -72,6 +81,7 @@ pub trait ComponentService {
                     panic!("Missing response from golem-component-service for get-components")
                 }
                 Some(get_components_response::Result::Success(result)) => {
+                    debug!("Response from get_components was {result:?}");
                     let latest = result
                         .components
                         .into_iter()
@@ -89,21 +99,29 @@ pub trait ComponentService {
                                 .try_into()
                                 .expect("component_id has unexpected format")
                         }
-                        _ => match self.add_component(local_path, component_type).await {
-                            Ok(component_id) => break component_id,
-                            Err(AddComponentError::AlreadyExists) => {
-                                if retries > 0 {
-                                    info!("Component got created in parallel, retrying get_or_add_component");
-                                    retries -= 1;
-                                    continue;
-                                } else {
-                                    panic!("Component already exists in golem-component-service");
+                        _ => {
+                            match self
+                                .add_component_with_name(local_path, &file_name, component_type)
+                                .await
+                            {
+                                Ok(component_id) => break component_id,
+                                Err(AddComponentError::AlreadyExists) => {
+                                    if retries > 0 {
+                                        info!("Component with name {file_name} got created in parallel, retrying get_or_add_component");
+                                        retries -= 1;
+                                        sleep(Duration::from_secs(1)).await;
+                                        continue;
+                                    } else {
+                                        panic!("Component with name {file_name} already exists in golem-component-service");
+                                    }
+                                }
+                                Err(AddComponentError::Other(message)) => {
+                                    panic!(
+                                        "Failed to add component with name {file_name}: {message}"
+                                    );
                                 }
                             }
-                            Err(AddComponentError::Other(message)) => {
-                                panic!("Failed to add component: {message}");
-                            }
-                        },
+                        }
                     }
                 }
                 Some(get_components_response::Result::Error(error)) => {
