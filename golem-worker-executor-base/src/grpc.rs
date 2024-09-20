@@ -47,9 +47,9 @@ use golem_common::grpc::{
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, TargetWorkerId,
-    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    TargetWorkerId, TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId,
+    WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
@@ -58,7 +58,7 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -859,6 +859,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if metadata.last_known_status.component_version == request.target_version {
             return Err(GolemError::invalid_request(
                 "Worker is already at the target version",
+            ));
+        }
+
+        let component_metadata = self
+            .component_service()
+            .get_metadata(
+                &worker_id.component_id,
+                Some(metadata.last_known_status.component_version),
+            )
+            .await?;
+        if component_metadata.component_type == ComponentType::Ephemeral {
+            return Err(GolemError::invalid_request(
+                "Ephemeral workers cannot be updated",
             ));
         }
 
