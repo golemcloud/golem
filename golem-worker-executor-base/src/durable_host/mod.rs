@@ -636,6 +636,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             } => {
                 *execution_status = ExecutionStatus::Suspended {
                     last_known_status,
+                    component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -647,6 +648,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             } => {
                 *execution_status = ExecutionStatus::Suspended {
                     last_known_status,
+                    component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
                 await_interruption.send(()).ok();
@@ -656,6 +658,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             } => {
                 *execution_status = ExecutionStatus::Suspended {
                     last_known_status,
+                    component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -674,6 +677,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             } => {
                 *execution_status = ExecutionStatus::Running {
                     last_known_status,
+                    component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -683,6 +687,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             } => {
                 *execution_status = ExecutionStatus::Running {
                     last_known_status,
+                    component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }

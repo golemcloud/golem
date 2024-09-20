@@ -750,7 +750,7 @@ impl ComponentServiceLocalFileSystem {
             size,
             memories,
             exports,
-            component_type: component_type.clone(),
+            component_type: *component_type,
         })
     }
 
