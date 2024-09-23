@@ -35,7 +35,7 @@ use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::WorkerUrn;
@@ -540,9 +540,9 @@ impl From<WorkerMetadata> for WorkerMetadataView {
 
         WorkerMetadataView {
             worker_urn: WorkerUrn {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: ComponentId(worker_id.component_id),
-                    worker_name: worker_id.worker_name,
+                    worker_name: Some(worker_id.worker_name),
                 },
             },
             account_id,

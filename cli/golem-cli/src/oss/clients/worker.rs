@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use crate::clients::worker::WorkerClient;
+use crate::clients::worker::{worker_name_required, WorkerClient};
 use crate::command::worker::WorkerConnectOptions;
 use crate::connect_output::ConnectOutput;
 use crate::model::{
@@ -79,16 +79,28 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
     ) -> Result<InvokeResult, GolemError> {
         info!("Invoke and await for function {function} in {worker_urn}");
 
-        Ok(self
-            .client
-            .invoke_and_await_function(
-                &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
-                idempotency_key.as_ref().map(|k| k.0.as_str()),
-                &function,
-                &parameters,
-            )
-            .await?)
+        if let Some(worker_name) = &worker_urn.id.worker_name {
+            Ok(self
+                .client
+                .invoke_and_await_function(
+                    &worker_urn.id.component_id.0,
+                    worker_name,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters,
+                )
+                .await?)
+        } else {
+            Ok(self
+                .client
+                .invoke_and_await_function_without_name(
+                    &worker_urn.id.component_id.0,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters,
+                )
+                .await?)
+        }
     }
 
     async fn invoke(
@@ -100,16 +112,28 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
     ) -> Result<(), GolemError> {
         info!("Invoke function {function} in {worker_urn}");
 
-        let _ = self
-            .client
-            .invoke_function(
-                &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
-                idempotency_key.as_ref().map(|k| k.0.as_str()),
-                &function,
-                &parameters,
-            )
-            .await?;
+        if let Some(worker_name) = &worker_urn.id.worker_name {
+            let _ = self
+                .client
+                .invoke_function(
+                    &worker_urn.id.component_id.0,
+                    worker_name,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters,
+                )
+                .await?;
+        } else {
+            let _ = self
+                .client
+                .invoke_function_without_name(
+                    &worker_urn.id.component_id.0,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters,
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -120,7 +144,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .client
             .interrupt_worker(
                 &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
+                &worker_name_required(&worker_urn)?,
                 Some(false),
             )
             .await?;
@@ -132,7 +156,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let _ = self
             .client
-            .resume_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .resume_worker(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
             .await?;
         Ok(())
     }
@@ -144,7 +171,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .client
             .interrupt_worker(
                 &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
+                &worker_name_required(&worker_urn)?,
                 Some(true),
             )
             .await?;
@@ -156,7 +183,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         let _ = self
             .client
-            .delete_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .delete_worker(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
             .await?;
         Ok(())
     }
@@ -166,7 +196,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
 
         Ok(self
             .client
-            .get_worker_metadata(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .get_worker_metadata(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
             .await?
             .into())
     }
@@ -251,7 +284,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .push("components")
             .push(&worker_urn.id.component_id.0.to_string())
             .push("workers")
-            .push(&worker_urn.id.worker_name)
+            .push(&worker_name_required(&worker_urn)?)
             .push("connect");
 
         let mut request = url
@@ -435,7 +468,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             .client
             .update_worker(
                 &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
+                &worker_name_required(&worker_urn)?,
                 &UpdateWorkerRequest {
                     mode: update_mode,
                     target_version,

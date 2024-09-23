@@ -34,7 +34,7 @@ use golem_client::model::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedType, InvokeParameters,
     InvokeResult, ScanCursor, StringFilterComparator, WorkerFilter, WorkerNameFilter,
 };
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
@@ -208,35 +208,40 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
     components: &(dyn ComponentService<ProjectContext = ProjectContext> + Send + Sync),
     worker_urn: WorkerUrn,
 ) -> Result<Option<Component>, GolemError> {
-    let WorkerId {
+    let TargetWorkerId {
         component_id,
         worker_name,
     } = worker_urn.id;
-    let component_urn = ComponentUrn { id: component_id };
 
-    let worker_meta = client
-        .find_metadata(
-            component_urn.clone(),
-            Some(WorkerFilter::Name(WorkerNameFilter {
-                comparator: StringFilterComparator::Equal,
-                value: worker_name,
-            })),
-            None,
-            Some(2),
-            Some(true),
-        )
-        .await?;
+    if let Some(worker_name) = worker_name {
+        let component_urn = ComponentUrn { id: component_id };
 
-    if worker_meta.workers.len() > 1 {
-        Err(GolemError(
-            "Multiple workers with the same name".to_string(),
-        ))
-    } else if let Some(worker) = worker_meta.workers.first() {
-        Ok(Some(
-            components
-                .get_metadata(&component_urn, worker.component_version)
-                .await?,
-        ))
+        let worker_meta = client
+            .find_metadata(
+                component_urn.clone(),
+                Some(WorkerFilter::Name(WorkerNameFilter {
+                    comparator: StringFilterComparator::Equal,
+                    value: worker_name,
+                })),
+                None,
+                Some(2),
+                Some(true),
+            )
+            .await?;
+
+        if worker_meta.workers.len() > 1 {
+            Err(GolemError(
+                "Multiple workers with the same name".to_string(),
+            ))
+        } else if let Some(worker) = worker_meta.workers.first() {
+            Ok(Some(
+                components
+                    .get_metadata(&component_urn, worker.component_version)
+                    .await?,
+            ))
+        } else {
+            Ok(None)
+        }
     } else {
         Ok(None)
     }
@@ -262,7 +267,9 @@ async fn get_component_metadata_for_worker<ProjectContext: Send + Sync>(
     {
         Ok(component)
     } else {
-        info!("No worker found with name {}. Assuming it should be create with the latest component version", worker_urn.id.worker_name);
+        if let Some(worker_name) = &worker_urn.id.worker_name {
+            info!("No worker found with name {worker_name}. Assuming it should be create with the latest component version");
+        }
         let component_urn = ComponentUrn {
             id: worker_urn.id.component_id.clone(),
         };
@@ -446,9 +453,9 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
             .await?;
 
         Ok(GolemResult::Ok(Box::new(WorkerAddView(WorkerUrn {
-            id: WorkerId {
+            id: TargetWorkerId {
                 component_id: ComponentId(inst.component_id),
-                worker_name: inst.worker_name,
+                worker_name: Some(inst.worker_name),
             },
         }))))
     }
@@ -470,7 +477,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
                 let component_urn = self.components.resolve_uri(component_uri, &project).await?;
 
                 Ok(WorkerUrn {
-                    id: WorkerId {
+                    id: TargetWorkerId {
                         component_id: component_urn.id,
                         worker_name,
                     },
@@ -794,9 +801,9 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let mut failed = Vec::new();
         for worker in to_update {
             let worker_urn = WorkerUrn {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: ComponentId(worker.worker_id.component_id),
-                    worker_name: worker.worker_id.worker_name,
+                    worker_name: Some(worker.worker_id.worker_name),
                 },
             };
             let result = self
