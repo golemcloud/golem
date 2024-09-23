@@ -24,14 +24,16 @@ use golem_worker_service_base::metrics;
 fn main() -> std::io::Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(async_main())
 }
 
 async fn async_main() -> std::io::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        let services = Services::noop();
+        let config = WorkerServiceBaseConfig::default();
+        let services = Services::new(&config)
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         let api_service = make_open_api_service(&services);
         println!("{}", api_service.spec_yaml());
         Ok(())
@@ -83,14 +85,11 @@ pub async fn app(
             .with(OpenTelemetryMetrics::new())
             .with(Tracing);
 
-        poem::Server::new(poem::listener::TcpListener::bind((
-            "0.0.0.0",
-            config.custom_request_port,
-        )))
-        .name("gateway")
-        .run(route)
-        .await
-        .expect("Custom Request server failed")
+        poem::Server::new(TcpListener::bind(("0.0.0.0", config.custom_request_port)))
+            .name("gateway")
+            .run(route)
+            .await
+            .expect("Custom Request server failed")
     });
 
     let worker_server = tokio::spawn(async move {

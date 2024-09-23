@@ -17,8 +17,6 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use golem_common::model::OwnedWorkerId;
-#[cfg(any(feature = "mocks", test))]
-use tracing::info;
 use tracing::{error, warn};
 
 use crate::services::HasAll;
@@ -108,27 +106,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 pub struct WorkerActivatorMock {}
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 impl Default for WorkerActivatorMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 impl WorkerActivatorMock {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 #[async_trait]
 impl WorkerActivator for WorkerActivatorMock {
     async fn activate_worker(&self, _owned_worker_id: &OwnedWorkerId) {
-        info!("WorkerActivatorMock::activate_worker");
+        tracing::info!("WorkerActivatorMock::activate_worker");
     }
 }

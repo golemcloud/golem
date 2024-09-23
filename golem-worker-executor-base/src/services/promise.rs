@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 use std::collections::HashSet;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -272,19 +272,19 @@ pub enum RedisPromiseState {
     Complete(Vec<u8>),
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 pub struct PromiseServiceMock {
     completed: Arc<Mutex<HashSet<PromiseId>>>,
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 impl Default for PromiseServiceMock {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 impl PromiseServiceMock {
     pub fn new() -> Self {
         Self {
@@ -297,7 +297,7 @@ impl PromiseServiceMock {
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
+#[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
     async fn create(&self, _worker_id: &WorkerId, _oplog_idx: OplogIndex) -> PromiseId {

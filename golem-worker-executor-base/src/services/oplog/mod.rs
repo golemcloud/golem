@@ -45,8 +45,6 @@ mod compressed;
 mod multilayer;
 mod primary;
 
-#[cfg(any(feature = "mocks", test))]
-pub mod mock;
 #[cfg(test)]
 mod tests;
 

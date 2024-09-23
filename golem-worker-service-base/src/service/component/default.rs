@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use chrono::Utc;
 use http::Uri;
 use tonic::transport::Channel;
 
@@ -9,7 +8,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 
@@ -191,53 +190,5 @@ fn is_retriable(error: &ComponentServiceError) -> bool {
     match error {
         ComponentServiceError::Internal(error) => error.is::<tonic::Status>(),
         _ => false,
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ComponentServiceNoop {}
-
-impl ComponentServiceNoop {
-    pub fn test_component() -> Component {
-        use golem_common::model::component_metadata::ComponentMetadata;
-        use golem_service_base::model::{ComponentName, VersionedComponentId};
-
-        let id = VersionedComponentId {
-            component_id: ComponentId::new_v4(),
-            version: 1,
-        };
-
-        Component {
-            versioned_component_id: id.clone(),
-            component_name: ComponentName("test".to_string()),
-            component_size: 0,
-            metadata: ComponentMetadata {
-                exports: vec![],
-                producers: vec![],
-                memories: vec![],
-            },
-            created_at: Some(Utc::now()),
-            component_type: Some(ComponentType::Durable),
-        }
-    }
-}
-
-#[async_trait]
-impl<AuthCtx> ComponentService<AuthCtx> for ComponentServiceNoop {
-    async fn get_by_version(
-        &self,
-        _component_id: &ComponentId,
-        _version: u64,
-        _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component> {
-        Ok(Self::test_component())
-    }
-
-    async fn get_latest(
-        &self,
-        _component_id: &ComponentId,
-        _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component> {
-        Ok(Self::test_component())
     }
 }

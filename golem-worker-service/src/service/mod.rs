@@ -14,20 +14,17 @@ use golem_worker_service_base::http::InputHttpRequest;
 use golem_worker_service_base::repo::api_definition;
 use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::api_definition::{
-    ApiDefinitionService, ApiDefinitionServiceDefault, ApiDefinitionServiceNoop,
+    ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
 };
-use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
 use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
-use golem_worker_service_base::service::component::{ComponentServiceNoop, RemoteComponentService};
+use golem_worker_service_base::service::component::RemoteComponentService;
 use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
-use golem_worker_service_base::service::worker::{
-    WorkerRequestMetadata, WorkerServiceDefault, WorkerServiceNoOp,
-};
+use golem_worker_service_base::service::worker::WorkerServiceDefault;
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -35,7 +32,7 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 
 use golem_worker_service_base::service::api_deployment::{
-    ApiDeploymentService, ApiDeploymentServiceDefault, ApiDeploymentServiceNoop,
+    ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,49 +163,5 @@ impl Services {
             component_service,
             api_definition_validator_service,
         })
-    }
-
-    pub fn noop() -> Services {
-        let component_service: component::ComponentService =
-            Arc::new(ComponentServiceNoop::default());
-
-        let worker_service: worker::WorkerService = Arc::new(WorkerServiceNoOp {
-            metadata: WorkerRequestMetadata {
-                account_id: None,
-                limits: None,
-            },
-        });
-
-        let api_definition_validator_service: Arc<
-            dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
-                + Sync
-                + Send,
-        > = Arc::new(ApiDefinitionValidatorNoop::default());
-
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
-            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
-        );
-
-        let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-                + Sync
-                + Send,
-        > = Arc::new(ApiDefinitionServiceNoop::default());
-
-        let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceNoop::default());
-
-        let http_definition_lookup_service =
-            Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
-
-        Services {
-            worker_service,
-            definition_service,
-            deployment_service,
-            http_definition_lookup_service,
-            worker_to_http_service,
-            component_service,
-            api_definition_validator_service,
-        }
     }
 }
