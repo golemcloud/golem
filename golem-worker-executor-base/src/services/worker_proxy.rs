@@ -190,7 +190,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call(move |client| {
                 Box::pin(client.invoke_and_await(authorised_grpc_request(
                     InvokeAndAwaitRequest {
-                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        worker_id: Some(owned_worker_id.worker_id().into_target_worker_id().into()),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         function: function_name.clone(),
                         invoke_parameters: invoke_parameters.clone(),
@@ -255,7 +255,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call(move |client| {
                 Box::pin(client.invoke(authorised_grpc_request(
                     InvokeRequest {
-                        worker_id: Some(owned_worker_id.worker_id().into()),
+                        worker_id: Some(owned_worker_id.worker_id().into_target_worker_id().into()),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         function: function_name.clone(),
                         invoke_parameters: invoke_parameters.clone(),

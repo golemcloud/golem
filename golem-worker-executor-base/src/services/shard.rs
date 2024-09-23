@@ -33,7 +33,7 @@ pub trait ShardService {
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>);
     fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError>;
     fn current_assignment(&self) -> Result<ShardAssignment, GolemError>;
-    fn opt_current_assignment(&self) -> Option<ShardAssignment>;
+    fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
 }
 
 pub struct ShardServiceDefault {
@@ -147,7 +147,7 @@ impl ShardService for ShardServiceDefault {
         })
     }
 
-    fn opt_current_assignment(&self) -> Option<ShardAssignment> {
+    fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.shard_assignment.read().unwrap().clone()
     }
 }

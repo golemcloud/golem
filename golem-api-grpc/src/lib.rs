@@ -191,9 +191,9 @@ pub mod proto {
 
     #[cfg(test)]
     mod tests {
-        use std::str::FromStr;
-
         use crate::proto::golem;
+        use prost::Message;
+        use std::str::FromStr;
 
         #[test]
         fn test_uuid() {
@@ -205,6 +205,28 @@ pub mod proto {
 
             println!("template_id_proto: {:?}", template_id_proto);
             println!("token_proto: {:?}", token_proto);
+        }
+
+        #[test]
+        fn target_worker_id_and_worker_id_are_bin_compatible() {
+            let component_id_uuid = uuid::Uuid::new_v4();
+            let component_id_uuid: golem::common::Uuid = component_id_uuid.into();
+            let component_id = golem::component::ComponentId {
+                value: Some(component_id_uuid),
+            };
+            let target_worker_id = golem::worker::TargetWorkerId {
+                component_id: Some(component_id.clone()),
+                name: Some("hello".to_string()),
+            };
+            let worker_id = golem::worker::WorkerId {
+                component_id: Some(component_id),
+                name: "hello".to_string(),
+            };
+
+            let target_worker_id_bytes = target_worker_id.encode_to_vec();
+            let worker_id_bytes = worker_id.encode_to_vec();
+
+            assert_eq!(target_worker_id_bytes, worker_id_bytes);
         }
     }
 }

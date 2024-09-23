@@ -38,7 +38,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::{ComponentId, ComponentVersion};
+use golem_common::model::{ComponentId, ComponentType, ComponentVersion};
 use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
@@ -56,6 +56,7 @@ pub struct ComponentMetadata {
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
+    pub component_type: ComponentType,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -438,6 +439,7 @@ async fn get_metadata_via_grpc(
                             "Undefined component version".to_string(),
                         ))?,
                     size: component.component_size,
+                    component_type: component.component_type().into(),
                     memories: component
                         .metadata
                         .as_ref()
@@ -685,6 +687,17 @@ impl ComponentServiceLocalFileSystem {
         }
     }
 
+    fn parse_postfix(s: &str) -> Result<(ComponentVersion, ComponentType), String> {
+        let first_part = s.split('-').next().ok_or("Could not get version part")?;
+        let version = first_part.parse::<u64>().map_err(|err| err.to_string())?;
+        let component_type = if s.ends_with("-ephemeral") {
+            ComponentType::Ephemeral
+        } else {
+            ComponentType::Durable
+        };
+        Ok((version, component_type))
+    }
+
     async fn get_metadata_impl(
         root: &Path,
         component_id: &ComponentId,
@@ -706,13 +719,13 @@ impl ComponentServiceLocalFileSystem {
 
         let matching_files: Vec<_> = matching_files
             .into_iter()
-            .filter_map(|(path, s)| s.parse::<u64>().ok().map(|version| (path, version)))
+            .filter_map(|(path, s)| Self::parse_postfix(&s).ok().map(|version| (path, version)))
             .collect();
 
-        let (path, version) = match forced_version {
+        let (path, (version, component_type)) = match forced_version {
             Some(forced_version) => matching_files
                 .iter()
-                .find(|(_path, version)| *version == forced_version)
+                .find(|(_path, (version, _component_type))| *version == forced_version)
                 .ok_or(GolemError::GetLatestVersionOfComponentFailed {
                     component_id: component_id.clone(),
                     reason: "Could not find any component with the given id and version"
@@ -720,7 +733,7 @@ impl ComponentServiceLocalFileSystem {
                 })?,
             None => matching_files
                 .iter()
-                .max_by_key(|(_path, version)| *version)
+                .max_by_key(|(_path, (version, _))| *version)
                 .ok_or(GolemError::GetLatestVersionOfComponentFailed {
                     component_id: component_id.clone(),
                     reason: "Could not find any component with the given id".to_string(),
@@ -737,6 +750,7 @@ impl ComponentServiceLocalFileSystem {
             size,
             memories,
             exports,
+            component_type: *component_type,
         })
     }
 
@@ -765,13 +779,20 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError> {
-        let path = self
-            .root
-            .join(format!("{}-{}.wasm", component_id, component_version));
-
         let metadata = self
             .get_metadata(component_id, Some(component_version))
             .await?;
+
+        let postfix = match metadata.component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
+
+        let path = self.root.join(format!(
+            "{}-{}{postfix}.wasm",
+            component_id, component_version
+        ));
+
         Ok((
             self.get_from_path(&path, engine, component_id, component_version)
                 .await?,

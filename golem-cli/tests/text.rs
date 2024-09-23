@@ -2,12 +2,12 @@ use crate::api_definition::{
     golem_def, make_golem_file, make_open_api_file, make_shopping_cart_component,
 };
 use crate::cli::{Cli, CliLive};
-use crate::worker::make_component;
+use crate::worker::add_environment_service_component;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
-use golem_common::model::WorkerId;
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use golem_test_framework::config::TestDependencies;
 use indoc::formatdoc;
@@ -291,7 +291,8 @@ fn text_worker_add(
     ),
 ) -> Result<(), Failed> {
     let component_urn =
-        make_component(deps, &format!("{name} text worker add"), &cli)?.component_urn;
+        add_environment_service_component(deps, &format!("{name} text worker add"), &cli)?
+            .component_urn;
     let worker_name = format!("{name}_worker_add");
     let cfg = &cli.config;
     let res = cli.with_format(Format::Text).run_string(&[
@@ -313,9 +314,9 @@ fn text_worker_add(
         &format!(
             "(?m)^Worker URN:.+{}$",
             WorkerUrn {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: component_urn.id.clone(),
-                    worker_name: worker_name.clone()
+                    worker_name: Some(worker_name.clone())
                 }
             }
         ),
@@ -339,8 +340,12 @@ fn text_worker_invoke_and_await(
         CliLive,
     ),
 ) -> Result<(), Failed> {
-    let component_urn =
-        make_component(deps, &format!("{name} text worker_invoke_and_await"), &cli)?.component_urn;
+    let component_urn = add_environment_service_component(
+        deps,
+        &format!("{name} text worker_invoke_and_await"),
+        &cli,
+    )?
+    .component_urn;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[
@@ -384,7 +389,8 @@ fn text_worker_get(
     ),
 ) -> Result<(), Failed> {
     let component_urn =
-        make_component(deps, &format!("{name} text worker get"), &cli)?.component_urn;
+        add_environment_service_component(deps, &format!("{name} text worker get"), &cli)?
+            .component_urn;
     let worker_name = format!("{name}_worker_get");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[
@@ -415,9 +421,9 @@ fn text_worker_get(
         &format!(
             "(?m)^Worker URN:.+{}$",
             WorkerUrn {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: component_urn.id.clone(),
-                    worker_name: worker_name.clone()
+                    worker_name: Some(worker_name.clone())
                 }
             }
         ),
@@ -451,7 +457,8 @@ fn text_worker_list(
     ),
 ) -> Result<(), Failed> {
     let component_urn =
-        make_component(deps, &format!("{name} text worker list"), &cli)?.component_urn;
+        add_environment_service_component(deps, &format!("{name} text worker list"), &cli)?
+            .component_urn;
     let worker_name = format!("{name:_<9}_worker_list");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[

@@ -36,10 +36,9 @@ use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, ScanCursor,
-    WorkerFilter, WorkerStatus,
+    AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
+    ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_common::model::{PromiseId, WorkerId};
 use golem_service_base::model::{GolemErrorUnknown, ResourceLimits, WorkerMetadata};
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
@@ -85,7 +84,7 @@ pub trait WorkerService<AuthCtx> {
     // Accepts Vec<TypeAnnotatedValue> and returns TypeAnnotatedValue
     async fn invoke_and_await_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -96,7 +95,7 @@ pub trait WorkerService<AuthCtx> {
     // Accepts a Vec<Val> and returns a Vec<Val> (with no type information)
     async fn invoke_and_await_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -107,7 +106,7 @@ pub trait WorkerService<AuthCtx> {
     // Accepts Vec<TypeAnnotatedValue> parameters as input
     async fn invoke_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -118,7 +117,7 @@ pub trait WorkerService<AuthCtx> {
     // Accepts Vec<Val> as input
     async fn invoke_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -291,7 +290,7 @@ where
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream> {
         let worker_id = worker_id.clone();
-        let worker_id_err: golem_common::model::WorkerId = worker_id.clone();
+        let worker_id_err: WorkerId = worker_id.clone();
         let stream = self
             .call_worker_executor(
                 worker_id.clone(),
@@ -358,7 +357,7 @@ where
 
     async fn invoke_and_await_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -427,7 +426,7 @@ where
 
     async fn invoke_and_await_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -487,7 +486,7 @@ where
 
     async fn invoke_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -535,7 +534,7 @@ where
 
     async fn invoke_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -930,25 +929,25 @@ where
                         component_id.clone().into();
                     let account_id = metadata.account_id.clone().map(|id| id.into());
                     Box::pin(worker_executor_client.get_workers_metadata(
-                        golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest {
+                        workerexecutor::v1::GetWorkersMetadataRequest {
                             component_id: Some(component_id),
                             filter: filter.clone().map(|f| f.into()),
                             cursor: Some(cursor.clone().into()),
                             count,
                             precise,
                             account_id,
-                        }
+                        },
                     ))
                 },
                 |response| match response.into_inner() {
                     workerexecutor::v1::GetWorkersMetadataResponse {
                         result:
-                        Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(
-                                 workerexecutor::v1::GetWorkersMetadataSuccessResponse {
-                                     workers,
-                                     cursor,
-                                 },
-                             )),
+                            Some(workerexecutor::v1::get_workers_metadata_response::Result::Success(
+                                workerexecutor::v1::GetWorkersMetadataSuccessResponse {
+                                    workers,
+                                    cursor,
+                                },
+                            )),
                     } => {
                         let workers = workers
                             .into_iter()
@@ -963,9 +962,9 @@ where
                     }
                     workerexecutor::v1::GetWorkersMetadataResponse {
                         result:
-                        Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(
-                                 err,
-                             )),
+                            Some(workerexecutor::v1::get_workers_metadata_response::Result::Failure(
+                                err,
+                            )),
                     } => Err(err.into()),
                     workerexecutor::v1::GetWorkersMetadataResponse { .. } => {
                         Err("Empty response".into())

@@ -37,12 +37,12 @@ use crate::services::{
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
-use golem_common::model::exports;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::{exports, ComponentType};
 use golem_common::model::{
     ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -173,7 +173,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             parent,
         )
         .await?;
-        let oplog = deps.oplog_service().open(&owned_worker_id).await;
+        let last_oplog_index = deps.oplog_service().get_last_index(&owned_worker_id).await;
+        let oplog = deps
+            .oplog_service()
+            .open(&owned_worker_id, last_oplog_index)
+            .await;
 
         let initial_pending_invocations = worker_metadata
             .last_known_status
@@ -187,6 +191,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .collect::<Vec<_>>();
         let initial_invocation_results =
             worker_metadata.last_known_status.invocation_results.clone();
+        let initial_component_metadata = deps
+            .component_service()
+            .get_metadata(
+                &owned_worker_id.worker_id.component_id,
+                Some(worker_metadata.last_known_status.component_version),
+            )
+            .await?;
 
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),
@@ -208,6 +219,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
             last_known_status: worker_metadata.last_known_status.clone(),
+            component_type: initial_component_metadata.component_type,
             timestamp: Timestamp::now_utc(),
         }));
 
@@ -348,6 +360,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         *execution_status = ExecutionStatus::Loading {
             last_known_status: execution_status.last_known_status().clone(),
+            component_type: execution_status.component_type(),
             timestamp: Timestamp::now_utc(),
         };
     }
@@ -407,6 +420,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     interrupt_kind,
                     await_interruption: Arc::new(sender),
                     last_known_status,
+                    component_type: execution_status.component_type(),
                     timestamp: Timestamp::now_utc(),
                 };
                 Some(receiver)
@@ -635,8 +649,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // last oplog index as reference.
         self.oplog().commit().await;
         // Storing the status in the key-value storage
+        let component_type = self.execution_status.read().unwrap().component_type();
         self.worker_service()
-            .update_status(&self.owned_worker_id, &status_value)
+            .update_status(&self.owned_worker_id, &status_value, component_type)
             .await;
         // Updating the status in memory
         self.execution_status
@@ -956,7 +971,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ..initial_status
                     },
                 };
-                this.worker_service().add(&worker_metadata).await?;
+                this.worker_service()
+                    .add(&worker_metadata, component_metadata.component_type)
+                    .await?;
                 Ok(worker_metadata)
             }
             Some(previous_metadata) => Ok(WorkerMetadata {
@@ -1421,7 +1438,19 @@ impl RunningWorker {
                                                                     )
                                                                     .await
                                                                     .unwrap(); // TODO: handle this error
-                                                                false // do not break
+
+                                                                if store
+                                                                    .data_mut()
+                                                                    .component_metadata()
+                                                                    .component_type
+                                                                    == ComponentType::Ephemeral
+                                                                {
+                                                                    final_decision =
+                                                                        RetryDecision::None;
+                                                                    true // stop after the invocation
+                                                                } else {
+                                                                    false // continue processing the queue
+                                                                }
                                                             }
                                                             Err(error) => {
                                                                 let trap_type =
@@ -1971,6 +2000,9 @@ fn calculate_latest_worker_status(
             OplogEntry::DescribeResource { .. } => {}
             OplogEntry::Log { .. } => {
                 result = WorkerStatus::Running;
+            }
+            OplogEntry::Restart { .. } => {
+                result = WorkerStatus::Idle;
             }
         }
     }

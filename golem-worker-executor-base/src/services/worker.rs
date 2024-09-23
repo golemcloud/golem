@@ -17,9 +17,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
@@ -33,7 +34,11 @@ use crate::storage::keyvalue::{
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService {
-    async fn add(&self, worker_metadata: &WorkerMetadata) -> Result<(), GolemError>;
+    async fn add(
+        &self,
+        worker_metadata: &WorkerMetadata,
+        component_type: ComponentType,
+    ) -> Result<(), GolemError>;
 
     async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata>;
 
@@ -45,6 +50,7 @@ pub trait WorkerService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         status_value: &WorkerStatusRecord,
+        component_type: ComponentType,
     );
 }
 
@@ -102,7 +108,11 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
-    async fn add(&self, worker_metadata: &WorkerMetadata) -> Result<(), GolemError> {
+    async fn add(
+        &self,
+        worker_metadata: &WorkerMetadata,
+        component_type: ComponentType,
+    ) -> Result<(), GolemError> {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;
@@ -122,34 +132,37 @@ impl WorkerService for DefaultWorkerService {
             .create(&owned_worker_id, initial_oplog_entry)
             .await;
 
-        self.key_value_storage
-            .with_entity("worker", "add", "worker_status")
-            .set(
-                KeyValueStorageNamespace::Worker,
-                &Self::status_key(worker_id),
-                &worker_metadata.last_known_status,
-            )
-            .await
-            .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
-
-        if worker_metadata.last_known_status.status == WorkerStatus::Running {
-            let shard_assignment = self.shard_service.current_assignment()?;
-            let shard_id = ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
-
-            debug!(
-                "Adding worker to the list of running workers for shard {shard_id} in KV storage"
-            );
-
-            self
-                .key_value_storage
-                .with_entity("worker", "add", "worker_id")
-                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), &owned_worker_id)
+        if component_type != ComponentType::Ephemeral {
+            self.key_value_storage
+                .with_entity("worker", "add", "worker_status")
+                .set(
+                    KeyValueStorageNamespace::Worker,
+                    &Self::status_key(worker_id),
+                    &worker_metadata.last_known_status,
+                )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to add worker to the set of running workers per shard ids in KV storage: {err}"
-                    )
-                });
+                .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
+
+            if worker_metadata.last_known_status.status == WorkerStatus::Running {
+                let shard_assignment = self.shard_service.current_assignment()?;
+                let shard_id =
+                    ShardId::from_worker_id(worker_id, shard_assignment.number_of_shards);
+
+                debug!(
+                    "Adding worker to the list of running workers for shard {shard_id} in KV storage"
+                );
+
+                self
+                    .key_value_storage
+                    .with_entity("worker", "add", "worker_id")
+                    .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), &owned_worker_id)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to add worker to the set of running workers per shard ids in KV storage: {err}"
+                        )
+                    });
+            }
         }
 
         Ok(())
@@ -215,13 +228,39 @@ impl WorkerService for DefaultWorkerService {
                 Some(details)
             }
             Some((_, entry)) => {
-                panic!("Unexpected initial oplog entry for worker: {entry:?}")
+                // This should never happen, but there were some issues previously causing a corrupt oplog
+                // leading to this state.
+                //
+                // There is no point in panicking and restarting the executor here, as the corrupt oplog
+                // will most likely remain as it is.
+                //
+                // So to save the executor's state we return a "fake" failed worker metadata.
+
+                warn!(
+                    worker_id = owned_worker_id.to_string(),
+                    oplog_entry = format!("{entry:?}"),
+                    "Unexpected initial oplog entry found, returning fake failed worker metadata"
+                );
+                let last_oplog_idx = self.oplog_service.get_last_index(owned_worker_id).await;
+                Some(WorkerMetadata {
+                    worker_id: owned_worker_id.worker_id(),
+                    args: vec![],
+                    env: vec![],
+                    account_id: owned_worker_id.account_id(),
+                    created_at: Timestamp::now_utc(),
+                    parent: None,
+                    last_known_status: WorkerStatusRecord {
+                        status: WorkerStatus::Failed,
+                        oplog_idx: last_oplog_idx,
+                        ..WorkerStatusRecord::default()
+                    },
+                })
             }
         }
     }
 
     async fn get_running_workers_in_shards(&self) -> Vec<WorkerMetadata> {
-        let shard_assignment = self.shard_service.opt_current_assignment();
+        let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<WorkerMetadata> = vec![];
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids {
@@ -274,55 +313,58 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         status_value: &WorkerStatusRecord,
+        component_type: ComponentType,
     ) {
         record_worker_call("update_status");
 
-        debug!("Updating worker status to {status_value:?}");
-        self.key_value_storage
-            .with_entity("worker", "update_status", "worker_status")
-            .set(
-                KeyValueStorageNamespace::Worker,
-                &Self::status_key(&owned_worker_id.worker_id),
-                status_value,
-            )
-            .await
-            .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
-
-        let shard_assignment = self
-            .shard_service
-            .current_assignment()
-            .expect("sharding assignment is not ready");
-        let shard_id = ShardId::from_worker_id(
-            &owned_worker_id.worker_id,
-            shard_assignment.number_of_shards,
-        );
-
-        if status_value.status == WorkerStatus::Running {
-            debug!("Adding worker to the set of running workers in shard {shard_id}");
-
-            self
-                .key_value_storage
-                .with_entity("worker", "add", "worker_id")
-                .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+        if component_type != ComponentType::Ephemeral {
+            debug!("Updating worker status to {status_value:?}");
+            self.key_value_storage
+                .with_entity("worker", "update_status", "worker_status")
+                .set(
+                    KeyValueStorageNamespace::Worker,
+                    &Self::status_key(&owned_worker_id.worker_id),
+                    status_value,
+                )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
-                    )
-                });
-        } else {
-            debug!("Removing worker from the set of running workers in shard {shard_id}");
+                .unwrap_or_else(|err| panic!("failed to set worker status in KV storage: {err}"));
 
-            self
-                .key_value_storage
-                .with_entity("worker", "remove", "worker_id")
-                .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
-                    )
-                });
+            let shard_assignment = self
+                .shard_service
+                .current_assignment()
+                .expect("sharding assignment is not ready");
+            let shard_id = ShardId::from_worker_id(
+                &owned_worker_id.worker_id,
+                shard_assignment.number_of_shards,
+            );
+
+            if status_value.status == WorkerStatus::Running {
+                debug!("Adding worker to the set of running workers in shard {shard_id}");
+
+                self
+                    .key_value_storage
+                    .with_entity("worker", "add", "worker_id")
+                    .add_to_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
+                        )
+                    });
+            } else {
+                debug!("Removing worker from the set of running workers in shard {shard_id}");
+
+                self
+                    .key_value_storage
+                    .with_entity("worker", "remove", "worker_id")
+                    .remove_from_set(KeyValueStorageNamespace::Worker, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
+                        )
+                    });
+            }
         }
     }
 }

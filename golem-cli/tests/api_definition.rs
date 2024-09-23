@@ -1,5 +1,5 @@
 use crate::cli::{Cli, CliLive};
-use crate::worker::make_component_from_file;
+use crate::worker::add_component_from_file;
 use assert2::assert;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
@@ -97,7 +97,7 @@ pub fn make_shopping_cart_component(
     component_name: &str,
     cli: &CliLive,
 ) -> Result<ComponentView, Failed> {
-    make_component_from_file(deps, component_name, cli, "shopping-cart.wasm")
+    add_component_from_file(deps, component_name, cli, "shopping-cart.wasm")
 }
 
 fn make_file(id: &str, json: &serde_json::value::Value) -> Result<PathBuf, Failed> {

@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    ComponentId, FilterComparator, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    ComponentId, FilterComparator, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use rand::seq::IteratorRandom;
 use serde_json::json;
@@ -70,6 +70,125 @@ async fn dynamic_worker_creation() {
             ]),
         ])))))]
     );
+}
+
+fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
+    match env.into_iter().next() {
+        Some(Value::Result(Ok(Some(inner)))) => match *inner {
+            Value::List(items) => {
+                let pairs = items
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        Value::Tuple(values) if values.len() == 2 => {
+                            let mut iter = values.into_iter();
+                            let key = iter.next();
+                            let value = iter.next();
+                            match (key, value) {
+                                (Some(Value::String(key)), Some(Value::String(value))) => {
+                                    Some((key, value))
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<(String, String)>>();
+                HashMap::from_iter(pairs)
+            }
+            _ => panic!("Unexpected result value"),
+        },
+        _ => panic!("Unexpected result value"),
+    }
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn dynamic_worker_creation_without_name() {
+    let component_id = DEPS.store_component("environment-service").await;
+    let worker_id = TargetWorkerId {
+        component_id: component_id.clone(),
+        worker_name: None,
+    };
+
+    let env1 = DEPS
+        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+    let env2 = DEPS
+        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    let env1 = get_env_result(env1);
+    let env2 = get_env_result(env2);
+
+    check!(env1.contains_key("GOLEM_WORKER_NAME"));
+    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
+    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
+    check!(env2.contains_key("GOLEM_WORKER_NAME"));
+    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
+    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
+    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn ephemeral_worker_creation_without_name() {
+    let component_id = DEPS.store_ephemeral_component("environment-service").await;
+    let worker_id = TargetWorkerId {
+        component_id: component_id.clone(),
+        worker_name: None,
+    };
+
+    let env1 = DEPS
+        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+    let env2 = DEPS
+        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
+        .await
+        .unwrap();
+
+    let env1 = get_env_result(env1);
+    let env2 = get_env_result(env2);
+
+    check!(env1.contains_key("GOLEM_WORKER_NAME"));
+    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
+    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
+    check!(env2.contains_key("GOLEM_WORKER_NAME"));
+    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
+    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
+    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn ephemeral_worker_creation_with_name_is_not_persistent() {
+    let component_id = DEPS.store_ephemeral_component("counters").await;
+    let worker_id = TargetWorkerId {
+        component_id: component_id.clone(),
+        worker_name: Some("test".to_string()),
+    };
+
+    let _ = DEPS
+        .invoke_and_await(
+            worker_id.clone(),
+            "rpc:counters/api.{inc-global-by}",
+            vec![Value::U64(2)],
+        )
+        .await
+        .unwrap();
+
+    let result = DEPS
+        .invoke_and_await(
+            worker_id.clone(),
+            "rpc:counters/api.{get-global-value}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    check!(result == vec![Value::U64(0)]);
 }
 
 #[tokio::test]

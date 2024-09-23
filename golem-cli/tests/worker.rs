@@ -4,6 +4,7 @@ use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
 use golem_client::model::UpdateRecord;
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::WorkerUrn;
 use golem_test_framework::config::TestDependencies;
@@ -94,6 +95,16 @@ fn make(
             ctx.clone(),
             worker_invoke_indexed_resource,
         ),
+        Trial::test_in_context(
+            format!("worker_invoke_without_name{suffix}"),
+            ctx.clone(),
+            worker_invoke_without_name,
+        ),
+        Trial::test_in_context(
+            format!("worker_invoke_without_name_ephemeral{suffix}"),
+            ctx.clone(),
+            worker_invoke_without_name_ephemeral,
+        ),
     ]
 }
 
@@ -118,7 +129,7 @@ pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial
     tests
 }
 
-pub fn make_component_from_file(
+pub fn add_component_from_file(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
     component_name: &str,
     cli: &CliLive,
@@ -136,12 +147,31 @@ pub fn make_component_from_file(
     ])
 }
 
-pub fn make_component(
+pub fn add_ephemeral_component_from_file(
+    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    component_name: &str,
+    cli: &CliLive,
+    file: &str,
+) -> Result<ComponentView, Failed> {
+    let env_service = deps.component_directory().join(file);
+    let cfg = &cli.config;
+
+    cli.run(&[
+        "component",
+        "add",
+        "--ephemeral",
+        &cfg.arg('c', "component-name"),
+        component_name,
+        env_service.to_str().unwrap(),
+    ])
+}
+
+pub fn add_environment_service_component(
     deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
     component_name: &str,
     cli: &CliLive,
 ) -> Result<ComponentView, Failed> {
-    make_component_from_file(deps, component_name, cli, "environment-service.wasm")
+    add_component_from_file(deps, component_name, cli, "environment-service.wasm")
 }
 
 fn component_ref_key(cfg: &CliConfig, ref_kind: RefKind) -> String {
@@ -170,7 +200,8 @@ fn worker_new_instance(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, &format!("{name} worker new instance"), &cli)?;
+    let component =
+        add_environment_service_component(deps, &format!("{name} worker new instance"), &cli)?;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
 
@@ -184,7 +215,7 @@ fn worker_new_instance(
     ])?;
 
     assert_eq!(worker_urn.id.component_id, component.component_urn.id);
-    assert_eq!(worker_urn.id.worker_name, worker_name);
+    assert_eq!(worker_urn.id.worker_name, Some(worker_name));
     Ok(())
 }
 
@@ -208,16 +239,16 @@ fn worker_ref(
         RefKind::Url => {
             let url = WorkerUrl {
                 component_name: component.component_name.clone(),
-                worker_name,
+                worker_name: Some(worker_name),
             };
 
             vec![cfg.arg('W', "worker"), url.to_string()]
         }
         RefKind::Urn => {
             let urn = WorkerUrn {
-                id: golem_common::model::WorkerId {
+                id: TargetWorkerId {
                     component_id: component.component_urn.id.clone(),
-                    worker_name,
+                    worker_name: Some(worker_name),
                 },
             };
 
@@ -234,7 +265,8 @@ fn worker_invoke_and_await(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?;
+    let component =
+        add_environment_service_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[
@@ -330,7 +362,7 @@ fn worker_invoke_and_await_wave_params(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component_from_file(
+    let component = add_component_from_file(
         deps,
         &format!("{name} worker_invoke_and_await_wave_params"),
         &cli,
@@ -397,7 +429,7 @@ fn worker_invoke_drop(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component_from_file(
+    let component = add_component_from_file(
         deps,
         &format!("{name} worker_invoke_drop"),
         &cli,
@@ -478,7 +510,8 @@ fn worker_invoke_no_params(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?;
+    let component =
+        add_environment_service_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_no_params");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[
@@ -510,7 +543,11 @@ fn worker_invoke_json_params(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, &format!("{name} worker_invoke_json_params"), &cli)?;
+    let component = add_environment_service_component(
+        deps,
+        &format!("{name} worker_invoke_json_params"),
+        &cli,
+    )?;
     let worker_name = format!("{name}_worker_invoke_json_params");
     let cfg = &cli.config;
     let _: WorkerUrn = cli.run(&[
@@ -543,7 +580,7 @@ fn worker_invoke_wave_params(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component_from_file(
+    let component = add_component_from_file(
         deps,
         &format!("{name} worker_invoke_wave_params"),
         &cli,
@@ -759,7 +796,7 @@ fn worker_list(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, &format!("{name} worker_list"), &cli)?;
+    let component = add_environment_service_component(deps, &format!("{name} worker_list"), &cli)?;
     let cfg = &cli.config;
 
     let workers_count = 10;
@@ -786,7 +823,7 @@ fn worker_list(
             &component_ref_key(cfg, ref_kind),
             &component_ref_value(&component, ref_kind),
             &cfg.arg('f', "filter"),
-            format!("name = {}", worker_urn.id.worker_name).as_str(),
+            format!("name = {}", worker_urn.id.worker_name.unwrap_or_default()).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
             "--precise",
@@ -937,7 +974,7 @@ fn worker_invoke_indexed_resource(
         RefKind,
     ),
 ) -> Result<(), Failed> {
-    let component = make_component_from_file(
+    let component = add_component_from_file(
         deps,
         &format!("{name}_worker_invoke_indexed_resource"),
         &cli,
@@ -992,6 +1029,77 @@ fn worker_invoke_indexed_resource(
         result,
         json!({"typ":{"items":[{"type":"U64"}],"type":"Tuple"},"value":[3]})
     );
+
+    Ok(())
+}
+
+fn worker_invoke_without_name(
+    (deps, name, cli, _ref_kind): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+        RefKind,
+    ),
+) -> Result<(), Failed> {
+    let component = add_environment_service_component(
+        deps,
+        &format!("{name} worker_invoke_without_name"),
+        &cli,
+    )?;
+    let cfg = &cli.config;
+
+    let url = WorkerUrl {
+        component_name: component.component_name.clone(),
+        worker_name: None,
+    };
+
+    let result: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{get-environment}",
+    ])?;
+
+    let path = serde_json_path::JsonPath::parse("$.value[0].ok")?;
+    let _node = path.query(&result).exactly_one()?;
+
+    Ok(())
+}
+
+fn worker_invoke_without_name_ephemeral(
+    (deps, name, cli, _ref_kind): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+        RefKind,
+    ),
+) -> Result<(), Failed> {
+    let component = add_ephemeral_component_from_file(
+        deps,
+        &format!("{name} worker_invoke_without_name_ephemeral"),
+        &cli,
+        "environment-service.wasm",
+    )?;
+    let cfg = &cli.config;
+
+    let url = WorkerUrl {
+        component_name: component.component_name.clone(),
+        worker_name: None,
+    };
+
+    let result: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{get-environment}",
+    ])?;
+
+    let path = serde_json_path::JsonPath::parse("$.value[0].ok")?;
+    let _node = path.query(&result).exactly_one()?;
 
     Ok(())
 }
