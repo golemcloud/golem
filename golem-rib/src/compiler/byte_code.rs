@@ -254,17 +254,17 @@ mod internal {
                             )?)
                         };
 
-                        instructions.push(RibIR::InvokeFunction(arguments.len(), function_result_type));
+                        instructions
+                            .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
 
                         let site = parsed_function_name.site.clone();
 
                         match &parsed_function_name.function {
-                            DynamicParsedFunctionReference::Function { function } => {
-                                instructions.push(RibIR::CreateFunctionName(
+                            DynamicParsedFunctionReference::Function { function } => instructions
+                                .push(RibIR::CreateFunctionName(
                                     site,
                                     FunctionReferenceType::Function(function.clone()),
-                                ))
-                            }
+                                )),
 
                             DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
                                 instructions.push(RibIR::CreateFunctionName(
@@ -278,15 +278,16 @@ mod internal {
                                     FunctionReferenceType::RawResourceDrop(resource.clone()),
                                 ))
                             }
-                            DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
-                                instructions.push(RibIR::CreateFunctionName(
-                                    site,
-                                    FunctionReferenceType::RawResourceMethod(
-                                        resource.clone(),
-                                        method.clone(),
-                                    ),
-                                ))
-                            }
+                            DynamicParsedFunctionReference::RawResourceMethod {
+                                resource,
+                                method,
+                            } => instructions.push(RibIR::CreateFunctionName(
+                                site,
+                                FunctionReferenceType::RawResourceMethod(
+                                    resource.clone(),
+                                    method.clone(),
+                                ),
+                            )),
                             DynamicParsedFunctionReference::RawResourceStaticMethod {
                                 resource,
                                 method,

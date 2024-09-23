@@ -65,7 +65,6 @@ impl Interpreter {
 
         dbg!(instructions.clone());
 
-
         while let Some(instruction) = instructions.pop_front() {
             match instruction {
                 RibIR::PushLit(val) => {
@@ -545,15 +544,13 @@ mod internal {
 
                 let variant_arg_typ = variant.typ.clone();
 
-                let arg_value = match variant_arg_typ {
-                    Some(_) => Some(
-                        interpreter
-                            .stack
-                            .pop_val()
-                            .ok_or("Failed to get the variant argument from the stack".to_string())?,
-                    ),
-                    None => None,
-                };
+                let arg_value =
+                    match variant_arg_typ {
+                        Some(_) => Some(interpreter.stack.pop_val().ok_or(
+                            "Failed to get the variant argument from the stack".to_string(),
+                        )?),
+                        None => None,
+                    };
 
                 interpreter.stack.push_variant(
                     variant_name.clone(),
@@ -788,7 +785,6 @@ mod internal {
                     .ok_or("Failed to get value from the stack".to_string())
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
-
 
         let result = interpreter
             .env
