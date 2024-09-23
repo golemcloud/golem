@@ -307,7 +307,7 @@ impl From<RibIR> for ProtoRibIR {
                 instruction_id: value.index as u64,
             }),
             RibIR::Deconstruct => Instruction::Deconstruct((&AnalysedType::Str(TypeStr)).into()), //TODO; remove type in deconstruct from protobuf
-            RibIR::InvokeFunction(name, arg_count, return_type) => {
+            RibIR::InvokeFunction(arg_count, return_type) => {
                 let typ = match return_type {
                     AnalysedTypeWithUnit::Unit => None,
                     AnalysedTypeWithUnit::Type(analysed_type) => {

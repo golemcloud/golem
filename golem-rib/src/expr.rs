@@ -692,10 +692,12 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct Number {
     pub value: f64, // Change to bigdecimal
 }
+
+impl Eq for Number {}
 
 impl Number {
     pub fn to_val(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
