@@ -63,6 +63,8 @@ impl Interpreter {
         // O(1) to do this
         let mut instructions = VecDeque::from(instructions0.instructions);
 
+        dbg!(instructions.clone());
+
 
         while let Some(instruction) = instructions.pop_front() {
             match instruction {
@@ -548,7 +550,7 @@ mod internal {
                         interpreter
                             .stack
                             .pop_val()
-                            .ok_or("Failed to get a value from the stack".to_string())?,
+                            .ok_or("Failed to get the variant argument from the stack".to_string())?,
                     ),
                     None => None,
                 };
@@ -767,6 +769,7 @@ mod internal {
         argument_size: usize,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
+        dbg!("is this executed?");
         let function_name = interpreter
             .stack
             .pop_str()
