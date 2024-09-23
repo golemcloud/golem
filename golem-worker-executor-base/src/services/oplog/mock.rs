@@ -49,7 +49,11 @@ impl OplogService for OplogServiceMock {
         unimplemented!()
     }
 
-    async fn open(&self, _owned_worker_id: &OwnedWorkerId) -> Arc<dyn Oplog + Send + Sync> {
+    async fn open(
+        &self,
+        _owned_worker_id: &OwnedWorkerId,
+        _last_oplog_index: OplogIndex,
+    ) -> Arc<dyn Oplog + Send + Sync> {
         unimplemented!()
     }
 

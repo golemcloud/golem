@@ -122,14 +122,17 @@ impl OplogService for PrimaryOplogService {
                 )
             });
 
-        self.open(owned_worker_id).await
+        self.open(owned_worker_id, OplogIndex::INITIAL).await
     }
 
-    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn Oplog + Send + Sync> {
+    async fn open(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        last_oplog_index: OplogIndex,
+    ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("open");
 
         let key = Self::oplog_key(&owned_worker_id.worker_id);
-        let last_oplog_index = self.get_last_index(owned_worker_id).await;
 
         self.oplogs
             .get_or_open(
