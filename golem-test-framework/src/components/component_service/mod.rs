@@ -30,11 +30,12 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use tokio::time::sleep;
 use tonic::transport::Channel;
-use tracing::{info, Level};
+use tracing::{debug, info, Level};
 
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 
 use crate::components::rdb::Rdb;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
@@ -49,10 +50,22 @@ pub mod spawned;
 pub trait ComponentService {
     async fn client(&self) -> ComponentServiceClient<Channel>;
 
-    async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
-        let mut retries = 3;
+    async fn get_or_add_component(
+        &self,
+        local_path: &Path,
+        component_type: ComponentType,
+    ) -> ComponentId {
+        let mut retries = 5;
         loop {
-            let file_name = local_path.file_name().unwrap().to_string_lossy();
+            let mut file_name: String = local_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            if component_type == ComponentType::Ephemeral {
+                file_name = format!("{}-ephemeral", file_name);
+            }
+
             let mut client = self.client().await;
             let response = client
                 .get_components(GetComponentsRequest {
@@ -68,12 +81,16 @@ pub trait ComponentService {
                     panic!("Missing response from golem-component-service for get-components")
                 }
                 Some(get_components_response::Result::Success(result)) => {
+                    debug!("Response from get_components was {result:?}");
                     let latest = result
                         .components
                         .into_iter()
                         .max_by_key(|t| t.versioned_component_id.as_ref().unwrap().version);
                     match latest {
-                        Some(component) => {
+                        Some(component)
+                            if Into::<ComponentType>::into(component.component_type())
+                                == component_type =>
+                        {
                             break component
                                 .versioned_component_id
                                 .expect("versioned_component_id field is missing")
@@ -82,21 +99,29 @@ pub trait ComponentService {
                                 .try_into()
                                 .expect("component_id has unexpected format")
                         }
-                        None => match self.add_component(local_path).await {
-                            Ok(component_id) => break component_id,
-                            Err(AddComponentError::AlreadyExists) => {
-                                if retries > 0 {
-                                    info!("Component got created in parallel, retrying get_or_add_component");
-                                    retries -= 1;
-                                    continue;
-                                } else {
-                                    panic!("Component already exists in golem-component-service");
+                        _ => {
+                            match self
+                                .add_component_with_name(local_path, &file_name, component_type)
+                                .await
+                            {
+                                Ok(component_id) => break component_id,
+                                Err(AddComponentError::AlreadyExists) => {
+                                    if retries > 0 {
+                                        info!("Component with name {file_name} got created in parallel, retrying get_or_add_component");
+                                        retries -= 1;
+                                        sleep(Duration::from_secs(1)).await;
+                                        continue;
+                                    } else {
+                                        panic!("Component with name {file_name} already exists in golem-component-service");
+                                    }
+                                }
+                                Err(AddComponentError::Other(message)) => {
+                                    panic!(
+                                        "Failed to add component with name {file_name}: {message}"
+                                    );
                                 }
                             }
-                            Err(AddComponentError::Other(message)) => {
-                                panic!("Failed to add component: {message}");
-                            }
-                        },
+                        }
                     }
                 }
                 Some(get_components_response::Result::Error(error)) => {
@@ -109,26 +134,31 @@ pub trait ComponentService {
     async fn add_component(
         &self,
         local_path: &Path,
-    ) -> Result<ComponentId, crate::components::component_service::AddComponentError> {
+        component_type: ComponentType,
+    ) -> Result<ComponentId, AddComponentError> {
         let file_name = local_path.file_name().unwrap().to_string_lossy();
-        self.add_component_with_name(local_path, &file_name).await
+        self.add_component_with_name(local_path, &file_name, component_type)
+            .await
     }
 
     async fn add_component_with_name(
         &self,
         local_path: &Path,
         name: &str,
+        component_type: ComponentType,
     ) -> Result<ComponentId, AddComponentError> {
         let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
 
+        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+            component_type.into();
         let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
             data: Some(Data::Header(CreateComponentRequestHeader {
                 project_id: None,
                 component_name: name.to_string(),
-                component_type: None,
+                component_type: Some(component_type as i32),
             })),
         }];
 
@@ -189,17 +219,24 @@ pub trait ComponentService {
         }
     }
 
-    async fn update_component(&self, component_id: &ComponentId, local_path: &Path) -> u64 {
+    async fn update_component(
+        &self,
+        component_id: &ComponentId,
+        local_path: &Path,
+        component_type: ComponentType,
+    ) -> u64 {
         let mut client = self.client().await;
         let mut file = File::open(local_path)
             .await
             .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
 
+        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+            component_type.into();
         let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
             data: Some(update_component_request::Data::Header(
                 UpdateComponentRequestHeader {
                     component_id: Some(component_id.clone().into()),
-                    component_type: None,
+                    component_type: Some(component_type as i32),
                 },
             )),
         }];

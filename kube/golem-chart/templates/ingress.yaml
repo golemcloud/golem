@@ -34,6 +34,20 @@ spec:
                 name: service-worker-service-{{.Values.env}}
                 port:
                   number: {{ .Values.workerService.ports.http }}
+          - path: "/v1/components/[^/]+/invoke$"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v1/components/[^/]+/invoke-and-await$"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
           - path: /
             pathType: ImplementationSpecific
             backend:
@@ -80,6 +94,20 @@ spec:
                 port:
                   number: {{ .Values.workerService.ports.http }}
           - path: "/v1/components/*/workers"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v1/components/*/invoke"
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: service-worker-service-{{.Values.env}}
+                port:
+                  number: {{ .Values.workerService.ports.http }}
+          - path: "/v1/components/*/invoke-and-await"
             pathType: ImplementationSpecific
             backend:
               service:

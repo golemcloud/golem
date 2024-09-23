@@ -44,7 +44,7 @@ impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Compon
 impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::component::Component {
     fn from(value: Component<Namespace>) -> Self {
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
-            value.component_type.clone().into();
+            value.component_type.into();
         Self {
             versioned_component_id: Some(value.versioned_component_id.into()),
             component_name: value.component_name.0,

@@ -23,7 +23,9 @@ use wasmtime::Trap;
 
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord};
+use golem_common::model::{
+    ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord,
+};
 
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
@@ -128,20 +130,24 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 pub enum ExecutionStatus {
     Loading {
         last_known_status: WorkerStatusRecord,
+        component_type: ComponentType,
         timestamp: Timestamp,
     },
     Running {
         last_known_status: WorkerStatusRecord,
+        component_type: ComponentType,
         timestamp: Timestamp,
     },
     Suspended {
         last_known_status: WorkerStatusRecord,
+        component_type: ComponentType,
         timestamp: Timestamp,
     },
     Interrupting {
         interrupt_kind: InterruptKind,
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
         last_known_status: WorkerStatusRecord,
+        component_type: ComponentType,
         timestamp: Timestamp,
     },
 }
@@ -191,6 +197,28 @@ impl ExecutionStatus {
             ExecutionStatus::Running { timestamp, .. } => *timestamp,
             ExecutionStatus::Suspended { timestamp, .. } => *timestamp,
             ExecutionStatus::Interrupting { timestamp, .. } => *timestamp,
+        }
+    }
+
+    pub fn component_type(&self) -> ComponentType {
+        match self {
+            ExecutionStatus::Loading { component_type, .. } => *component_type,
+            ExecutionStatus::Running { component_type, .. } => *component_type,
+            ExecutionStatus::Suspended { component_type, .. } => *component_type,
+            ExecutionStatus::Interrupting { component_type, .. } => *component_type,
+        }
+    }
+
+    pub fn set_component_type(&mut self, new_component_type: ComponentType) {
+        match self {
+            ExecutionStatus::Loading { component_type, .. } => *component_type = new_component_type,
+            ExecutionStatus::Running { component_type, .. } => *component_type = new_component_type,
+            ExecutionStatus::Suspended { component_type, .. } => {
+                *component_type = new_component_type
+            }
+            ExecutionStatus::Interrupting { component_type, .. } => {
+                *component_type = new_component_type
+            }
         }
     }
 }

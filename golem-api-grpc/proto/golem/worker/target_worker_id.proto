@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+import "golem/component/component_id.proto";
+
+package golem.worker;
+
+message TargetWorkerId {
+  golem.component.ComponentId component_id = 1;
+  optional string name = 2;
+}

@@ -15,7 +15,7 @@
 use crate::components::component_service::{AddComponentError, ComponentService};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, ComponentType};
 use std::path::{Path, PathBuf};
 use tonic::transport::Channel;
 use tracing::{debug, info};
@@ -40,13 +40,21 @@ impl ComponentService for FileSystemComponentService {
         panic!("No real component service running")
     }
 
-    async fn get_or_add_component(&self, local_path: &Path) -> ComponentId {
-        self.add_component(local_path)
+    async fn get_or_add_component(
+        &self,
+        local_path: &Path,
+        component_type: ComponentType,
+    ) -> ComponentId {
+        self.add_component(local_path, component_type)
             .await
             .expect("Failed to add component")
     }
 
-    async fn add_component(&self, local_path: &Path) -> Result<ComponentId, AddComponentError> {
+    async fn add_component(
+        &self,
+        local_path: &Path,
+        component_type: ComponentType,
+    ) -> Result<ComponentId, AddComponentError> {
         let uuid = Uuid::new_v4();
 
         let target_dir = &self.root;
@@ -65,12 +73,19 @@ impl ComponentService for FileSystemComponentService {
             )));
         }
 
-        let _ =
-            std::fs::copy(local_path, target_dir.join(format!("{uuid}-0.wasm"))).map_err(|err| {
-                AddComponentError::Other(format!(
-                    "Failed to copy WASM to the local component store: {err}"
-                ))
-            });
+        let postfix = match component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
+        let _ = std::fs::copy(
+            local_path,
+            target_dir.join(format!("{uuid}-0{postfix}.wasm")),
+        )
+        .map_err(|err| {
+            AddComponentError::Other(format!(
+                "Failed to copy WASM to the local component store: {err}"
+            ))
+        });
 
         Ok(ComponentId(uuid))
     }
@@ -79,11 +94,17 @@ impl ComponentService for FileSystemComponentService {
         &self,
         local_path: &Path,
         _name: &str,
+        component_type: ComponentType,
     ) -> Result<ComponentId, AddComponentError> {
-        self.add_component(local_path).await
+        self.add_component(local_path, component_type).await
     }
 
-    async fn update_component(&self, component_id: &ComponentId, local_path: &Path) -> u64 {
+    async fn update_component(
+        &self,
+        component_id: &ComponentId,
+        local_path: &Path,
+        component_type: ComponentType,
+    ) -> u64 {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -96,9 +117,13 @@ impl ComponentService for FileSystemComponentService {
             std::panic!("Source file does not exist: {local_path:?}");
         }
 
+        let postfix = match component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
         let last_version = self.get_latest_version(component_id).await;
         let new_version = last_version + 1;
-        let target = target_dir.join(format!("{component_id}-{new_version}.wasm"));
+        let target = target_dir.join(format!("{component_id}-{new_version}{postfix}.wasm"));
 
         let _ = std::fs::copy(local_path, target)
             .expect("Failed to copy WASM to the local component store");

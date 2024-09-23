@@ -11,6 +11,7 @@ import public "golem/shardmanager/shard_id.proto";
 import public "golem/component/component_id.proto";
 import public "golem/worker/cursor.proto";
 import public "golem/worker/update_mode.proto";
+import public "golem/worker/target_worker_id.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
@@ -101,7 +102,7 @@ message CreateWorkerResponse {
 
 
 message InvokeAndAwaitWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.TargetWorkerId worker_id = 1;
   string name = 2;
   repeated wasm.rpc.Val input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
@@ -135,7 +136,7 @@ message InvokeAndAwaitWorkerSuccessTyped {
 
 
 message InvokeWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.TargetWorkerId worker_id = 1;
   string name = 2;
   repeated wasm.rpc.Val input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;

@@ -94,3 +94,10 @@ pub trait WorkerClient {
         target_version: u64,
     ) -> Result<(), GolemError>;
 }
+
+pub fn worker_name_required(urn: &WorkerUrn) -> Result<String, GolemError> {
+    urn.id
+        .worker_name
+        .clone()
+        .ok_or_else(|| GolemError("Must specify the worker's name".to_string()))
+}
