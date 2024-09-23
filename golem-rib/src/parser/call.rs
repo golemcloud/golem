@@ -17,8 +17,11 @@ use combine::error::{Commit, Tracked};
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::stream::{PointerOffset, position};
-use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser, StreamOnce, Positioned};
+use combine::stream::{position, PointerOffset};
+use combine::{
+    any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser, Positioned,
+    StreamOnce,
+};
 use combine::{sep_by, EasyParser};
 
 use crate::expr::Expr;
@@ -795,15 +798,7 @@ mod function_call_tests {
                             ResourceParam(Expr::literal("hello")),
                             ResourceParam(Expr::record(vec![(
                                 "field-a".to_string(),
-                                Expr::call(
-                                    DynamicParsedFunctionName {
-                                        site: ParsedFunctionSite::Global,
-                                        function: DynamicParsedFunctionReference::Function {
-                                            function: "some".to_string(),
-                                        },
-                                    },
-                                    vec![Expr::number(1f64)],
-                                ),
+                                Expr::option(Some(Expr::number(1f64))),
                             )])),
                         ],
                     },

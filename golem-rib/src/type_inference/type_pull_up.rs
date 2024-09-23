@@ -246,8 +246,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_pull_up_tests {
-    use crate::{ArmPattern, Expr, InferredType, Number, ParsedFunctionName};
     use crate::function_name::DynamicParsedFunctionName;
+    use crate::{ArmPattern, Expr, InferredType, Number, ParsedFunctionName};
 
     #[test]
     pub fn test_pull_up_identifier() {

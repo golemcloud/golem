@@ -249,6 +249,7 @@ mod internal {
 #[cfg(test)]
 mod function_parameters_inference_tests {
     use crate::call_type::CallType;
+    use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::type_registry::FunctionTypeRegistry;
     use crate::{
         Expr, InferredType, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
@@ -257,7 +258,6 @@ mod function_parameters_inference_tests {
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
-    use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
     fn get_function_type_registry() -> FunctionTypeRegistry {
         let metadata = vec![

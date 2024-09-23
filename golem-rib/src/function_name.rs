@@ -16,6 +16,7 @@ use crate::{text, CompilerOutput, Expr, Interpreter, RibInterpreterResult};
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
+use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -26,7 +27,6 @@ use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt::Display;
-use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode)]
 pub enum ParsedFunctionSite {
@@ -45,11 +45,10 @@ pub enum ParsedFunctionSite {
 #[derive(PartialEq, Eq, Clone)]
 pub struct SemVer(pub semver::Version);
 
-
 impl Serialize for SemVer {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
+    where
+        S: Serializer,
     {
         // Serialize the SemVer as its string representation.
         serializer.serialize_str(&self.0.to_string())
@@ -58,8 +57,8 @@ impl Serialize for SemVer {
 
 impl<'de> Deserialize<'de> for SemVer {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
+    where
+        D: Deserializer<'de>,
     {
         // Deserialize a string and attempt to parse it into a semver::Version.
         let s = String::deserialize(deserializer)?;
@@ -573,7 +572,9 @@ impl ParsedFunctionReference {
     }
 }
 
-impl From<DynamicParsedFunctionReference> for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
+impl From<DynamicParsedFunctionReference>
+    for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference
+{
     fn from(value: DynamicParsedFunctionReference) -> Self {
         let function = match value {
             DynamicParsedFunctionReference::Function { function } => ProtoDynamicFunctionReference::Function(
@@ -625,10 +626,14 @@ impl From<DynamicParsedFunctionReference> for golem_api_grpc::proto::golem::rib:
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference> for DynamicParsedFunctionReference {
+impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
+    for DynamicParsedFunctionReference
+{
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference,
+    ) -> Result<Self, Self::Error> {
         let function = value
             .function_reference
             .ok_or("Missing function reference".to_string())?;
@@ -1000,7 +1005,9 @@ impl ParsedFunctionName {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName> for DynamicParsedFunctionName {
+impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName>
+    for DynamicParsedFunctionName
+{
     type Error = String;
 
     fn try_from(
@@ -1014,7 +1021,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName> for D
     }
 }
 
-impl From<DynamicParsedFunctionName> for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
+impl From<DynamicParsedFunctionName>
+    for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName
+{
     fn from(value: DynamicParsedFunctionName) -> Self {
         golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
             site: Some(value.site.into()),
@@ -1285,7 +1294,7 @@ mod function_name_tests {
             parsed.function().raw_resource_params(),
             Some(&vec![
                 "\"hello\"".to_string(),
-                "{ field-a: some(1) }".to_string(),
+                "{field-a: some(1)}".to_string(),
             ])
         );
         assert_eq!(
@@ -1301,7 +1310,7 @@ mod function_name_tests {
                     resource: "resource1".to_string(),
                     resource_params: vec![
                         "\"hello\"".to_string(),
-                        "{ field-a: some(1) }".to_string(),
+                        "{field-a: some(1)}".to_string(),
                     ],
                 },
             },
@@ -1551,7 +1560,7 @@ mod function_name_tests {
             parsed.function().raw_resource_params(),
             Some(&vec![
                 "\"hello\"".to_string(),
-                "{ field-a: some(1) }".to_string(),
+                "{field-a: some(1)}".to_string(),
             ])
         );
         assert_eq!(
@@ -1567,7 +1576,7 @@ mod function_name_tests {
                     resource: "resource1".to_string(),
                     resource_params: vec![
                         "\"hello\"".to_string(),
-                        "{ field-a: some(1) }".to_string(),
+                        "{field-a: some(1)}".to_string(),
                     ],
                 },
             },

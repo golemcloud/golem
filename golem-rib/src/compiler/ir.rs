@@ -15,7 +15,11 @@
 use crate::{AnalysedTypeWithUnit, ParsedFunctionName, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
-use golem_api_grpc::proto::golem::rib::{And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate, PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR};
+use golem_api_grpc::proto::golem::rib::{
+    And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
+    GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate,
+    PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR,
+};
 use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
@@ -71,8 +75,10 @@ pub enum FunctionReferenceType {
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
-    type Error =String;
-    fn try_from(value: golem_api_grpc::proto::golem::rib::FunctionReferenceType) -> Result<Self, Self::Error> {
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::FunctionReferenceType,
+    ) -> Result<Self, Self::Error> {
         let value = value.r#type.ok_or("Missing type".to_string())?;
         let function_reference_type = match value {
             golem_api_grpc::proto::golem::rib::function_reference_type::Type::Function(name) => FunctionReferenceType::Function(name.name),
@@ -362,10 +368,15 @@ impl TryFrom<ProtoRibIR> for RibIR {
                 let parsed_site = instruction.site.ok_or("Missing site".to_string())?;
                 let parsed_function_site = ParsedFunctionSite::try_from(parsed_site)?;
 
-                let reference_type = instruction.function_reference_details.ok_or("Missing reference_type".to_string())?;
+                let reference_type = instruction
+                    .function_reference_details
+                    .ok_or("Missing reference_type".to_string())?;
                 let function_reference_type = reference_type.try_into()?;
 
-                Ok(RibIR::CreateFunctionName(parsed_function_site, function_reference_type))
+                Ok(RibIR::CreateFunctionName(
+                    parsed_function_site,
+                    function_reference_type,
+                ))
             }
         }
     }
