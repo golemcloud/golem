@@ -20,7 +20,7 @@ use golem_wasm_rpc::protobuf::{
     TypedEnum, TypedList, TypedOption, TypedRecord, TypedTuple, TypedVariant,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterpreterStack {
     pub stack: Vec<RibInterpreterResult>,
 }

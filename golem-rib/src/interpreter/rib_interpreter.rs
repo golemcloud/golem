@@ -63,6 +63,7 @@ impl Interpreter {
         // O(1) to do this
         let mut instructions = VecDeque::from(instructions0.instructions);
 
+
         while let Some(instruction) = instructions.pop_front() {
             match instruction {
                 RibIR::PushLit(val) => {
@@ -357,6 +358,7 @@ mod internal {
         match analysed_type {
             AnalysedType::Tuple(inner_type) => {
                 // Last updated value in stack should be a list to update the list
+
                 let last_list = interpreter_stack
                     .pop_n(list_size)
                     .ok_or(format!("Expected {} value on the stack", list_size))?;
@@ -765,6 +767,11 @@ mod internal {
         argument_size: usize,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
+        let function_name = interpreter
+            .stack
+            .pop_str()
+            .ok_or("Failed to get a function name from the stack".to_string())?;
+
         let last_n_elements = interpreter
             .stack
             .pop_n(argument_size)
@@ -779,10 +786,6 @@ mod internal {
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
-        let function_name = interpreter
-            .stack
-            .pop_str()
-            .ok_or("Failed to get a function name from the stack".to_string())?;
 
         let result = interpreter
             .env

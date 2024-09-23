@@ -240,6 +240,7 @@ mod internal {
 
             Expr::Call(invocation_name, arguments, inferred_type) => match invocation_name {
                 CallType::Function(parsed_function_name) => {
+
                     let function_result_type = if inferred_type.is_unit() {
                         AnalysedTypeWithUnit::Unit
                     } else {
@@ -248,6 +249,12 @@ mod internal {
                             inferred_type,
                         )?)
                     };
+
+                    for expr in arguments.iter().rev() {
+                        stack.push(ExprState::from_expr(expr));
+                    }
+
+                    instructions.push(RibIR::InvokeFunction(arguments.len(), function_result_type));
 
                     let site = parsed_function_name.site.clone();
 
@@ -355,12 +362,6 @@ mod internal {
                             ))
                         }
                     }
-
-                    for expr in arguments.iter().rev() {
-                        stack.push(ExprState::from_expr(expr));
-                    }
-
-                    instructions.push(RibIR::InvokeFunction(arguments.len(), function_result_type));
                 }
 
                 CallType::VariantConstructor(variant_name) => {
