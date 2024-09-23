@@ -14,7 +14,6 @@ autotests = false
 path = "src/lib.rs"
 
 [features]
-mocks = []
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }

@@ -548,58 +548,6 @@ where
     }
 }
 
-#[derive(Default)]
-pub struct ApiDeploymentServiceNoop {}
-
-#[async_trait]
-impl<Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync>
-    ApiDeploymentService<Namespace> for ApiDeploymentServiceNoop
-{
-    async fn deploy(
-        &self,
-        _deployment: &ApiDeploymentRequest<Namespace>,
-    ) -> Result<(), ApiDeploymentError<Namespace>> {
-        Ok(())
-    }
-
-    async fn undeploy(
-        &self,
-        _deployment: &ApiDeploymentRequest<Namespace>,
-    ) -> Result<(), ApiDeploymentError<Namespace>> {
-        Ok(())
-    }
-
-    async fn get_by_id(
-        &self,
-        _namespace: &Namespace,
-        _api_definition_id: &ApiDefinitionId,
-    ) -> Result<Vec<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        Ok(vec![])
-    }
-
-    async fn get_by_site(
-        &self,
-        _site: &ApiSiteString,
-    ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>> {
-        Ok(None)
-    }
-
-    async fn get_definitions_by_site(
-        &self,
-        _site: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDeploymentError<Namespace>> {
-        Ok(vec![])
-    }
-
-    async fn delete(
-        &self,
-        _namespace: &Namespace,
-        _site: &ApiSiteString,
-    ) -> Result<(), ApiDeploymentError<Namespace>> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::repo::RepoError;
