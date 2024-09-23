@@ -86,7 +86,7 @@ mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, ParsedFunctionName, ParsedFunctionReference, RibIR,
+        InferredType, InstructionId, RibIR,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

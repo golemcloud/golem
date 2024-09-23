@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;

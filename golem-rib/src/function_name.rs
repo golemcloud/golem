@@ -12,17 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{text, CompilerOutput, Expr, Interpreter, RibInterpreterResult};
+use crate::{text, Expr};
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
 use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use golem_wasm_rpc::Value;
-use poem_openapi::types::ToJSON;
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
@@ -878,7 +876,7 @@ pub struct ParsedFunctionName {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub(crate) struct DynamicParsedFunctionName {
+pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: DynamicParsedFunctionReference,
 }

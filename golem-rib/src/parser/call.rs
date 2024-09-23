@@ -13,20 +13,18 @@
 // limitations under the License.
 
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, ResourceParam};
-use combine::error::{Commit, Tracked};
+use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::stream::{position, PointerOffset};
 use combine::{
-    any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser, Positioned,
-    StreamOnce,
+    any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser,
 };
-use combine::{sep_by, EasyParser};
+use combine::sep_by;
 
 use crate::expr::Expr;
 use crate::function_name::{
-    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
+    ParsedFunctionSite, SemVer,
 };
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;

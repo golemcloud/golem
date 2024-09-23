@@ -225,7 +225,7 @@ mod internal {
     use golem_wasm_rpc::protobuf::typed_result::ResultValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedRecord, TypedTuple};
     use golem_wasm_rpc::type_annotated_value_to_string;
-    use poem_openapi::types::ToJSON;
+    
     use std::collections::VecDeque;
     use std::ops::Deref;
 

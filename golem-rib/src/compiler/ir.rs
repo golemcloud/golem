@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{AnalysedTypeWithUnit, ParsedFunctionName, ParsedFunctionSite, VariableId};
+use crate::{AnalysedTypeWithUnit, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{

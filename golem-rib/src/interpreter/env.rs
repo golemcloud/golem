@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::interpreter::result::RibInterpreterResult;
-use crate::{ParsedFunctionName, VariableId};
+use crate::VariableId;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::future::Future;
