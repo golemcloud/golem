@@ -17,15 +17,11 @@ use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::{
-    any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser,
-};
 use combine::sep_by;
+use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
 
 use crate::expr::Expr;
-use crate::function_name::{
-    ParsedFunctionSite, SemVer,
-};
+use crate::function_name::{ParsedFunctionSite, SemVer};
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
 
@@ -223,9 +219,7 @@ mod function_call_tests {
     use combine::EasyParser;
 
     use crate::expr::Expr;
-    use crate::function_name::{
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
-    };
+    use crate::function_name::{ParsedFunctionSite, SemVer};
     use crate::parser::rib_expr::rib_expr;
 
     #[test]

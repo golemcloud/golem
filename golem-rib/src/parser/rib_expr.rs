@@ -187,11 +187,8 @@ mod tests {
 
     use crate::expr::ArmPattern;
     use crate::expr::MatchArm;
-    use crate::function_name::ParsedFunctionReference::RawResourceStaticMethod;
     use crate::function_name::ParsedFunctionSite::PackagedInterface;
-    use crate::function_name::{
-        DynamicParsedFunctionName, DynamicParsedFunctionReference, ParsedFunctionName,
-    };
+    use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
     use super::*;
 

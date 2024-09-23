@@ -8,7 +8,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_common::model::{ComponentId, IdempotencyKey};
 
 use crate::worker_binding::RibInputValue;
-use rib::{ParsedFunctionName, RibByteCode, RibFunctionInvoke, RibInterpreterResult};
+use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterResult};
 
 use crate::worker_bridge_execution::{
     NoopWorkerRequestExecutor, WorkerRequest, WorkerRequestExecutor,

@@ -291,7 +291,7 @@ pub enum ParsedFunctionReference {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
-pub(crate) enum DynamicParsedFunctionReference {
+pub enum DynamicParsedFunctionReference {
     Function {
         function: String,
     },

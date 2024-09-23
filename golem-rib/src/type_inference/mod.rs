@@ -54,10 +54,7 @@ mod type_inference_tests {
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::type_inference::type_inference_tests::internal;
-        use crate::{
-            Expr, InferredType, Number, ParsedFunctionName, ParsedFunctionReference,
-            ParsedFunctionSite, VariableId,
-        };
+        use crate::{Expr, InferredType, Number, ParsedFunctionSite, VariableId};
 
         #[test]
         fn test_simple_let_binding_type_inference() {
@@ -1025,7 +1022,7 @@ mod type_inference_tests {
         use crate::type_inference::type_inference_tests::internal;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
-            ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
+            ParsedFunctionSite, VariableId,
         };
 
         #[test]
@@ -1892,7 +1889,7 @@ mod type_inference_tests {
         use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
-            ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
+            ParsedFunctionSite, VariableId,
         };
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
