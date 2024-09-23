@@ -232,7 +232,10 @@ where
             .try_into()
             .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
 
-        self.component_repo.create(&record).await?;
+        let result = self.component_repo.create(&record).await;
+        if let Err(RepoError::UniqueViolation(_)) = result {
+            Err(ComponentError::AlreadyExists(component_id.clone()))?;
+        }
 
         self.component_compilation
             .enqueue_compilation(component_id, component.versioned_component_id.version)

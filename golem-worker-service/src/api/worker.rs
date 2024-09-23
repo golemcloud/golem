@@ -1,6 +1,8 @@
 use crate::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
-use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::{
+    ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -119,7 +121,51 @@ impl WorkerApi {
         record.result(response)
     }
 
-    /// Invoke a function and await it's resolution
+    /// Invoke a function and await its resolution on a new worker with a random generated name
+    ///
+    /// Ideal for invoking ephemeral components, but works with durable ones as well.
+    /// Supply the parameters in the request body as JSON.
+    #[oai(
+        path = "/:component_id/invoke-and-await",
+        method = "post",
+        operation_id = "invoke_and_await_function_without_name"
+    )]
+    async fn invoke_and_await_function_without_name(
+        &self,
+        component_id: Path<ComponentId>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
+        function: Query<String>,
+        params: Json<InvokeParameters>,
+    ) -> Result<Json<InvokeResult>> {
+        let worker_id = make_target_worker_id(component_id.0, None)?;
+
+        let record = recorded_http_api_request!(
+            "invoke_and_await_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let precise_jsons = params.0.params;
+
+        let response = self
+            .worker_service
+            .invoke_and_await_function_json(
+                &worker_id,
+                idempotency_key.0,
+                function.0,
+                precise_jsons,
+                None,
+                empty_worker_metadata(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|result| Json(InvokeResult { result }));
+        record.result(response)
+    }
+
+    /// Invoke a function and await its resolution
     ///
     /// Supply the parameters in the request body as JSON.
     #[oai(
@@ -135,7 +181,7 @@ impl WorkerApi {
         function: Query<String>,
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResult>> {
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = make_target_worker_id(component_id.0, Some(worker_name.0))?;
 
         let record = recorded_http_api_request!(
             "invoke_and_await_function",
@@ -165,7 +211,52 @@ impl WorkerApi {
 
     /// Invoke a function
     ///
-    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+    /// Ideal for invoking ephemeral components, but works with durable ones as well.
+    /// Triggers the execution of a function and immediately returns.
+    #[oai(
+        path = "/:component_id/invoke",
+        method = "post",
+        operation_id = "invoke_function_without_name"
+    )]
+    async fn invoke_function_without_name(
+        &self,
+        component_id: Path<ComponentId>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
+        function: Query<String>,
+        params: Json<InvokeParameters>,
+    ) -> Result<Json<InvokeResponse>> {
+        let worker_id = make_target_worker_id(component_id.0, None)?;
+
+        let record = recorded_http_api_request!(
+            "invoke_function",
+            worker_id = worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let precise_json_array = params.0.params;
+
+        let response = self
+            .worker_service
+            .invoke_function_json(
+                &worker_id,
+                idempotency_key.0,
+                function.0,
+                precise_json_array.clone(),
+                None,
+                empty_worker_metadata(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InvokeResponse {}));
+
+        record.result(response)
+    }
+
+    /// Invoke a function
+    ///
+    /// Triggers the execution of a function and immediately returns.
     #[oai(
         path = "/:component_id/workers/:worker_name/invoke",
         method = "post",
@@ -179,7 +270,7 @@ impl WorkerApi {
         function: Query<String>,
         params: Json<InvokeParameters>,
     ) -> Result<Json<InvokeResponse>> {
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = make_target_worker_id(component_id.0, Some(worker_name.0))?;
 
         let record = recorded_http_api_request!(
             "invoke_function",
@@ -212,7 +303,7 @@ impl WorkerApi {
     ///
     /// Completes a promise with a given custom array of bytes.
     /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
-    /// The data field is sent back to the worker and it has no predefined meaning.
+    /// The data field is sent back to the worker, and it has no predefined meaning.
     #[oai(
         path = "/:component_id/workers/:worker_name/complete",
         method = "post",
@@ -535,6 +626,24 @@ fn make_worker_id(
         }))
     })?;
     Ok(WorkerId {
+        component_id,
+        worker_name,
+    })
+}
+
+fn make_target_worker_id(
+    component_id: ComponentId,
+    worker_name: Option<String>,
+) -> std::result::Result<TargetWorkerId, WorkerApiBaseError> {
+    if let Some(worker_name) = &worker_name {
+        validate_worker_name(worker_name).map_err(|error| {
+            WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec![format!("Invalid worker name: {error}")],
+            }))
+        })?;
+    }
+
+    Ok(TargetWorkerId {
         component_id,
         worker_name,
     })

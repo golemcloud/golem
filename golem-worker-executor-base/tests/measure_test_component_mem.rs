@@ -1,5 +1,6 @@
 use crate::common::{start, TestContext, TestWorkerExecutor};
 use anyhow::anyhow;
+use golem_common::model::ComponentType;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::AnalysisContext;
@@ -90,7 +91,7 @@ async fn measure_component(
 
     let component_id = executor
         .component_service()
-        .get_or_add_component(path)
+        .get_or_add_component(path, ComponentType::Durable)
         .await;
 
     let data = std::fs::read(path)?;

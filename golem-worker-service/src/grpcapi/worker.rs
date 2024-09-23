@@ -37,9 +37,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
+    proto_invocation_context_parent_worker_id_string, proto_target_worker_id_string,
+    proto_worker_id_string,
 };
-use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::{ComponentVersion, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::validate_worker_name;
@@ -215,7 +216,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
             context_parent_worker_id =
@@ -246,7 +247,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_json",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
             context_parent_worker_id =
@@ -277,7 +278,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
             context_parent_worker_id =
@@ -304,7 +305,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_json",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
             context_parent_worker_id =
@@ -588,7 +589,7 @@ impl WorkerGrpcApi {
     }
 
     async fn invoke(&self, request: InvokeRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -609,7 +610,7 @@ impl WorkerGrpcApi {
     }
 
     async fn invoke_json(&self, request: InvokeJsonRequest) -> Result<(), GrpcWorkerError> {
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
@@ -636,7 +637,7 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAndAwaitRequest,
     ) -> Result<InvokeResult, GrpcWorkerError> {
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -661,7 +662,7 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAndAwaitJsonRequest,
     ) -> Result<String, GrpcWorkerError> {
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
         let idempotency_key = request
@@ -752,6 +753,20 @@ fn validated_worker_id(
     })
 }
 
+fn validated_target_worker_id(
+    component_id: golem_common::model::ComponentId,
+    worker_name: Option<String>,
+) -> Result<TargetWorkerId, GrpcWorkerError> {
+    if let Some(worker_name) = &worker_name {
+        validate_worker_name(worker_name)
+            .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
+    }
+    Ok(TargetWorkerId {
+        component_id,
+        worker_name,
+    })
+}
+
 fn validate_protobuf_worker_id(
     worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
 ) -> Result<WorkerId, GrpcWorkerError> {
@@ -760,6 +775,16 @@ fn validate_protobuf_worker_id(
         .try_into()
         .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
     validated_worker_id(worker_id.component_id, worker_id.worker_name)
+}
+
+fn validate_protobuf_target_worker_id(
+    worker_id: Option<golem_api_grpc::proto::golem::worker::TargetWorkerId>,
+) -> Result<TargetWorkerId, GrpcWorkerError> {
+    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
+    let worker_id: TargetWorkerId = worker_id
+        .try_into()
+        .map_err(|e| bad_request_error(format!("Invalid target worker id: {e}")))?;
+    validated_target_worker_id(worker_id.component_id, worker_id.worker_name)
 }
 
 fn bad_request_error<T>(error: T) -> GrpcWorkerError

@@ -131,7 +131,7 @@ uri_from_into!(ResourceUri);
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{ComponentId, WorkerId};
+    use crate::model::{ComponentId, TargetWorkerId, WorkerId};
     use crate::uri::oss::uri::{
         ApiDefinitionUri, ApiDeploymentUri, ComponentOrVersionUri, ComponentUri,
         ComponentVersionUri, ResourceUri, WorkerFunctionUri, WorkerOrFunctionUri, WorkerUri,
@@ -326,14 +326,14 @@ mod tests {
     pub fn worker_uri_to_uri() {
         let typed_url = WorkerUri::URL(WorkerUrl {
             component_name: "my comp".to_string(),
-            worker_name: "my worker".to_string(),
+            worker_name: Some("my worker".to_string()),
         });
         let typed_urn = WorkerUri::URN(WorkerUrn {
-            id: WorkerId {
+            id: TargetWorkerId {
                 component_id: ComponentId(
                     Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap(),
                 ),
-                worker_name: "my worker".to_string(),
+                worker_name: Some("my worker".to_string()),
             },
         });
 
@@ -343,6 +343,30 @@ mod tests {
         assert_eq!(
             untyped_urn.to_string(),
             "urn:worker:679ae459-8700-41d9-920c-7e2887459c94/my+worker"
+        );
+    }
+
+    #[test]
+    pub fn worker_uri_to_uri_no_name() {
+        let typed_url = WorkerUri::URL(WorkerUrl {
+            component_name: "my comp".to_string(),
+            worker_name: None,
+        });
+        let typed_urn = WorkerUri::URN(WorkerUrn {
+            id: TargetWorkerId {
+                component_id: ComponentId(
+                    Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap(),
+                ),
+                worker_name: None,
+            },
+        });
+
+        let untyped_url: GolemUri = typed_url.into();
+        let untyped_urn: GolemUri = typed_urn.into();
+        assert_eq!(untyped_url.to_string(), "worker:///my+comp");
+        assert_eq!(
+            untyped_urn.to_string(),
+            "urn:worker:679ae459-8700-41d9-920c-7e2887459c94"
         );
     }
 
@@ -362,12 +386,35 @@ mod tests {
         };
 
         assert_eq!(typed_url.component_name, "my comp");
-        assert_eq!(typed_url.worker_name, "my worker");
+        assert_eq!(typed_url.worker_name, Some("my worker".to_string()));
         assert_eq!(
             typed_urn.id.component_id.0.to_string(),
             "679ae459-8700-41d9-920c-7e2887459c94"
         );
-        assert_eq!(typed_urn.id.worker_name, "my worker");
+        assert_eq!(typed_urn.id.worker_name, Some("my worker".to_string()));
+    }
+
+    #[test]
+    pub fn worker_uri_from_uri_no_name() {
+        let untyped_url = GolemUri::from_str("worker:///my+comp").unwrap();
+        let untyped_urn =
+            GolemUri::from_str("urn:worker:679ae459-8700-41d9-920c-7e2887459c94").unwrap();
+        let typed_url: WorkerUri = untyped_url.try_into().unwrap();
+        let typed_urn: WorkerUri = untyped_urn.try_into().unwrap();
+        let WorkerUri::URL(typed_url) = typed_url else {
+            panic!()
+        };
+        let WorkerUri::URN(typed_urn) = typed_urn else {
+            panic!()
+        };
+
+        assert_eq!(typed_url.component_name, "my comp");
+        assert_eq!(typed_url.worker_name, None);
+        assert_eq!(
+            typed_urn.id.component_id.0.to_string(),
+            "679ae459-8700-41d9-920c-7e2887459c94"
+        );
+        assert_eq!(typed_urn.id.worker_name, None);
     }
 
     #[test]
@@ -384,12 +431,33 @@ mod tests {
         };
 
         assert_eq!(typed_url.component_name, "my comp");
-        assert_eq!(typed_url.worker_name, "my worker");
+        assert_eq!(typed_url.worker_name, Some("my worker".to_string()));
         assert_eq!(
             typed_urn.id.component_id.0.to_string(),
             "679ae459-8700-41d9-920c-7e2887459c94"
         );
-        assert_eq!(typed_urn.id.worker_name, "my worker");
+        assert_eq!(typed_urn.id.worker_name, Some("my worker".to_string()));
+    }
+
+    #[test]
+    pub fn worker_uri_from_str_no_name() {
+        let typed_url = WorkerUri::from_str("worker:///my+comp").unwrap();
+        let typed_urn =
+            WorkerUri::from_str("urn:worker:679ae459-8700-41d9-920c-7e2887459c94").unwrap();
+        let WorkerUri::URL(typed_url) = typed_url else {
+            panic!()
+        };
+        let WorkerUri::URN(typed_urn) = typed_urn else {
+            panic!()
+        };
+
+        assert_eq!(typed_url.component_name, "my comp");
+        assert_eq!(typed_url.worker_name, None);
+        assert_eq!(
+            typed_urn.id.component_id.0.to_string(),
+            "679ae459-8700-41d9-920c-7e2887459c94"
+        );
+        assert_eq!(typed_urn.id.worker_name, None);
     }
 
     #[test]
@@ -478,11 +546,11 @@ mod tests {
                 function: "fn a".to_string(),
             }));
         let typed_urn = WorkerOrFunctionUri::URN(WorkerOrFunctionUrn::Worker(WorkerUrn {
-            id: WorkerId {
+            id: TargetWorkerId {
                 component_id: ComponentId(
                     Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap(),
                 ),
-                worker_name: "my worker".to_string(),
+                worker_name: Some("my worker".to_string()),
             },
         }));
 

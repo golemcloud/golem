@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ComponentId, ComponentVersion, WorkerId};
+use crate::model::{ComponentId, ComponentVersion, TargetWorkerId, WorkerId};
 use crate::uri::{
     try_from_golem_urn, urldecode, urlencode, GolemUrn, GolemUrnTransformError, TypedGolemUrn,
     API_DEFINITION_TYPE_NAME, API_DEPLOYMENT_TYPE_NAME, COMPONENT_TYPE_NAME, WORKER_TYPE_NAME,
@@ -140,7 +140,22 @@ urn_from_into!(ComponentOrVersionUrn);
 /// Typed Golem URN for worker
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WorkerUrn {
-    pub id: WorkerId,
+    pub id: TargetWorkerId,
+}
+
+impl WorkerUrn {
+    pub fn worker_id(&self) -> Result<WorkerId, GolemUrnTransformError> {
+        match &self.id.worker_name {
+            Some(name) => Ok(WorkerId {
+                component_id: self.id.component_id.clone(),
+                worker_name: name.clone(),
+            }),
+            None => Err(GolemUrnTransformError::invalid_name(
+                Self::resource_type(),
+                "Worker name expected".to_string(),
+            )),
+        }
+    }
 }
 
 impl TypedGolemUrn for WorkerUrn {
@@ -160,25 +175,35 @@ impl TypedGolemUrn for WorkerUrn {
             let worker_name = urldecode(worker_name);
 
             Ok(Self {
-                id: WorkerId {
+                id: TargetWorkerId {
                     component_id: ComponentId(id),
-                    worker_name,
+                    worker_name: Some(worker_name),
                 },
             })
         } else {
-            Err(GolemUrnTransformError::invalid_name(
-                Self::resource_type(),
-                "Worker name expected".to_string(),
-            ))
+            let id = Uuid::parse_str(resource_name).map_err(|err| {
+                GolemUrnTransformError::invalid_name(
+                    Self::resource_type(),
+                    format!("Can't parse UUID: {err}"),
+                )
+            })?;
+
+            Ok(Self {
+                id: TargetWorkerId {
+                    component_id: ComponentId(id),
+                    worker_name: None,
+                },
+            })
         }
     }
 
     fn to_name(&self) -> String {
-        format!(
-            "{}/{}",
-            self.id.component_id.0,
-            urlencode(&self.id.worker_name)
-        )
+        match self.id.worker_name {
+            Some(ref worker_name) => {
+                format!("{}/{}", self.id.component_id.0, urlencode(worker_name))
+            }
+            None => self.id.component_id.0.to_string(),
+        }
     }
 }
 
@@ -433,7 +458,7 @@ impl Display for ResourceUrn {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{ComponentId, WorkerId};
+    use crate::model::{ComponentId, TargetWorkerId, WorkerId};
     use crate::uri::oss::urn::{
         ApiDefinitionUrn, ApiDeploymentUrn, ComponentOrVersionUrn, ComponentUrn,
         ComponentVersionUrn, ResourceUrn, WorkerFunctionUrn, WorkerOrFunctionUrn, WorkerUrn,
@@ -576,11 +601,11 @@ mod tests {
     #[test]
     pub fn worker_urn_to_urn() {
         let typed = WorkerUrn {
-            id: WorkerId {
+            id: TargetWorkerId {
                 component_id: ComponentId(
                     Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap(),
                 ),
-                worker_name: "my:worker/1".to_string(),
+                worker_name: Some("my:worker/1".to_string()),
             },
         };
 
@@ -588,6 +613,24 @@ mod tests {
         assert_eq!(
             untyped.to_string(),
             "urn:worker:679ae459-8700-41d9-920c-7e2887459c94/my%3Aworker%2F1"
+        );
+    }
+
+    #[test]
+    pub fn worker_urn_to_urn_no_name() {
+        let typed = WorkerUrn {
+            id: TargetWorkerId {
+                component_id: ComponentId(
+                    Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap(),
+                ),
+                worker_name: None,
+            },
+        };
+
+        let untyped: GolemUrn = typed.into();
+        assert_eq!(
+            untyped.to_string(),
+            "urn:worker:679ae459-8700-41d9-920c-7e2887459c94"
         );
     }
 
@@ -602,7 +645,20 @@ mod tests {
             typed.id.component_id.0.to_string(),
             "679ae459-8700-41d9-920c-7e2887459c94"
         );
-        assert_eq!(typed.id.worker_name, "my:worker/1");
+        assert_eq!(typed.id.worker_name, Some("my:worker/1".to_string()));
+    }
+
+    #[test]
+    pub fn worker_urn_from_urn_no_name() {
+        let untyped =
+            GolemUrn::from_str("urn:worker:679ae459-8700-41d9-920c-7e2887459c94").unwrap();
+        let typed: WorkerUrn = untyped.try_into().unwrap();
+
+        assert_eq!(
+            typed.id.component_id.0.to_string(),
+            "679ae459-8700-41d9-920c-7e2887459c94"
+        );
+        assert_eq!(typed.id.worker_name, None);
     }
 
     #[test]
@@ -615,7 +671,18 @@ mod tests {
             typed.id.component_id.0.to_string(),
             "679ae459-8700-41d9-920c-7e2887459c94"
         );
-        assert_eq!(typed.id.worker_name, "my:worker/1");
+        assert_eq!(typed.id.worker_name, Some("my:worker/1".to_string()));
+    }
+
+    #[test]
+    pub fn worker_urn_from_str_no_name() {
+        let typed = WorkerUrn::from_str("urn:worker:679ae459-8700-41d9-920c-7e2887459c94").unwrap();
+
+        assert_eq!(
+            typed.id.component_id.0.to_string(),
+            "679ae459-8700-41d9-920c-7e2887459c94"
+        );
+        assert_eq!(typed.id.worker_name, None);
     }
 
     #[test]
@@ -671,11 +738,11 @@ mod tests {
     #[test]
     pub fn worker_or_function_urn_to_urn() {
         let typed_w = WorkerOrFunctionUrn::Worker(WorkerUrn {
-            id: WorkerId {
+            id: TargetWorkerId {
                 component_id: ComponentId(
                     Uuid::parse_str("679ae459-8700-41d9-920c-7e2887459c94").unwrap(),
                 ),
-                worker_name: "my:worker/1".to_string(),
+                worker_name: Some("my:worker/1".to_string()),
             },
         });
         let typed_f = WorkerOrFunctionUrn::Function(WorkerFunctionUrn {
@@ -742,16 +809,6 @@ mod tests {
         assert_eq!(
             typed_f.to_string(),
             "urn:worker:679ae459-8700-41d9-920c-7e2887459c94/my%3Aworker%2F1/fn+a"
-        );
-    }
-
-    #[test]
-    pub fn worker_or_function_error() {
-        let res = WorkerOrFunctionUrn::from_str("urn:worker:679ae459-8700-41d9-920c-7e2887459c94");
-
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Failed to parse URN of type worker: Worker name expected"
         );
     }
 

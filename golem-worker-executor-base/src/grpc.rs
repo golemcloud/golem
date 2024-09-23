@@ -42,14 +42,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_promise_id_string, proto_worker_id_string,
+    proto_promise_id_string, proto_target_worker_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
-    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    TargetWorkerId, TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId,
+    WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
@@ -58,7 +58,7 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasEvents, HasPromiseService,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasPromiseService,
     HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -610,7 +610,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, GolemError> {
-        let worker_id = request.worker_id()?;
+        let target_worker_id = request.worker_id()?;
+
+        let current_assignment = self.shard_service().current_assignment()?;
+
+        let unspecified_name = target_worker_id.worker_name.is_none();
+        let worker_id = target_worker_id.into_worker_id(
+            &current_assignment.shard_ids,
+            current_assignment.number_of_shards,
+        );
+
+        if unspecified_name {
+            info!(
+                worker_id = worker_id.to_string(),
+                "Generated new unique worker id"
+            );
+        }
+
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
@@ -843,6 +859,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if metadata.last_known_status.component_version == request.target_version {
             return Err(GolemError::invalid_request(
                 "Worker is already at the target version",
+            ));
+        }
+
+        let component_metadata = self
+            .component_service()
+            .get_metadata(
+                &worker_id.component_id,
+                Some(metadata.last_known_status.component_version),
+            )
+            .await?;
+        if component_metadata.component_type == ComponentType::Ephemeral {
+            return Err(GolemError::invalid_request(
+                "Ephemeral workers cannot be updated",
             ));
         }
 
@@ -1155,12 +1184,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_and_await_worker(
         &self,
-        request: Request<golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest>,
+        request: Request<InvokeAndAwaitWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -1199,7 +1228,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_worker_json_typed",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             account_id = proto_account_id_string(&request.account_id),
         );
@@ -1242,7 +1271,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "invoke_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            worker_id = proto_target_worker_id_string(&request.worker_id),
             function = request.name,
             account_id = proto_account_id_string(&request.account_id)
         );
@@ -1693,7 +1722,7 @@ trait GrpcInvokeRequest {
     fn account_id(&self) -> Result<AccountId, GolemError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
     fn input(&self) -> Vec<Val>;
-    fn worker_id(&self) -> Result<WorkerId, GolemError>;
+    fn worker_id(&self) -> Result<TargetWorkerId, GolemError>;
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, GolemError>;
     fn name(&self) -> String;
     fn args(&self) -> Option<Vec<String>>;
@@ -1718,7 +1747,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeWorkerRequest {
         self.input.clone()
     }
 
-    fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
+    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
         self.worker_id
             .clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?
@@ -1770,7 +1799,7 @@ impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeAndAwaitWorkerReques
         self.input.clone()
     }
 
-    fn worker_id(&self) -> Result<common_model::WorkerId, GolemError> {
+    fn worker_id(&self) -> Result<common_model::TargetWorkerId, GolemError> {
         self.worker_id
             .clone()
             .ok_or(GolemError::invalid_request("worker_id not found"))?
