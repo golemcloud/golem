@@ -148,6 +148,7 @@ struct CreateOplogConstructor {
     initial_entry: Option<OplogEntry>,
     primary: Arc<dyn OplogService + Send + Sync>,
     service: MultiLayerOplogService,
+    last_oplog_index: OplogIndex,
 }
 
 impl CreateOplogConstructor {
@@ -156,12 +157,14 @@ impl CreateOplogConstructor {
         initial_entry: Option<OplogEntry>,
         primary: Arc<dyn OplogService + Send + Sync>,
         service: MultiLayerOplogService,
+        last_oplog_index: OplogIndex,
     ) -> Self {
         Self {
             owned_worker_id,
             initial_entry,
             primary,
             service,
+            last_oplog_index,
         }
     }
 }
@@ -177,7 +180,9 @@ impl OplogConstructor for CreateOplogConstructor {
                 .create(&self.owned_worker_id, initial_entry)
                 .await
         } else {
-            self.primary.open(&self.owned_worker_id).await
+            self.primary
+                .open(&self.owned_worker_id, self.last_oplog_index)
+                .await
         };
         Arc::new(MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await)
     }
@@ -198,12 +203,18 @@ impl OplogService for MultiLayerOplogService {
                     Some(initial_entry),
                     self.primary.clone(),
                     self.clone(),
+                    OplogIndex::INITIAL,
                 ),
             )
             .await
     }
 
-    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn Oplog + Send + Sync> {
+    async fn open(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        last_oplog_index: OplogIndex,
+    ) -> Arc<dyn Oplog + Send + Sync> {
+        debug!("MultiLayerOplogService::open {owned_worker_id}");
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -212,6 +223,7 @@ impl OplogService for MultiLayerOplogService {
                     None,
                     self.primary.clone(),
                     self.clone(),
+                    last_oplog_index,
                 ),
             )
             .await

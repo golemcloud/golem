@@ -159,7 +159,10 @@ impl SchedulerServiceDefault {
                         let current_last_index =
                             self.oplog_service.get_last_index(&owned_worker_id).await;
                         if current_last_index == last_oplog_index {
-                            let oplog = self.oplog_service.open(&owned_worker_id).await;
+                            let oplog = self
+                                .oplog_service
+                                .open(&owned_worker_id, last_oplog_index)
+                                .await;
                             if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
                                 if more {
                                     self.schedule(

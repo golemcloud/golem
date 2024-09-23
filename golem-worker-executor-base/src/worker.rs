@@ -173,7 +173,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             parent,
         )
         .await?;
-        let oplog = deps.oplog_service().open(&owned_worker_id).await;
+        let last_oplog_index = deps.oplog_service().get_last_index(&owned_worker_id).await;
+        let oplog = deps
+            .oplog_service()
+            .open(&owned_worker_id, last_oplog_index)
+            .await;
 
         let initial_pending_invocations = worker_metadata
             .last_known_status
