@@ -70,10 +70,11 @@ pub enum FunctionReferenceType {
     IndexedResourceDrop(String, usize),
 }
 
-impl From<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
-    fn from(value: golem_api_grpc::proto::golem::rib::FunctionReferenceType) -> Self {
+impl TryFrom<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
+    type Error =String;
+    fn try_from(value: golem_api_grpc::proto::golem::rib::FunctionReferenceType) -> Result<Self, Self::Error> {
         let value = value.r#type.ok_or("Missing type".to_string())?;
-        match value {
+        let function_reference_type = match value {
             golem_api_grpc::proto::golem::rib::function_reference_type::Type::Function(name) => FunctionReferenceType::Function(name.name),
             golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceConstructor(name) => FunctionReferenceType::RawResourceConstructor(name.resource_name),
             golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceDrop(name) => FunctionReferenceType::RawResourceDrop(name.resource_name),
@@ -109,7 +110,8 @@ impl From<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for Function
                 let index = indexed_resource_drop.arg_size;
                 FunctionReferenceType::IndexedResourceDrop(name, index as usize)
             }
-        }
+        };
+        Ok(function_reference_type)
     }
 }
 
@@ -361,7 +363,7 @@ impl TryFrom<ProtoRibIR> for RibIR {
                 let parsed_function_site = ParsedFunctionSite::try_from(parsed_site)?;
 
                 let reference_type = instruction.function_reference_details.ok_or("Missing reference_type".to_string())?;
-                let function_reference_type = reference_type.into();
+                let function_reference_type = reference_type.try_into()?;
 
                 Ok(RibIR::CreateFunctionName(parsed_function_site, function_reference_type))
             }
