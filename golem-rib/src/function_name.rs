@@ -22,13 +22,13 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use golem_wasm_rpc::Value;
 use poem_openapi::types::ToJSON;
-use semver::{BuildMetadata, Prerelease};
-use serde::{Deserialize, Serialize};
+use semver::{BuildMetadata, Prerelease, Version};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt::Display;
 use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode)]
 pub enum ParsedFunctionSite {
     Global,
     Interface {
@@ -44,6 +44,29 @@ pub enum ParsedFunctionSite {
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct SemVer(pub semver::Version);
+
+
+impl Serialize for SemVer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+    {
+        // Serialize the SemVer as its string representation.
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SemVer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+    {
+        // Deserialize a string and attempt to parse it into a semver::Version.
+        let s = String::deserialize(deserializer)?;
+        let version = Version::parse(&s).map_err(serde::de::Error::custom)?;
+        Ok(SemVer(version))
+    }
+}
 
 impl std::fmt::Debug for SemVer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -550,6 +573,58 @@ impl ParsedFunctionReference {
     }
 }
 
+impl From<DynamicParsedFunctionReference> for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
+    fn from(value: DynamicParsedFunctionReference) -> Self {
+        let function = match value {
+            DynamicParsedFunctionReference::Function { function } => ProtoDynamicFunctionReference::Function(
+                golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+            ),
+            DynamicParsedFunctionReference::RawResourceConstructor { resource } => ProtoDynamicFunctionReference::RawResourceConstructor(
+                golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference { resource },
+            ),
+            DynamicParsedFunctionReference::RawResourceMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceMethod(
+                golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference { resource, method },
+            ),
+            DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceStaticMethod(
+                golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference { resource, method },
+            ),
+            DynamicParsedFunctionReference::RawResourceDrop { resource } => ProtoDynamicFunctionReference::RawResourceDrop(
+                golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
+            ),
+            DynamicParsedFunctionReference::IndexedResourceConstructor { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceConstructor(
+                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
+                    resource,
+                    resource_params: resource_params.into_iter().map(|x| x.0.into()).collect(),
+                },
+            ),
+            DynamicParsedFunctionReference::IndexedResourceMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceMethod(
+                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
+                    resource,
+                    resource_params: resource_params.into_iter().map(|x| x.0.into()).collect(),
+                    method,
+                },
+            ),
+            DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceStaticMethod(
+                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
+                    resource,
+                    resource_params: resource_params.into_iter().map(|x| x.0.into()).collect(),
+                    method,
+                },
+            ),
+            DynamicParsedFunctionReference::IndexedResourceDrop { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceDrop(
+                golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
+                    resource,
+                    resource_params: resource_params.into_iter().map(|x| x.0.into()).collect(),
+                },
+            ),
+        };
+
+        golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
+            function_reference: Some(function),
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference> for DynamicParsedFunctionReference {
     type Error = String;
 
@@ -936,6 +1011,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName> for D
             value.function.ok_or("Missing function".to_string())?,
         )?;
         Ok(Self { site, function })
+    }
+}
+
+impl From<DynamicParsedFunctionName> for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
+    fn from(value: DynamicParsedFunctionName) -> Self {
+        golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
+            site: Some(value.site.into()),
+            function: Some(value.function.into()),
+        }
     }
 }
 

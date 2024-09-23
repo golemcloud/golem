@@ -42,7 +42,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::InvocationName> for CallType {
         let invocation = value.name.ok_or("Missing name of invocation")?;
         match invocation {
             golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
-                Ok(CallType::Function(ParsedFunctionName::try_from(name)?))
+                Ok(CallType::Function(DynamicParsedFunctionName::try_from(name)?))
             }
             golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(name) => {
                 Ok(CallType::VariantConstructor(name))
