@@ -44,11 +44,11 @@ impl RegistryKey {
                 RegistryKey::VariantName(variant_name.clone())
             }
             CallType::EnumConstructor(enum_name) => RegistryKey::EnumName(enum_name.clone()),
-            CallType::Function(function_name) => match function_name.site().interface_name() {
-                None => RegistryKey::FunctionName(function_name.function().function_name()),
+            CallType::Function(function_name) => match function_name.site.interface_name() {
+                None => RegistryKey::FunctionName(function_name.function_name()),
                 Some(interface_name) => RegistryKey::FunctionNameWithInterface {
                     interface_name: interface_name.to_string(),
-                    function_name: function_name.function().function_name(),
+                    function_name: function_name.function_name(),
                 },
             },
         }

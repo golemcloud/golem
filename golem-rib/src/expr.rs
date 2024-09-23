@@ -1058,10 +1058,10 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     }
                     golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
                         name,
-                    ) => Expr::call(ParsedFunctionName::parse(name)?, params),
+                    ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
                     golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
                         name,
-                    ) => Expr::call(ParsedFunctionName::parse(name)?, params),
+                    ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
                 }
             }
         };

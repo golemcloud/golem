@@ -605,7 +605,7 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::RawResourceMethod(resource, meethod) => {
+            FunctionReferenceType::RawResourceMethod(resource, method) => {
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::RawResourceMethod { resource, method },
@@ -647,7 +647,7 @@ mod internal {
                         resource_params: type_anntoated_values
                             .iter()
                             .map(type_annotated_value_to_string)
-                            .collect()?,
+                            .collect::<Result<Vec<String>, String>>()?,
                     },
                 };
 
@@ -681,7 +681,7 @@ mod internal {
                         resource_params: type_anntoated_values
                             .iter()
                             .map(type_annotated_value_to_string)
-                            .collect()?,
+                            .collect::<Result<Vec<String>, String>>()?,
                         method,
                     },
                 };
@@ -716,7 +716,7 @@ mod internal {
                         resource_params: type_anntoated_values
                             .iter()
                             .map(type_annotated_value_to_string)
-                            .collect()?,
+                            .collect::<Result<Vec<String>, String>>()?,
                         method,
                     },
                 };
@@ -747,7 +747,7 @@ mod internal {
                         resource_params: type_anntoated_values
                             .iter()
                             .map(type_annotated_value_to_string)
-                            .collect()?,
+                            .collect::<Result<Vec<String>, String>>()?,
                     },
                 };
 

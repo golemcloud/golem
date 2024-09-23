@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, ResourceParam};
-use combine::error::Commit;
+use combine::error::{Commit, Tracked};
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
@@ -79,11 +79,11 @@ where
                     nesting += 1;
                     current_param.push(next_char);
                 } else if next_char == ',' && nesting == 1 {
-                    let (expr, _) = rib_expr()
-                        .easy_parse(position::Stream::new(current_param.trim()))
-                        .into_result()?;
+                    let expr = rib_expr()
+                        .easy_parse(current_param.trim())
+                        .map_err(|e| Commit::Commit(Tracked::from(RibParseError::Message(e.to_string()))))?;
 
-                    result.push(expr);
+                    result.push(expr.0);
                     current_param.clear();
                 } else {
                     current_param.push(next_char);
@@ -97,8 +97,8 @@ where
 
             if !current_param.is_empty() {
                 let expr = rib_expr()
-                    .easy_parse(position::Stream::new(&current_param))
-                    .into_result()?;
+                    .easy_parse(current_param.trim())
+                    .map_err(|e| Commit::Commit(Tracked::from(RibParseError::Message(e.to_string()))))?;
 
                 result.push(expr.0);
             }

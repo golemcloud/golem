@@ -26,9 +26,9 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
     writer::write_expr(expr)
 }
 
-// Writes Expr without any outer interpolation in all cases
-// TODO; Once we avoid interpolation support (other than for concatenations, we need just `to_string`
-// and avoid distinguishing it with `to_string`. Currently `to_string` writes expressions wrapped with interpolation
+// TODO; Once we avoid interpolation support
+// we can remove this function and use `to_string`.
+// Currently `to_string` writes expressions wrapped with interpolation
 // unless they are literals/text concatenated string
 pub fn to_raw_string(expr: &Expr) -> String {
     writer::write_expr(expr).unwrap()

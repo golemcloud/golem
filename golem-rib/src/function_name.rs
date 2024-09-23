@@ -26,6 +26,7 @@ use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
+use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionSite {
@@ -549,6 +550,85 @@ impl ParsedFunctionReference {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference> for DynamicParsedFunctionReference {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference) -> Result<Self, Self::Error> {
+        let function = value
+            .function_reference
+            .ok_or("Missing function reference".to_string())?;
+
+        match function {
+            ProtoDynamicFunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
+                                                        function
+                                                    }) => {
+                Ok(Self::Function { function })
+            },
+            ProtoDynamicFunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                                                                    resource
+                                                                }) => {
+                Ok(Self::RawResourceConstructor { resource })
+            },
+            ProtoDynamicFunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                                                               resource,
+                                                               method
+                                                           }) => {
+                Ok(Self::RawResourceMethod { resource, method })
+            },
+            ProtoDynamicFunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                                                                     resource,
+                                                                     method
+                                                                 }) => {
+                Ok(Self::RawResourceStaticMethod { resource, method })
+            },
+            ProtoDynamicFunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
+                                                              resource
+                                                          }) => {
+                Ok(Self::RawResourceDrop { resource })
+            },
+            ProtoDynamicFunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
+                                                                         resource,
+                                                                         resource_params
+                                                                     }) => {
+
+                let resource_params: Vec<ResourceParam> =
+                    resource_params.into_iter().map(|x| Expr::try_from(x).map(ResourceParam)).collect::<Result<Vec<ResourceParam>, String>>()?;
+
+                Ok(Self::IndexedResourceConstructor { resource, resource_params })
+            },
+            ProtoDynamicFunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
+                                                                    resource,
+                                                                    resource_params,
+                                                                    method
+                                                                }) => {
+                let resource_params: Vec<ResourceParam> =
+                    resource_params.into_iter().map(|x| Expr::try_from(x).map(ResourceParam)).collect::<Result<Vec<ResourceParam>, String>>()?;
+
+                Ok(Self::IndexedResourceMethod { resource, resource_params, method })
+            },
+            ProtoDynamicFunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
+                                                                          resource,
+                                                                          resource_params,
+                                                                          method
+                                                                      }) => {
+                let resource_params: Vec<ResourceParam> =
+                    resource_params.into_iter().map(|x| Expr::try_from(x).map(ResourceParam)).collect::<Result<Vec<ResourceParam>, String>>()?;
+
+                Ok(Self::IndexedResourceStaticMethod { resource, resource_params, method })
+            },
+            ProtoDynamicFunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
+                                                                  resource,
+                                                                  resource_params
+                                                              }) => {
+                let resource_params: Vec<ResourceParam> =
+                    resource_params.into_iter().map(|x| Expr::try_from(x).map(ResourceParam)).collect::<Result<Vec<ResourceParam>, String>>()?;
+
+                Ok(Self::IndexedResourceDrop { resource, resource_params })
+            },
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionReference>
     for ParsedFunctionReference
 {
@@ -723,17 +803,6 @@ pub(crate) struct DynamicParsedFunctionName {
     pub function: DynamicParsedFunctionReference,
 }
 
-impl TryFrom<DynamicParsedFunctionName> for ParsedFunctionName {
-    type Error = String;
-
-    fn try_from(value: DynamicParsedFunctionName) -> Result<Self, Self::Error> {
-        Ok(ParsedFunctionName {
-            site: value.site,
-            function: value.function.try_into()?,
-        })
-    }
-}
-
 impl DynamicParsedFunctionName {
     pub fn parse(name: impl AsRef<str>) -> Result<Self, String> {
         let name = name.as_ref();
@@ -754,11 +823,22 @@ impl DynamicParsedFunctionName {
         }
     }
 
+    pub fn function_name(&self) -> String {
+        self.to_static().function.function_name()
+    }
+
     fn to_static(&self) -> ParsedFunctionName {
         ParsedFunctionName {
             site: self.site.clone(),
             function: self.function.to_static(),
         }
+    }
+}
+
+impl Display for DynamicParsedFunctionName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let function_name = self.to_static().to_string();
+        write!(f, "{}", function_name)
     }
 }
 
@@ -819,7 +899,7 @@ impl ParsedFunctionName {
             parser.easy_parse(name);
 
         match result {
-            Ok((parsed, _)) => Ok(parsed),
+            Ok((parsed, _)) => Ok(parsed.to_static()),
             Err(error) => {
                 let error_message = error
                     .map_position(|p| p.translate_position(name))
@@ -842,6 +922,20 @@ impl ParsedFunctionName {
             site: self.site.clone(),
             function,
         })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName> for DynamicParsedFunctionName {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName,
+    ) -> Result<Self, Self::Error> {
+        let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
+        let function = DynamicParsedFunctionReference::try_from(
+            value.function.ok_or("Missing function".to_string())?,
+        )?;
+        Ok(Self { site, function })
     }
 }
 
