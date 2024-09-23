@@ -23,7 +23,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
 use crate::services::oplog::OplogOps;
 use crate::services::rpc::{RpcDemand, RpcError};
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
@@ -87,13 +87,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
+        let current_idempotency_key = self
+            .get_current_idempotency_key()
+            .await
+            .unwrap_or(IdempotencyKey::fresh());
+        let oplog_index = self.state.current_oplog_index().await;
+
+        // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
             |_ctx| {
                 Box::pin(async move {
-                    let uuid = Uuid::new_v4();
+                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
                     Ok::<Uuid, GolemError>(uuid)
                 })
             },
@@ -152,13 +160,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
+        let current_idempotency_key = self
+            .get_current_idempotency_key()
+            .await
+            .unwrap_or(IdempotencyKey::fresh());
+        let oplog_index = self.state.current_oplog_index().await;
+
+        // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
             |_ctx| {
                 Box::pin(async move {
-                    let uuid = Uuid::new_v4();
+                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
                     Ok::<Uuid, GolemError>(uuid)
                 })
             },
@@ -221,13 +237,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id.clone();
 
+        let current_idempotency_key = self
+            .get_current_idempotency_key()
+            .await
+            .unwrap_or(IdempotencyKey::fresh());
+        let oplog_index = self.state.current_oplog_index().await;
+
+        // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
             |_ctx| {
                 Box::pin(async move {
-                    let uuid = Uuid::new_v4();
+                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
                     Ok::<Uuid, GolemError>(uuid)
                 })
             },

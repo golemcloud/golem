@@ -529,7 +529,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_args: &[String],
         self_env: &[(String, String)],
     ) -> Result<(), RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh()); // TODO
 
         if self
             .shard_service()
