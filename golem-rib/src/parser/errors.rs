@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use combine::{ParseError, StreamOnce};
 
 use serde::de::StdError;
 
@@ -24,6 +25,7 @@ impl StdError for RibParseError {
         }
     }
 }
+
 
 // A curated list of most common syntax errors, with the intent
 // to not regress user-facing error messages with changing parsing logic

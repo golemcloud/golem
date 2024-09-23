@@ -78,6 +78,7 @@ mod name_binding_tests {
         Expr, InferredType, ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
         VariableId,
     };
+    use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
     #[test]
     fn test_name_binding_simple() {
@@ -99,9 +100,9 @@ mod name_binding_tests {
         );
 
         let call_expr = Expr::Call(
-            CallType::Function(ParsedFunctionName {
+            CallType::Function(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function {
+                function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
@@ -146,9 +147,9 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::Call(
-            CallType::Function(ParsedFunctionName {
+            CallType::Function(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function {
+                function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
@@ -160,9 +161,9 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::Call(
-            CallType::Function(ParsedFunctionName {
+            CallType::Function(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function {
+                function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
@@ -207,9 +208,9 @@ mod name_binding_tests {
         );
 
         let call_expr1 = Expr::Call(
-            CallType::Function(ParsedFunctionName {
+            CallType::Function(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function {
+                function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),
@@ -221,9 +222,9 @@ mod name_binding_tests {
         );
 
         let call_expr2 = Expr::Call(
-            CallType::Function(ParsedFunctionName {
+            CallType::Function(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function {
+                function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),

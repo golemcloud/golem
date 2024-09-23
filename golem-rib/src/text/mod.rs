@@ -31,7 +31,7 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 // Currently `to_string` writes expressions wrapped with interpolation
 // unless they are literals/text concatenated string
 pub fn to_raw_string(expr: &Expr) -> String {
-    writer::write_expr(expr).unwrap()
+    writer::write_expr_without_interpolation(expr).unwrap()
 }
 
 #[cfg(test)]

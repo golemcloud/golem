@@ -257,6 +257,7 @@ mod function_parameters_inference_tests {
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
+    use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
     fn get_function_type_registry() -> FunctionTypeRegistry {
         let metadata = vec![
@@ -295,9 +296,9 @@ mod function_parameters_inference_tests {
         let let_binding = Expr::let_binding("x", Expr::number(1f64));
 
         let call_expr = Expr::Call(
-            CallType::Function(ParsedFunctionName {
+            CallType::Function(DynamicParsedFunctionName {
                 site: ParsedFunctionSite::Global,
-                function: ParsedFunctionReference::Function {
+                function: DynamicParsedFunctionReference::Function {
                     function: "foo".to_string(),
                 },
             }),

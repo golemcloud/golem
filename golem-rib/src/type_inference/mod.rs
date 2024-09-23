@@ -57,6 +57,7 @@ mod type_inference_tests {
             Expr, InferredType, Number, ParsedFunctionName, ParsedFunctionReference,
             ParsedFunctionSite, VariableId,
         };
+        use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
         #[test]
         fn test_simple_let_binding_type_inference() {
@@ -83,9 +84,9 @@ mod type_inference_tests {
             );
 
             let call_expr = Expr::Call(
-                CallType::Function(ParsedFunctionName {
+                CallType::Function(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 }),
@@ -140,9 +141,9 @@ mod type_inference_tests {
             );
 
             let call_expr1 = Expr::Call(
-                CallType::Function(ParsedFunctionName {
+                CallType::Function(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 }),
@@ -154,9 +155,9 @@ mod type_inference_tests {
             );
 
             let call_expr2 = Expr::Call(
-                CallType::Function(ParsedFunctionName {
+                CallType::Function(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "baz".to_string(),
                     },
                 }),
@@ -1025,6 +1026,7 @@ mod type_inference_tests {
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
             ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
         };
+        use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
         #[test]
         fn test_simple_pattern_match_type_inference() {
@@ -1076,9 +1078,9 @@ mod type_inference_tests {
                             InferredType::U64,
                         ))),
                         Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
                                 },
                             }),
@@ -1096,9 +1098,9 @@ mod type_inference_tests {
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "baz".to_string(),
                                 },
                             }),
@@ -1898,6 +1900,7 @@ mod type_inference_tests {
         };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedOption;
+        use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
         pub(crate) fn get_function_type_registry() -> FunctionTypeRegistry {
             let metadata = vec![
@@ -2063,9 +2066,9 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "process".to_string(),
                                 },
                             }),
@@ -2546,9 +2549,9 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
                                 },
                             }),

@@ -17,8 +17,8 @@ use combine::error::{Commit, Tracked};
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::stream::position;
-use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
+use combine::stream::{PointerOffset, position};
+use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser, StreamOnce, Positioned};
 use combine::{sep_by, EasyParser};
 
 use crate::expr::Expr;
@@ -79,11 +79,10 @@ where
                     nesting += 1;
                     current_param.push(next_char);
                 } else if next_char == ',' && nesting == 1 {
-                    let expr = rib_expr()
-                        .easy_parse(current_param.trim())
-                        .map_err(|e| Commit::Commit(Tracked::from(RibParseError::Message(e.to_string()))))?;
+                    let expr =
+                        Expr::from_text(current_param.trim()).expect("Failed to parse expression");
 
-                    result.push(expr.0);
+                    result.push(expr);
                     current_param.clear();
                 } else {
                     current_param.push(next_char);
@@ -96,11 +95,9 @@ where
             }
 
             if !current_param.is_empty() {
-                let expr = rib_expr()
-                    .easy_parse(current_param.trim())
-                    .map_err(|e| Commit::Commit(Tracked::from(RibParseError::Message(e.to_string()))))?;
-
-                result.push(expr.0);
+                let expr =
+                    Expr::from_text(current_param.trim()).expect("Failed to parse expression");
+                result.push(expr);
             }
 
             Ok((result, result_committed.unwrap()))
@@ -219,7 +216,6 @@ where
         function: DynamicParsedFunctionReference::Function { function: id },
     }))
 }
-
 #[cfg(test)]
 mod function_call_tests {
     use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, ResourceParam};
@@ -1012,18 +1008,10 @@ mod function_call_tests {
                     function: DynamicParsedFunctionReference::IndexedResourceDrop {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            ResourceParam(Expr::literal("\"hello\"")),
+                            ResourceParam(Expr::literal("hello")),
                             ResourceParam(Expr::record(vec![(
                                 "field-a".to_string(),
-                                Expr::call(
-                                    DynamicParsedFunctionName {
-                                        site: ParsedFunctionSite::Global,
-                                        function: DynamicParsedFunctionReference::Function {
-                                            function: "some".to_string(),
-                                        },
-                                    },
-                                    vec![Expr::literal("1")],
-                                ),
+                                Expr::option(Some(Expr::number(1f64))),
                             )])),
                         ],
                     },
