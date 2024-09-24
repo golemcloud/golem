@@ -1363,34 +1363,6 @@ mod interpreter_tests {
     }
 
     #[tokio::test]
-    async fn test_interpreter_for_dynamic_resource_parameters() {
-        let mut interpreter = Interpreter::default();
-
-        let input = internal::get_analysed_typ_str();
-
-        let analysed_exports =
-            internal::get_component_metadata("ns:name/interface.{resource1(\"hello\").new}", vec![input], AnalysedType::Str(TypeStr));
-
-        let expr = r#"
-
-           let hello = "hello";
-           let result = ns:name/interface.{resource1(hello).new}(hello);
-           result
-
-        "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-        let mut expr2 = expr.clone();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
-
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
-        );
-    }
-
-    #[tokio::test]
     async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
         let mut interpreter = Interpreter::default();
 
@@ -1451,6 +1423,31 @@ mod interpreter_tests {
         assert_eq!(
             result.get_val().unwrap(),
             TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_with_indexed_resource() {
+        let mut interpreter = Interpreter::default();
+
+        let input = internal::get_analysed_typ_str();
+
+        let analysed_exports =
+            internal::get_component_metadata_with_indexed_resource();
+
+        let expr = r#"
+           golem:it/api.{cart("hello").checkout}();
+           "success"
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let mut expr2 = expr.clone();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("success".to_string())
         );
     }
 
@@ -1563,6 +1560,220 @@ mod interpreter_tests {
                     typ: output,
                 }],
             })]
+        }
+
+
+        pub(crate) fn get_component_metadata_with_indexed_resource() -> Vec<AnalysedExport> {
+
+           let instance = AnalysedExport::Instance(
+                AnalysedInstance {
+                    name: "golem:it/api".to_string(),
+                    functions: vec![
+                        AnalysedFunction {
+                            name: "[constructor]cart".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "user-id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr)
+                                }
+                            ],
+                            results: vec![
+                                AnalysedFunctionResult {
+                                    name: None,
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Owned
+                                    })
+                                }
+                            ]
+                        },
+                        AnalysedFunction {
+                            name: "[method]cart.add-item".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                },
+                                AnalysedFunctionParameter {
+                                    name: "item".to_string(),
+                                    typ: AnalysedType::Record(TypeRecord {
+                                        fields: vec![
+                                            NameTypePair {
+                                                name: "product-id".to_string(),
+                                                typ: AnalysedType::Str(TypeStr)
+                                            },
+                                            NameTypePair {
+                                                name: "name".to_string(),
+                                                typ: AnalysedType::Str(TypeStr)
+                                            },
+                                            NameTypePair {
+                                                name: "price".to_string(),
+                                                typ: AnalysedType::F32(TypeF32)
+                                            },
+                                            NameTypePair {
+                                                name: "quantity".to_string(),
+                                                typ: AnalysedType::U32(TypeU32)
+                                            }
+                                        ]
+                                    })
+                                }
+                            ],
+                            results: vec![]
+                        },
+                        AnalysedFunction {
+                            name: "[method]cart.remove-item".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                },
+                                AnalysedFunctionParameter {
+                                    name: "product-id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr)
+                                }
+                            ],
+                            results: vec![]
+                        },
+                        AnalysedFunction {
+                            name: "[method]cart.update-item-quantity".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                },
+                                AnalysedFunctionParameter {
+                                    name: "product-id".to_string(),
+                                    typ: AnalysedType::Str(TypeStr)
+                                },
+                                AnalysedFunctionParameter {
+                                    name: "quantity".to_string(),
+                                    typ: AnalysedType::U32(TypeU32)
+                                }
+                            ],
+                            results: vec![]
+                        },
+                        AnalysedFunction {
+                            name: "[method]cart.checkout".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                }
+                            ],
+                            results: vec![
+                                AnalysedFunctionResult {
+                                    name: None,
+                                    typ: AnalysedType::Variant(TypeVariant {
+                                        cases: vec![
+                                            NameOptionTypePair {
+                                                name: "error".to_string(),
+                                                typ: Some(AnalysedType::Str(TypeStr))
+                                            },
+                                            NameOptionTypePair {
+                                                name: "success".to_string(),
+                                                typ: Some(AnalysedType::Record(TypeRecord {
+                                                    fields: vec![
+                                                        NameTypePair {
+                                                            name: "order-id".to_string(),
+                                                            typ: AnalysedType::Str(TypeStr)
+                                                        }
+                                                    ]
+                                                }))
+                                            }
+                                        ]
+                                    })
+                                }
+                            ]
+                        },
+                        AnalysedFunction {
+                            name: "[method]cart.get-cart-contents".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                }
+                            ],
+                            results: vec![
+                                AnalysedFunctionResult {
+                                    name: None,
+                                    typ: AnalysedType::List(TypeList {
+                                        inner: Box::new(AnalysedType::Record(TypeRecord {
+                                            fields: vec![
+                                                NameTypePair {
+                                                    name: "product-id".to_string(),
+                                                    typ: AnalysedType::Str(TypeStr)
+                                                },
+                                                NameTypePair {
+                                                    name: "name".to_string(),
+                                                    typ: AnalysedType::Str(TypeStr)
+                                                },
+                                                NameTypePair {
+                                                    name: "price".to_string(),
+                                                    typ: AnalysedType::F32(TypeF32)
+                                                },
+                                                NameTypePair {
+                                                    name: "quantity".to_string(),
+                                                    typ: AnalysedType::U32(TypeU32)
+                                                }
+                                            ]
+                                        }))
+                                    })
+                                }
+                            ]
+                        },
+                        AnalysedFunction {
+                            name: "[method]cart.merge-with".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                },
+                                AnalysedFunctionParameter {
+                                    name: "other-cart".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Borrowed
+                                    })
+                                }
+                            ],
+                            results: vec![]
+                        },
+                        AnalysedFunction {
+                            name: "[drop]cart".to_string(),
+                            parameters: vec![
+                                AnalysedFunctionParameter {
+                                    name: "self".to_string(),
+                                    typ: AnalysedType::Handle(TypeHandle {
+                                        resource_id: AnalysedResourceId(0),
+                                        mode: AnalysedResourceMode::Owned
+                                    })
+                                }
+                            ],
+                            results: vec![]
+                        }
+                    ]
+                }
+            );
+
+            vec![instance]
         }
     }
 }
