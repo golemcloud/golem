@@ -169,13 +169,23 @@ message ResultExpr {
 }
 
 message CallExpr {
-  InvocationName name = 1;
+  optional InvocationName name = 1;
   repeated Expr params = 2;
+  optional CallType call_type = 3;
 }
 
+message CallType {
+   oneof name {
+       golem.rib.DynamicParsedFunctionName parsed = 1;
+       string variant_constructor = 2;
+       string enum_constructor = 3;
+     }
+}
+
+/** Legacy call-type that holds fully formed function names and not dynamic functions. This is kept for backward compatibility */
 message InvocationName {
    oneof name {
-     golem.rib.DynamicParsedFunctionName parsed = 1;
+     golem.rib.ParsedFunctionName parsed = 1;
      string variant_constructor = 2;
      string enum_constructor = 3;
    }
