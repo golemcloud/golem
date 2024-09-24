@@ -94,7 +94,14 @@ spec:
 
         let properties = component.properties.as_object().unwrap();
 
-        assert!(properties.get_key_value("testComponentProperty").unwrap().1.as_str() == Some("aaa"));
+        assert!(
+            properties
+                .get_key_value("testComponentProperty")
+                .unwrap()
+                .1
+                .as_str()
+                == Some("aaa")
+        );
 
         assert!(component.traits.len() == 2);
 
