@@ -27,7 +27,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
@@ -50,6 +50,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         match location.parse_as_golem_urn() {
             Some((remote_worker_id, None)) => {
+                let remote_worker_id = remote_worker_id
+                    .try_into_worker_id()
+                    .ok_or(anyhow!("Must specify a worker name"))?; // TODO: this should not be a requirement here
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
                 let demand = self.rpc().create_demand(&remote_worker_id).await;
@@ -543,18 +546,20 @@ pub struct WasmRpcEntryPayload {
 }
 
 pub trait UrnExtensions {
-    fn parse_as_golem_urn(&self) -> Option<(WorkerId, Option<String>)>;
+    fn parse_as_golem_urn(&self) -> Option<(TargetWorkerId, Option<String>)>;
 
     fn golem_urn(worker_id: &WorkerId, function_name: Option<&str>) -> Self;
 }
 
 impl UrnExtensions for Uri {
-    fn parse_as_golem_urn(&self) -> Option<(WorkerId, Option<String>)> {
+    fn parse_as_golem_urn(&self) -> Option<(TargetWorkerId, Option<String>)> {
         let urn = WorkerOrFunctionUrn::from_str(&self.value).ok()?;
 
         match urn {
             WorkerOrFunctionUrn::Worker(w) => Some((w.id, None)),
-            WorkerOrFunctionUrn::Function(f) => Some((f.id, Some(f.function))),
+            WorkerOrFunctionUrn::Function(f) => {
+                Some((f.id.into_target_worker_id(), Some(f.function)))
+            }
         }
     }
 

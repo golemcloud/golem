@@ -239,16 +239,23 @@ pub struct WorkerId {
 }
 
 impl WorkerId {
-    pub fn slug(&self) -> String {
-        format!("{}/{}", self.component_id, self.worker_name)
-    }
-
     pub fn to_redis_key(&self) -> String {
         format!("{}:{}", self.component_id.0, self.worker_name)
     }
 
     pub fn uri(&self) -> String {
-        WorkerUrn { id: self.clone() }.to_string()
+        WorkerUrn {
+            id: self.clone().into_target_worker_id(),
+        }
+        .to_string()
+    }
+
+    /// The dual of `TargetWorkerId::into_worker_id`
+    pub fn into_target_worker_id(self) -> TargetWorkerId {
+        TargetWorkerId {
+            component_id: self.component_id,
+            worker_name: Some(self.worker_name),
+        }
     }
 }
 
@@ -276,7 +283,7 @@ impl FromStr for WorkerId {
 
 impl Display for WorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.slug())
+        f.write_str(&format!("{}/{}", self.component_id, self.worker_name))
     }
 }
 
@@ -337,6 +344,116 @@ impl OwnedWorkerId {
 impl Display for OwnedWorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.account_id, self.worker_id)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode)]
+pub struct TargetWorkerId {
+    pub component_id: ComponentId,
+    pub worker_name: Option<String>,
+}
+
+impl TargetWorkerId {
+    pub fn uri(&self) -> String {
+        WorkerUrn { id: self.clone() }.to_string()
+    }
+
+    /// Converts a `TargetWorkerId` to a `WorkerId` if the worker name is specified
+    pub fn try_into_worker_id(self) -> Option<WorkerId> {
+        self.worker_name.map(|worker_name| WorkerId {
+            component_id: self.component_id,
+            worker_name,
+        })
+    }
+
+    /// Converts a `TargetWorkerId` to a `WorkerId`. If the worker name was not specified,
+    /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
+    /// that the generated worker ID will belong to one of the provided shards.
+    ///
+    /// If the worker name was specified, `force_in_shard` is ignored.
+    pub fn into_worker_id(
+        self,
+        force_in_shard: &HashSet<ShardId>,
+        number_of_shards: usize,
+    ) -> WorkerId {
+        let TargetWorkerId {
+            component_id,
+            worker_name,
+        } = self;
+        match worker_name {
+            Some(worker_name) => WorkerId {
+                component_id,
+                worker_name,
+            },
+            None => {
+                if force_in_shard.is_empty() || number_of_shards == 0 {
+                    let worker_name = Uuid::new_v4().to_string();
+                    WorkerId {
+                        component_id,
+                        worker_name,
+                    }
+                } else {
+                    let mut current = Uuid::new_v4().to_u128_le();
+                    loop {
+                        let uuid = Uuid::from_u128_le(current);
+                        let worker_name = uuid.to_string();
+                        let worker_id = WorkerId {
+                            component_id: component_id.clone(),
+                            worker_name,
+                        };
+                        let shard_id = ShardId::from_worker_id(&worker_id, number_of_shards);
+                        if force_in_shard.contains(&shard_id) {
+                            return worker_id;
+                        }
+                        current += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Display for TargetWorkerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.worker_name {
+            Some(worker_name) => write!(f, "{}/{}", self.component_id, worker_name),
+            None => write!(f, "{}/*", self.component_id),
+        }
+    }
+}
+
+impl From<WorkerId> for TargetWorkerId {
+    fn from(value: WorkerId) -> Self {
+        value.into_target_worker_id()
+    }
+}
+
+impl From<&WorkerId> for TargetWorkerId {
+    fn from(value: &WorkerId) -> Self {
+        value.clone().into_target_worker_id()
+    }
+}
+
+impl TryFrom<golem::worker::TargetWorkerId> for TargetWorkerId {
+    type Error = String;
+
+    fn try_from(value: golem::worker::TargetWorkerId) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
+            worker_name: value.name,
+        })
+    }
+}
+
+impl From<TargetWorkerId> for golem::worker::TargetWorkerId {
+    fn from(value: TargetWorkerId) -> Self {
+        Self {
+            component_id: Some(value.component_id.into()),
+            name: value.worker_name,
+        }
     }
 }
 
@@ -2173,7 +2290,7 @@ impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Enum)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Enum)]
 #[repr(i32)]
 pub enum ComponentType {
     Durable = 0,
@@ -2220,16 +2337,18 @@ impl From<ComponentType> for golem_api_grpc::proto::golem::component::ComponentT
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::str::FromStr;
+    use std::time::SystemTime;
     use std::vec;
 
-    use bincode::{Decode, Encode};
-    use serde::{Deserialize, Serialize};
-
     use crate::model::{
-        AccountId, ComponentId, FilterComparator, StringFilterComparator, Timestamp, WorkerFilter,
-        WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentId, FilterComparator, ShardId, StringFilterComparator, TargetWorkerId,
+        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
+    use bincode::{Decode, Encode};
+    use rand::{thread_rng, Rng};
+    use serde::{Deserialize, Serialize};
 
     #[test]
     fn timestamp_conversion() {
@@ -2465,5 +2584,40 @@ mod tests {
                 "worker-2".to_string(),
             ))
             .matches(&worker_metadata));
+    }
+
+    #[test]
+    fn target_worker_id_force_shards() {
+        let mut rng = thread_rng();
+        const SHARD_COUNT: usize = 1000;
+        const EXAMPLE_COUNT: usize = 1000;
+        for _ in 0..EXAMPLE_COUNT {
+            let mut shard_ids = HashSet::new();
+            let count = rng.gen_range(0..100);
+            for _ in 0..count {
+                let shard_id = rng.gen_range(0..SHARD_COUNT);
+                shard_ids.insert(ShardId {
+                    value: shard_id as i64,
+                });
+            }
+
+            let component_id = ComponentId::new_v4();
+            let target_worker_id = TargetWorkerId {
+                component_id,
+                worker_name: None,
+            };
+
+            let start = SystemTime::now();
+            let worker_id = target_worker_id.into_worker_id(&shard_ids, SHARD_COUNT);
+            let end = SystemTime::now();
+            println!(
+                "Time with {count} valid shards: {:?}",
+                end.duration_since(start).unwrap()
+            );
+
+            if !shard_ids.is_empty() {
+                assert!(shard_ids.contains(&ShardId::from_worker_id(&worker_id, SHARD_COUNT)));
+            }
+        }
     }
 }

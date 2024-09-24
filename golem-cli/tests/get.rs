@@ -17,7 +17,7 @@ use crate::api_definition::{
 };
 use crate::api_deployment::make_definition;
 use crate::cli::{Cli, CliLive};
-use crate::worker::make_component;
+use crate::worker::add_environment_service_component;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
@@ -170,7 +170,7 @@ fn top_level_get_component(
 fn top_level_get_worker(
     (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, "top_level_get_worker", &cli)?;
+    let component = add_environment_service_component(deps, "top_level_get_worker", &cli)?;
     let worker_name = "top_level_get_worker";
     let cfg = &cli.config;
 
@@ -185,7 +185,7 @@ fn top_level_get_worker(
 
     let url = WorkerUrl {
         component_name: component.component_name.to_string(),
-        worker_name: worker_name.to_string(),
+        worker_name: Some(worker_name.to_string()),
     };
 
     let worker: WorkerMetadataView = cli.run(&["get", &url.to_string()])?;
@@ -202,7 +202,7 @@ fn top_level_get_worker(
 fn top_level_get_worker_function(
     (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
 ) -> Result<(), Failed> {
-    let component = make_component(deps, "top_level_get_worker_function", &cli)?;
+    let component = add_environment_service_component(deps, "top_level_get_worker_function", &cli)?;
     let worker_name = "top_level_get_worker_function";
     let cfg = &cli.config;
 
@@ -231,7 +231,7 @@ fn top_level_get_worker_function(
     );
 
     let urn = WorkerFunctionUrn {
-        id: worker_urn.id,
+        id: worker_urn.id.try_into_worker_id().unwrap(),
         function: function_name.to_string(),
     };
 

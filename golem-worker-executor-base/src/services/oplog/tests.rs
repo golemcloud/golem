@@ -217,6 +217,9 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             context,
             message,
         },
+        OplogEntry::Restart { timestamp } => OplogEntry::Restart {
+            timestamp: rounded_ts(timestamp),
+        },
     }
 }
 

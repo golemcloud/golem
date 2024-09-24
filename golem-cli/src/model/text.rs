@@ -690,10 +690,14 @@ pub mod worker {
 
     impl MessageWithFields for WorkerAddView {
         fn message(&self) -> String {
-            format!(
-                "Added worker {}",
-                format_message_highlight(&self.0.id.worker_name)
-            )
+            if let Some(worker_name) = &self.0.id.worker_name {
+                format!("Added worker {}", format_message_highlight(&worker_name))
+            } else {
+                format!(
+                    "Added worker with a {}",
+                    format_message_highlight("random generated name")
+                )
+            }
         }
 
         fn fields(&self) -> Vec<(&'static str, String)> {
@@ -704,7 +708,7 @@ pub mod worker {
                 .fmt_field("Component URN", &self.0.id.component_id, |id| {
                     format_id(&ComponentUrn { id: id.clone() })
                 })
-                .fmt_field("Worker name", &self.0.id.worker_name, format_id);
+                .fmt_field_option("Worker name", &(self.0.id.worker_name.as_ref()), format_id);
 
             fields.build()
         }
@@ -727,10 +731,14 @@ pub mod worker {
 
     impl MessageWithFields for WorkerGetView {
         fn message(&self) -> String {
-            format!(
-                "Got metadata for worker {}",
-                format_message_highlight(&self.0.worker_urn.id.worker_name)
-            )
+            if let Some(worker_name) = &self.0.worker_urn.id.worker_name {
+                format!(
+                    "Got metadata for worker {}",
+                    format_message_highlight(worker_name)
+                )
+            } else {
+                "Got metadata for worker".to_string()
+            }
         }
 
         fn fields(&self) -> Vec<(&'static str, String)> {
@@ -741,7 +749,7 @@ pub mod worker {
                 .fmt_field("Component URN", &self.0.worker_urn.id.component_id, |id| {
                     format_id(&ComponentUrn { id: id.clone() })
                 })
-                .fmt_field("Worker name", &self.0.worker_urn.id.worker_name, format_id)
+                .fmt_field_option("Worker name", &self.0.worker_urn.id.worker_name, format_id)
                 .fmt_field("Component version", &self.0.component_version, format_id)
                 .field("Created at", &self.0.created_at)
                 .fmt_field("Component size", &self.0.component_size, format_binary_size)
@@ -799,7 +807,7 @@ pub mod worker {
                 component_urn: ComponentUrn {
                     id: value.worker_urn.id.component_id.clone(),
                 },
-                worker_name: value.worker_urn.id.worker_name.to_string(),
+                worker_name: value.worker_urn.id.worker_name.clone().unwrap_or_default(),
                 status: format_status(&value.status),
                 component_version: value.component_version,
                 created_at: value.created_at,
@@ -860,7 +868,7 @@ pub mod worker {
         fn from(value: &WorkerUrn) -> Self {
             WorkerUrnTableView {
                 worker_urn: value.clone(),
-                worker_name: value.id.worker_name.clone(),
+                worker_name: value.id.worker_name.clone().unwrap_or_default(),
             }
         }
     }

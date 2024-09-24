@@ -17,6 +17,7 @@ import public "golem/worker/log_event.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/component/component_id.proto";
 import public "golem/worker/update_mode.proto";
+import public "golem/worker/target_worker_id.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -102,7 +103,7 @@ message InterruptWorkerResponse {
 }
 
 message InvokeAndAwaitRequest {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.TargetWorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
@@ -117,7 +118,7 @@ message InvokeAndAwaitResponse {
 }
 
 message InvokeAndAwaitJsonRequest {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.TargetWorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
@@ -132,7 +133,7 @@ message InvokeAndAwaitJsonResponse {
 }
 
 message InvokeRequest {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.TargetWorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
@@ -147,7 +148,7 @@ message InvokeResponse {
 }
 
 message InvokeJsonRequest {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.TargetWorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
