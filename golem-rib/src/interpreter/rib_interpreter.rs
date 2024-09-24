@@ -984,7 +984,8 @@ mod interpreter_tests {
     use super::*;
     use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
     use golem_wasm_ast::analysis::{
-        AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr,
+        AnalysedType, NameOptionTypePair, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr,
+        TypeVariant,
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
@@ -1428,14 +1429,14 @@ mod interpreter_tests {
     }
 
     #[tokio::test]
-    async fn test_interpreter_with_indexed_resource() {
+    async fn test_interpreter_with_indexed_resource_drop() {
         let mut interpreter = Interpreter::default();
 
-        let analysed_exports = internal::get_component_metadata_with_indexed_resource();
+        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
 
         let expr = r#"
-           let x = "user";
-           golem:it/api.{cart(x).checkout}();
+           let user_id = "user";
+           golem:it/api.{cart(user_id).drop}();
            "success"
         "#;
 
@@ -1449,8 +1450,127 @@ mod interpreter_tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_interpreter_with_indexed_resource_checkout() {
+        let result_type = AnalysedType::Variant(TypeVariant {
+            cases: vec![
+                NameOptionTypePair {
+                    name: "error".to_string(),
+                    typ: Some(AnalysedType::Str(TypeStr)),
+                },
+                NameOptionTypePair {
+                    name: "success".to_string(),
+                    typ: Some(AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "order-id".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    })),
+                },
+            ],
+        });
+
+        let result_value = internal::type_annotated_value_result(
+            &result_type,
+            r#"
+          success({order-id: "foo"})
+        "#,
+        );
+
+        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
+
+        let mut interpreter = internal::test_interpreter(&result_type, &result_value);
+
+        let expr = r#"
+           let user_id = "foo";
+           let result = golem:it/api.{cart(user_id).checkout}();
+           result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), result_value);
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_with_indexed_resource_get_cart_contents() {
+        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
+
+        let result_type = AnalysedType::Variant(TypeVariant {
+            cases: vec![
+                NameOptionTypePair {
+                    name: "error".to_string(),
+                    typ: Some(AnalysedType::Str(TypeStr)),
+                },
+                NameOptionTypePair {
+                    name: "success".to_string(),
+                    typ: Some(AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "order-id".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    })),
+                },
+            ],
+        });
+
+        let result_value = internal::type_annotated_value_result(
+            &result_type,
+            r#"
+          success({order-id: "foo"})
+        "#,
+        );
+
+        let mut interpreter = internal::test_interpreter(&result_type, &result_value);
+
+        let expr = r#"
+           let user_id = "bar";
+           let result = golem:it/api.{cart(user_id).get-cart-contents}();
+           result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(result.get_val().unwrap(), result_value);
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_with_indexed_resource_update_item_quantity() {
+        let mut interpreter = Interpreter::default();
+
+        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
+
+        let expr = r#"
+           let user_id = "jon";
+           let product_id = "mac";
+           let quantity = 1032;
+           golem:it/api.{cart(user_id).update-item-quantity}(product_id, quantity);
+           "successfully updated"
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("successfully updated".to_string())
+        );
+    }
+
     mod internal {
+        use crate::interpreter::env::InterpreterEnv;
+        use crate::interpreter::stack::InterpreterStack;
+        use crate::{Interpreter, RibFunctionInvoke};
         use golem_wasm_ast::analysis::*;
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use golem_wasm_rpc::protobuf::TypedTuple;
+        use std::collections::HashMap;
+        use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
             AnalysedType::Variant(TypeVariant {
@@ -1560,7 +1680,7 @@ mod interpreter_tests {
             })]
         }
 
-        pub(crate) fn get_component_metadata_with_indexed_resource() -> Vec<AnalysedExport> {
+        pub(crate) fn get_shopping_cart_metadata_with_cart_resource() -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
@@ -1752,6 +1872,54 @@ mod interpreter_tests {
             });
 
             vec![instance]
+        }
+
+        pub(crate) fn type_annotated_value_result(
+            analysed_type: &AnalysedType,
+            wasm_wave_str: &str,
+        ) -> TypeAnnotatedValue {
+            golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str).unwrap()
+        }
+
+        pub(crate) fn test_interpreter(
+            result_type: &AnalysedType,
+            result_value: &TypeAnnotatedValue,
+        ) -> Interpreter {
+            Interpreter {
+                stack: InterpreterStack::default(),
+                env: InterpreterEnv {
+                    env: HashMap::new(),
+                    call_worker_function_async: static_worker_invoke(result_type, result_value),
+                },
+            }
+        }
+
+        fn static_worker_invoke(
+            result_type: &AnalysedType,
+            value: &TypeAnnotatedValue,
+        ) -> RibFunctionInvoke {
+            let analysed_type = result_type.clone();
+            let value = value.clone();
+
+            Arc::new(move |_, _| {
+                Box::pin({
+                    let analysed_type = analysed_type.clone();
+                    let value = value.clone();
+
+                    async move {
+                        let analysed_type = analysed_type.clone();
+                        let value = value.clone();
+                        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                            typ: vec![golem_wasm_ast::analysis::protobuf::Type::from(
+                                &analysed_type,
+                            )],
+                            value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                                type_annotated_value: Some(value.clone()),
+                            }],
+                        }))
+                    }
+                })
+            })
         }
     }
 }
