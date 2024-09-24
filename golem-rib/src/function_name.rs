@@ -48,7 +48,6 @@ impl Serialize for SemVer {
     where
         S: Serializer,
     {
-        // Serialize the SemVer as its string representation.
         serializer.serialize_str(&self.0.to_string())
     }
 }
@@ -58,7 +57,6 @@ impl<'de> Deserialize<'de> for SemVer {
     where
         D: Deserializer<'de>,
     {
-        // Deserialize a string and attempt to parse it into a semver::Version.
         let s = String::deserialize(deserializer)?;
         let version = Version::parse(&s).map_err(serde::de::Error::custom)?;
         Ok(SemVer(version))
