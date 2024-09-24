@@ -54,11 +54,12 @@ pub struct Trait {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert2::{assert};
+    use assert2::assert;
 
     #[test]
     fn deserialize_example_application() {
-        let application: Application = serde_yaml::from_str(r#"
+        let application: Application = serde_yaml::from_str(
+            r#"
 apiVersion: core.oam.dev/v1beta1
 metadata:
   name: "App name"
@@ -78,7 +79,9 @@ spec:
         - type: worker-rpc
           properties:
             componentName: component-three
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         assert!(application.api_version == API_VERSION_V1BETA1);
         assert!(application.kind == KIND_APPLICATION);
@@ -108,4 +111,3 @@ spec:
         assert!(properties.get_key_value("componentName").unwrap().1 == "component-three");
     }
 }
-

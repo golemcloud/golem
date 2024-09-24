@@ -23,7 +23,7 @@ pub mod wit;
 
 use crate::stub::StubDefinition;
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -41,6 +41,12 @@ pub enum Command {
     /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
+    /// TODO
+    #[cfg(feature = "unstable-dec-dep")]
+    Declarative {
+        #[command(subcommand)]
+        subcommand: Declarative,
+    },
 }
 
 /// Generate a Rust RPC stub crate for a WASM component
@@ -172,6 +178,31 @@ pub struct InitializeWorkspaceArgs {
     pub wasm_rpc_override: WasmRpcOverride,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum Declarative {
+    /// TODO
+    Init(DeclarativeInitArgs),
+    /// Runs the pre-build steps (stub generation and adding wit dependencies) based on declarative component specifications
+    PreBuild(DeclarativeBuildArgs),
+    /// Runs the post-build steps (composing stubs) based on declarative component specifications
+    PostBuild(DeclarativeBuildArgs),
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+pub struct DeclarativeInitArgs {
+    #[clap(long, short, required = true)]
+    pub component_name: Vec<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+pub struct DeclarativeBuildArgs {
+    /// List of Open Application Model specifications for component dependencies, can be defined multiple times
+    #[clap(long, short, required = true)]
+    pub component: Vec<PathBuf>,
+}
+
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     let stub_def = StubDefinition::new(
         &args.source_wit_root,
@@ -179,9 +210,9 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &args.world,
         &args.stub_crate_version,
         &args.wasm_rpc_override,
-        args.always_inline_types
+        args.always_inline_types,
     )
-    .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
+        .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
     commands::generate::generate(&stub_def)
 }
 
@@ -227,4 +258,17 @@ pub fn initialize_workspace(
         stubgen_command,
         stubgen_prefix,
     )
+}
+
+pub fn run_declarative_command(command: Declarative) -> anyhow::Result<()> {
+    match command {
+        Declarative::Init(_) => {}
+        Declarative::PreBuild(args) => {
+            eprintln!("components: {:?}", args.component)
+        }
+        Declarative::PostBuild(args) => {
+            eprintln!("components: {:?}", args.component)
+        }
+    }
+    Ok(())
 }

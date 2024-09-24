@@ -1,2 +1,2 @@
-pub mod oam;
 pub mod component;
+pub mod oam;
