@@ -34,10 +34,12 @@ use crate::preview2::golem::api::host::{
     WorkerMetadata,
 };
 use crate::services::HasWorker;
-use crate::workerctx::{StatusManagement, WorkerCtx};
+use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{ComponentId, OwnedWorkerId, PromiseId, ScanCursor, WorkerId};
+use golem_common::model::{
+    ComponentId, IdempotencyKey, OwnedWorkerId, PromiseId, ScanCursor, WorkerId,
+};
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -446,13 +448,22 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem::api::host::Uuid> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api", "generate_idempotency_key");
+
+        let current_idempotency_key = self
+            .get_current_idempotency_key()
+            .await
+            .unwrap_or(IdempotencyKey::fresh());
+        let oplog_index = self.state.current_oplog_index().await;
+
+        // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem api::generate_idempotency_key",
             |_ctx| {
                 Box::pin(async move {
-                    let uuid = Uuid::new_v4();
+                    let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+                    let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be a uuid
                     Ok::<Uuid, GolemError>(uuid)
                 })
             },

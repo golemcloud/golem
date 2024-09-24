@@ -7,8 +7,11 @@ interface api {
            component-version,
            update-mode,
            worker-any-filter,
-           worker-metadata
+           worker-metadata,
+           uuid
   };
+
+
   get-self-uri: func(function-name: string) -> string;
   jump: func() -> u64;
   fail-with-custom-max-retries: func(max-retries: u64) -> ();
@@ -20,6 +23,8 @@ interface api {
   get-self-metadata: func() -> worker-metadata;
   get-worker-metadata: func(worker-id: worker-id) -> option<worker-metadata>;
   update-worker: func(worker-id: worker-id, component-version: component-version, update-mode: update-mode) -> ();
+
+  generate-idempotency-keys: func() -> tuple<uuid, uuid>;
 }
 
 world runtime-service {

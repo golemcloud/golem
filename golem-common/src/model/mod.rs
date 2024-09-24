@@ -42,7 +42,7 @@ use poem_openapi::{Enum, Object, Union};
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 pub mod component_metadata;
 pub mod exports;
@@ -788,6 +788,8 @@ pub struct IdempotencyKey {
 }
 
 impl IdempotencyKey {
+    const ROOT_NS: Uuid = uuid!("9C19B15A-C83D-46F7-9BC3-EAD7923733F4");
+
     pub fn new(value: String) -> Self {
         Self { value }
     }
@@ -800,6 +802,25 @@ impl IdempotencyKey {
 
     pub fn fresh() -> Self {
         Self::from_uuid(Uuid::new_v4())
+    }
+
+    /// Generates a deterministic new idempotency key using a base idempotency key and an oplog index.
+    ///
+    /// The base idempotency key determines the "namespace" of the generated key UUIDv5. If
+    /// the base idempotency key is already an UUID, it is directly used as the namespace of the v5 algorithm,
+    /// while the name part is derived from the given oplog index.
+    ///
+    /// If the base idempotency key is not an UUID (as it can be an arbitrary user-provided string), then first
+    /// we generate a UUIDv5 in the ROOT_NS namespace and use that as unique namespace for generating
+    /// the new idempotency key.
+    pub fn derived(base: &IdempotencyKey, oplog_index: OplogIndex) -> Self {
+        let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
+            base_uuid
+        } else {
+            Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
+        };
+        let name = format!("oplog-index-{}", oplog_index);
+        Self::from_uuid(Uuid::new_v5(&namespace, name.as_bytes()))
     }
 }
 
@@ -2342,9 +2363,11 @@ mod tests {
     use std::time::SystemTime;
     use std::vec;
 
+    use crate::model::oplog::OplogIndex;
     use crate::model::{
-        AccountId, ComponentId, FilterComparator, ShardId, StringFilterComparator, TargetWorkerId,
-        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentId, FilterComparator, IdempotencyKey, ShardId, StringFilterComparator,
+        TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+        WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
     use rand::{thread_rng, Rng};
@@ -2619,5 +2642,50 @@ mod tests {
                 assert!(shard_ids.contains(&ShardId::from_worker_id(&worker_id, SHARD_COUNT)));
             }
         }
+    }
+
+    #[test]
+    fn derived_idempotency_key() {
+        let base1 = IdempotencyKey::fresh();
+        let base2 = IdempotencyKey::fresh();
+        let base3 = IdempotencyKey {
+            value: "base3".to_string(),
+        };
+
+        assert_ne!(base1, base2);
+
+        let idx1 = OplogIndex::from_u64(2);
+        let idx2 = OplogIndex::from_u64(11);
+
+        let derived11a = IdempotencyKey::derived(&base1, idx1);
+        let derived12a = IdempotencyKey::derived(&base1, idx2);
+        let derived21a = IdempotencyKey::derived(&base2, idx1);
+        let derived22a = IdempotencyKey::derived(&base2, idx2);
+
+        let derived11b = IdempotencyKey::derived(&base1, idx1);
+        let derived12b = IdempotencyKey::derived(&base1, idx2);
+        let derived21b = IdempotencyKey::derived(&base2, idx1);
+        let derived22b = IdempotencyKey::derived(&base2, idx2);
+
+        let derived31 = IdempotencyKey::derived(&base3, idx1);
+        let derived32 = IdempotencyKey::derived(&base3, idx2);
+
+        assert_eq!(derived11a, derived11b);
+        assert_eq!(derived12a, derived12b);
+        assert_eq!(derived21a, derived21b);
+        assert_eq!(derived22a, derived22b);
+
+        assert_ne!(derived11a, derived12a);
+        assert_ne!(derived11a, derived21a);
+        assert_ne!(derived11a, derived22a);
+        assert_ne!(derived12a, derived21a);
+        assert_ne!(derived12a, derived22a);
+        assert_ne!(derived21a, derived22a);
+
+        assert_ne!(derived11a, derived31);
+        assert_ne!(derived21a, derived31);
+        assert_ne!(derived12a, derived32);
+        assert_ne!(derived22a, derived32);
+        assert_ne!(derived31, derived32);
     }
 }
