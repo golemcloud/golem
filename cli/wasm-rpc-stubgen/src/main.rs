@@ -39,6 +39,10 @@ async fn main() {
                 &[],
             ));
         }
+        #[cfg(feature = "unstable-dec-dep")]
+        Command::Declarative { subcommand } => {
+            let _ = render_error(run_declarative_command(subcommand));
+        }
     }
 }
 

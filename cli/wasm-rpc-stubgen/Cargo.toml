@@ -7,6 +7,9 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/wasm-rpc"
 description = "Golem WASM RPC stub generator"
 
+[features]
+unstable-dec-dep = []
+
 [lib]
 name = "golem_wasm_rpc_stubgen"
 path = "src/lib.rs"

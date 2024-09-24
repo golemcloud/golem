@@ -36,7 +36,11 @@ impl Component {
         let mut components = Vec::<Component>::new();
         let mut errors = Vec::<String>::new();
         let mut add_error = |err: String| {
-            errors.push(format!("Error in {}: {}", application.source.to_string_lossy(), err))
+            errors.push(format!(
+                "Error in {}: {}",
+                application.source.to_string_lossy(),
+                err
+            ))
         };
 
         if application.application.spec.components.is_empty() {
@@ -44,16 +48,23 @@ impl Component {
         } else {
             for component in application.application.spec.components {
                 let mut add_component_error = |err: String| {
-                    add_error(format!("Error in component ({}) specification: {}", component.name, err));
+                    add_error(format!(
+                        "Error in component ({}) specification: {}",
+                        component.name, err
+                    ));
                 };
 
-                let properties = match serde_json::from_value::<ComponentProperties>(component.properties) {
-                    Ok(properties) => Some(properties),
-                    Err(err) => {
-                        add_component_error(format!("Failed to get component properties: {}", err));
-                        None
-                    }
-                };
+                let properties =
+                    match serde_json::from_value::<ComponentProperties>(component.properties) {
+                        Ok(properties) => Some(properties),
+                        Err(err) => {
+                            add_component_error(format!(
+                                "Failed to get component properties: {}",
+                                err
+                            ));
+                            None
+                        }
+                    };
 
                 let worker_rpc_dependencies = {
                     let mut worker_rpc_dependencies = Vec::<String>::new();
@@ -61,10 +72,15 @@ impl Component {
                     for component_trait in component.traits {
                         let properties = match component_trait.trait_type.as_str() {
                             TRAIT_TYPE_WORKER_RPC => {
-                                match serde_json::from_value::<TraitWorkerRpcProperties>(component_trait.properties) {
+                                match serde_json::from_value::<TraitWorkerRpcProperties>(
+                                    component_trait.properties,
+                                ) {
                                     Ok(properties) => Some(properties),
                                     Err(err) => {
-                                        add_component_error(format!("Failed to get worker RPC trait properties: {}", err));
+                                        add_component_error(format!(
+                                            "Failed to get worker RPC trait properties: {}",
+                                            err
+                                        ));
                                         has_errors = true;
                                         None
                                     }
@@ -83,7 +99,9 @@ impl Component {
                     (!has_errors).then(|| worker_rpc_dependencies)
                 };
 
-                if let (Some(properties), Some(worker_rpc_dependencies)) = (properties, worker_rpc_dependencies) {
+                if let (Some(properties), Some(worker_rpc_dependencies)) =
+                    (properties, worker_rpc_dependencies)
+                {
                     components.push(Component {
                         name: component.name,
                         source: application.source.clone(),
@@ -103,7 +121,9 @@ impl Component {
         }
     }
 
-    pub fn from_oam_applications(applications: Vec<oam::ApplicationWithSource>) -> Result<Vec<Component>> {
+    pub fn from_oam_applications(
+        applications: Vec<oam::ApplicationWithSource>,
+    ) -> Result<Vec<Component>> {
         let mut all_components = Vec::<Component>::new();
         let mut errors = Vec::<String>::new();
 
@@ -125,12 +145,13 @@ impl Component {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert2::{assert};
     use crate::model::oam::Application;
+    use assert2::assert;
 
     #[test]
     fn deserialize_example_application() {
-        let application: Application = serde_yaml::from_str(r#"
+        let application: Application = serde_yaml::from_str(
+            r#"
 apiVersion: core.oam.dev/v1beta1
 metadata:
   name: "App name"
@@ -150,7 +171,9 @@ spec:
         - type: worker-rpc
           properties:
             componentName: component-three
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         assert!(application.api_version == oam::API_VERSION_V1BETA1);
         assert!(application.kind == oam::KIND_APPLICATION);
@@ -160,7 +183,8 @@ spec:
         let components = Component::from_oam_application(oam::ApplicationWithSource {
             source: PathBuf::from("test"),
             application,
-        }).unwrap();
+        })
+        .unwrap();
 
         assert!(components.len() == 1);
 
