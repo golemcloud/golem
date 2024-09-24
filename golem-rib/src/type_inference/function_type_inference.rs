@@ -57,10 +57,8 @@ mod internal {
             CallType::Function(dynamic_parsed_function_name) => {
                 let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
                 let function = parsed_function_static.clone().function;
-                let indexed_resource = function.is_indexed_resource();
-
                 // If indexed resource, first we need to fetch the parameter types of th constructor
-                if indexed_resource {
+                if let Some(_) = function.resource_name() {
                     let constructor_name = {
                         let raw_str = function.resource_name().ok_or("Resource name not found")?;
                         format!["[constructor]{}", raw_str]
