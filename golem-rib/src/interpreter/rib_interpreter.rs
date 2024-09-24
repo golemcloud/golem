@@ -984,8 +984,8 @@ mod interpreter_tests {
     use super::*;
     use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
     use golem_wasm_ast::analysis::{
-        AnalysedType, NameOptionTypePair, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr,
-        TypeVariant,
+        AnalysedType, NameOptionTypePair, NameTypePair, TypeF32, TypeList, TypeRecord, TypeS32,
+        TypeStr, TypeU32, TypeVariant,
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
@@ -1430,19 +1430,18 @@ mod interpreter_tests {
 
     #[tokio::test]
     async fn test_interpreter_with_indexed_resource_drop() {
-        let mut interpreter = Interpreter::default();
-
-        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
-
         let expr = r#"
            let user_id = "user";
            golem:it/api.{cart(user_id).drop}();
            "success"
         "#;
-
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+
+        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+        let mut rib_interpreter = Interpreter::default();
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(
             result.get_val().unwrap(),
@@ -1452,35 +1451,6 @@ mod interpreter_tests {
 
     #[tokio::test]
     async fn test_interpreter_with_indexed_resource_checkout() {
-        let result_type = AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "error".to_string(),
-                    typ: Some(AnalysedType::Str(TypeStr)),
-                },
-                NameOptionTypePair {
-                    name: "success".to_string(),
-                    typ: Some(AnalysedType::Record(TypeRecord {
-                        fields: vec![NameTypePair {
-                            name: "order-id".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }],
-                    })),
-                },
-            ],
-        });
-
-        let result_value = internal::type_annotated_value_result(
-            &result_type,
-            r#"
-          success({order-id: "foo"})
-        "#,
-        );
-
-        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
-
-        let mut interpreter = internal::test_interpreter(&result_type, &result_value);
-
         let expr = r#"
            let user_id = "foo";
            let result = golem:it/api.{cart(user_id).checkout}();
@@ -1488,15 +1458,6 @@ mod interpreter_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
-
-        assert_eq!(result.get_val().unwrap(), result_value);
-    }
-
-    #[tokio::test]
-    async fn test_interpreter_with_indexed_resource_get_cart_contents() {
-        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
 
         let result_type = AnalysedType::Variant(TypeVariant {
             cases: vec![
@@ -1523,27 +1484,69 @@ mod interpreter_tests {
         "#,
         );
 
-        let mut interpreter = internal::test_interpreter(&result_type, &result_value);
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-        let expr = r#"
-           let user_id = "bar";
-           let result = golem:it/api.{cart(user_id).get-cart-contents}();
-           result
-        "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+        let mut rib_executor = internal::test_executor(&result_type, &result_value);
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), result_value);
     }
 
     #[tokio::test]
+    async fn test_interpreter_with_indexed_resource_get_cart_contents() {
+        let expr = r#"
+           let user_id = "bar";
+           let result = golem:it/api.{cart(user_id).get-cart-contents}();
+           result[0].product-id
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let result_type = AnalysedType::List(TypeList {
+            inner: Box::new(AnalysedType::Record(TypeRecord {
+                fields: vec![
+                    NameTypePair {
+                        name: "product-id".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "name".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                    },
+                    NameTypePair {
+                        name: "price".to_string(),
+                        typ: AnalysedType::F32(TypeF32),
+                    },
+                    NameTypePair {
+                        name: "quantity".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                    },
+                ],
+            })),
+        });
+
+        let result_value = internal::type_annotated_value_result(
+            &result_type,
+            r#"
+            [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
+        "#,
+        );
+
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+        let mut rib_executor = internal::test_executor(&result_type, &result_value);
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("foo".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn test_interpreter_with_indexed_resource_update_item_quantity() {
-        let mut interpreter = Interpreter::default();
-
-        let analysed_exports = internal::get_shopping_cart_metadata_with_cart_resource();
-
         let expr = r#"
            let user_id = "jon";
            let product_id = "mac";
@@ -1551,14 +1554,45 @@ mod interpreter_tests {
            golem:it/api.{cart(user_id).update-item-quantity}(product_id, quantity);
            "successfully updated"
         "#;
-
         let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+
+        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+        let mut rib_executor = Interpreter::default();
+
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(
             result.get_val().unwrap(),
             TypeAnnotatedValue::Str("successfully updated".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_with_indexed_resource_add_item() {
+        let expr = r#"
+           let user_id = "foo";
+           let product = { product-id: "mac", name: "macbook", quantity: 1u32, price: 1f32 };
+           golem:it/api.{cart(user_id).add-item}(product);
+
+           "successfully added"
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+
+        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+        let mut rib_executor = Interpreter::default();
+
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("successfully added".to_string())
         );
     }
 
@@ -1881,7 +1915,7 @@ mod interpreter_tests {
             golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str).unwrap()
         }
 
-        pub(crate) fn test_interpreter(
+        pub(crate) fn test_executor(
             result_type: &AnalysedType,
             result_value: &TypeAnnotatedValue,
         ) -> Interpreter {

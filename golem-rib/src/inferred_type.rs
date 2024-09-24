@@ -793,7 +793,7 @@ impl InferredType {
                 (InferredType::OneOf(types), inferred_type) => {
                     let mut unified = None;
                     for typ in types {
-                        match typ.unify_with_required(inferred_type) {
+                        match typ.unify_with_alternative(inferred_type) {
                             Ok(result) => {
                                 unified = Some(result);
                                 break;

@@ -41,8 +41,11 @@ pub fn infer_function_types(
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+    use crate::{
+        Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, RegistryKey, RegistryValue,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
+    use std::fmt::Display;
 
     pub(crate) fn resolve_call_expressions(
         call_type: &mut CallType,
@@ -53,35 +56,40 @@ mod internal {
         match call_type {
             CallType::Function(dynamic_parsed_function_name) => {
                 let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
-                let function = parsed_function_static.function;
+                let function = parsed_function_static.clone().function;
                 let indexed_resource = function.is_indexed_resource();
 
+                // If indexed resource, first we need to fetch the parameter types of th constructor
                 if indexed_resource {
-                    let constructor = {
+                    let constructor_name = {
                         let raw_str = function.resource_name().ok_or("Resource name not found")?;
                         format!["[constructor]{}", raw_str]
                     };
 
-                    let constructor_params = dynamic_parsed_function_name
+                    let mut constructor_params: &mut Vec<Expr> = &mut vec![];
+
+                    if let Some(resource_params) = dynamic_parsed_function_name
                         .function
                         .raw_resource_params_mut()
-                        .ok_or("Resource params not found")?;
+                    {
+                        constructor_params = resource_params
+                    }
 
                     let registry_key = RegistryKey::from_function_name(
                         &parsed_function_static.site,
-                        constructor.as_str(),
+                        constructor_name.as_str(),
                     );
 
+                    // Infer the types of constructor parameter expressions
                     infer_types(
-                        constructor.as_str(),
+                        &FunctionNameInternal::ResourceConstructorName(constructor_name),
                         function_type_registry,
                         registry_key,
                         constructor_params,
                         inferred_type,
-                        false,
                     )?;
 
-                    // Inferring the types of the final method in the resource
+                    // Infer the types of resource method parameters
                     let resource_method_name = function.function_name();
                     let registry_key = RegistryKey::from_function_name(
                         &parsed_function_static.site,
@@ -89,22 +97,20 @@ mod internal {
                     );
 
                     infer_types(
-                        resource_method_name.as_str(),
+                        &FunctionNameInternal::ResourceMethodName(resource_method_name),
                         function_type_registry,
                         registry_key,
                         args,
                         inferred_type,
-                        true,
                     )
                 } else {
                     let registry_key = RegistryKey::from_invocation_name(call_type);
                     infer_types(
-                        function.function_name().as_str(),
+                        &FunctionNameInternal::Fqn(parsed_function_static),
                         function_type_registry,
                         registry_key,
                         args,
                         inferred_type,
-                        false,
                     )
                 }
             }
@@ -113,13 +119,12 @@ mod internal {
         }
     }
 
-    pub(crate) fn infer_types(
-        function_name: &str,
+    fn infer_types(
+        function_name: &FunctionNameInternal,
         function_type_registry: &FunctionTypeRegistry,
         key: RegistryKey,
         args: &mut [Expr],
         inferred_type: &mut InferredType,
-        is_resource_method: bool,
     ) -> Result<(), String> {
         if let Some(value) = function_type_registry.types.get(&key) {
             match value {
@@ -129,12 +134,11 @@ mod internal {
                     return_types,
                 } => {
                     let mut parameter_types = parameter_types.clone();
-                    if is_resource_method {
-                        parameter_types = parameter_types
-                            .iter()
-                            .filter(|t| !matches!(t, AnalysedType::Handle(_)))
-                            .cloned()
-                            .collect();
+
+                    if let FunctionNameInternal::ResourceMethodName(_) = function_name {
+                        if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
+                            parameter_types.remove(0);
+                        }
                     }
 
                     if parameter_types.len() == args.len() {
@@ -166,6 +170,28 @@ mod internal {
         }
 
         Ok(())
+    }
+
+    enum FunctionNameInternal {
+        ResourceConstructorName(String),
+        ResourceMethodName(String),
+        Fqn(ParsedFunctionName),
+    }
+
+    impl Display for FunctionNameInternal {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                FunctionNameInternal::ResourceConstructorName(name) => {
+                    write!(f, "{}", name)
+                }
+                FunctionNameInternal::ResourceMethodName(name) => {
+                    write!(f, "{}", name)
+                }
+                FunctionNameInternal::Fqn(name) => {
+                    write!(f, "{}", name)
+                }
+            }
+        }
     }
 
     // A preliminary check of the arguments passed before  typ inference
