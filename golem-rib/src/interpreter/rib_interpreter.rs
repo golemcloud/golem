@@ -64,8 +64,6 @@ impl Interpreter {
         // O(1) to do this
         let mut instructions = VecDeque::from(instructions0.instructions);
 
-        dbg!(instructions.clone());
-
         while let Some(instruction) = instructions.pop_front() {
             match instruction {
                 RibIR::PushLit(val) => {
@@ -119,7 +117,6 @@ impl Interpreter {
                 }
 
                 RibIR::LoadVar(variable_id) => {
-                    dbg!("here?? {}", self.stack.clone(), &self.env);
                     internal::run_load_var_instruction(variable_id, self)?;
                 }
 
@@ -629,7 +626,6 @@ mod internal {
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::IndexedResourceConstructor(resource, resource_params_size) => {
-                dbg!("here??");
                 let last_n_elements = interpreter
                     .stack
                     .pop_n(resource_params_size)
@@ -773,9 +769,7 @@ mod internal {
             .stack
             .pop_str()
             .ok_or("Failed to get a function name from the stack".to_string())?;
-
-        dbg!(function_name.clone());
-
+        
         let last_n_elements = interpreter
             .stack
             .pop_n(argument_size)
