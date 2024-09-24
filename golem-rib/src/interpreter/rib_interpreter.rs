@@ -1436,7 +1436,7 @@ mod interpreter_tests {
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
 
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1484,7 +1484,7 @@ mod interpreter_tests {
         "#,
         );
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
         let mut rib_executor = internal::test_executor(&result_type, &result_value);
@@ -1533,7 +1533,7 @@ mod interpreter_tests {
         "#,
         );
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
         let mut rib_executor = internal::test_executor(&result_type, &result_value);
@@ -1556,7 +1556,7 @@ mod interpreter_tests {
         "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
 
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1582,7 +1582,33 @@ mod interpreter_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource();
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+
+        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+        let mut rib_executor = Interpreter::default();
+
+        let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("successfully added".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_with_resource_add_item() {
+        let expr = r#"
+           let user_id = "foo";
+           let product = { product-id: "mac", name: "macbook", quantity: 1u32, price: 1f32 };
+           golem:it/api.{cart.add-item}(product);
+
+           "successfully added"
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
 
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1714,16 +1740,24 @@ mod interpreter_tests {
             })]
         }
 
-        pub(crate) fn get_shopping_cart_metadata_with_cart_resource() -> Vec<AnalysedExport> {
+        pub(crate) fn get_shopping_cart_metadata_with_cart_resource_with_parameters() -> Vec<AnalysedExport> {
+            get_shopping_cart_metadata_with_cart_resource(vec![AnalysedFunctionParameter {
+                name: "user-id".to_string(),
+                typ: AnalysedType::Str(TypeStr),
+            }])
+        }
+
+        pub(crate) fn get_shopping_cart_metadata_with_cart_raw_resource() -> Vec<AnalysedExport> {
+            get_shopping_cart_metadata_with_cart_resource(vec![])
+        }
+
+        fn get_shopping_cart_metadata_with_cart_resource(constructor_parameters: Vec<AnalysedFunctionParameter>) -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![
                     AnalysedFunction {
                         name: "[constructor]cart".to_string(),
-                        parameters: vec![AnalysedFunctionParameter {
-                            name: "user-id".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        }],
+                        parameters: constructor_parameters,
                         results: vec![AnalysedFunctionResult {
                             name: None,
                             typ: AnalysedType::Handle(TypeHandle {

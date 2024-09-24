@@ -21,12 +21,12 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use golem_wasm_rpc::Value;
-use semver::{BuildMetadata, Prerelease, Version};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use semver::{BuildMetadata, Prerelease};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub enum ParsedFunctionSite {
     Global,
     Interface {
@@ -42,26 +42,6 @@ pub enum ParsedFunctionSite {
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct SemVer(pub semver::Version);
-
-impl Serialize for SemVer {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for SemVer {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let version = Version::parse(&s).map_err(serde::de::Error::custom)?;
-        Ok(SemVer(version))
-    }
-}
 
 impl std::fmt::Debug for SemVer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

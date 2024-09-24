@@ -17,9 +17,8 @@ use crate::compiler::ir::RibIR;
 use crate::{Expr, InstructionId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq,  Encode, Decode)]
 pub struct RibByteCode {
     pub instructions: Vec<RibIR>,
 }

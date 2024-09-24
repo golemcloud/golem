@@ -25,7 +25,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 
 // To create any type, example, CreateOption, you have to feed a fully formed AnalysedType
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq,  Encode, Decode)]
 pub enum RibIR {
     PushLit(TypeAnnotatedValue),
     AssignVar(VariableId),
