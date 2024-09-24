@@ -194,6 +194,12 @@ impl Guest for Component {
         );
         bindings::golem::api::host::update_worker(&worker_id, component_version, update_mode);
     }
+
+    fn generate_idempotency_keys() -> (bindings::exports::golem::it::api::Uuid, bindings::exports::golem::it::api::Uuid) {
+        let key1 = generate_idempotency_key();
+        let key2 = generate_idempotency_key();
+        (key1, key2)
+    }
 }
 
 fn remote_call(param: u64) -> bool {
