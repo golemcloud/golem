@@ -1849,6 +1849,7 @@ dependencies = [
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.3.0",
+ "itertools 0.12.1",
  "pretty_env_logger",
  "prettyplease",
  "proc-macro2",
