@@ -27,7 +27,8 @@ pub struct ComponentProperties {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TraitWorkerRpcProperties {
-    pub name: String,
+    #[serde(rename = "componentName")]
+    pub component_name: String,
 }
 
 impl Component {
@@ -70,13 +71,12 @@ impl Component {
                                 }
                             }
                             other => {
-                                add_component_error(format!("Unknown trait type: {}", other));
-                                has_errors = true;
+                                eprintln!("Skipping unknown trait: {}", other);
                                 None
                             }
                         };
                         if let Some(properties) = properties {
-                            worker_rpc_dependencies.push(properties.name);
+                            worker_rpc_dependencies.push(properties.component_name);
                         }
                     }
 
