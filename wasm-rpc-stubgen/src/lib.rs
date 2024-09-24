@@ -16,6 +16,7 @@ pub mod cargo;
 pub mod commands;
 pub mod compilation;
 pub mod make;
+pub mod model;
 pub mod rust;
 pub mod stub;
 pub mod wit;
