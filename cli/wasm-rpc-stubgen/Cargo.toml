@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.79"
+assert2 = "0.3.15"
 cargo_toml = "0.20.2"
 clap = { version = "4.5.7", features = ["derive"] }
 cargo-component-core = "=0.13.2"
@@ -34,6 +35,8 @@ proc-macro2 = "1.0.85"
 quote = "1.0.36"
 regex = "1.10.4"
 serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.128"
+serde_yaml = "0.9.33"
 syn = "2.0.66"
 tempfile = "3.12.0"
 tokio = "1.38.0"
