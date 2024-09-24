@@ -52,11 +52,9 @@ mod type_inference_tests {
 
     mod let_binding_tests {
         use crate::call_type::CallType;
+        use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::type_inference::type_inference_tests::internal;
-        use crate::{
-            Expr, InferredType, Number, ParsedFunctionName, ParsedFunctionReference,
-            ParsedFunctionSite, VariableId,
-        };
+        use crate::{Expr, InferredType, Number, ParsedFunctionSite, VariableId};
 
         #[test]
         fn test_simple_let_binding_type_inference() {
@@ -83,9 +81,9 @@ mod type_inference_tests {
             );
 
             let call_expr = Expr::Call(
-                CallType::Function(ParsedFunctionName {
+                CallType::Function(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 }),
@@ -140,9 +138,9 @@ mod type_inference_tests {
             );
 
             let call_expr1 = Expr::Call(
-                CallType::Function(ParsedFunctionName {
+                CallType::Function(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 }),
@@ -154,9 +152,9 @@ mod type_inference_tests {
             );
 
             let call_expr2 = Expr::Call(
-                CallType::Function(ParsedFunctionName {
+                CallType::Function(DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "baz".to_string(),
                     },
                 }),
@@ -1019,11 +1017,12 @@ mod type_inference_tests {
     }
     mod pattern_match_tests {
         use crate::call_type::CallType;
+        use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
-            ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
+            ParsedFunctionSite, VariableId,
         };
 
         #[test]
@@ -1076,9 +1075,9 @@ mod type_inference_tests {
                             InferredType::U64,
                         ))),
                         Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
                                 },
                             }),
@@ -1096,9 +1095,9 @@ mod type_inference_tests {
                             InferredType::U64, // because predicate is u64
                         ))),
                         Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "baz".to_string(),
                                 },
                             }),
@@ -1886,10 +1885,11 @@ mod type_inference_tests {
     }
     mod internal {
         use crate::call_type::CallType;
+        use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
-            ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
+            ParsedFunctionSite, VariableId,
         };
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
@@ -2063,9 +2063,9 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "process".to_string(),
                                 },
                             }),
@@ -2546,9 +2546,9 @@ mod type_inference_tests {
                         VariableId::local("result", 0),
                         None,
                         Box::new(Expr::Call(
-                            CallType::Function(ParsedFunctionName {
+                            CallType::Function(DynamicParsedFunctionName {
                                 site: ParsedFunctionSite::Global,
-                                function: ParsedFunctionReference::Function {
+                                function: DynamicParsedFunctionReference::Function {
                                     function: "foo".to_string(),
                                 },
                             }),

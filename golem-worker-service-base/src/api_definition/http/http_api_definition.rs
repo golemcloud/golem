@@ -80,13 +80,11 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledHttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<CompiledRoute>,
-    #[serde(default)]
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -350,7 +348,7 @@ pub struct Route {
     pub binding: GolemWorkerBinding,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
+use crate::ParsedFunctionSite;
 use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
@@ -38,17 +39,26 @@ pub enum RegistryKey {
 }
 
 impl RegistryKey {
+    pub fn from_function_name(site: &ParsedFunctionSite, function_name: &str) -> RegistryKey {
+        match site.interface_name() {
+            None => RegistryKey::FunctionName(function_name.to_string()),
+            Some(name) => RegistryKey::FunctionNameWithInterface {
+                interface_name: name.to_string(),
+                function_name: function_name.to_string(),
+            },
+        }
+    }
     pub fn from_invocation_name(invocation_name: &CallType) -> RegistryKey {
         match invocation_name {
             CallType::VariantConstructor(variant_name) => {
                 RegistryKey::VariantName(variant_name.clone())
             }
             CallType::EnumConstructor(enum_name) => RegistryKey::EnumName(enum_name.clone()),
-            CallType::Function(function_name) => match function_name.site().interface_name() {
-                None => RegistryKey::FunctionName(function_name.function().function_name()),
+            CallType::Function(function_name) => match function_name.site.interface_name() {
+                None => RegistryKey::FunctionName(function_name.function_name()),
                 Some(interface_name) => RegistryKey::FunctionNameWithInterface {
                     interface_name: interface_name.to_string(),
-                    function_name: function_name.function().function_name(),
+                    function_name: function_name.function_name(),
                 },
             },
         }
@@ -64,7 +74,7 @@ pub enum RegistryValue {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
 }

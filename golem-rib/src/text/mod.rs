@@ -26,6 +26,14 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
     writer::write_expr(expr)
 }
 
+// TODO; Once we avoid interpolation support
+// we can remove this function and use `to_string`.
+// Currently `to_string` writes expressions wrapped with interpolation
+// unless they are literals/text concatenated string
+pub fn to_raw_string(expr: &Expr) -> String {
+    writer::write_expr_without_interpolation(expr).unwrap()
+}
+
 #[cfg(test)]
 mod record_tests {
     use crate::expr::*;

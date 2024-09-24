@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::function_name::ParsedFunctionName;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{text, type_inference, InferredType, VariableId};
+use crate::{
+    text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName, VariableId,
+};
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
@@ -30,7 +31,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
     SelectField(Box<Expr>, String, InferredType),
@@ -256,9 +257,9 @@ impl Expr {
         cond
     }
 
-    pub fn call(parsed_fn_name: ParsedFunctionName, args: Vec<Expr>) -> Self {
+    pub fn call(dynamic_parsed_fn_name: DynamicParsedFunctionName, args: Vec<Expr>) -> Self {
         Expr::Call(
-            CallType::Function(parsed_fn_name),
+            CallType::Function(dynamic_parsed_fn_name),
             args,
             InferredType::Unknown,
         )
@@ -697,6 +698,8 @@ pub struct Number {
     pub value: f64, // Change to bigdecimal
 }
 
+impl Eq for Number {}
+
 impl Number {
     pub fn to_val(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
         match analysed_type {
@@ -721,7 +724,7 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,
@@ -735,7 +738,7 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
@@ -1050,18 +1053,43 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let invocation_name = expr.name.ok_or("Missing invocation name")?;
-                let name = invocation_name.name.ok_or("Missing function call name")?;
-                match name {
-                    golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
-                        Expr::call(name.try_into()?, params)
+                // This is not required and kept for backward compatibility
+                let legacy_invocation_name = expr.name;
+                let call_type = expr.call_type;
+
+                match (legacy_invocation_name, call_type) {
+                    (Some(legacy), None) => {
+                        let name = legacy.name.ok_or("Missing function call name")?;
+                        match name {
+                            golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
+                                // Reading the previous parsed-function-name in persistent store as a dynamic-parsed-function-name
+                                Expr::call(DynamicParsedFunctionName::parse(
+                                    ParsedFunctionName::try_from(name)?.to_string()
+                                )?, params)
+                            }
+                            golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
+                                name,
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
+                                name,
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                        }
                     }
-                    golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
-                        name,
-                    ) => Expr::call(ParsedFunctionName::parse(name)?, params),
-                    golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(
-                        name,
-                    ) => Expr::call(ParsedFunctionName::parse(name)?, params),
+                    (_, Some(call_type)) => {
+                        let name = call_type.name.ok_or("Missing function call name")?;
+                        match name {
+                            golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
+                                Expr::call(name.try_into()?, params)
+                            }
+                            golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
+                                name,
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                            golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(
+                                name,
+                            ) => Expr::call(DynamicParsedFunctionName::parse(name)?, params),
+                        }
+                    }
+                    (_, _) => Err("Missing both call type (and legacy invocation type)")?,
                 }
             }
         };
@@ -1248,8 +1276,9 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             Expr::Call(function_name, args, _) => {
                 Some(golem_api_grpc::proto::golem::rib::expr::Expr::Call(
                     golem_api_grpc::proto::golem::rib::CallExpr {
-                        name: Some(function_name.into()),
+                        name: None,
                         params: args.into_iter().map(|expr| expr.into()).collect(),
+                        call_type: Some(function_name.into()),
                     },
                 ))
             }

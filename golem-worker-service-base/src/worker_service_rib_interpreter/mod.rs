@@ -8,7 +8,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_common::model::{ComponentId, IdempotencyKey};
 
 use crate::worker_binding::RibInputValue;
-use rib::{ParsedFunctionName, RibByteCode, RibFunctionInvoke, RibInterpreterResult};
+use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterResult};
 
 use crate::worker_bridge_execution::{
     NoopWorkerRequestExecutor, WorkerRequest, WorkerRequestExecutor,
@@ -86,7 +86,7 @@ impl WorkerServiceRibInterpreter for DefaultEvaluator {
         let idempotency_key = idempotency_key.clone();
 
         let worker_invoke_function: RibFunctionInvoke = Arc::new(
-            move |function_name: ParsedFunctionName, parameters: Vec<TypeAnnotatedValue>| {
+            move |function_name: String, parameters: Vec<TypeAnnotatedValue>| {
                 let worker_name = worker_name.to_string();
                 let component_id = component_id.clone();
                 let worker_name = worker_name.clone();

@@ -67,7 +67,8 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use crate::expr::Expr;
-    use crate::{ArmPattern, MatchArm, ParsedFunctionName};
+    use crate::function_name::DynamicParsedFunctionName;
+    use crate::{ArmPattern, MatchArm};
 
     #[test]
     fn test_block_parse() {
@@ -86,11 +87,11 @@ mod tests {
             Expr::let_binding("x", Expr::number(1f64)),
             Expr::let_binding("y", Expr::number(2f64)),
             Expr::call(
-                ParsedFunctionName::parse("foo").unwrap(),
+                DynamicParsedFunctionName::parse("foo").unwrap(),
                 vec![Expr::identifier("x")],
             ),
             Expr::call(
-                ParsedFunctionName::parse("foo").unwrap(),
+                DynamicParsedFunctionName::parse("foo").unwrap(),
                 vec![Expr::identifier("y")],
             ),
         ]);
@@ -117,11 +118,11 @@ mod tests {
                 Expr::let_binding("x", Expr::number(1f64)),
                 Expr::let_binding("y", Expr::number(2f64)),
                 Expr::call(
-                    ParsedFunctionName::parse("foo").unwrap(),
+                    DynamicParsedFunctionName::parse("foo").unwrap(),
                     vec![Expr::identifier("x")],
                 ),
                 Expr::call(
-                    ParsedFunctionName::parse("foo").unwrap(),
+                    DynamicParsedFunctionName::parse("foo").unwrap(),
                     vec![Expr::identifier("y")],
                 ),
             ]),
@@ -154,11 +155,11 @@ mod tests {
                     Expr::let_binding("x", Expr::number(1f64)),
                     Expr::let_binding("y", Expr::number(2f64)),
                     Expr::call(
-                        ParsedFunctionName::parse("foo").unwrap(),
+                        DynamicParsedFunctionName::parse("foo").unwrap(),
                         vec![Expr::identifier("x")],
                     ),
                     Expr::call(
-                        ParsedFunctionName::parse("foo").unwrap(),
+                        DynamicParsedFunctionName::parse("foo").unwrap(),
                         vec![Expr::identifier("y")],
                     ),
                 ]),
@@ -194,11 +195,11 @@ mod tests {
                         Expr::let_binding("x", Expr::number(1f64)),
                         Expr::let_binding("y", Expr::number(2f64)),
                         Expr::call(
-                            ParsedFunctionName::parse("foo").unwrap(),
+                            DynamicParsedFunctionName::parse("foo").unwrap(),
                             vec![Expr::identifier("x")],
                         ),
                         Expr::call(
-                            ParsedFunctionName::parse("foo").unwrap(),
+                            DynamicParsedFunctionName::parse("foo").unwrap(),
                             vec![Expr::identifier("y")],
                         ),
                     ]),

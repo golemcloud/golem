@@ -6,6 +6,8 @@ import "wasm/ast/type.proto";
 
 import "wasm/rpc/type_annotated_value.proto";
 
+import "golem/rib/function_name.proto";
+
 message RibIR {
     oneof instruction {
         wasm.rpc.TypeAnnotatedValue push_lit = 1;
@@ -39,6 +41,7 @@ message RibIR {
         ConcatInstruction concat = 29;
         EnumConstructionInstruction enum_construction = 30;
         And and = 31;
+        CreateFunctionNameInstruction create_function_name = 32;
     }
 }
 
@@ -83,7 +86,6 @@ message JumpInstruction {
 }
 
 message CallInstruction {
-    string function_name = 1;
     uint64 argument_count = 2;
     wasm.ast.Type return_type = 3;
 }
@@ -98,6 +100,12 @@ message EnumConstructionInstruction {
     wasm.ast.Type return_type = 2;
 }
 
+message CreateFunctionNameInstruction {
+   golem.rib.ParsedFunctionSite site = 1;
+   FunctionReferenceType function_reference_details = 2;
+}
+
+
 message EqualTo {}
 message GreaterThan {}
 message LessThan {}
@@ -106,3 +114,61 @@ message LessThanOrEqualTo {}
 message GetTag {}
 message Negate {}
 message And {}
+
+message FunctionReferenceType {
+  oneof type {
+    Function function = 1;
+    RawResourceConstructor raw_resource_constructor = 2;
+    RawResourceDrop raw_resource_drop = 3;
+    RawResourceMethod raw_resource_method = 4;
+    RawResourceStaticMethod raw_resource_static_method = 5;
+    IndexedResourceConstructor indexed_resource_constructor = 6;
+    IndexedResourceMethod indexed_resource_method = 7;
+    IndexedResourceStaticMethod indexed_resource_static_method = 8;
+    IndexedResourceDrop indexed_resource_drop = 9;
+  }
+}
+
+message Function {
+  string name = 1;
+}
+
+message RawResourceConstructor {
+  string resource_name = 1;
+}
+
+message RawResourceDrop {
+  string resource_name = 1;
+}
+
+message RawResourceMethod {
+  string resource_name = 1;
+  string method_name = 2;
+}
+
+message RawResourceStaticMethod {
+  string resource_name = 1;
+  string method_name = 2;
+}
+
+message IndexedResourceConstructor {
+  string resource_name = 1;
+  uint32 arg_size = 2;
+}
+
+message IndexedResourceMethod {
+  string resource_name = 1;
+  uint32 arg_size = 2;
+  string method_name = 3;
+}
+
+message IndexedResourceStaticMethod {
+  string resource_name = 1;
+  uint32 arg_size = 2;
+  string method_name = 3;
+}
+
+message IndexedResourceDrop {
+  string resource_name = 1;
+  uint32 arg_size = 2;
+}

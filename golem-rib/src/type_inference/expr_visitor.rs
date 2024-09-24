@@ -1,3 +1,4 @@
+use crate::call_type::CallType;
 use crate::Expr;
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -50,7 +51,13 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Option(Some(expr), _) => queue.push_back(&mut *expr),
         Expr::Result(Ok(expr), _) => queue.push_back(&mut *expr),
         Expr::Result(Err(expr), _) => queue.push_back(&mut *expr),
-        Expr::Call(_, expressions, _) => queue.extend(expressions.iter_mut()),
+        Expr::Call(call_type, arguments, _) => {
+            if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
+                queue.extend(exprs.iter_mut())
+            }
+
+            queue.extend(arguments.iter_mut())
+        }
         Expr::Unwrap(expr, _) => queue.push_back(&mut *expr), // not yet needed
         Expr::And(expr1, expr2, _) => {
             queue.push_back(&mut *expr1);
@@ -114,7 +121,14 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Option(Some(expr), _) => queue.push_back(expr),
         Expr::Result(Ok(expr), _) => queue.push_back(expr),
         Expr::Result(Err(expr), _) => queue.push_back(expr),
-        Expr::Call(_, expressions, _) => queue.extend(expressions.iter()),
+        Expr::Call(call_type, arguments, _) => {
+            if let CallType::Function(dynamic) = call_type {
+                if let Some(params) = dynamic.function.raw_resource_params() {
+                    queue.extend(params.iter())
+                }
+            }
+            queue.extend(arguments.iter())
+        }
         Expr::Unwrap(expr, _) => queue.push_back(expr),
         Expr::And(expr1, expr2, _) => {
             queue.push_back(expr1);
@@ -203,8 +217,14 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Option(Some(expr), _) => queue.push_front(&mut *expr),
         Expr::Result(Ok(expr), _) => queue.push_front(&mut *expr),
         Expr::Result(Err(expr), _) => queue.push_front(&mut *expr),
-        Expr::Call(_, expressions, _) => {
-            for expr in expressions.iter_mut() {
+        Expr::Call(call_type, arguments, _) => {
+            if let Some(exprs) = internal::get_expressions_in_call_mut(call_type) {
+                for expr in exprs.iter_mut() {
+                    queue.push_front(expr);
+                }
+            }
+
+            for expr in arguments.iter_mut() {
                 queue.push_front(expr);
             }
         }
@@ -217,5 +237,20 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         Expr::Option(None, _) => {}
         Expr::Throw(_, _) => {}
         Expr::GetTag(_, _) => {}
+    }
+}
+
+mod internal {
+    use crate::call_type::CallType;
+    use crate::Expr;
+
+    pub(crate) fn get_expressions_in_call_mut(call_type: &mut CallType) -> Option<&mut Vec<Expr>> {
+        match call_type {
+            CallType::Function(dynamic_parsed_function_name) => dynamic_parsed_function_name
+                .function
+                .raw_resource_params_mut(),
+
+            _ => None,
+        }
     }
 }

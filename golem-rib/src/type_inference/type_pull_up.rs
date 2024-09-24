@@ -246,7 +246,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_pull_up_tests {
-    use crate::{ArmPattern, Expr, InferredType, Number, ParsedFunctionName};
+    use crate::function_name::DynamicParsedFunctionName;
+    use crate::{ArmPattern, Expr, InferredType, Number};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -403,7 +404,7 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_call() {
         let mut expr = Expr::call(
-            ParsedFunctionName::parse("global_fn").unwrap(),
+            DynamicParsedFunctionName::parse("global_fn").unwrap(),
             vec![Expr::number(1f64)],
         );
         expr.pull_types_up().unwrap();
