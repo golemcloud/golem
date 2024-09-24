@@ -769,7 +769,7 @@ mod internal {
             .stack
             .pop_str()
             .ok_or("Failed to get a function name from the stack".to_string())?;
-        
+
         let last_n_elements = interpreter
             .stack
             .pop_n(argument_size)
