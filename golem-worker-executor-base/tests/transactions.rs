@@ -15,6 +15,7 @@
 use crate::common::{start, TestContext};
 use assert2::check;
 use bytes::Bytes;
+use golem_common::model::{IdempotencyKey, TargetWorkerId};
 use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_message,
     TestDslUnsafe,
@@ -719,4 +720,105 @@ async fn golem_rust_infallible_transaction() {
                 "=> 4".to_string(),
             ]
     );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn idempotency_keys_in_ephemeral_workers() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_ephemeral_component("runtime-service").await;
+
+    let target_worker_id = TargetWorkerId {
+        component_id,
+        worker_name: None,
+    };
+
+    let idempotency_key1 = IdempotencyKey::fresh();
+    let idempotency_key2 = IdempotencyKey::fresh();
+
+    let result11 = executor
+        .invoke_and_await(
+            target_worker_id.clone(),
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result21 = executor
+        .invoke_and_await_with_key(
+            target_worker_id.clone(),
+            &idempotency_key1,
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result31 = executor
+        .invoke_and_await_with_key(
+            target_worker_id.clone(),
+            &idempotency_key2,
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result12 = executor
+        .invoke_and_await(
+            target_worker_id.clone(),
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result22 = executor
+        .invoke_and_await_with_key(
+            target_worker_id.clone(),
+            &idempotency_key1,
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result32 = executor
+        .invoke_and_await_with_key(
+            target_worker_id.clone(),
+            &idempotency_key2,
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    fn returned_keys_are_different(value: &[Value]) -> bool {
+        if value.len() == 1 {
+            if let Value::Tuple(items) = &value[0] {
+                if items.len() == 2 {
+                    items[0] != items[1]
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    check!(returned_keys_are_different(&result11));
+    check!(returned_keys_are_different(&result21));
+    check!(returned_keys_are_different(&result31));
+    check!(returned_keys_are_different(&result12));
+    check!(returned_keys_are_different(&result22));
+    check!(returned_keys_are_different(&result32));
+
+    check!(result11 != result12); // when not providing idempotency key it should return different keys
+    check!(result11 != result21);
+    check!(result11 != result31);
+    check!(result21 == result22); // same idempotency key should lead to the same result
+    check!(result31 == result32);
 }
