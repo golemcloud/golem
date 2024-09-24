@@ -4,7 +4,7 @@ use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 
-#[derive(Debug, Clone, PartialEq,  Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct CompiledGolemWorkerBinding {
     pub component_id: VersionedComponentId,
     pub worker_name_compiled: WorkerNameCompiled,
