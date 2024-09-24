@@ -67,18 +67,16 @@ kind: Application
 spec:
   components:
     - name: component-one
-      type: component-durable
+      type: test-component-type
       properties:
-        wit: wit
-        wasm: out/component.wasm
-        composedWasm: out/component-composed.wasm
+        testComponentProperty: aaa
       traits:
-        - type: worker-rpc
+        - type: test-trait-type-1
           properties:
-            componentName: component-two
-        - type: worker-rpc
+            testProperty: bbb
+        - type: test-trait-type-2
           properties:
-            componentName: component-three
+            testTraitProperty: ccc
 "#,
         )
         .unwrap();
@@ -91,23 +89,22 @@ spec:
         let component = &application.spec.components[0];
 
         assert!(component.name == "component-one");
-        assert!(component.component_type == "component-durable");
+        assert!(component.component_type == "test-component-type");
         assert!(component.properties.is_object());
 
         let properties = component.properties.as_object().unwrap();
 
-        assert!(properties.get_key_value("wit").unwrap().1.as_str() == Some("wit"));
-        assert!(properties.get_key_value("wasm").unwrap().1.as_str() == Some("out/component.wasm"));
+        assert!(properties.get_key_value("testComponentProperty").unwrap().1.as_str() == Some("aaa"));
 
         assert!(component.traits.len() == 2);
 
         let component_trait = &component.traits[1];
 
-        assert!(component_trait.trait_type == "worker-rpc");
+        assert!(component_trait.trait_type == "test-trait-type-2");
         assert!(component_trait.properties.is_object());
 
         let properties = component_trait.properties.as_object().unwrap();
 
-        assert!(properties.get_key_value("componentName").unwrap().1 == "component-three");
+        assert!(properties.get_key_value("testTraitProperty").unwrap().1 == "ccc");
     }
 }
