@@ -17,8 +17,7 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
-use poem_openapi::types::ToJSON;
+use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::{error, info};
@@ -38,7 +37,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
-    ScanCursor, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerStatus,
+    ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::model::{GolemErrorUnknown, ResourceLimits, WorkerMetadata};
 use golem_service_base::routing_table::HasRoutingTableService;
@@ -988,192 +987,5 @@ fn is_filter_with_running_status(filter: &WorkerFilter) -> bool {
         }
         WorkerFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
         _ => false,
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct WorkerServiceNoOp {
-    pub metadata: WorkerRequestMetadata,
-}
-
-#[async_trait]
-impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceNoOp
-where
-    AuthCtx: Send + Sync,
-{
-    async fn create(
-        &self,
-        _worker_id: &WorkerId,
-        _component_version: u64,
-        _arguments: Vec<String>,
-        _environment_variables: HashMap<String, String>,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<WorkerId> {
-        Ok(WorkerId {
-            component_id: ComponentId::new_v4(),
-            worker_name: "no-op".to_string(),
-        })
-    }
-
-    async fn connect(
-        &self,
-        _worker_id: &WorkerId,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<ConnectWorkerStream> {
-        Err(WorkerServiceError::Internal(anyhow::Error::msg(
-            "Not supported",
-        )))
-    }
-
-    async fn delete(
-        &self,
-        _worker_id: &WorkerId,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<()> {
-        Ok(())
-    }
-
-    async fn invoke_and_await_function_json(
-        &self,
-        _worker_id: &TargetWorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<TypeAnnotatedValue>,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue> {
-        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-            value: vec![],
-            typ: vec![],
-        }))
-    }
-
-    async fn invoke_and_await_function_proto(
-        &self,
-        _worker_id: &TargetWorkerId,
-        _idempotency_key: Option<ProtoIdempotencyKey>,
-        _function_name: String,
-        _params: Vec<ProtoVal>,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<InvokeResult> {
-        Ok(InvokeResult::default())
-    }
-
-    async fn invoke_function_json(
-        &self,
-        _worker_id: &TargetWorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<TypeAnnotatedValue>,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<()> {
-        Ok(())
-    }
-
-    async fn invoke_function_proto(
-        &self,
-        _worker_id: &TargetWorkerId,
-        _idempotency_key: Option<ProtoIdempotencyKey>,
-        _function_name: String,
-        _params: Vec<ProtoVal>,
-        _invocation_context: Option<InvocationContext>,
-        _metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<()> {
-        Ok(())
-    }
-
-    async fn complete_promise(
-        &self,
-        _worker_id: &WorkerId,
-        _oplog_id: u64,
-        _data: Vec<u8>,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<bool> {
-        Ok(true)
-    }
-
-    async fn interrupt(
-        &self,
-        _worker_id: &WorkerId,
-        _recover_immediately: bool,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<()> {
-        Ok(())
-    }
-
-    async fn get_metadata(
-        &self,
-        worker_id: &WorkerId,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<WorkerMetadata> {
-        Ok(WorkerMetadata {
-            worker_id: worker_id.clone(),
-            args: vec![],
-            env: Default::default(),
-            status: WorkerStatus::Running,
-            component_version: 0,
-            retry_count: 0,
-            pending_invocation_count: 0,
-            updates: vec![],
-            created_at: Timestamp::now_utc(),
-            last_error: None,
-            component_size: 0,
-            total_linear_memory_size: 0,
-            owned_resources: HashMap::new(),
-        })
-    }
-
-    async fn find_metadata(
-        &self,
-        _component_id: &ComponentId,
-        _filter: Option<WorkerFilter>,
-        _cursor: ScanCursor,
-        _count: u64,
-        _precise: bool,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
-        Ok((None, vec![]))
-    }
-
-    async fn resume(
-        &self,
-        _worker_id: &WorkerId,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<()> {
-        Ok(())
-    }
-
-    async fn update(
-        &self,
-        _worker_id: &WorkerId,
-        _update_mode: UpdateMode,
-        _target_version: ComponentVersion,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<()> {
-        Ok(())
-    }
-
-    async fn get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        _metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<Component> {
-        let worker_id = WorkerId {
-            component_id: worker_id.component_id.clone(),
-            worker_name: worker_id.worker_name.to_json_string(),
-        };
-        Err(WorkerServiceError::WorkerNotFound(worker_id))
     }
 }

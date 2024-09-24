@@ -17,10 +17,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    ComponentType, OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
+    ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
@@ -228,7 +228,33 @@ impl WorkerService for DefaultWorkerService {
                 Some(details)
             }
             Some((_, entry)) => {
-                panic!("Unexpected initial oplog entry for worker: {entry:?}")
+                // This should never happen, but there were some issues previously causing a corrupt oplog
+                // leading to this state.
+                //
+                // There is no point in panicking and restarting the executor here, as the corrupt oplog
+                // will most likely remain as it is.
+                //
+                // So to save the executor's state we return a "fake" failed worker metadata.
+
+                warn!(
+                    worker_id = owned_worker_id.to_string(),
+                    oplog_entry = format!("{entry:?}"),
+                    "Unexpected initial oplog entry found, returning fake failed worker metadata"
+                );
+                let last_oplog_idx = self.oplog_service.get_last_index(owned_worker_id).await;
+                Some(WorkerMetadata {
+                    worker_id: owned_worker_id.worker_id(),
+                    args: vec![],
+                    env: vec![],
+                    account_id: owned_worker_id.account_id(),
+                    created_at: Timestamp::now_utc(),
+                    parent: None,
+                    last_known_status: WorkerStatusRecord {
+                        status: WorkerStatus::Failed,
+                        oplog_idx: last_oplog_idx,
+                        ..WorkerStatusRecord::default()
+                    },
+                })
             }
         }
     }
@@ -340,55 +366,5 @@ impl WorkerService for DefaultWorkerService {
                     });
             }
         }
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-pub struct WorkerServiceMock {}
-
-#[cfg(any(feature = "mocks", test))]
-impl Default for WorkerServiceMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-impl WorkerServiceMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-#[async_trait]
-impl WorkerService for WorkerServiceMock {
-    async fn add(
-        &self,
-        _worker_metadata: &WorkerMetadata,
-        _component_type: ComponentType,
-    ) -> Result<(), GolemError> {
-        unimplemented!()
-    }
-
-    async fn get(&self, _owned_worker_id: &OwnedWorkerId) -> Option<WorkerMetadata> {
-        unimplemented!()
-    }
-
-    async fn get_running_workers_in_shards(&self) -> Vec<WorkerMetadata> {
-        unimplemented!()
-    }
-
-    async fn remove(&self, _owned_worker_id: &OwnedWorkerId) {
-        unimplemented!()
-    }
-
-    async fn update_status(
-        &self,
-        _owned_worker_id: &OwnedWorkerId,
-        _status_value: &WorkerStatusRecord,
-        _component_type: ComponentType,
-    ) {
-        unimplemented!()
     }
 }

@@ -300,20 +300,21 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use crate::service::component::ComponentService;
+    use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
+    use golem_common::model::ComponentId;
     use golem_service_base::db;
+    use golem_service_base::model::Component;
     use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
     use golem_worker_service_base::repo::api_deployment;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
-    use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorNoop;
-    use golem_worker_service_base::service::component::ComponentServiceNoop;
+    use golem_worker_service_base::service::component::ComponentResult;
+    use golem_worker_service_base::service::http::http_api_definition_validator::HttpApiDefinitionValidator;
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
-
-    use crate::service::component::ComponentService;
-
-    use super::*;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -332,6 +333,30 @@ mod test {
     impl<'c> Drop for SqliteDb<'c> {
         fn drop(&mut self) {
             std::fs::remove_file(&self.db_path).unwrap();
+        }
+    }
+
+    struct TestComponentService;
+
+    #[async_trait]
+    impl golem_worker_service_base::service::component::ComponentService<EmptyAuthCtx>
+        for TestComponentService
+    {
+        async fn get_by_version(
+            &self,
+            _component_id: &ComponentId,
+            _version: u64,
+            _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<Component> {
+            unimplemented!()
+        }
+
+        async fn get_latest(
+            &self,
+            _component_id: &ComponentId,
+            _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<Component> {
+            unimplemented!()
         }
     }
 
@@ -355,12 +380,12 @@ mod test {
                 db_pool.clone().into(),
             ));
 
-        let component_service: ComponentService = Arc::new(ComponentServiceNoop {});
+        let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
             api_definition_repo,
             api_deployment_repo,
-            Arc::new(ApiDefinitionValidatorNoop {}),
+            Arc::new(HttpApiDefinitionValidator {}),
         );
 
         let endpoint = RegisterApiDefinitionApi::new(Arc::new(definition_service));

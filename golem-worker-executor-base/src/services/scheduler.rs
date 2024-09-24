@@ -159,7 +159,10 @@ impl SchedulerServiceDefault {
                         let current_last_index =
                             self.oplog_service.get_last_index(&owned_worker_id).await;
                         if current_last_index == last_oplog_index {
-                            let oplog = self.oplog_service.open(&owned_worker_id).await;
+                            let oplog = self
+                                .oplog_service
+                                .open(&owned_worker_id, last_oplog_index)
+                                .await;
                             if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
                                 if more {
                                     self.schedule(
@@ -266,38 +269,9 @@ impl SchedulerService for SchedulerServiceDefault {
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
-pub struct SchedulerServiceMock {}
-
-#[cfg(any(feature = "mocks", test))]
-impl Default for SchedulerServiceMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-impl SchedulerServiceMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-#[async_trait]
-impl SchedulerService for SchedulerServiceMock {
-    async fn schedule(&self, _time: DateTime<Utc>, _action: ScheduledAction) -> ScheduleId {
-        unimplemented!()
-    }
-
-    async fn cancel(&self, _id: ScheduleId) {
-        unimplemented!()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -308,20 +282,49 @@ mod tests {
 
     use uuid::Uuid;
 
-    use crate::services::oplog::mock::OplogServiceMock;
-    use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{AccountId, ComponentId, PromiseId, ScheduledAction, WorkerId};
-
+    use crate::services::oplog::{OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
-    use crate::services::shard::ShardServiceMock;
-    use crate::services::worker_activator::WorkerActivatorMock;
+    use crate::services::shard::{ShardService, ShardServiceDefault};
+    use crate::services::worker_activator::{WorkerActivator, WorkerActivatorMock};
+    use crate::storage::blob::memory::InMemoryBlobStorage;
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{
+        AccountId, ComponentId, PromiseId, ScheduledAction, ShardId, WorkerId,
+    };
 
     fn serialized_bytes<T: Encode>(entry: &T) -> Vec<u8> {
         golem_common::serialization::serialize(entry)
             .expect("failed to serialize entry")
             .to_vec()
+    }
+
+    fn create_shard_service_mock() -> Arc<dyn ShardService + Send + Sync> {
+        let result = Arc::new(ShardServiceDefault::new());
+        result.register(1, &HashSet::from_iter(vec![ShardId::new(0)]));
+        result
+    }
+
+    fn create_promise_service_mock() -> Arc<PromiseServiceMock> {
+        Arc::new(PromiseServiceMock::new())
+    }
+
+    fn create_worker_activator_mock() -> Arc<dyn WorkerActivator + Send + Sync> {
+        Arc::new(WorkerActivatorMock::new())
+    }
+
+    async fn create_oplog_service_mock() -> Arc<dyn OplogService + Send + Sync> {
+        Arc::new(
+            PrimaryOplogService::new(
+                Arc::new(InMemoryIndexedStorage::new()),
+                Arc::new(InMemoryBlobStorage::new()),
+                1,
+                1024,
+            )
+            .await,
+        )
     }
 
     #[tokio::test]
@@ -356,10 +359,10 @@ mod tests {
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
-        let shard_service = Arc::new(ShardServiceMock::new());
-        let promise_service = Arc::new(PromiseServiceMock::new());
-        let worker_activator = Arc::new(WorkerActivatorMock::new());
-        let oplog_service = Arc::new(OplogServiceMock::new());
+        let shard_service = create_shard_service_mock();
+        let promise_service = create_promise_service_mock();
+        let worker_activator = create_worker_activator_mock();
+        let oplog_service = create_oplog_service_mock().await;
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -470,10 +473,10 @@ mod tests {
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
-        let shard_service = Arc::new(ShardServiceMock::new());
-        let promise_service = Arc::new(PromiseServiceMock::new());
-        let worker_activator = Arc::new(WorkerActivatorMock::new());
-        let oplog_service = Arc::new(OplogServiceMock::new());
+        let shard_service = create_shard_service_mock();
+        let promise_service = create_promise_service_mock();
+        let worker_activator = create_worker_activator_mock();
+        let oplog_service = create_oplog_service_mock().await;
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -569,10 +572,10 @@ mod tests {
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
-        let shard_service = Arc::new(ShardServiceMock::new());
-        let promise_service = Arc::new(PromiseServiceMock::new());
-        let worker_activator = Arc::new(WorkerActivatorMock::new());
-        let oplog_service = Arc::new(OplogServiceMock::new());
+        let shard_service = create_shard_service_mock();
+        let promise_service = create_promise_service_mock();
+        let worker_activator = create_worker_activator_mock();
+        let oplog_service = create_oplog_service_mock().await;
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -673,10 +676,10 @@ mod tests {
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
-        let shard_service = Arc::new(ShardServiceMock::new());
-        let promise_service = Arc::new(PromiseServiceMock::new());
-        let worker_activator = Arc::new(WorkerActivatorMock::new());
-        let oplog_service = Arc::new(OplogServiceMock::new());
+        let shard_service = create_shard_service_mock();
+        let promise_service = create_promise_service_mock();
+        let worker_activator = create_worker_activator_mock();
+        let oplog_service = create_oplog_service_mock().await;
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -775,10 +778,10 @@ mod tests {
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
-        let shard_service = Arc::new(ShardServiceMock::new());
-        let promise_service = Arc::new(PromiseServiceMock::new());
-        let worker_activator = Arc::new(WorkerActivatorMock::new());
-        let oplog_service = Arc::new(OplogServiceMock::new());
+        let shard_service = create_shard_service_mock();
+        let promise_service = create_promise_service_mock();
+        let worker_activator = create_worker_activator_mock();
+        let oplog_service = create_oplog_service_mock().await;
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -883,10 +886,10 @@ mod tests {
 
         let kvs = Arc::new(InMemoryKeyValueStorage::new());
 
-        let shard_service = Arc::new(ShardServiceMock::new());
-        let promise_service = Arc::new(PromiseServiceMock::new());
-        let worker_activator = Arc::new(WorkerActivatorMock::new());
-        let oplog_service = Arc::new(OplogServiceMock::new());
+        let shard_service = create_shard_service_mock();
+        let promise_service = create_promise_service_mock();
+        let worker_activator = create_worker_activator_mock();
+        let oplog_service = create_oplog_service_mock().await;
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
