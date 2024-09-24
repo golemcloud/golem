@@ -63,8 +63,6 @@ impl Interpreter {
         // O(1) to do this
         let mut instructions = VecDeque::from(instructions0.instructions);
 
-        dbg!(instructions.clone());
-
         while let Some(instruction) = instructions.pop_front() {
             match instruction {
                 RibIR::PushLit(val) => {
@@ -766,7 +764,6 @@ mod internal {
         argument_size: usize,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
-        dbg!("is this executed?");
         let function_name = interpreter
             .stack
             .pop_str()
@@ -1362,6 +1359,34 @@ mod interpreter_tests {
         assert_eq!(
             result.get_val().unwrap(),
             TypeAnnotatedValue::Str("1 bar".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interpreter_for_dynamic_resource_parameters() {
+        let mut interpreter = Interpreter::default();
+
+        let input = internal::get_analysed_typ_str();
+
+        let analysed_exports =
+            internal::get_component_metadata("ns:name/interface.{resource1(\"hello\").new}", vec![input], AnalysedType::Str(TypeStr));
+
+        let expr = r#"
+
+           let hello = "hello";
+           let result = ns:name/interface.{resource1(hello).new}(hello);
+           result
+
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let mut expr2 = expr.clone();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let result = interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
         );
     }
 

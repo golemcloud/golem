@@ -303,7 +303,7 @@ mod internal {
                                 resource_params,
                             } => {
                                 for param in resource_params {
-                                    stack.push(ExprState::from_expr(&param.0));
+                                    stack.push(ExprState::from_expr(&param));
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
@@ -319,7 +319,7 @@ mod internal {
                                 method,
                             } => {
                                 for param in resource_params {
-                                    stack.push(ExprState::from_expr(&param.0));
+                                    stack.push(ExprState::from_expr(param));
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
@@ -336,7 +336,7 @@ mod internal {
                                 method,
                             } => {
                                 for param in resource_params {
-                                    stack.push(ExprState::from_expr(&param.0));
+                                    stack.push(ExprState::from_expr(param));
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
@@ -352,7 +352,7 @@ mod internal {
                                 resource_params,
                             } => {
                                 for param in resource_params {
-                                    stack.push(ExprState::from_expr(&param.0));
+                                    stack.push(ExprState::from_expr(param));
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,

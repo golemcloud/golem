@@ -16,6 +16,7 @@ use crate::call_type::CallType;
 use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
+use crate::{ParsedFunctionName, ParsedFunctionReference};
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -43,13 +44,17 @@ impl RegistryKey {
             CallType::VariantConstructor(variant_name) => {
                 RegistryKey::VariantName(variant_name.clone())
             }
-            CallType::EnumConstructor(enum_name) => RegistryKey::EnumName(enum_name.clone()),
-            CallType::Function(function_name) => match function_name.site.interface_name() {
-                None => RegistryKey::FunctionName(function_name.function_name()),
-                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
-                    interface_name: interface_name.to_string(),
-                    function_name: function_name.function_name(),
-                },
+            CallType::EnumConstructor(enum_name) => {
+                RegistryKey::EnumName(enum_name.clone())
+            },
+            CallType::Function(function_name) => {
+                match function_name.site.interface_name() {
+                    None => RegistryKey::FunctionName(function_name.function_name()),
+                    Some(interface_name) => RegistryKey::FunctionNameWithInterface {
+                        interface_name: interface_name.to_string(),
+                        function_name: function_name.function_name(),
+                    },
+                }
             },
         }
     }
@@ -64,7 +69,7 @@ pub enum RegistryValue {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
 }

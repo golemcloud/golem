@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, ResourceParam};
+use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
@@ -120,21 +120,21 @@ where
         |((resource, resource_params), _, _)| {
             DynamicParsedFunctionReference::IndexedResourceConstructor {
                 resource,
-                resource_params: resource_params.into_iter().map(ResourceParam).collect(),
+                resource_params
             }
         },
     );
     let indexed_drop_syntax = (indexed_resource_syntax(), token('.'), string("drop")).map(
         |((resource, resource_params), _, _)| DynamicParsedFunctionReference::IndexedResourceDrop {
             resource,
-            resource_params: resource_params.into_iter().map(ResourceParam).collect(),
+            resource_params
         },
     );
     let indexed_method_syntax = (indexed_resource_syntax(), token('.'), identifier()).map(
         |((resource, resource_params), _, method)| {
             DynamicParsedFunctionReference::IndexedResourceMethod {
                 resource,
-                resource_params: resource_params.into_iter().map(ResourceParam).collect(),
+                resource_params,
                 method,
             }
         },
@@ -215,7 +215,7 @@ where
 }
 #[cfg(test)]
 mod function_call_tests {
-    use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference, ResourceParam};
+    use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use combine::EasyParser;
 
     use crate::expr::Expr;
@@ -757,9 +757,9 @@ mod function_call_tests {
                     function: DynamicParsedFunctionReference::IndexedResourceConstructor {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            ResourceParam(Expr::literal("hello")),
-                            ResourceParam(Expr::number(1f64)),
-                            ResourceParam(Expr::boolean(true)),
+                           Expr::literal("hello"),
+                           Expr::number(1f64),
+                           Expr::boolean(true),
                         ],
                     },
                 },
@@ -787,11 +787,11 @@ mod function_call_tests {
                     function: DynamicParsedFunctionReference::IndexedResourceConstructor {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            ResourceParam(Expr::literal("hello")),
-                            ResourceParam(Expr::record(vec![(
+                            Expr::literal("hello"),
+                            Expr::record(vec![(
                                 "field-a".to_string(),
                                 Expr::option(Some(Expr::number(1f64))),
-                            )])),
+                            )]),
                         ],
                     },
                 },
@@ -965,9 +965,9 @@ mod function_call_tests {
                     function: DynamicParsedFunctionReference::IndexedResourceDrop {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            ResourceParam(Expr::literal("hello")),
-                            ResourceParam(Expr::number(1f64)),
-                            ResourceParam(Expr::boolean(true)),
+                            Expr::literal("hello"),
+                            Expr::number(1f64),
+                            Expr::boolean(true),
                         ],
                     },
                 },
@@ -995,11 +995,11 @@ mod function_call_tests {
                     function: DynamicParsedFunctionReference::IndexedResourceDrop {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            ResourceParam(Expr::literal("hello")),
-                            ResourceParam(Expr::record(vec![(
+                            Expr::literal("hello"),
+                            Expr::record(vec![(
                                 "field-a".to_string(),
                                 Expr::option(Some(Expr::number(1f64))),
-                            )])),
+                            )]),
                         ],
                     },
                 },
