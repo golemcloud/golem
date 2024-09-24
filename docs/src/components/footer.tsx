@@ -86,7 +86,7 @@ export function Footer() {
 
 const support = [
   { name: "Blog", href: "https://www.golem.cloud/blog" },
-  { name: "Help Center", href: "https://support.golem.cloud" },
+  { name: "Help Center", href: "https://help.golem.cloud" },
 ]
 
 const golem = [
