@@ -303,7 +303,7 @@ mod internal {
                                 resource_params,
                             } => {
                                 for param in resource_params {
-                                    stack.push(ExprState::from_expr(&param));
+                                    stack.push(ExprState::from_expr(param));
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,

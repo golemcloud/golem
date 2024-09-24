@@ -16,6 +16,7 @@ use crate::interpreter::result::RibInterpreterResult;
 use crate::VariableId;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -23,6 +24,14 @@ use std::sync::Arc;
 pub struct InterpreterEnv {
     pub env: HashMap<EnvironmentKey, RibInterpreterResult>,
     pub call_worker_function_async: RibFunctionInvoke,
+}
+
+impl Debug for InterpreterEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InterpreterEnv")
+            .field("env", &self.env)
+            .finish()
+    }
 }
 
 pub type RibFunctionInvoke = Arc<

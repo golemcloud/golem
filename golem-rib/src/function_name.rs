@@ -360,10 +360,7 @@ impl DynamicParsedFunctionReference {
                 resource_params,
             } => ParsedFunctionReference::IndexedResourceConstructor {
                 resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|param| text::to_raw_string(&param))
-                    .collect(),
+                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
             },
             Self::IndexedResourceMethod {
                 resource,
@@ -371,10 +368,7 @@ impl DynamicParsedFunctionReference {
                 method,
             } => ParsedFunctionReference::IndexedResourceMethod {
                 resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|param| text::to_raw_string(&param))
-                    .collect(),
+                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
                 method: method.clone(),
             },
             Self::IndexedResourceStaticMethod {
@@ -383,10 +377,7 @@ impl DynamicParsedFunctionReference {
                 method,
             } => ParsedFunctionReference::IndexedResourceStaticMethod {
                 resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|param| text::to_raw_string(&param))
-                    .collect(),
+                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
                 method: method.clone(),
             },
             Self::IndexedResourceDrop {
@@ -394,27 +385,47 @@ impl DynamicParsedFunctionReference {
                 resource_params,
             } => ParsedFunctionReference::IndexedResourceDrop {
                 resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|param| text::to_raw_string(&param))
-                    .collect(),
+                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
             },
         }
     }
 
-    pub fn raw_resource_params(&mut self) -> Option<&mut Vec<Expr>> {
+    pub fn raw_resource_params_mut(&mut self) -> Option<&mut Vec<Expr>> {
         match self {
-            Self::IndexedResourceConstructor { resource_params, .. }
-            | Self::IndexedResourceMethod { resource_params, .. }
-            | Self::IndexedResourceStaticMethod { resource_params, .. }
-            | Self::IndexedResourceDrop { resource_params, .. } => {
-                Some(resource_params)
+            Self::IndexedResourceConstructor {
+                resource_params, ..
             }
-            _ => None
+            | Self::IndexedResourceMethod {
+                resource_params, ..
+            }
+            | Self::IndexedResourceStaticMethod {
+                resource_params, ..
+            }
+            | Self::IndexedResourceDrop {
+                resource_params, ..
+            } => Some(resource_params),
+            _ => None,
+        }
+    }
+
+    pub fn raw_resource_params(&self) -> Option<&Vec<Expr>> {
+        match self {
+            Self::IndexedResourceConstructor {
+                resource_params, ..
+            }
+            | Self::IndexedResourceMethod {
+                resource_params, ..
+            }
+            | Self::IndexedResourceStaticMethod {
+                resource_params, ..
+            }
+            | Self::IndexedResourceDrop {
+                resource_params, ..
+            } => Some(resource_params),
+            _ => None,
         }
     }
 }
-
 
 impl Display for ParsedFunctionReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -680,7 +691,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
                                                                      }) => {
 
                 let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(|x| Expr::try_from(x)).collect::<Result<Vec<Expr>, String>>()?;
+                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
 
                 Ok(Self::IndexedResourceConstructor { resource, resource_params })
             },
@@ -690,7 +701,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
                                                                     method
                                                                 }) => {
                 let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(|x| Expr::try_from(x)).collect::<Result<Vec<Expr>, String>>()?;
+                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
 
                 Ok(Self::IndexedResourceMethod { resource, resource_params, method })
             },
@@ -700,7 +711,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
                                                                           method
                                                                       }) => {
                 let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(|x| Expr::try_from(x)).collect::<Result<Vec<Expr>, String>>()?;
+                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
 
                 Ok(Self::IndexedResourceStaticMethod { resource, resource_params, method })
             },
@@ -709,7 +720,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
                                                                   resource_params
                                                               }) => {
                 let resource_params: Vec<Expr> =
-                    resource_params.into_iter().map(|x| Expr::try_from(x)).collect::<Result<Vec<Expr>, String>>()?;
+                    resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
 
                 Ok(Self::IndexedResourceDrop { resource, resource_params })
             },

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
+use crate::ParsedFunctionSite;
 use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
-use crate::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -39,7 +39,6 @@ pub enum RegistryKey {
 }
 
 impl RegistryKey {
-
     pub fn from_function_name(site: &ParsedFunctionSite, function_name: &str) -> RegistryKey {
         match site.interface_name() {
             None => RegistryKey::FunctionName(function_name.to_string()),
@@ -54,17 +53,13 @@ impl RegistryKey {
             CallType::VariantConstructor(variant_name) => {
                 RegistryKey::VariantName(variant_name.clone())
             }
-            CallType::EnumConstructor(enum_name) => {
-                RegistryKey::EnumName(enum_name.clone())
-            },
-            CallType::Function(function_name) => {
-                match function_name.site.interface_name() {
-                    None => RegistryKey::FunctionName(function_name.function_name()),
-                    Some(interface_name) => RegistryKey::FunctionNameWithInterface {
-                        interface_name: interface_name.to_string(),
-                        function_name: function_name.function_name(),
-                    },
-                }
+            CallType::EnumConstructor(enum_name) => RegistryKey::EnumName(enum_name.clone()),
+            CallType::Function(function_name) => match function_name.site.interface_name() {
+                None => RegistryKey::FunctionName(function_name.function_name()),
+                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
+                    interface_name: interface_name.to_string(),
+                    function_name: function_name.function_name(),
+                },
             },
         }
     }

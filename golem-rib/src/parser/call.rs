@@ -120,14 +120,14 @@ where
         |((resource, resource_params), _, _)| {
             DynamicParsedFunctionReference::IndexedResourceConstructor {
                 resource,
-                resource_params
+                resource_params,
             }
         },
     );
     let indexed_drop_syntax = (indexed_resource_syntax(), token('.'), string("drop")).map(
         |((resource, resource_params), _, _)| DynamicParsedFunctionReference::IndexedResourceDrop {
             resource,
-            resource_params
+            resource_params,
         },
     );
     let indexed_method_syntax = (indexed_resource_syntax(), token('.'), identifier()).map(
@@ -757,9 +757,9 @@ mod function_call_tests {
                     function: DynamicParsedFunctionReference::IndexedResourceConstructor {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                           Expr::literal("hello"),
-                           Expr::number(1f64),
-                           Expr::boolean(true),
+                            Expr::literal("hello"),
+                            Expr::number(1f64),
+                            Expr::boolean(true),
                         ],
                     },
                 },

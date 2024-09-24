@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_registry::{FunctionTypeRegistry, RegistryKey, RegistryValue};
-use crate::{Expr, InferredType};
+use crate::type_registry::FunctionTypeRegistry;
+use crate::Expr;
 use std::collections::VecDeque;
-use crate::call_type::CallType;
 
 pub fn infer_function_types(
     expr: &mut Expr,
@@ -26,7 +25,12 @@ pub fn infer_function_types(
     while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::Call(parsed_fn_name, args, inferred_type) => {
-                internal::resolve_call_expressions(parsed_fn_name, function_type_registry, args, inferred_type)?;
+                internal::resolve_call_expressions(
+                    parsed_fn_name,
+                    function_type_registry,
+                    args,
+                    inferred_type,
+                )?;
             }
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
@@ -36,11 +40,16 @@ pub fn infer_function_types(
 }
 
 mod internal {
-    use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
-    use golem_wasm_ast::analysis::AnalysedType;
     use crate::call_type::CallType;
+    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+    use golem_wasm_ast::analysis::AnalysedType;
 
-    pub(crate) fn resolve_call_expressions(call_type: &mut CallType, function_type_registry: &FunctionTypeRegistry, args: &mut Vec<Expr>, inferred_type: &mut InferredType) -> Result<(), String>{
+    pub(crate) fn resolve_call_expressions(
+        call_type: &mut CallType,
+        function_type_registry: &FunctionTypeRegistry,
+        args: &mut [Expr],
+        inferred_type: &mut InferredType,
+    ) -> Result<(), String> {
         match call_type {
             CallType::Function(dynamic_parsed_function_name) => {
                 let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
@@ -48,41 +57,70 @@ mod internal {
                 let indexed_resource = function.is_indexed_resource();
 
                 if indexed_resource {
-                    // Inferring th types of the resource parameters
                     let constructor = {
                         let raw_str = function.resource_name().ok_or("Resource name not found")?;
                         format!["[constructor]{}", raw_str]
                     };
 
-                    let mut constructor_params =
-                        dynamic_parsed_function_name
-                            .function
-                            .raw_resource_params().ok_or("Resource params not found")?;
+                    let constructor_params = dynamic_parsed_function_name
+                        .function
+                        .raw_resource_params_mut()
+                        .ok_or("Resource params not found")?;
 
-                    let registry_key = RegistryKey::from_function_name(&parsed_function_static.site, constructor.as_str());
+                    let registry_key = RegistryKey::from_function_name(
+                        &parsed_function_static.site,
+                        constructor.as_str(),
+                    );
 
-                    infer_types(constructor.as_str(), function_type_registry, registry_key, &mut constructor_params, inferred_type, false)?;
+                    infer_types(
+                        constructor.as_str(),
+                        function_type_registry,
+                        registry_key,
+                        constructor_params,
+                        inferred_type,
+                        false,
+                    )?;
 
                     // Inferring the types of the final method in the resource
                     let resource_method_name = function.function_name();
-                    let registry_key = RegistryKey::from_function_name(&parsed_function_static.site, resource_method_name.as_str());
+                    let registry_key = RegistryKey::from_function_name(
+                        &parsed_function_static.site,
+                        resource_method_name.as_str(),
+                    );
 
-                    infer_types(resource_method_name.as_str(), function_type_registry, registry_key, args, inferred_type, true)
-                }
-
-                else {
+                    infer_types(
+                        resource_method_name.as_str(),
+                        function_type_registry,
+                        registry_key,
+                        args,
+                        inferred_type,
+                        true,
+                    )
+                } else {
                     let registry_key = RegistryKey::from_invocation_name(call_type);
-
-                    infer_types(function.function_name().as_str(), function_type_registry, registry_key, args, inferred_type, false)
+                    infer_types(
+                        function.function_name().as_str(),
+                        function_type_registry,
+                        registry_key,
+                        args,
+                        inferred_type,
+                        false,
+                    )
                 }
             }
 
-            // This will never happen unless variant identification phase happens before functions identification phase
-           _ => panic!("Enum constructor not supported"),
+            _ => Ok(()),
         }
     }
 
-    pub(crate) fn infer_types(function_name: &str, function_type_registry: &FunctionTypeRegistry, key: RegistryKey, args: &mut Vec<Expr>, inferred_type: &mut InferredType, is_resource_method: bool) -> Result<(), String> {
+    pub(crate) fn infer_types(
+        function_name: &str,
+        function_type_registry: &FunctionTypeRegistry,
+        key: RegistryKey,
+        args: &mut [Expr],
+        inferred_type: &mut InferredType,
+        is_resource_method: bool,
+    ) -> Result<(), String> {
         if let Some(value) = function_type_registry.types.get(&key) {
             match value {
                 RegistryValue::Value(_) => {}
@@ -92,11 +130,13 @@ mod internal {
                 } => {
                     let mut parameter_types = parameter_types.clone();
                     if is_resource_method {
-                        parameter_types = parameter_types.iter().filter(|t| match t {
-                            AnalysedType::Handle(_) => false,
-                            _ => true,
-                        }).cloned().collect();
+                        parameter_types = parameter_types
+                            .iter()
+                            .filter(|t| !matches!(t, AnalysedType::Handle(_)))
+                            .cloned()
+                            .collect();
                     }
+
                     if parameter_types.len() == args.len() {
                         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
                             check_function_arguments(&param_type, arg)?;
@@ -113,7 +153,6 @@ mod internal {
                                 )
                             }
                         }
-
                     } else {
                         return Err(format!(
                             "Function {} expects {} arguments, but {} were provided",
