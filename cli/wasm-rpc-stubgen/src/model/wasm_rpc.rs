@@ -1,8 +1,10 @@
 use crate::model::oam;
+use crate::model::validation::{ValidationBuilder, ValidationResult};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-pub type Result<T> = std::result::Result<T, Vec<String>>;
+pub type Result<T> = std::result::Result<(T, Vec<String>), Vec<String>>;
 
 pub const TRAIT_TYPE_WASM_RPC: &str = "wasm-rpc";
 
@@ -17,7 +19,7 @@ pub struct Component {
     pub wit: PathBuf,
     pub input_wasm: PathBuf,
     pub output_wasm: PathBuf,
-    pub worker_rpc_dependencies: Vec<String>,
+    pub wasm_rpc_dependencies: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,139 +47,160 @@ pub struct ComponentProperties {
     pub input_wasm: String,
     #[serde(rename = "outputWasm")]
     pub output_wasm: String,
+    #[serde(flatten)]
+    pub extra_properties: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TraitWasmRpcProperties {
     #[serde(rename = "componentName")]
     pub component_name: String,
+    #[serde(flatten)]
+    pub extra_properties: BTreeMap<String, serde_json::Value>,
 }
 
 impl Component {
-    pub fn from_oam_application(application: oam::ApplicationWithSource) -> Result<Vec<Component>> {
+    pub fn from_oam_application(
+        mut application: oam::ApplicationWithSource,
+    ) -> Result<Vec<Component>> {
+        let mut validation = ValidationBuilder::new();
+        validation.push_context("source", application.source.to_string_lossy().to_string());
+
         let mut components = Vec::<Component>::new();
-        let mut errors = Vec::<String>::new();
-        let mut add_error = |err: String| {
-            errors.push(format!(
-                "Error in {}: {}",
-                application.source.to_string_lossy(),
-                err
-            ))
-        };
 
         if application.application.spec.components.is_empty() {
-            add_error("Expected at least one component specification".to_string());
+            validation.add_error("Expected at least one component specification".to_string());
         } else {
-            'component: for component in application.application.spec.components {
-                let mut add_component_error = |err: String| {
-                    add_error(format!(
-                        "Error in component ({}) specification: {}",
-                        component.name, err
-                    ));
-                };
-                let log_skip_reason = |reason: String| {
-                    eprintln!(
-                        "{} (component: {}, source: {})",
-                        reason,
-                        component.name,
-                        application.source.to_string_lossy()
-                    );
-                };
+            let mut components_by_type = application.extract_components_by_type(&BTreeSet::from([
+                COMPONENT_TYPE_DURABLE,
+                COMPONENT_TYPE_EPHEMERAL,
+            ]));
 
-                let component_type =
-                    match ComponentType::try_from(component.component_type.as_str()) {
-                        Ok(component_type) => Some(component_type),
-                        Err(err) => {
-                            log_skip_reason(format!("Skipping component: {}", err));
-                            continue 'component;
-                        }
-                    };
+            let mut get_components_with_type = |type_str: &str, type_enum: ComponentType| {
+                components_by_type
+                    .remove(type_str)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |c| (type_enum.clone(), c))
+            };
 
-                let properties =
-                    match serde_json::from_value::<ComponentProperties>(component.properties) {
-                        Ok(properties) => Some(properties),
-                        Err(err) => {
-                            add_component_error(format!(
-                                "Failed to get component properties: {}",
-                                err
-                            ));
-                            None
-                        }
-                    };
+            let durable_components =
+                get_components_with_type(COMPONENT_TYPE_DURABLE, ComponentType::Durable);
+            let ephemeral_components =
+                get_components_with_type(COMPONENT_TYPE_EPHEMERAL, ComponentType::Ephemeral);
 
-                let worker_rpc_dependencies = {
-                    let mut worker_rpc_dependencies = Vec::<String>::new();
-                    let mut has_errors = false;
-                    for component_trait in component.traits {
-                        let properties = match component_trait.trait_type.as_str() {
-                            TRAIT_TYPE_WASM_RPC => {
-                                match serde_json::from_value::<TraitWasmRpcProperties>(
-                                    component_trait.properties,
-                                ) {
-                                    Ok(properties) => Some(properties),
-                                    Err(err) => {
-                                        add_component_error(format!(
-                                            "Failed to get WASM RPC trait properties: {}",
-                                            err
-                                        ));
-                                        has_errors = true;
-                                        None
-                                    }
+            let all_components = durable_components.chain(ephemeral_components);
+
+            for (component_type, mut component) in all_components {
+                validation.push_context("component name", component.name.clone());
+                validation.push_context("component type", component.component_type.clone());
+
+                let properties = component.clone_properties_as::<ComponentProperties>();
+                if let Some(err) = properties.as_ref().err() {
+                    validation.add_error(format!("Failed to get component properties: {}", err))
+                }
+
+                let wasm_rpc_traits = component
+                    .extract_traits_by_type(&BTreeSet::from([TRAIT_TYPE_WASM_RPC]))
+                    .remove(TRAIT_TYPE_WASM_RPC)
+                    .unwrap_or_default();
+
+                let mut wasm_rpc_dependencies = Vec::<String>::new();
+                for wasm_rpc in wasm_rpc_traits {
+                    validation.push_context("trait type", wasm_rpc.trait_type.clone());
+
+                    match oam::TypedTrait::<TraitWasmRpcProperties>::try_from(wasm_rpc) {
+                        Ok(wasm_rpc) => {
+                            if !wasm_rpc.properties.extra_properties.is_empty() {
+                                validation.push_context(
+                                    "dep component name",
+                                    wasm_rpc.properties.component_name.clone(),
+                                );
+
+                                for (name, _) in wasm_rpc.properties.extra_properties {
+                                    validation.add_warn(format!(
+                                        "Unknown wasm-rpc trait property: {}",
+                                        name
+                                    ));
                                 }
+
+                                validation.pop_context();
                             }
-                            other => {
-                                log_skip_reason(format!("Skipping unknown trait: {}", other));
-                                None
-                            }
-                        };
-                        if let Some(properties) = properties {
-                            worker_rpc_dependencies.push(properties.component_name);
+                            wasm_rpc_dependencies.push(wasm_rpc.properties.component_name)
                         }
+                        Err(err) => validation
+                            .add_error(format!("Failed to get wasm-rpc trait properties: {}", err)),
                     }
 
-                    (!has_errors).then_some(worker_rpc_dependencies)
-                };
-
-                if let (Some(component_type), Some(properties), Some(worker_rpc_dependencies)) =
-                    (component_type, properties, worker_rpc_dependencies)
-                {
-                    components.push(Component {
-                        name: component.name,
-                        component_type,
-                        source: application.source.clone(),
-                        wit: properties.wit.into(),
-                        input_wasm: properties.input_wasm.into(),
-                        output_wasm: properties.output_wasm.into(),
-                        worker_rpc_dependencies,
-                    })
+                    validation.pop_context();
                 }
+
+                if !validation.has_any_errors() {
+                    if let Ok(properties) = properties {
+                        if !properties.extra_properties.is_empty() {
+                            for (name, _) in properties.extra_properties {
+                                validation
+                                    .add_warn(format!("Unknown component property: {}", name));
+                            }
+                        }
+
+                        components.push(Component {
+                            name: component.name,
+                            component_type,
+                            source: application.source.clone(),
+                            wit: properties.wit.into(),
+                            input_wasm: properties.input_wasm.into(),
+                            output_wasm: properties.output_wasm.into(),
+                            wasm_rpc_dependencies,
+                        })
+                    }
+                }
+
+                validation.pop_context();
+                validation.pop_context();
+            }
+
+            for component in application.application.spec.components {
+                validation.push_context("component name", component.name.clone());
+                validation.push_context("component type", component.component_type.clone());
+
+                validation.add_warn("Unknown component-type".to_string());
+
+                validation.pop_context();
+                validation.pop_context();
             }
         }
 
-        if errors.is_empty() {
-            Ok(components)
-        } else {
-            Err(errors)
+        match validation.build() {
+            ValidationResult::Ok => Ok((components, vec![])),
+            ValidationResult::Warns(warns) => Ok((components, warns)),
+            ValidationResult::WarnsAndErrors(warns_and_errors) => Err(warns_and_errors),
         }
     }
 
     pub fn from_oam_applications(
         applications: Vec<oam::ApplicationWithSource>,
     ) -> Result<Vec<Component>> {
-        let mut all_components = Vec::<Component>::new();
-        let mut errors = Vec::<String>::new();
+        let mut validation_result = ValidationResult::Ok;
+        let mut components = Vec::<Component>::new();
 
         for app in applications {
             match Component::from_oam_application(app) {
-                Ok(app_components) => all_components.extend(app_components),
-                Err(errs) => errors.extend(errs),
+                Ok((app_components, warns)) => {
+                    components.extend(app_components);
+                    validation_result = validation_result.merge(ValidationResult::Warns(warns));
+                }
+                Err(warns_and_errors) => {
+                    validation_result =
+                        validation_result.merge(ValidationResult::WarnsAndErrors(warns_and_errors))
+                }
             }
         }
 
-        if errors.is_empty() {
-            Ok(all_components)
-        } else {
-            Err(errors)
+        match validation_result {
+            ValidationResult::Ok => Ok((components, vec![])),
+            ValidationResult::Warns(warns) => Ok((components, warns)),
+            ValidationResult::WarnsAndErrors(warns_and_errors) => Err(warns_and_errors),
         }
     }
 }
@@ -204,6 +227,7 @@ spec:
         wit: wit
         inputWasm: out/in.wasm
         outputWasm: out/out.wasm
+        testUnknownProp: test
       traits:
         - type: wasm-rpc
           properties:
@@ -211,9 +235,10 @@ spec:
         - type: wasm-rpc
           properties:
             componentName: component-three
+            testUnknownProp: test
         - type: unknown-trait
           properties:
-            unknownProp: test
+            testUnknownProp: test
     - name: component-one
       type: unknown-component-type
       properties:
@@ -233,8 +258,11 @@ spec:
 
         assert!(components.as_ref().err() == None);
 
-        let components = components.unwrap();
+        let (components, warns) = components.unwrap();
 
+        println!("{}", warns.join("\n"));
+
+        assert!(warns.len() == 3);
         assert!(components.len() == 1);
 
         let component = &components[0];
@@ -244,9 +272,9 @@ spec:
         assert!(component.wit.to_string_lossy() == "wit");
         assert!(component.input_wasm.to_string_lossy() == "out/in.wasm");
         assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
-        assert!(component.worker_rpc_dependencies.len() == 2);
+        assert!(component.wasm_rpc_dependencies.len() == 2);
 
-        assert!(component.worker_rpc_dependencies[0] == "component-two");
-        assert!(component.worker_rpc_dependencies[1] == "component-three");
+        assert!(component.wasm_rpc_dependencies[0] == "component-two");
+        assert!(component.wasm_rpc_dependencies[1] == "component-three");
     }
 }

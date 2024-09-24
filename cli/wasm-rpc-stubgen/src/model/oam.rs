@@ -1,5 +1,6 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub const API_VERSION_V1BETA1: &str = "core.oam.dev/v1beta1";
@@ -9,6 +10,38 @@ pub const KIND_APPLICATION: &str = "Application";
 pub struct ApplicationWithSource {
     pub source: PathBuf,
     pub application: Application,
+}
+
+impl ApplicationWithSource {
+    pub fn extract_components_by_type(
+        &mut self,
+        component_types: &BTreeSet<&'static str>,
+    ) -> BTreeMap<&'static str, Vec<Component>> {
+        let mut components = Vec::<Component>::new();
+
+        std::mem::swap(&mut components, &mut self.application.spec.components);
+
+        let mut matching_components = BTreeMap::<&'static str, Vec<Component>>::new();
+        let mut remaining_components = Vec::<Component>::new();
+
+        for component in components {
+            if let Some(component_type) = component_types.get(component.component_type.as_str()) {
+                matching_components
+                    .entry(component_type)
+                    .or_default()
+                    .push(component)
+            } else {
+                remaining_components.push(component)
+            }
+        }
+
+        std::mem::swap(
+            &mut remaining_components,
+            &mut self.application.spec.components,
+        );
+
+        matching_components
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,11 +77,60 @@ pub struct Component {
     pub traits: Vec<Trait>,
 }
 
+impl Component {
+    pub fn clone_properties_as<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_value(self.properties.clone())
+    }
+
+    pub fn extract_traits_by_type(
+        &mut self,
+        trait_types: &BTreeSet<&'static str>,
+    ) -> BTreeMap<&'static str, Vec<Trait>> {
+        let mut component_traits = Vec::<Trait>::new();
+
+        std::mem::swap(&mut component_traits, &mut self.traits);
+
+        let mut matching_traits = BTreeMap::<&'static str, Vec<Trait>>::new();
+        let mut remaining_traits = Vec::<Trait>::new();
+
+        for component_trait in component_traits {
+            if let Some(trait_type) = trait_types.get(component_trait.trait_type.as_str()) {
+                matching_traits
+                    .entry(trait_type)
+                    .or_default()
+                    .push(component_trait);
+            } else {
+                remaining_traits.push(component_trait);
+            }
+        }
+
+        std::mem::swap(&mut remaining_traits, &mut self.traits);
+
+        matching_traits
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Trait {
     #[serde(rename = "type")]
     pub trait_type: String,
     pub properties: serde_json::Value,
+}
+
+pub struct TypedTrait<T: DeserializeOwned> {
+    pub trait_type: String,
+    pub properties: T,
+}
+
+impl<T: DeserializeOwned> TryFrom<Trait> for TypedTrait<T> {
+    type Error = serde_json::Error;
+
+    fn try_from(value: Trait) -> Result<Self, Self::Error> {
+        serde_json::from_value(value.properties).map(|properties| TypedTrait {
+            trait_type: value.trait_type,
+            properties,
+        })
+    }
 }
 
 #[cfg(test)]
