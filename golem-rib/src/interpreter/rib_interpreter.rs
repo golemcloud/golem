@@ -572,12 +572,10 @@ mod internal {
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
         match function_type {
-            FunctionReferenceType::Function(parsed_fn_name) => {
+            FunctionReferenceType::Function { function } => {
                 let parsed_function_name = ParsedFunctionName {
                     site,
-                    function: ParsedFunctionReference::Function {
-                        function: parsed_fn_name,
-                    },
+                    function: ParsedFunctionReference::Function { function },
                 };
 
                 interpreter
@@ -585,7 +583,7 @@ mod internal {
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
 
-            FunctionReferenceType::RawResourceConstructor(resource) => {
+            FunctionReferenceType::RawResourceConstructor { resource } => {
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::RawResourceConstructor { resource },
@@ -595,7 +593,7 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::RawResourceDrop(resource) => {
+            FunctionReferenceType::RawResourceDrop { resource } => {
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::RawResourceDrop { resource },
@@ -605,7 +603,7 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::RawResourceMethod(resource, method) => {
+            FunctionReferenceType::RawResourceMethod { resource, method } => {
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::RawResourceMethod { resource, method },
@@ -615,7 +613,7 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::RawResourceStaticMethod(resource, method) => {
+            FunctionReferenceType::RawResourceStaticMethod { resource, method } => {
                 let parsed_function_name = ParsedFunctionName {
                     site,
                     function: ParsedFunctionReference::RawResourceStaticMethod { resource, method },
@@ -625,10 +623,10 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::IndexedResourceConstructor(resource, resource_params_size) => {
+            FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => {
                 let last_n_elements = interpreter
                     .stack
-                    .pop_n(resource_params_size)
+                    .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
                 let type_anntoated_values = last_n_elements
@@ -655,14 +653,14 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::IndexedResourceMethod(
+            FunctionReferenceType::IndexedResourceMethod {
                 resource,
-                resource_params_size,
+                arg_size,
                 method,
-            ) => {
+            } => {
                 let last_n_elements = interpreter
                     .stack
-                    .pop_n(resource_params_size)
+                    .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
                 let type_anntoated_values = last_n_elements
@@ -690,14 +688,14 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::IndexedResourceStaticMethod(
+            FunctionReferenceType::IndexedResourceStaticMethod {
                 resource,
-                resource_params_size,
+                arg_size,
                 method,
-            ) => {
+            } => {
                 let last_n_elements = interpreter
                     .stack
-                    .pop_n(resource_params_size)
+                    .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
                 let type_anntoated_values = last_n_elements
@@ -725,10 +723,10 @@ mod internal {
                     .stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
-            FunctionReferenceType::IndexedResourceDrop(resource, resource_params) => {
+            FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
                 let last_n_elements = interpreter
                     .stack
-                    .pop_n(resource_params)
+                    .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
                 let type_anntoated_values = last_n_elements
@@ -1436,7 +1434,8 @@ mod interpreter_tests {
            "success"
         "#;
         let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+        let component_metadata =
+            internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
 
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1484,7 +1483,8 @@ mod interpreter_tests {
         "#,
         );
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+        let component_metadata =
+            internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
         let mut rib_executor = internal::test_executor(&result_type, &result_value);
@@ -1533,7 +1533,8 @@ mod interpreter_tests {
         "#,
         );
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+        let component_metadata =
+            internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
         let mut rib_executor = internal::test_executor(&result_type, &result_value);
@@ -1556,7 +1557,8 @@ mod interpreter_tests {
         "#;
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+        let component_metadata =
+            internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
 
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1582,7 +1584,8 @@ mod interpreter_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
+        let component_metadata =
+            internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
 
         let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1740,7 +1743,8 @@ mod interpreter_tests {
             })]
         }
 
-        pub(crate) fn get_shopping_cart_metadata_with_cart_resource_with_parameters() -> Vec<AnalysedExport> {
+        pub(crate) fn get_shopping_cart_metadata_with_cart_resource_with_parameters(
+        ) -> Vec<AnalysedExport> {
             get_shopping_cart_metadata_with_cart_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
                 typ: AnalysedType::Str(TypeStr),
@@ -1751,7 +1755,9 @@ mod interpreter_tests {
             get_shopping_cart_metadata_with_cart_resource(vec![])
         }
 
-        fn get_shopping_cart_metadata_with_cart_resource(constructor_parameters: Vec<AnalysedFunctionParameter>) -> Vec<AnalysedExport> {
+        fn get_shopping_cart_metadata_with_cart_resource(
+            constructor_parameters: Vec<AnalysedFunctionParameter>,
+        ) -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
                 name: "golem:it/api".to_string(),
                 functions: vec![

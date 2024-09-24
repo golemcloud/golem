@@ -18,7 +18,7 @@ use crate::{Expr, InstructionId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
 
-#[derive(Debug, Clone, PartialEq,  Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct RibByteCode {
     pub instructions: Vec<RibIR>,
 }
@@ -262,19 +262,25 @@ mod internal {
                             DynamicParsedFunctionReference::Function { function } => instructions
                                 .push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::Function(function.clone()),
+                                    FunctionReferenceType::Function {
+                                        function: function.clone(),
+                                    },
                                 )),
 
                             DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::RawResourceConstructor(resource.clone()),
+                                    FunctionReferenceType::RawResourceConstructor {
+                                        resource: resource.clone(),
+                                    },
                                 ))
                             }
                             DynamicParsedFunctionReference::RawResourceDrop { resource } => {
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::RawResourceDrop(resource.clone()),
+                                    FunctionReferenceType::RawResourceDrop {
+                                        resource: resource.clone(),
+                                    },
                                 ))
                             }
                             DynamicParsedFunctionReference::RawResourceMethod {
@@ -282,20 +288,20 @@ mod internal {
                                 method,
                             } => instructions.push(RibIR::CreateFunctionName(
                                 site,
-                                FunctionReferenceType::RawResourceMethod(
-                                    resource.clone(),
-                                    method.clone(),
-                                ),
+                                FunctionReferenceType::RawResourceMethod {
+                                    resource: resource.clone(),
+                                    method: method.clone(),
+                                },
                             )),
                             DynamicParsedFunctionReference::RawResourceStaticMethod {
                                 resource,
                                 method,
                             } => instructions.push(RibIR::CreateFunctionName(
                                 site,
-                                FunctionReferenceType::RawResourceStaticMethod(
-                                    resource.clone(),
-                                    method.clone(),
-                                ),
+                                FunctionReferenceType::RawResourceStaticMethod {
+                                    resource: resource.clone(),
+                                    method: method.clone(),
+                                },
                             )),
                             DynamicParsedFunctionReference::IndexedResourceConstructor {
                                 resource,
@@ -306,10 +312,10 @@ mod internal {
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::IndexedResourceConstructor(
-                                        resource.clone(),
-                                        resource_params.len(),
-                                    ),
+                                    FunctionReferenceType::IndexedResourceConstructor {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                    },
                                 ))
                             }
                             DynamicParsedFunctionReference::IndexedResourceMethod {
@@ -322,11 +328,11 @@ mod internal {
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::IndexedResourceMethod(
-                                        resource.clone(),
-                                        resource_params.len(),
-                                        method.clone(),
-                                    ),
+                                    FunctionReferenceType::IndexedResourceMethod {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                        method: method.clone(),
+                                    },
                                 ))
                             }
                             DynamicParsedFunctionReference::IndexedResourceStaticMethod {
@@ -339,11 +345,11 @@ mod internal {
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::IndexedResourceStaticMethod(
-                                        resource.clone(),
-                                        resource_params.len(),
-                                        method.clone(),
-                                    ),
+                                    FunctionReferenceType::IndexedResourceStaticMethod {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                        method: method.clone(),
+                                    },
                                 ))
                             }
                             DynamicParsedFunctionReference::IndexedResourceDrop {
@@ -355,10 +361,10 @@ mod internal {
                                 }
                                 instructions.push(RibIR::CreateFunctionName(
                                     site,
-                                    FunctionReferenceType::IndexedResourceDrop(
-                                        resource.clone(),
-                                        resource_params.len(),
-                                    ),
+                                    FunctionReferenceType::IndexedResourceDrop {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                    },
                                 ))
                             }
                         }
