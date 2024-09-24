@@ -27,9 +27,7 @@ use crate::config::ComponentServiceConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
-use golem_component_service_base::service::component::{
-    ComponentService, ComponentServiceDefault, ComponentServiceNoop,
-};
+use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
 use golem_service_base::auth::DefaultNamespace;
 
 #[derive(Clone)]
@@ -90,18 +88,5 @@ impl Services {
             component_service,
             compilation_service,
         })
-    }
-
-    pub fn noop() -> Self {
-        let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
-            Arc::new(ComponentServiceNoop::default());
-
-        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-            Arc::new(ComponentCompilationServiceDisabled);
-
-        Services {
-            component_service,
-            compilation_service,
-        }
     }
 }

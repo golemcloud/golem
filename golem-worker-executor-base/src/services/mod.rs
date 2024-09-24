@@ -290,62 +290,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         }
     }
 
-    #[cfg(any(feature = "mocks", test))]
-    pub async fn mocked(mocked_extra_deps: Ctx::ExtraDeps) -> Self {
-        let active_workers = Arc::new(active_workers::ActiveWorkers::new(
-            &crate::services::golem_config::MemoryConfig::default(),
-        ));
-        let engine = Arc::new(wasmtime::Engine::default());
-        let linker = Arc::new(wasmtime::component::Linker::new(&engine));
-        let runtime = Handle::current();
-        let component_service = Arc::new(component::ComponentServiceMock::new());
-        let worker_service = Arc::new(worker::WorkerServiceMock::new());
-        let worker_enumeration_service =
-            Arc::new(worker_enumeration::WorkerEnumerationServiceMock::new());
-        let running_worker_enumeration_service =
-            Arc::new(worker_enumeration::RunningWorkerEnumerationServiceMock::new());
-        let promise_service = Arc::new(promise::PromiseServiceMock::new());
-        let golem_config = Arc::new(golem_config::GolemConfig::default());
-        let shard_service = Arc::new(shard::ShardServiceDefault::new());
-        let shard_manager_service = Arc::new(shard_manager::ShardManagerServiceSingleShard::new());
-        let key_value_service = Arc::new(key_value::DefaultKeyValueService::new(Arc::new(
-            crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new(),
-        )));
-        let blob_storage = Arc::new(crate::storage::blob::memory::InMemoryBlobStorage::new());
-        let blob_store_service = Arc::new(blob_store::DefaultBlobStoreService::new(
-            blob_storage.clone(),
-        ));
-        let oplog_service = Arc::new(oplog::mock::OplogServiceMock::new());
-        let rpc = Arc::new(rpc::RpcMock::new());
-        let scheduler_service = Arc::new(scheduler::SchedulerServiceMock::new());
-        let worker_activator = Arc::new(worker_activator::WorkerActivatorMock::new());
-        let worker_proxy = Arc::new(worker_proxy::WorkerProxyMock::new());
-        let events = Arc::new(Events::new(32768));
-        Self {
-            active_workers,
-            engine,
-            linker,
-            runtime,
-            component_service,
-            shard_manager_service,
-            worker_service,
-            worker_enumeration_service,
-            running_worker_enumeration_service,
-            promise_service,
-            golem_config,
-            shard_service,
-            key_value_service,
-            blob_store_service,
-            oplog_service,
-            rpc,
-            scheduler_service,
-            worker_activator,
-            worker_proxy,
-            events,
-            extra_deps: mocked_extra_deps,
-        }
-    }
-
     pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
         All::new(
             this.active_workers(),

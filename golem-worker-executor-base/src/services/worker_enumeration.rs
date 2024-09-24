@@ -67,35 +67,6 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
-pub struct RunningWorkerEnumerationServiceMock {}
-
-#[cfg(any(feature = "mocks", test))]
-impl Default for RunningWorkerEnumerationServiceMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-impl RunningWorkerEnumerationServiceMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-#[async_trait]
-impl RunningWorkerEnumerationService for RunningWorkerEnumerationServiceMock {
-    async fn get(
-        &self,
-        _component_id: &ComponentId,
-        _filter: Option<WorkerFilter>,
-    ) -> Result<Vec<WorkerMetadata>, GolemError> {
-        unimplemented!()
-    }
-}
-
 #[async_trait]
 pub trait WorkerEnumerationService {
     async fn get(
@@ -241,38 +212,5 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         }
 
         Ok((new_cursor, workers))
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-pub struct WorkerEnumerationServiceMock {}
-
-#[cfg(any(feature = "mocks", test))]
-impl Default for WorkerEnumerationServiceMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-impl WorkerEnumerationServiceMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-#[async_trait]
-impl WorkerEnumerationService for WorkerEnumerationServiceMock {
-    async fn get(
-        &self,
-        _account_id: &AccountId,
-        _component_id: &ComponentId,
-        _filter: Option<WorkerFilter>,
-        _cursor: ScanCursor,
-        _count: u64,
-        _precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
-        unimplemented!()
     }
 }

@@ -152,64 +152,6 @@ impl ShardService for ShardServiceDefault {
     }
 }
 
-#[cfg(any(feature = "mocks", test))]
-pub struct ShardServiceMock {}
-
-#[cfg(any(feature = "mocks", test))]
-impl Default for ShardServiceMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-impl ShardServiceMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(any(feature = "mocks", test))]
-impl ShardService for ShardServiceMock {
-    fn is_ready(&self) -> bool {
-        tracing::info!("ShardServiceMock::is_ready");
-        true
-    }
-
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        tracing::info!("ShardServiceMock::assign_shards {:?}", shard_ids);
-        Ok(())
-    }
-
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError> {
-        tracing::info!("ShardServiceMock::check_worker {:?}", worker_id);
-        Ok(())
-    }
-
-    fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
-        tracing::info!(
-            "ShardServiceMock::register {} {:?}",
-            number_of_shards,
-            shard_ids
-        )
-    }
-
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), GolemError> {
-        tracing::info!("ShardServiceMock::revoke_shards {:?}", shard_ids);
-        Ok(())
-    }
-
-    fn current_assignment(&self) -> Result<ShardAssignment, GolemError> {
-        tracing::info!("ShardServiceMock::current_assignment");
-        Ok(ShardAssignment::default())
-    }
-
-    fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
-        tracing::info!("ShardServiceMock::opt_current_assignment");
-        None
-    }
-}
-
 fn sharding_not_ready_error() -> GolemError {
     GolemError::Unknown {
         details: "Sharding is not ready".to_string(),
