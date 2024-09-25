@@ -12,59 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use combine::parser::char::{spaces, string};
+use crate::parser::errors::RibParseError;
+use combine::parser::char::string;
 use combine::{attempt, choice, ParseError, Parser};
 
-use crate::expr::Expr;
-use crate::parser::errors::RibParseError;
-use crate::InferredType;
-
-pub fn binary<Input>(
-    left_expr: impl Parser<Input, Output = Expr>,
-    right_expr: impl Parser<Input, Output = Expr>,
-) -> impl Parser<Input, Output = Expr>
+pub fn binary_op<Input>() -> impl Parser<Input, Output = BinaryOp>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
         <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
     >,
 {
-    spaces().with(
-        (
-            left_expr.skip(spaces()),
-            choice((
-                attempt(string(">=")),
-                attempt(string("<=")),
-                string("<"),
-                string(">"),
-                string("=="),
-            ))
-            .skip(spaces()),
-            right_expr.skip(spaces()),
-        )
-            .message("Expected a valid expression of the form x > y")
-            .map(|(left, str, right)| match str {
-                ">" => Expr::GreaterThan(Box::new(left), Box::new(right), InferredType::Bool),
-                "<" => Expr::LessThan(Box::new(left), Box::new(right), InferredType::Bool),
-                "==" => Expr::EqualTo(Box::new(left), Box::new(right), InferredType::Bool),
-                ">=" => {
-                    Expr::GreaterThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
-                }
-                "<=" => {
-                    Expr::LessThanOrEqualTo(Box::new(left), Box::new(right), InferredType::Bool)
-                }
-                _ => unreachable!(),
-            }),
-    )
+    choice((
+        attempt(string(">=")),
+        attempt(string("<=")),
+        attempt(string("==")),
+        string("<"),
+        string(">"),
+    ))
+    .and_then(|str| match str {
+        ">" => Ok(BinaryOp::GreaterThan),
+        "<" => Ok(BinaryOp::LessThan),
+        "==" => Ok(BinaryOp::EqualTo),
+        ">=" => Ok(BinaryOp::GreaterThanOrEqualTo),
+        "<=" => Ok(BinaryOp::LessThanOrEqualTo),
+        _ => Err(RibParseError::Message(
+            "Invalid binary operator".to_string(),
+        )),
+    })
+}
+
+pub enum BinaryOp {
+    GreaterThan,
+    LessThan,
+    LessThanOrEqualTo,
+    GreaterThanOrEqualTo,
+    EqualTo,
 }
 
 #[cfg(test)]
 mod test {
-    use combine::EasyParser;
-
     use crate::parser::rib_expr::rib_expr;
-
-    use super::*;
+    use crate::{
+        DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ParsedFunctionSite,
+    };
+    use combine::EasyParser;
 
     #[test]
     fn test_greater_than() {
@@ -158,6 +150,172 @@ mod test {
                         Expr::identifier("bar")
                     ),
                     Expr::less_than(Expr::identifier("foo"), Expr::identifier("bar"))
+                ]),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_record() {
+        let input = "{foo : 1} == {foo: 2}";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::record(vec![("foo".to_string(), Expr::number(1f64))]),
+                    Expr::record(vec![("foo".to_string(), Expr::number(2f64))]),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_sequence() {
+        let input = "[1, 2] == [3, 4]";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::sequence(vec![Expr::number(1f64), Expr::number(2f64)]),
+                    Expr::sequence(vec![Expr::number(3f64), Expr::number(4f64)]),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_tuple() {
+        let input = "(1, 2) == (3, 4)";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::tuple(vec![Expr::number(1f64), Expr::number(2f64)]),
+                    Expr::tuple(vec![Expr::number(3f64), Expr::number(4f64)]),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_select_field() {
+        let input = "foo.bar == baz.qux";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::select_field(Expr::identifier("foo"), "bar"),
+                    Expr::select_field(Expr::identifier("baz"), "qux"),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_select_index() {
+        let input = "foo[1] == bar[2]";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::select_index(Expr::identifier("foo"), 1),
+                    Expr::select_index(Expr::identifier("bar"), 2),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_result() {
+        let input = "ok(foo) == ok(bar)";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::ok(Expr::identifier("foo")),
+                    Expr::ok(Expr::identifier("bar")),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_option() {
+        let input = "some(foo) == some(bar)";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::option(Some(Expr::identifier("foo"))),
+                    Expr::option(Some(Expr::identifier("bar"))),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_of_call() {
+        let input = "foo() == bar()";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::equal_to(
+                    Expr::call(
+                        DynamicParsedFunctionName {
+                            site: ParsedFunctionSite::Global,
+                            function: DynamicParsedFunctionReference::Function {
+                                function: "foo".to_string(),
+                            }
+                        },
+                        vec![]
+                    ),
+                    Expr::call(
+                        DynamicParsedFunctionName {
+                            site: ParsedFunctionSite::Global,
+                            function: DynamicParsedFunctionReference::Function {
+                                function: "bar".to_string(),
+                            }
+                        },
+                        vec![]
+                    ),
+                ),
+                ""
+            ))
+        );
+    }
+
+    #[test]
+    fn test_binary_op_in_record() {
+        let input = "{foo: bar > baz, baz: bar == foo}";
+        let result = rib_expr().easy_parse(input);
+        assert_eq!(
+            result,
+            Ok((
+                Expr::record(vec![
+                    (
+                        "foo".to_string(),
+                        Expr::greater_than(Expr::identifier("bar"), Expr::identifier("baz"))
+                    ),
+                    (
+                        "baz".to_string(),
+                        Expr::equal_to(Expr::identifier("bar"), Expr::identifier("foo"))
+                    ),
                 ]),
                 ""
             ))
