@@ -33,6 +33,7 @@ use crate::preview2::golem::api::host::{
     ComponentVersion, HostGetWorkers, PersistenceLevel, RetryPolicy, UpdateMode, Uri,
     WorkerMetadata,
 };
+use crate::services::oplog::CommitLevel;
 use crate::services::HasWorker;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use golem_common::model::oplog::{OplogEntry, OplogIndex, WrappedFunctionType};
@@ -420,7 +421,7 @@ impl<Ctx: WorkerCtx> golem::api::host::Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("golem::api", "set_oplog_persistence_level");
         // commit all pending entries and change persistence level
         if self.state.is_live() {
-            self.state.oplog.commit().await;
+            self.state.oplog.commit(CommitLevel::DurableOnly).await;
         }
         self.state.persistence_level = new_persistence_level.into();
         debug!(

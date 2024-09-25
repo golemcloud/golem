@@ -14,7 +14,7 @@
 
 use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
-use crate::services::oplog::{OpenOplogs, Oplog, OplogConstructor, OplogService};
+use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_mutex::Mutex;
@@ -542,7 +542,7 @@ impl Oplog for PrimaryOplog {
         }
     }
 
-    async fn commit(&self) {
+    async fn commit(&self, _level: CommitLevel) {
         let mut state = self.state.lock().await;
         state.commit().await
     }

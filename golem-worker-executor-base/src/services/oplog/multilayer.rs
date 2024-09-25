@@ -32,7 +32,9 @@ use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
-use crate::services::oplog::{downcast_oplog, OpenOplogs, Oplog, OplogConstructor, OplogService};
+use crate::services::oplog::{
+    downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
+};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug {
@@ -115,7 +117,7 @@ pub struct MultiLayerOplogService {
     oplogs: OpenOplogs,
 
     entry_count_limit: u64,
-    max_operations_before_commit: u64,
+    max_operations_before_commit_ephemeral: u64,
 }
 
 impl MultiLayerOplogService {
@@ -123,14 +125,14 @@ impl MultiLayerOplogService {
         primary: Arc<dyn OplogService + Send + Sync>,
         lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
         entry_count_limit: u64,
-        max_operations_before_commit: u64,
+        max_operations_before_commit_ephemeral: u64,
     ) -> Self {
         Self {
             primary,
             lower,
             oplogs: OpenOplogs::new("multi-layer oplog"),
             entry_count_limit,
-            max_operations_before_commit,
+            max_operations_before_commit_ephemeral,
         }
     }
 }
@@ -142,7 +144,7 @@ impl Clone for MultiLayerOplogService {
             lower: self.lower.clone(),
             oplogs: self.oplogs.clone(),
             entry_count_limit: self.entry_count_limit,
-            max_operations_before_commit: self.max_operations_before_commit,
+            max_operations_before_commit_ephemeral: self.max_operations_before_commit_ephemeral,
         }
     }
 }
@@ -183,35 +185,56 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        let primary = if let Some(initial_entry) = self.initial_entry {
-            self.primary
-                .create(&self.owned_worker_id, initial_entry, self.component_type)
-                .await
-        } else {
-            self.primary
-                .open(
-                    &self.owned_worker_id,
-                    self.last_oplog_index,
-                    self.component_type,
-                )
-                .await
-        };
-
         match self.component_type {
-            ComponentType::Durable => Arc::new(
-                MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await,
-            ),
-            ComponentType::Ephemeral => Arc::new(
-                EphemeralOplog::new(
-                    self.owned_worker_id,
-                    self.last_oplog_index,
-                    self.service.max_operations_before_commit,
-                    primary,
-                    self.service,
-                    close,
+            ComponentType::Durable => {
+                let primary = if let Some(initial_entry) = self.initial_entry {
+                    self.primary
+                        .create(&self.owned_worker_id, initial_entry, self.component_type)
+                        .await
+                } else {
+                    self.primary
+                        .open(
+                            &self.owned_worker_id,
+                            self.last_oplog_index,
+                            self.component_type,
+                        )
+                        .await
+                };
+                Arc::new(
+                    MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await,
                 )
-                .await,
-            ),
+            }
+            ComponentType::Ephemeral => {
+                let primary = self
+                    .primary
+                    .open(
+                        &self.owned_worker_id,
+                        self.last_oplog_index,
+                        self.component_type,
+                    )
+                    .await;
+
+                let target_layer = self.service.lower.last();
+                let target = target_layer.open(&self.owned_worker_id).await;
+
+                if let Some(initial_entry) = self.initial_entry {
+                    target
+                        .append(vec![(OplogIndex::INITIAL, initial_entry)])
+                        .await;
+                }
+
+                Arc::new(
+                    EphemeralOplog::new(
+                        self.owned_worker_id,
+                        self.last_oplog_index,
+                        self.service.max_operations_before_commit_ephemeral,
+                        primary,
+                        target,
+                        close,
+                    )
+                    .await,
+                )
+            }
         }
     }
 }
@@ -602,8 +625,8 @@ impl Oplog for MultiLayerOplog {
         self.primary_length.set(new_length);
     }
 
-    async fn commit(&self) {
-        self.primary.commit().await;
+    async fn commit(&self, level: CommitLevel) {
+        self.primary.commit(level).await;
         let count = self.primary_length.get();
         if count >= self.multi_layer_oplog_service.entry_count_limit {
             let current_idx = self.primary.current_oplog_index().await;

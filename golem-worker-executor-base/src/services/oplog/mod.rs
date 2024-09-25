@@ -135,6 +135,17 @@ pub trait OplogService: Debug {
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
 }
 
+/// Level of commit guarantees
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CommitLevel {
+    /// Always commit immediately and do not return until it is done
+    Immediate,
+    /// Always commit, both for durable and ephemeral workers, no guarantees that it awaits it
+    Always,
+    /// Only commit immediately if the worker is durable
+    DurableOnly,
+}
+
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug {
@@ -147,7 +158,7 @@ pub trait Oplog: Any + Debug {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex);
 
     /// Commits the buffered entries to the oplog
-    async fn commit(&self);
+    async fn commit(&self, level: CommitLevel);
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
@@ -167,7 +178,7 @@ pub trait Oplog: Any + Debug {
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
         self.add(entry).await;
-        self.commit().await;
+        self.commit(CommitLevel::Always).await;
         self.current_oplog_index().await
     }
 

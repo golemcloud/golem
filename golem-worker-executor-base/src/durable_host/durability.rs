@@ -15,7 +15,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::error::GolemError;
 use crate::model::PersistenceLevel;
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -342,7 +342,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     WrappedFunctionType::WriteRemoteBatched(_)
                 )
             {
-                self.state.oplog.commit().await;
+                self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
         }
         Ok(())

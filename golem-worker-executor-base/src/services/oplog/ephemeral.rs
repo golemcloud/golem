@@ -14,7 +14,7 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::OplogArchive;
-use crate::services::oplog::{MultiLayerOplogService, Oplog};
+use crate::services::oplog::{CommitLevel, Oplog};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -70,12 +70,9 @@ impl EphemeralOplog {
         last_oplog_idx: OplogIndex,
         max_operations_before_commit: u64,
         primary: Arc<dyn Oplog + Send + Sync>,
-        multi_layer_oplog_service: MultiLayerOplogService,
+        target: Arc<dyn OplogArchive + Send + Sync>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
-        let target_layer = multi_layer_oplog_service.lower.last();
-        let target = target_layer.open(&owned_worker_id).await;
-
         Self {
             owned_worker_id,
             primary,
@@ -121,10 +118,22 @@ impl Oplog for EphemeralOplog {
         self.target.drop_prefix(last_dropped_id).await;
     }
 
-    async fn commit(&self) {
+    async fn commit(&self, level: CommitLevel) {
         record_oplog_call("commit");
-        let mut state = self.state.lock().await;
-        state.commit().await
+        match level {
+            CommitLevel::Immediate => {
+                let mut state = self.state.lock().await;
+                state.commit().await
+            }
+            CommitLevel::Always => {
+                let clone = self.state.clone();
+                tokio::spawn(async move {
+                    let mut state = clone.lock().await;
+                    state.commit().await
+                });
+            }
+            CommitLevel::DurableOnly => {}
+        }
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

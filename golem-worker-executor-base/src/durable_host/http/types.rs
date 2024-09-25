@@ -43,7 +43,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
@@ -657,7 +657,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.state.oplog.commit().await;
+                self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
             if !matches!(serializable_response, SerializableResponse::Pending) {
