@@ -712,9 +712,10 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     async fn store_worker_status(&self, status: WorkerStatus) {
         self.update_worker_status(|s| s.status = status.clone())
             .await;
-        if status == WorkerStatus::Idle
+        if (status == WorkerStatus::Idle
             || status == WorkerStatus::Failed
-            || status == WorkerStatus::Exited
+            || status == WorkerStatus::Exited)
+            && self.component_metadata().component_type == ComponentType::Durable
         {
             debug!("Scheduling oplog archive");
             let at = Utc::now().add(self.state.config.oplog.archive_interval);

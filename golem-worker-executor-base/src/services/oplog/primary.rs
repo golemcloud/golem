@@ -21,7 +21,9 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_common::model::{
+    AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerId,
+};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
@@ -95,6 +97,7 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
+        component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("create");
 
@@ -122,13 +125,15 @@ impl OplogService for PrimaryOplogService {
                 )
             });
 
-        self.open(owned_worker_id, OplogIndex::INITIAL).await
+        self.open(owned_worker_id, OplogIndex::INITIAL, component_type)
+            .await
     }
 
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
+        _component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("open");
 
@@ -374,10 +379,10 @@ struct PrimaryOplogState {
 }
 
 impl PrimaryOplogState {
-    async fn append(&mut self, arrays: &[OplogEntry]) {
+    async fn append(&mut self, entries: &[OplogEntry]) {
         record_oplog_call("append");
 
-        for entry in arrays {
+        for entry in entries {
             let oplog_idx = self.last_committed_idx.next();
             self.indexed_storage
                 .with_entity("oplog", "append", "entry")

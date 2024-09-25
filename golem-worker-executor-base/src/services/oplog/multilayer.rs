@@ -26,8 +26,9 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor};
+use golem_common::model::{AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor};
 
+use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
@@ -108,12 +109,13 @@ pub trait OplogArchive: Debug {
 
 #[derive(Debug)]
 pub struct MultiLayerOplogService {
-    primary: Arc<dyn OplogService + Send + Sync>,
-    lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
+    pub primary: Arc<dyn OplogService + Send + Sync>,
+    pub lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
 
     oplogs: OpenOplogs,
 
     entry_count_limit: u64,
+    max_operations_before_commit: u64,
 }
 
 impl MultiLayerOplogService {
@@ -121,12 +123,14 @@ impl MultiLayerOplogService {
         primary: Arc<dyn OplogService + Send + Sync>,
         lower: NEVec<Arc<dyn OplogArchiveService + Send + Sync>>,
         entry_count_limit: u64,
+        max_operations_before_commit: u64,
     ) -> Self {
         Self {
             primary,
             lower,
             oplogs: OpenOplogs::new("multi-layer oplog"),
             entry_count_limit,
+            max_operations_before_commit,
         }
     }
 }
@@ -138,6 +142,7 @@ impl Clone for MultiLayerOplogService {
             lower: self.lower.clone(),
             oplogs: self.oplogs.clone(),
             entry_count_limit: self.entry_count_limit,
+            max_operations_before_commit: self.max_operations_before_commit,
         }
     }
 }
@@ -149,6 +154,7 @@ struct CreateOplogConstructor {
     primary: Arc<dyn OplogService + Send + Sync>,
     service: MultiLayerOplogService,
     last_oplog_index: OplogIndex,
+    component_type: ComponentType,
 }
 
 impl CreateOplogConstructor {
@@ -158,6 +164,7 @@ impl CreateOplogConstructor {
         primary: Arc<dyn OplogService + Send + Sync>,
         service: MultiLayerOplogService,
         last_oplog_index: OplogIndex,
+        component_type: ComponentType,
     ) -> Self {
         Self {
             owned_worker_id,
@@ -165,6 +172,7 @@ impl CreateOplogConstructor {
             primary,
             service,
             last_oplog_index,
+            component_type,
         }
     }
 }
@@ -177,14 +185,34 @@ impl OplogConstructor for CreateOplogConstructor {
     ) -> Arc<dyn Oplog + Send + Sync> {
         let primary = if let Some(initial_entry) = self.initial_entry {
             self.primary
-                .create(&self.owned_worker_id, initial_entry)
+                .create(&self.owned_worker_id, initial_entry, self.component_type)
                 .await
         } else {
             self.primary
-                .open(&self.owned_worker_id, self.last_oplog_index)
+                .open(
+                    &self.owned_worker_id,
+                    self.last_oplog_index,
+                    self.component_type,
+                )
                 .await
         };
-        Arc::new(MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await)
+
+        match self.component_type {
+            ComponentType::Durable => Arc::new(
+                MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await,
+            ),
+            ComponentType::Ephemeral => Arc::new(
+                EphemeralOplog::new(
+                    self.owned_worker_id,
+                    self.last_oplog_index,
+                    self.service.max_operations_before_commit,
+                    primary,
+                    self.service,
+                    close,
+                )
+                .await,
+            ),
+        }
     }
 }
 
@@ -194,6 +222,7 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
+        component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
         self.oplogs
             .get_or_open(
@@ -204,6 +233,7 @@ impl OplogService for MultiLayerOplogService {
                     self.primary.clone(),
                     self.clone(),
                     OplogIndex::INITIAL,
+                    component_type,
                 ),
             )
             .await
@@ -213,6 +243,7 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
+        component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
         debug!("MultiLayerOplogService::open {owned_worker_id}");
         self.oplogs
@@ -224,6 +255,7 @@ impl OplogService for MultiLayerOplogService {
                     self.primary.clone(),
                     self.clone(),
                     last_oplog_index,
+                    component_type,
                 ),
             )
             .await

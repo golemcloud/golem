@@ -173,10 +173,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             parent,
         )
         .await?;
+        let initial_component_metadata = deps
+            .component_service()
+            .get_metadata(
+                &owned_worker_id.worker_id.component_id,
+                Some(worker_metadata.last_known_status.component_version),
+            )
+            .await?;
         let last_oplog_index = deps.oplog_service().get_last_index(&owned_worker_id).await;
         let oplog = deps
             .oplog_service()
-            .open(&owned_worker_id, last_oplog_index)
+            .open(
+                &owned_worker_id,
+                last_oplog_index,
+                initial_component_metadata.component_type,
+            )
             .await;
 
         let initial_pending_invocations = worker_metadata
@@ -191,13 +202,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .collect::<Vec<_>>();
         let initial_invocation_results =
             worker_metadata.last_known_status.invocation_results.clone();
-        let initial_component_metadata = deps
-            .component_service()
-            .get_metadata(
-                &owned_worker_id.worker_id.component_id,
-                Some(worker_metadata.last_known_status.component_version),
-            )
-            .await?;
 
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),

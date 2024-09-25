@@ -31,8 +31,8 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogPayload, UpdateDescription, WrappedFunctionType,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
-    WorkerId,
+    AccountId, ComponentId, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, Timestamp, WorkerId,
 };
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
@@ -42,6 +42,7 @@ use crate::error::GolemError;
 
 mod blob;
 mod compressed;
+mod ephemeral;
 mod multilayer;
 mod primary;
 
@@ -68,11 +69,13 @@ pub trait OplogService: Debug {
         &self,
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
+        component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync + 'static>;
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
+        component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync + 'static>;
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
