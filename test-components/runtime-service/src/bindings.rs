@@ -11565,6 +11565,7 @@ pub mod exports {
                     super::super::super::super::golem::api::host::WorkerAnyFilter;
                 pub type WorkerMetadata =
                     super::super::super::super::golem::api::host::WorkerMetadata;
+                pub type Uuid = super::super::super::super::golem::api::host::Uuid;
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
                 pub unsafe fn _export_get_self_uri_cabi<T: Guest>(
@@ -12310,6 +12311,28 @@ pub mod exports {
                         super::super::super::super::golem::api::host::UpdateMode::_lift(arg5 as u8),
                     );
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_generate_idempotency_keys_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let result0 = T::generate_idempotency_keys();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let (t2_0, t2_1) = result0;
+                    let super::super::super::super::golem::api::host::Uuid {
+                        high_bits: high_bits3,
+                        low_bits: low_bits3,
+                    } = t2_0;
+                    *ptr1.add(0).cast::<i64>() = _rt::as_i64(high_bits3);
+                    *ptr1.add(8).cast::<i64>() = _rt::as_i64(low_bits3);
+                    let super::super::super::super::golem::api::host::Uuid {
+                        high_bits: high_bits4,
+                        low_bits: low_bits4,
+                    } = t2_1;
+                    *ptr1.add(16).cast::<i64>() = _rt::as_i64(high_bits4);
+                    *ptr1.add(24).cast::<i64>() = _rt::as_i64(low_bits4);
+                    ptr1
+                }
                 pub trait Guest {
                     fn get_self_uri(function_name: _rt::String) -> _rt::String;
                     fn jump() -> u64;
@@ -12330,74 +12353,79 @@ pub mod exports {
                         component_version: ComponentVersion,
                         update_mode: UpdateMode,
                     );
+                    fn generate_idempotency_keys() -> (Uuid, Uuid);
                 }
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-                  ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+                ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-                    #[export_name = "golem:it/api#get-self-uri"]
-                    unsafe extern "C" fn export_get_self_uri(arg0: *mut u8,arg1: usize,) -> *mut u8 {
-                      $($path_to_types)*::_export_get_self_uri_cabi::<$ty>(arg0, arg1)
-                    }
-                    #[export_name = "cabi_post_golem:it/api#get-self-uri"]
-                    unsafe extern "C" fn _post_return_get_self_uri(arg0: *mut u8,) {
-                      $($path_to_types)*::__post_return_get_self_uri::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#jump"]
-                    unsafe extern "C" fn export_jump() -> i64 {
-                      $($path_to_types)*::_export_jump_cabi::<$ty>()
-                    }
-                    #[export_name = "golem:it/api#fail-with-custom-max-retries"]
-                    unsafe extern "C" fn export_fail_with_custom_max_retries(arg0: i64,) {
-                      $($path_to_types)*::_export_fail_with_custom_max_retries_cabi::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#explicit-commit"]
-                    unsafe extern "C" fn export_explicit_commit(arg0: i32,) {
-                      $($path_to_types)*::_export_explicit_commit_cabi::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#atomic-region"]
-                    unsafe extern "C" fn export_atomic_region() {
-                      $($path_to_types)*::_export_atomic_region_cabi::<$ty>()
-                    }
-                    #[export_name = "golem:it/api#idempotence-flag"]
-                    unsafe extern "C" fn export_idempotence_flag(arg0: i32,) {
-                      $($path_to_types)*::_export_idempotence_flag_cabi::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#persist-nothing"]
-                    unsafe extern "C" fn export_persist_nothing() {
-                      $($path_to_types)*::_export_persist_nothing_cabi::<$ty>()
-                    }
-                    #[export_name = "golem:it/api#get-workers"]
-                    unsafe extern "C" fn export_get_workers(arg0: i64,arg1: i64,arg2: i32,arg3: *mut u8,arg4: usize,arg5: i32,) -> *mut u8 {
-                      $($path_to_types)*::_export_get_workers_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
-                    }
-                    #[export_name = "cabi_post_golem:it/api#get-workers"]
-                    unsafe extern "C" fn _post_return_get_workers(arg0: *mut u8,) {
-                      $($path_to_types)*::__post_return_get_workers::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#get-self-metadata"]
-                    unsafe extern "C" fn export_get_self_metadata() -> *mut u8 {
-                      $($path_to_types)*::_export_get_self_metadata_cabi::<$ty>()
-                    }
-                    #[export_name = "cabi_post_golem:it/api#get-self-metadata"]
-                    unsafe extern "C" fn _post_return_get_self_metadata(arg0: *mut u8,) {
-                      $($path_to_types)*::__post_return_get_self_metadata::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#get-worker-metadata"]
-                    unsafe extern "C" fn export_get_worker_metadata(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-                      $($path_to_types)*::_export_get_worker_metadata_cabi::<$ty>(arg0, arg1, arg2, arg3)
-                    }
-                    #[export_name = "cabi_post_golem:it/api#get-worker-metadata"]
-                    unsafe extern "C" fn _post_return_get_worker_metadata(arg0: *mut u8,) {
-                      $($path_to_types)*::__post_return_get_worker_metadata::<$ty>(arg0)
-                    }
-                    #[export_name = "golem:it/api#update-worker"]
-                    unsafe extern "C" fn export_update_worker(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,arg4: i64,arg5: i32,) {
-                      $($path_to_types)*::_export_update_worker_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
-                    }
-                  };);
-                }
+                  #[export_name = "golem:it/api#get-self-uri"]
+                  unsafe extern "C" fn export_get_self_uri(arg0: *mut u8,arg1: usize,) -> *mut u8 {
+                    $($path_to_types)*::_export_get_self_uri_cabi::<$ty>(arg0, arg1)
+                  }
+                  #[export_name = "cabi_post_golem:it/api#get-self-uri"]
+                  unsafe extern "C" fn _post_return_get_self_uri(arg0: *mut u8,) {
+                    $($path_to_types)*::__post_return_get_self_uri::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#jump"]
+                  unsafe extern "C" fn export_jump() -> i64 {
+                    $($path_to_types)*::_export_jump_cabi::<$ty>()
+                  }
+                  #[export_name = "golem:it/api#fail-with-custom-max-retries"]
+                  unsafe extern "C" fn export_fail_with_custom_max_retries(arg0: i64,) {
+                    $($path_to_types)*::_export_fail_with_custom_max_retries_cabi::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#explicit-commit"]
+                  unsafe extern "C" fn export_explicit_commit(arg0: i32,) {
+                    $($path_to_types)*::_export_explicit_commit_cabi::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#atomic-region"]
+                  unsafe extern "C" fn export_atomic_region() {
+                    $($path_to_types)*::_export_atomic_region_cabi::<$ty>()
+                  }
+                  #[export_name = "golem:it/api#idempotence-flag"]
+                  unsafe extern "C" fn export_idempotence_flag(arg0: i32,) {
+                    $($path_to_types)*::_export_idempotence_flag_cabi::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#persist-nothing"]
+                  unsafe extern "C" fn export_persist_nothing() {
+                    $($path_to_types)*::_export_persist_nothing_cabi::<$ty>()
+                  }
+                  #[export_name = "golem:it/api#get-workers"]
+                  unsafe extern "C" fn export_get_workers(arg0: i64,arg1: i64,arg2: i32,arg3: *mut u8,arg4: usize,arg5: i32,) -> *mut u8 {
+                    $($path_to_types)*::_export_get_workers_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
+                  }
+                  #[export_name = "cabi_post_golem:it/api#get-workers"]
+                  unsafe extern "C" fn _post_return_get_workers(arg0: *mut u8,) {
+                    $($path_to_types)*::__post_return_get_workers::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#get-self-metadata"]
+                  unsafe extern "C" fn export_get_self_metadata() -> *mut u8 {
+                    $($path_to_types)*::_export_get_self_metadata_cabi::<$ty>()
+                  }
+                  #[export_name = "cabi_post_golem:it/api#get-self-metadata"]
+                  unsafe extern "C" fn _post_return_get_self_metadata(arg0: *mut u8,) {
+                    $($path_to_types)*::__post_return_get_self_metadata::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#get-worker-metadata"]
+                  unsafe extern "C" fn export_get_worker_metadata(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+                    $($path_to_types)*::_export_get_worker_metadata_cabi::<$ty>(arg0, arg1, arg2, arg3)
+                  }
+                  #[export_name = "cabi_post_golem:it/api#get-worker-metadata"]
+                  unsafe extern "C" fn _post_return_get_worker_metadata(arg0: *mut u8,) {
+                    $($path_to_types)*::__post_return_get_worker_metadata::<$ty>(arg0)
+                  }
+                  #[export_name = "golem:it/api#update-worker"]
+                  unsafe extern "C" fn export_update_worker(arg0: i64,arg1: i64,arg2: *mut u8,arg3: usize,arg4: i64,arg5: i32,) {
+                    $($path_to_types)*::_export_update_worker_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4, arg5)
+                  }
+                  #[export_name = "golem:it/api#generate-idempotency-keys"]
+                  unsafe extern "C" fn export_generate_idempotency_keys() -> *mut u8 {
+                    $($path_to_types)*::_export_generate_idempotency_keys_cabi::<$ty>()
+                  }
+                };);
+              }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
                 #[repr(align(8))]
@@ -12713,31 +12741,31 @@ mod _rt {
 #[doc(hidden)]
 
 macro_rules! __export_runtime_service_impl {
-          ($ty:ident) => (self::export!($ty with_types_in self););
-          ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
-          $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
-          )
-        }
+        ($ty:ident) => (self::export!($ty with_types_in self););
+        ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
+        $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
+        )
+      }
 #[doc(inline)]
 pub(crate) use __export_runtime_service_impl as export;
 
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:runtime-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10165] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xafN\x01A\x02\x01A\"\
-\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
-method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
-le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
-\x01\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\x01\
-\x04\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01r\x01\x05values\
-\x04\0\x03uri\x03\0\x04\x01p\x03\x01k\x03\x01o\x02y\x07\x01p\x7f\x01j\x01\x07\x01\
-\x07\x01o\x02\x05w\x01q\x16\x0crecord-value\x01\x06\0\x0dvariant-value\x01\x08\0\
-\x0aenum-value\x01y\0\x0bflags-value\x01\x09\0\x0btuple-value\x01\x06\0\x0alist-\
-value\x01\x06\0\x0coption-value\x01\x07\0\x0cresult-value\x01\x0a\0\x07prim-u8\x01\
-}\0\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08\
-prim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0c\
-prim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 10229] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xefN\x01A\x02\x01A#\x01\
+B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
+od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
+lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\x01\
+\x12wasi:io/poll@0.2.0\x05\0\x02\x03\0\0\x08pollable\x01B*\x02\x03\x02\x01\x01\x04\
+\0\x08pollable\x03\0\0\x01z\x04\0\x0anode-index\x03\0\x02\x01r\x01\x05values\x04\
+\0\x03uri\x03\0\x04\x01p\x03\x01k\x03\x01o\x02y\x07\x01p\x7f\x01j\x01\x07\x01\x07\
+\x01o\x02\x05w\x01q\x16\x0crecord-value\x01\x06\0\x0dvariant-value\x01\x08\0\x0a\
+enum-value\x01y\0\x0bflags-value\x01\x09\0\x0btuple-value\x01\x06\0\x0alist-valu\
+e\x01\x06\0\x0coption-value\x01\x07\0\x0cresult-value\x01\x0a\0\x07prim-u8\x01}\0\
+\x08prim-u16\x01{\0\x08prim-u32\x01y\0\x08prim-u64\x01w\0\x07prim-s8\x01~\0\x08p\
+rim-s16\x01|\0\x08prim-s32\x01z\0\x08prim-s64\x01x\0\x0cprim-float32\x01v\0\x0cp\
+rim-float64\x01u\0\x09prim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01\
 s\0\x06handle\x01\x0b\0\x04\0\x08wit-node\x03\0\x0c\x01p\x0d\x01r\x01\x05nodes\x0e\
 \x04\0\x09wit-value\x03\0\x0f\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\
 \x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0\x11\
@@ -12914,23 +12942,25 @@ error-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x0
 @\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\x01\x20was\
 i:http/outgoing-handler@0.2.0\x05\x11\x02\x03\0\x03\x0ccomponent-id\x02\x03\0\x03\
 \x09worker-id\x02\x03\0\x03\x11component-version\x02\x03\0\x03\x0bupdate-mode\x02\
-\x03\0\x03\x11worker-any-filter\x02\x03\0\x03\x0fworker-metadata\x01B$\x02\x03\x02\
-\x01\x12\x04\0\x0ccomponent-id\x03\0\0\x02\x03\x02\x01\x13\x04\0\x09worker-id\x03\
-\0\x02\x02\x03\x02\x01\x14\x04\0\x11component-version\x03\0\x04\x02\x03\x02\x01\x15\
-\x04\0\x0bupdate-mode\x03\0\x06\x02\x03\x02\x01\x16\x04\0\x11worker-any-filter\x03\
-\0\x08\x02\x03\x02\x01\x17\x04\0\x0fworker-metadata\x03\0\x0a\x01@\x01\x0dfuncti\
-on-names\0s\x04\0\x0cget-self-uri\x01\x0c\x01@\0\0w\x04\0\x04jump\x01\x0d\x01@\x01\
-\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retries\x01\x0e\x01@\x01\x08\
-replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x0f\x01@\0\x01\0\x04\0\x0datomic-re\
-gion\x01\x10\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempotence-flag\x01\x11\x04\
-\0\x0fpersist-nothing\x01\x10\x01k\x09\x01p\x0b\x01@\x03\x0ccomponent-id\x01\x06\
-filter\x12\x07precise\x7f\0\x13\x04\0\x0bget-workers\x01\x14\x01@\0\0\x0b\x04\0\x11\
-get-self-metadata\x01\x15\x01k\x0b\x01@\x01\x09worker-id\x03\0\x16\x04\0\x13get-\
-worker-metadata\x01\x17\x01@\x03\x09worker-id\x03\x11component-version\x05\x0bup\
-date-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x18\x04\x01\x0cgolem:it/api\x05\x18\
-\x04\x01\x18golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0fruntime-service\x03\0\
-\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bi\
-ndgen-rust\x060.25.0";
+\x03\0\x03\x11worker-any-filter\x02\x03\0\x03\x0fworker-metadata\x02\x03\0\x03\x04\
+uuid\x01B)\x02\x03\x02\x01\x12\x04\0\x0ccomponent-id\x03\0\0\x02\x03\x02\x01\x13\
+\x04\0\x09worker-id\x03\0\x02\x02\x03\x02\x01\x14\x04\0\x11component-version\x03\
+\0\x04\x02\x03\x02\x01\x15\x04\0\x0bupdate-mode\x03\0\x06\x02\x03\x02\x01\x16\x04\
+\0\x11worker-any-filter\x03\0\x08\x02\x03\x02\x01\x17\x04\0\x0fworker-metadata\x03\
+\0\x0a\x02\x03\x02\x01\x18\x04\0\x04uuid\x03\0\x0c\x01@\x01\x0dfunction-names\0s\
+\x04\0\x0cget-self-uri\x01\x0e\x01@\0\0w\x04\0\x04jump\x01\x0f\x01@\x01\x0bmax-r\
+etriesw\x01\0\x04\0\x1cfail-with-custom-max-retries\x01\x10\x01@\x01\x08replicas\
+}\x01\0\x04\0\x0fexplicit-commit\x01\x11\x01@\0\x01\0\x04\0\x0datomic-region\x01\
+\x12\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempotence-flag\x01\x13\x04\0\x0fpe\
+rsist-nothing\x01\x12\x01k\x09\x01p\x0b\x01@\x03\x0ccomponent-id\x01\x06filter\x14\
+\x07precise\x7f\0\x15\x04\0\x0bget-workers\x01\x16\x01@\0\0\x0b\x04\0\x11get-sel\
+f-metadata\x01\x17\x01k\x0b\x01@\x01\x09worker-id\x03\0\x18\x04\0\x13get-worker-\
+metadata\x01\x19\x01@\x03\x09worker-id\x03\x11component-version\x05\x0bupdate-mo\
+de\x07\x01\0\x04\0\x0dupdate-worker\x01\x1a\x01o\x02\x0d\x0d\x01@\0\0\x1b\x04\0\x19\
+generate-idempotency-keys\x01\x1c\x04\x01\x0cgolem:it/api\x05\x19\x04\x01\x18gol\
+em:it/runtime-service\x04\0\x0b\x15\x01\0\x0fruntime-service\x03\0\0\0G\x09produ\
+cers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x06\
+0.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

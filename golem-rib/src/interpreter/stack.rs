@@ -20,7 +20,7 @@ use golem_wasm_rpc::protobuf::{
     TypedEnum, TypedList, TypedOption, TypedRecord, TypedTuple, TypedVariant,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterpreterStack {
     pub stack: Vec<RibInterpreterResult>,
 }
@@ -61,6 +61,13 @@ impl InterpreterStack {
             results.push(self.stack.pop()?);
         }
         Some(results)
+    }
+
+    pub fn pop_str(&mut self) -> Option<String> {
+        self.pop_val().and_then(|v| match v {
+            TypeAnnotatedValue::Str(s) => Some(s),
+            _ => None,
+        })
     }
 
     pub fn pop_val(&mut self) -> Option<TypeAnnotatedValue> {

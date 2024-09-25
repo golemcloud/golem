@@ -17,9 +17,8 @@ use crate::compiler::ir::RibIR;
 use crate::{Expr, InstructionId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct RibByteCode {
     pub instructions: Vec<RibIR>,
 }
@@ -84,7 +83,10 @@ impl From<RibByteCode> for ProtoRibByteCode {
 
 mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
-    use crate::{AnalysedTypeWithUnit, Expr, InferredType, InstructionId, RibIR};
+    use crate::{
+        AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
+        InferredType, InstructionId, RibIR,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -251,11 +253,121 @@ mod internal {
                             )?)
                         };
 
-                        instructions.push(RibIR::InvokeFunction(
-                            parsed_function_name.clone(),
-                            arguments.len(),
-                            function_result_type,
-                        ));
+                        instructions
+                            .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
+
+                        let site = parsed_function_name.site.clone();
+
+                        match &parsed_function_name.function {
+                            DynamicParsedFunctionReference::Function { function } => instructions
+                                .push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::Function {
+                                        function: function.clone(),
+                                    },
+                                )),
+
+                            DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::RawResourceConstructor {
+                                        resource: resource.clone(),
+                                    },
+                                ))
+                            }
+                            DynamicParsedFunctionReference::RawResourceDrop { resource } => {
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::RawResourceDrop {
+                                        resource: resource.clone(),
+                                    },
+                                ))
+                            }
+                            DynamicParsedFunctionReference::RawResourceMethod {
+                                resource,
+                                method,
+                            } => instructions.push(RibIR::CreateFunctionName(
+                                site,
+                                FunctionReferenceType::RawResourceMethod {
+                                    resource: resource.clone(),
+                                    method: method.clone(),
+                                },
+                            )),
+                            DynamicParsedFunctionReference::RawResourceStaticMethod {
+                                resource,
+                                method,
+                            } => instructions.push(RibIR::CreateFunctionName(
+                                site,
+                                FunctionReferenceType::RawResourceStaticMethod {
+                                    resource: resource.clone(),
+                                    method: method.clone(),
+                                },
+                            )),
+                            DynamicParsedFunctionReference::IndexedResourceConstructor {
+                                resource,
+                                resource_params,
+                            } => {
+                                for param in resource_params {
+                                    stack.push(ExprState::from_expr(param));
+                                }
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::IndexedResourceConstructor {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                    },
+                                ))
+                            }
+                            DynamicParsedFunctionReference::IndexedResourceMethod {
+                                resource,
+                                resource_params,
+                                method,
+                            } => {
+                                for param in resource_params {
+                                    stack.push(ExprState::from_expr(param));
+                                }
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::IndexedResourceMethod {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                        method: method.clone(),
+                                    },
+                                ))
+                            }
+                            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
+                                resource,
+                                resource_params,
+                                method,
+                            } => {
+                                for param in resource_params {
+                                    stack.push(ExprState::from_expr(param));
+                                }
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::IndexedResourceStaticMethod {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                        method: method.clone(),
+                                    },
+                                ))
+                            }
+                            DynamicParsedFunctionReference::IndexedResourceDrop {
+                                resource,
+                                resource_params,
+                            } => {
+                                for param in resource_params {
+                                    stack.push(ExprState::from_expr(param));
+                                }
+                                instructions.push(RibIR::CreateFunctionName(
+                                    site,
+                                    FunctionReferenceType::IndexedResourceDrop {
+                                        resource: resource.clone(),
+                                        arg_size: resource_params.len(),
+                                    },
+                                ))
+                            }
+                        }
                     }
 
                     CallType::VariantConstructor(variant_name) => {
@@ -380,6 +492,7 @@ mod internal {
         stack.push(ExprState::from_ir(RibIR::Label(else_ending_id.clone())));
     }
 }
+
 #[cfg(test)]
 mod compiler_tests {
     use super::*;

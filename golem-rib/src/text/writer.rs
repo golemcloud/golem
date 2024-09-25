@@ -41,6 +41,15 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
 }
 
+pub fn write_expr_without_interpolation(expr: &Expr) -> Result<String, WriterError> {
+    let mut buf = vec![];
+    let mut writer = Writer::new(&mut buf);
+
+    writer.write_expr(expr)?;
+
+    Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
+}
+
 struct Writer<W> {
     inner: W,
 }

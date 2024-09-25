@@ -187,9 +187,8 @@ mod tests {
 
     use crate::expr::ArmPattern;
     use crate::expr::MatchArm;
-    use crate::function_name::ParsedFunctionName;
-    use crate::function_name::ParsedFunctionReference::RawResourceStaticMethod;
     use crate::function_name::ParsedFunctionSite::PackagedInterface;
+    use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 
     use super::*;
 
@@ -265,14 +264,14 @@ mod tests {
             Expr::let_binding(
                 "result",
                 Expr::call(
-                    ParsedFunctionName {
+                    DynamicParsedFunctionName {
                         site: PackagedInterface {
                             namespace: "ns".to_string(),
                             package: "name".to_string(),
                             interface: "interface".to_string(),
                             version: None,
                         },
-                        function: RawResourceStaticMethod {
+                        function: DynamicParsedFunctionReference::RawResourceStaticMethod {
                             resource: "resource1".to_string(),
                             method: "do-something-static".to_string(),
                         },

@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{AnalysedTypeWithUnit, ParsedFunctionName, VariableId};
+use crate::{AnalysedTypeWithUnit, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{
-    And, CallInstruction, ConcatInstruction, EqualTo, GetTag, GreaterThan, GreaterThanOrEqualTo,
-    JumpInstruction, LessThan, LessThanOrEqualTo, Negate, PushListInstruction, PushNoneInstruction,
-    PushTupleInstruction, RibIr as ProtoRibIR,
+    And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
+    GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate,
+    PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 
 // To create any type, example, CreateOption, you have to feed a fully formed AnalysedType
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum RibIR {
     PushLit(TypeAnnotatedValue),
     AssignVar(VariableId),
@@ -51,13 +51,168 @@ pub enum RibIR {
     Jump(InstructionId),
     Label(InstructionId),
     Deconstruct,
-    InvokeFunction(ParsedFunctionName, usize, AnalysedTypeWithUnit),
+    CreateFunctionName(ParsedFunctionSite, FunctionReferenceType),
+    InvokeFunction(usize, AnalysedTypeWithUnit),
     PushVariant(String, AnalysedType), // There is no arg size since the type of each variant case is only 1 from beginning
     PushEnum(String, AnalysedType),
     Throw(String),
     GetTag,
     Concat(usize),
     Negate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub enum FunctionReferenceType {
+    Function {
+        function: String,
+    },
+    RawResourceConstructor {
+        resource: String,
+    },
+    RawResourceDrop {
+        resource: String,
+    },
+    RawResourceMethod {
+        resource: String,
+        method: String,
+    },
+    RawResourceStaticMethod {
+        resource: String,
+        method: String,
+    },
+    IndexedResourceConstructor {
+        resource: String,
+        arg_size: usize,
+    },
+    IndexedResourceMethod {
+        resource: String,
+        arg_size: usize,
+        method: String,
+    },
+    IndexedResourceStaticMethod {
+        resource: String,
+        arg_size: usize,
+        method: String,
+    },
+    IndexedResourceDrop {
+        resource: String,
+        arg_size: usize,
+    },
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::FunctionReferenceType,
+    ) -> Result<Self, Self::Error> {
+        let value = value.r#type.ok_or("Missing type".to_string())?;
+        let function_reference_type = match value {
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::Function(name) => FunctionReferenceType::Function {
+                function: name.name
+            },
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceConstructor(name) =>
+                FunctionReferenceType::RawResourceConstructor {
+                    resource: name.resource_name
+                },
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceDrop(name) => FunctionReferenceType::RawResourceDrop {
+                resource: name.resource_name
+            },
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceMethod(raw_resource_method) =>{
+                let resource = raw_resource_method.resource_name;
+                let method = raw_resource_method.method_name;
+                FunctionReferenceType::RawResourceMethod { resource, method }
+            }
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceStaticMethod(raw_resource_static_method) => {
+                let resource = raw_resource_static_method.resource_name;
+                let method = raw_resource_static_method.method_name;
+                FunctionReferenceType::RawResourceStaticMethod{ resource, method }
+            }
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceConstructor(indexed_resource_constructor) => {
+                let resource = indexed_resource_constructor.resource_name;
+                let arg_size = indexed_resource_constructor.arg_size;
+                FunctionReferenceType::IndexedResourceConstructor { resource, arg_size: arg_size as usize }
+            }
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceMethod(indexed_resource_method) => {
+                let resource = indexed_resource_method.resource_name;
+                let arg_size = indexed_resource_method.arg_size;
+                let method = indexed_resource_method.method_name;
+                FunctionReferenceType::IndexedResourceMethod { resource, arg_size: arg_size as usize, method }
+            }
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceStaticMethod(indexed_resource_static_method) =>  {
+                let resource = indexed_resource_static_method.resource_name;
+                let arg_size = indexed_resource_static_method.arg_size;
+                let method = indexed_resource_static_method.method_name;
+                FunctionReferenceType::IndexedResourceStaticMethod { resource, arg_size: arg_size as usize, method }
+            }
+            golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceDrop(indexed_resource_drop) => {
+                let resource = indexed_resource_drop.resource_name;
+                let arg_size = indexed_resource_drop.arg_size;
+                FunctionReferenceType::IndexedResourceDrop { resource, arg_size: arg_size as usize }
+            }
+        };
+        Ok(function_reference_type)
+    }
+}
+
+impl From<FunctionReferenceType> for golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+    fn from(value: FunctionReferenceType) -> Self {
+        match value {
+            FunctionReferenceType::Function { function } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::Function(golem_api_grpc::proto::golem::rib::Function {
+                    name: function
+                }))
+            },
+            FunctionReferenceType::RawResourceConstructor{ resource } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructor {
+                    resource_name: resource
+                }))
+            },
+            FunctionReferenceType::RawResourceDrop { resource } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDrop {
+                    resource_name: resource
+                }))
+            },
+            FunctionReferenceType::RawResourceMethod { resource, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethod {
+                    resource_name: resource,
+                    method_name: method
+                }))
+            },
+            FunctionReferenceType::RawResourceStaticMethod { resource, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethod {
+                    resource_name: resource,
+                    method_name: method
+                }))
+            },
+            FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::IndexedResourceConstructor {
+                    resource_name: resource,
+                    arg_size: arg_size as u32
+                }))
+            },
+            FunctionReferenceType::IndexedResourceMethod { resource, arg_size, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::IndexedResourceMethod {
+                    resource_name: resource,
+                    arg_size: arg_size as u32,
+                    method_name: method
+                }))
+            },
+            FunctionReferenceType::IndexedResourceStaticMethod { resource, arg_size, method } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethod {
+                    resource_name: resource,
+                    arg_size: arg_size as u32,
+                    method_name: method
+                }))
+            },
+            FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => golem_api_grpc::proto::golem::rib::FunctionReferenceType {
+                r#type: Some(golem_api_grpc::proto::golem::rib::function_reference_type::Type::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::IndexedResourceDrop {
+                    resource_name: resource,
+                    arg_size: arg_size as u32
+                }))
+            }
+
+        }
+    }
 }
 
 // Every instruction can have a unique ID, and the compiler
@@ -186,8 +341,6 @@ impl TryFrom<ProtoRibIR> for RibIR {
                 };
 
                 Ok(RibIR::InvokeFunction(
-                    ParsedFunctionName::parse(call_instruction.function_name)
-                        .map_err(|_| "Failed to convert ParsedFunctionName".to_string())?,
                     call_instruction.argument_count as usize,
                     return_type,
                 ))
@@ -244,6 +397,20 @@ impl TryFrom<ProtoRibIR> for RibIR {
             Instruction::Concat(concat_instruction) => {
                 Ok(RibIR::Concat(concat_instruction.arg_size as usize))
             }
+            Instruction::CreateFunctionName(instruction) => {
+                let parsed_site = instruction.site.ok_or("Missing site".to_string())?;
+                let parsed_function_site = ParsedFunctionSite::try_from(parsed_site)?;
+
+                let reference_type = instruction
+                    .function_reference_details
+                    .ok_or("Missing reference_type".to_string())?;
+                let function_reference_type = reference_type.try_into()?;
+
+                Ok(RibIR::CreateFunctionName(
+                    parsed_function_site,
+                    function_reference_type,
+                ))
+            }
         }
     }
 }
@@ -293,7 +460,7 @@ impl From<RibIR> for ProtoRibIR {
                 instruction_id: value.index as u64,
             }),
             RibIR::Deconstruct => Instruction::Deconstruct((&AnalysedType::Str(TypeStr)).into()), //TODO; remove type in deconstruct from protobuf
-            RibIR::InvokeFunction(name, arg_count, return_type) => {
+            RibIR::InvokeFunction(arg_count, return_type) => {
                 let typ = match return_type {
                     AnalysedTypeWithUnit::Unit => None,
                     AnalysedTypeWithUnit::Type(analysed_type) => {
@@ -303,7 +470,6 @@ impl From<RibIR> for ProtoRibIR {
                 };
 
                 Instruction::Call(CallInstruction {
-                    function_name: name.to_string(),
                     argument_count: arg_count as u64,
                     return_type: typ,
                 })
@@ -347,6 +513,12 @@ impl From<RibIR> for ProtoRibIR {
                 arg_size: concat as u64,
             }),
             RibIR::Negate => Instruction::Negate(Negate {}),
+            RibIR::CreateFunctionName(site, reference_type) => {
+                Instruction::CreateFunctionName(CreateFunctionNameInstruction {
+                    site: Some(site.into()),
+                    function_reference_details: Some(reference_type.into()),
+                })
+            }
         };
 
         ProtoRibIR {

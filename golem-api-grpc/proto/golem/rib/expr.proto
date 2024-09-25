@@ -169,10 +169,20 @@ message ResultExpr {
 }
 
 message CallExpr {
-  InvocationName name = 1;
+  optional InvocationName name = 1;
   repeated Expr params = 2;
+  optional CallType call_type = 3;
 }
 
+message CallType {
+   oneof name {
+       golem.rib.DynamicParsedFunctionName parsed = 1;
+       string variant_constructor = 2;
+       string enum_constructor = 3;
+     }
+}
+
+/** Legacy call-type that holds fully formed function names and not dynamic functions. This is kept for backward compatibility */
 message InvocationName {
    oneof name {
      golem.rib.ParsedFunctionName parsed = 1;
@@ -216,4 +226,45 @@ message TupleConstructorArmPattern {
 
 message LiteralArmPattern {
   Expr expr = 1;
+}
+
+message DynamicParsedFunctionName {
+  golem.rib.ParsedFunctionSite site = 1;
+  DynamicParsedFunctionReference function = 2;
+}
+
+message DynamicParsedFunctionReference {
+  oneof function_reference {
+    golem.rib.FunctionFunctionReference function = 1;
+    golem.rib.RawResourceConstructorFunctionReference raw_resource_constructor = 2;
+    golem.rib.RawResourceDropFunctionReference raw_resource_drop = 3;
+    golem.rib.RawResourceMethodFunctionReference raw_resource_method = 4;
+    golem.rib.RawResourceStaticMethodFunctionReference raw_resource_static_method = 5;
+    DynamicIndexedResourceConstructorFunctionReference indexed_resource_constructor = 6;
+    DynamicIndexedResourceMethodFunctionReference indexed_resource_method = 7;
+    DynamicIndexedResourceStaticMethodFunctionReference indexed_resource_static_method = 8;
+    DynamicIndexedResourceDropFunctionReference indexed_resource_drop = 9;
+  }
+}
+
+message DynamicIndexedResourceConstructorFunctionReference {
+  string resource = 1;
+  repeated golem.rib.Expr resource_params = 2;
+}
+
+message DynamicIndexedResourceMethodFunctionReference {
+  string resource = 1;
+  repeated golem.rib.Expr resource_params = 2;
+  string method = 3;
+}
+
+message DynamicIndexedResourceStaticMethodFunctionReference {
+  string resource = 1;
+  repeated golem.rib.Expr resource_params = 2;
+  string method = 3;
+}
+
+message DynamicIndexedResourceDropFunctionReference {
+  string resource = 1;
+  repeated golem.rib.Expr resource_params = 2;
 }

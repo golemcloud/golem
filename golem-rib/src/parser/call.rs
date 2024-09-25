@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
 use combine::error::Commit;
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
@@ -20,9 +21,7 @@ use combine::sep_by;
 use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
 
 use crate::expr::Expr;
-use crate::function_name::{
-    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
-};
+use crate::function_name::{ParsedFunctionSite, SemVer};
 use crate::parser::errors::RibParseError;
 use crate::parser::rib_expr::rib_expr;
 
@@ -46,11 +45,7 @@ where
         .message("Invalid function call")
 }
 
-// TODO;  Reusing function_name between Rib and internals of GOLEM may be a surface level requirement
-// as users can form function name in various other ways.
-// Example: Arguments to a resource can be partial because they may come from request parameters
-// and these are not represented using the current structure of ParsedFunctionName
-pub fn function_name<Input>() -> impl Parser<Input, Output = ParsedFunctionName>
+pub fn function_name<Input>() -> impl Parser<Input, Output = DynamicParsedFunctionName>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
@@ -81,7 +76,10 @@ where
                     nesting += 1;
                     current_param.push(next_char);
                 } else if next_char == ',' && nesting == 1 {
-                    result.push(current_param.trim().to_string());
+                    let expr =
+                        Expr::from_text(current_param.trim()).expect("Failed to parse expression");
+
+                    result.push(expr);
                     current_param.clear();
                 } else {
                     current_param.push(next_char);
@@ -94,7 +92,9 @@ where
             }
 
             if !current_param.is_empty() {
-                result.push(current_param.trim().to_string());
+                let expr =
+                    Expr::from_text(current_param.trim()).expect("Failed to parse expression");
+                result.push(expr);
             }
 
             Ok((result, result_committed.unwrap()))
@@ -112,44 +112,55 @@ where
         })
         .message("version");
 
-    let single_function = identifier().map(|id| ParsedFunctionReference::Function { function: id });
+    let single_function =
+        identifier().map(|id| DynamicParsedFunctionReference::Function { function: id });
 
     let indexed_resource_syntax = || (identifier(), token('(').with(capture_resource_params()));
     let indexed_constructor_syntax = (indexed_resource_syntax(), token('.'), string("new")).map(
-        |((resource, resource_params), _, _)| ParsedFunctionReference::IndexedResourceConstructor {
-            resource,
-            resource_params,
+        |((resource, resource_params), _, _)| {
+            DynamicParsedFunctionReference::IndexedResourceConstructor {
+                resource,
+                resource_params,
+            }
         },
     );
     let indexed_drop_syntax = (indexed_resource_syntax(), token('.'), string("drop")).map(
-        |((resource, resource_params), _, _)| ParsedFunctionReference::IndexedResourceDrop {
+        |((resource, resource_params), _, _)| DynamicParsedFunctionReference::IndexedResourceDrop {
             resource,
             resource_params,
         },
     );
     let indexed_method_syntax = (indexed_resource_syntax(), token('.'), identifier()).map(
-        |((resource, resource_params), _, method)| ParsedFunctionReference::IndexedResourceMethod {
-            resource,
-            resource_params,
-            method,
+        |((resource, resource_params), _, method)| {
+            DynamicParsedFunctionReference::IndexedResourceMethod {
+                resource,
+                resource_params,
+                method,
+            }
         },
     );
 
     let raw_constructor_syntax = (identifier(), token('.'), string("new"))
-        .map(|(resource, _, _)| ParsedFunctionReference::RawResourceConstructor { resource })
-        .or((string("[constructor]"), identifier())
-            .map(|(_, resource)| ParsedFunctionReference::RawResourceConstructor { resource }));
+        .map(|(resource, _, _)| DynamicParsedFunctionReference::RawResourceConstructor { resource })
+        .or(
+            (string("[constructor]"), identifier()).map(|(_, resource)| {
+                DynamicParsedFunctionReference::RawResourceConstructor { resource }
+            }),
+        );
     let raw_drop_syntax = (identifier(), token('.'), string("drop"))
-        .map(|(resource, _, _)| ParsedFunctionReference::RawResourceDrop { resource })
+        .map(|(resource, _, _)| DynamicParsedFunctionReference::RawResourceDrop { resource })
         .or((string("[drop]"), identifier())
-            .map(|(_, resource)| ParsedFunctionReference::RawResourceDrop { resource }));
+            .map(|(_, resource)| DynamicParsedFunctionReference::RawResourceDrop { resource }));
     let raw_method_syntax = (identifier(), token('.'), identifier())
         .map(
-            |(resource, _, method)| ParsedFunctionReference::RawResourceMethod { resource, method },
+            |(resource, _, method)| DynamicParsedFunctionReference::RawResourceMethod {
+                resource,
+                method,
+            },
         )
         .or(
             (string("[method]"), identifier(), token('.'), identifier()).map(
-                |(_, resource, _, method)| ParsedFunctionReference::RawResourceMethod {
+                |(_, resource, _, method)| DynamicParsedFunctionReference::RawResourceMethod {
                     resource,
                     method,
                 },
@@ -157,7 +168,7 @@ where
         );
     let raw_static_method_syntax = (string("[static]"), identifier(), token('.'), identifier())
         .map(
-            |(_, resource, _, method)| ParsedFunctionReference::RawResourceStaticMethod {
+            |(_, resource, _, method)| DynamicParsedFunctionReference::RawResourceStaticMethod {
                 resource,
                 method,
             },
@@ -194,23 +205,21 @@ where
                     },
                     None => ParsedFunctionSite::Interface { name: iface },
                 };
-                ParsedFunctionName { site, function }
+                DynamicParsedFunctionName { site, function }
             }),
     )
-    .or(identifier().map(|id| ParsedFunctionName {
+    .or(identifier().map(|id| DynamicParsedFunctionName {
         site: ParsedFunctionSite::Global,
-        function: ParsedFunctionReference::Function { function: id },
+        function: DynamicParsedFunctionReference::Function { function: id },
     }))
 }
-
 #[cfg(test)]
 mod function_call_tests {
+    use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use combine::EasyParser;
 
     use crate::expr::Expr;
-    use crate::function_name::{
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
-    };
+    use crate::function_name::{ParsedFunctionSite, SemVer};
     use crate::parser::rib_expr::rib_expr;
 
     #[test]
@@ -219,9 +228,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -240,9 +249,9 @@ mod function_call_tests {
 
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -259,9 +268,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -278,9 +287,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -301,9 +310,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -325,9 +334,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -350,9 +359,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -376,9 +385,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -398,9 +407,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -420,9 +429,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -442,9 +451,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -465,9 +474,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -487,9 +496,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -509,9 +518,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -531,9 +540,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -553,9 +562,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -575,9 +584,9 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Global,
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "foo".to_string(),
                     },
                 },
@@ -594,11 +603,11 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::Interface {
                         name: "interface".to_string(),
                     },
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "fn1".to_string(),
                     },
                 },
@@ -615,14 +624,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "fn1".to_string(),
                     },
                 },
@@ -639,14 +648,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "wasi".to_string(),
                         package: "cli".to_string(),
                         interface: "run".to_string(),
                         version: Some(SemVer(semver::Version::new(0, 2, 0))),
                     },
-                    function: ParsedFunctionReference::Function {
+                    function: DynamicParsedFunctionReference::Function {
                         function: "run".to_string(),
                     },
                 },
@@ -663,14 +672,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceConstructor {
+                    function: DynamicParsedFunctionReference::RawResourceConstructor {
                         resource: "resource1".to_string(),
                     },
                 },
@@ -687,14 +696,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceConstructor {
+                    function: DynamicParsedFunctionReference::RawResourceConstructor {
                         resource: "resource1".to_string(),
                     },
                 },
@@ -711,14 +720,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::IndexedResourceConstructor {
+                    function: DynamicParsedFunctionReference::IndexedResourceConstructor {
                         resource: "resource1".to_string(),
                         resource_params: vec![],
                     },
@@ -738,19 +747,19 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::IndexedResourceConstructor {
+                    function: DynamicParsedFunctionReference::IndexedResourceConstructor {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            "\"hello\"".to_string(),
-                            "1".to_string(),
-                            "true".to_string(),
+                            Expr::literal("hello"),
+                            Expr::number(1f64),
+                            Expr::boolean(true),
                         ],
                     },
                 },
@@ -768,18 +777,21 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::IndexedResourceConstructor {
+                    function: DynamicParsedFunctionReference::IndexedResourceConstructor {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            "\"hello\"".to_string(),
-                            "{ field-a: some(1) }".to_string(),
+                            Expr::literal("hello"),
+                            Expr::record(vec![(
+                                "field-a".to_string(),
+                                Expr::option(Some(Expr::number(1f64))),
+                            )]),
                         ],
                     },
                 },
@@ -795,14 +807,14 @@ mod function_call_tests {
         let input = "ns:name/interface.{resource1.do-something}({bar, baz})";
         let result = Expr::from_text(input).unwrap();
         let expected = Expr::call(
-            ParsedFunctionName {
+            DynamicParsedFunctionName {
                 site: ParsedFunctionSite::PackagedInterface {
                     namespace: "ns".to_string(),
                     package: "name".to_string(),
                     interface: "interface".to_string(),
                     version: None,
                 },
-                function: ParsedFunctionReference::RawResourceMethod {
+                function: DynamicParsedFunctionReference::RawResourceMethod {
                     resource: "resource1".to_string(),
                     method: "do-something".to_string(),
                 },
@@ -818,14 +830,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceMethod {
+                    function: DynamicParsedFunctionReference::RawResourceMethod {
                         resource: "resource1".to_string(),
                         method: "do-something".to_string(),
                     },
@@ -844,14 +856,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceMethod {
+                    function: DynamicParsedFunctionReference::RawResourceMethod {
                         resource: "resource1".to_string(),
                         method: "do-something-static".to_string(),
                     },
@@ -869,14 +881,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceStaticMethod {
+                    function: DynamicParsedFunctionReference::RawResourceStaticMethod {
                         resource: "resource1".to_string(),
                         method: "do-something-static".to_string(),
                     },
@@ -894,14 +906,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceDrop {
+                    function: DynamicParsedFunctionReference::RawResourceDrop {
                         resource: "resource1".to_string(),
                     },
                 },
@@ -918,14 +930,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::IndexedResourceDrop {
+                    function: DynamicParsedFunctionReference::IndexedResourceDrop {
                         resource: "resource1".to_string(),
                         resource_params: vec![],
                     },
@@ -943,19 +955,19 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::IndexedResourceDrop {
+                    function: DynamicParsedFunctionReference::IndexedResourceDrop {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            "\"hello\"".to_string(),
-                            "1".to_string(),
-                            "true".to_string(),
+                            Expr::literal("hello"),
+                            Expr::number(1f64),
+                            Expr::boolean(true),
                         ],
                     },
                 },
@@ -973,18 +985,21 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::IndexedResourceDrop {
+                    function: DynamicParsedFunctionReference::IndexedResourceDrop {
                         resource: "resource1".to_string(),
                         resource_params: vec![
-                            "\"hello\"".to_string(),
-                            "{ field-a: some(1) }".to_string(),
+                            Expr::literal("hello"),
+                            Expr::record(vec![(
+                                "field-a".to_string(),
+                                Expr::option(Some(Expr::number(1f64))),
+                            )]),
                         ],
                     },
                 },
@@ -1001,14 +1016,14 @@ mod function_call_tests {
         let result = rib_expr().easy_parse(input);
         let expected = Ok((
             Expr::call(
-                ParsedFunctionName {
+                DynamicParsedFunctionName {
                     site: ParsedFunctionSite::PackagedInterface {
                         namespace: "ns".to_string(),
                         package: "name".to_string(),
                         interface: "interface".to_string(),
                         version: None,
                     },
-                    function: ParsedFunctionReference::RawResourceDrop {
+                    function: DynamicParsedFunctionReference::RawResourceDrop {
                         resource: "resource1".to_string(),
                     },
                 },
