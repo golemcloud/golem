@@ -292,6 +292,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                     primary,
                     oplog_archives,
                     golem_config.oplog.entry_count_limit,
+                    golem_config.oplog.max_operations_before_commit_ephemeral,
                 ))
             }
         };

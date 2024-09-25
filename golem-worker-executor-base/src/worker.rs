@@ -26,7 +26,7 @@ use crate::invocation::{invoke_worker, InvokeResult};
 use crate::model::{ExecutionStatus, InterruptKind, LookupResult, TrapType, WorkerConfig};
 use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
-use crate::services::oplog::{Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
@@ -173,10 +173,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             parent,
         )
         .await?;
+        let initial_component_metadata = deps
+            .component_service()
+            .get_metadata(
+                &owned_worker_id.worker_id.component_id,
+                Some(worker_metadata.last_known_status.component_version),
+            )
+            .await?;
         let last_oplog_index = deps.oplog_service().get_last_index(&owned_worker_id).await;
         let oplog = deps
             .oplog_service()
-            .open(&owned_worker_id, last_oplog_index)
+            .open(
+                &owned_worker_id,
+                last_oplog_index,
+                initial_component_metadata.component_type,
+            )
             .await;
 
         let initial_pending_invocations = worker_metadata
@@ -191,13 +202,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .collect::<Vec<_>>();
         let initial_invocation_results =
             worker_metadata.last_known_status.invocation_results.clone();
-        let initial_component_metadata = deps
-            .component_service()
-            .get_metadata(
-                &owned_worker_id.worker_id.component_id,
-                Some(worker_metadata.last_known_status.component_version),
-            )
-            .await?;
 
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations.iter().cloned(),
@@ -647,7 +651,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn update_status(&self, status_value: WorkerStatusRecord) {
         // Need to make sure the oplog is committed, because the updated status stores the current
         // last oplog index as reference.
-        self.oplog().commit().await;
+        self.oplog().commit(CommitLevel::DurableOnly).await;
         // Storing the status in the key-value storage
         let component_type = self.execution_status.read().unwrap().component_type();
         self.worker_service()
@@ -1662,6 +1666,16 @@ impl RunningWorker {
                     error!("Failed to set the worker to suspended state at the end of the invocation loop: {err}");
                 }
             }
+
+            // Make sure all pending commits are done
+            store
+                .lock()
+                .await
+                .data_mut()
+                .get_public_state()
+                .oplog()
+                .commit(CommitLevel::Immediate)
+                .await;
 
             match final_decision {
                 RetryDecision::Immediate => {

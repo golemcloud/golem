@@ -22,7 +22,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use tokio::task::JoinHandle;
 use tracing::{error, span, warn, Instrument, Level};
 
-use golem_common::model::{ScheduleId, ScheduledAction};
+use golem_common::model::{ComponentType, ScheduleId, ScheduledAction};
 
 use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::oplog::{MultiLayerOplog, OplogService};
@@ -159,9 +159,11 @@ impl SchedulerServiceDefault {
                         let current_last_index =
                             self.oplog_service.get_last_index(&owned_worker_id).await;
                         if current_last_index == last_oplog_index {
+                            // We never schedule an archive operation for ephemeral workers, because they immediately write their oplog to the arcchive layer
+                            // So we can assume the component type is Durable here without calculating it from the latest component and worker metadata.
                             let oplog = self
                                 .oplog_service
-                                .open(&owned_worker_id, last_oplog_index)
+                                .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
                                 .await;
                             if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
                                 if more {

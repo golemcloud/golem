@@ -19,10 +19,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
-use tokio::sync::RwLock;
-
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use tokio::sync::RwLock;
 
 use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;

@@ -71,7 +71,7 @@ use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
-use crate::services::oplog::{Oplog, OplogOps, OplogService};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::HasOplogService;
@@ -712,9 +712,10 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     async fn store_worker_status(&self, status: WorkerStatus) {
         self.update_worker_status(|s| s.status = status.clone())
             .await;
-        if status == WorkerStatus::Idle
+        if (status == WorkerStatus::Idle
             || status == WorkerStatus::Failed
-            || status == WorkerStatus::Exited
+            || status == WorkerStatus::Exited)
+            && self.component_metadata().component_type == ComponentType::Durable
         {
             debug!("Scheduling oplog archive");
             let at = Utc::now().add(self.state.config.oplog.archive_interval);
@@ -770,7 +771,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         self.worker_id()
                     )
                 });
-            self.state.oplog.commit().await;
+            self.state.oplog.commit(CommitLevel::Always).await;
         }
         Ok(())
     }
@@ -860,7 +861,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     });
-                self.state.oplog.commit().await;
+                self.state.oplog.commit(CommitLevel::Always).await;
                 let oplog_idx = self.state.oplog.current_oplog_index().await;
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {

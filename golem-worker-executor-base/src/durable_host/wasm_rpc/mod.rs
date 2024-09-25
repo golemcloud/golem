@@ -21,7 +21,7 @@ use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::{InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -503,7 +503,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                self.state.oplog.commit().await;
+                self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
             result

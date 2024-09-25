@@ -237,7 +237,9 @@ async fn open_add_and_read_back() {
     };
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
 
     let entry1 = rounded(OplogEntry::jump(OplogRegion {
         start: OplogIndex::from_u64(5),
@@ -250,7 +252,69 @@ async fn open_add_and_read_back() {
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
+
+    let r1 = oplog.read(last_oplog_idx.next()).await;
+    let r2 = oplog.read(last_oplog_idx.next().next()).await;
+    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
+
+    assert_eq!(r1, entry1);
+    assert_eq!(r2, entry2);
+    assert_eq!(r3, entry3);
+
+    let entries = oplog_service
+        .read(&owned_worker_id, last_oplog_idx.next(), 3)
+        .await;
+    assert_eq!(
+        entries.into_values().collect::<Vec<_>>(),
+        vec![entry1, entry2, entry3]
+    );
+}
+
+#[tokio::test]
+async fn open_add_and_read_back_ephemeral() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+    let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Ephemeral)
+        .await;
+
+    let entry1 = rounded(OplogEntry::jump(OplogRegion {
+        start: OplogIndex::from_u64(5),
+        end: OplogIndex::from_u64(12),
+    }));
+    let entry2 = rounded(OplogEntry::suspend());
+    let entry3 = rounded(OplogEntry::exited());
+
+    let last_oplog_idx = oplog.current_oplog_index().await;
+    oplog.add(entry1.clone()).await;
+    oplog.add(entry2.clone()).await;
+    oplog.add(entry3.clone()).await;
+    oplog.commit(CommitLevel::Immediate).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -284,7 +348,9 @@ async fn entries_with_small_payload() {
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
 
     let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = rounded(
@@ -324,7 +390,7 @@ async fn entries_with_small_payload() {
     });
     oplog.add(entry4.clone()).await;
 
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -390,7 +456,9 @@ async fn entries_with_large_payload() {
     };
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
 
     let large_payload1 = vec![0u8; 1024 * 1024];
     let large_payload2 = vec![1u8; 1024 * 1024];
@@ -435,7 +503,7 @@ async fn entries_with_large_payload() {
     });
     oplog.add(entry4.clone()).await;
 
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -558,6 +626,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
         10,
+        10,
     ));
 
     let account_id = AccountId {
@@ -570,7 +639,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
     let mut entries = Vec::new();
 
     for i in 0..n {
@@ -584,7 +655,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 .await
                 .unwrap(),
         );
-        oplog.commit().await;
+        oplog.commit(CommitLevel::Always).await;
         entries.push(entry);
     }
 
@@ -596,6 +667,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()
@@ -654,6 +726,7 @@ async fn read_from_archive_impl(use_blob: bool) {
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
         10,
+        10,
     ));
     let account_id = AccountId {
         value: "user1".to_string(),
@@ -665,7 +738,9 @@ async fn read_from_archive_impl(use_blob: bool) {
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
 
     let timestamp = Timestamp::now_utc();
     let entries: Vec<OplogEntry> = (0..100)
@@ -682,13 +757,14 @@ async fn read_from_archive_impl(use_blob: bool) {
     for entry in &entries {
         oplog.add(entry.clone()).await;
     }
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()
@@ -771,6 +847,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
         10,
+        10,
     ));
     let account_id = AccountId {
         value: "user1".to_string(),
@@ -783,7 +860,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
 
     info!("FIRST OPEN");
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
     info!("FIRST OPEN DONE");
 
     let timestamp = Timestamp::now_utc();
@@ -801,13 +880,14 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     for entry in &entries {
         oplog.add(entry.clone()).await;
     }
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()
@@ -823,7 +903,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let oplog = if reopen == Reopen::Yes {
         drop(oplog);
         let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-        oplog_service.open(&owned_worker_id, last_oplog_index).await
+        oplog_service
+            .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+            .await
     } else if reopen == Reopen::Full {
         drop(oplog);
         primary_oplog_service = Arc::new(
@@ -833,9 +915,12 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             primary_oplog_service.clone(),
             nev![secondary_layer.clone(), tertiary_layer.clone()],
             10,
+            10,
         ));
         let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-        oplog_service.open(&owned_worker_id, last_oplog_index).await
+        oplog_service
+            .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+            .await
     } else {
         oplog
     };
@@ -852,16 +937,17 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     for (n, entry) in entries.iter().enumerate() {
         oplog.add(entry.clone()).await;
         if n % 100 == 0 {
-            oplog.commit().await;
+            oplog.commit(CommitLevel::Always).await;
         }
     }
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()
@@ -877,7 +963,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let oplog = if reopen == Reopen::Yes {
         drop(oplog);
         let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-        oplog_service.open(&owned_worker_id, last_oplog_index).await
+        oplog_service
+            .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+            .await
     } else if reopen == Reopen::Full {
         drop(oplog);
         primary_oplog_service = Arc::new(
@@ -887,9 +975,12 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             primary_oplog_service.clone(),
             nev![secondary_layer.clone(), tertiary_layer.clone()],
             10,
+            10,
         ));
         let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-        oplog_service.open(&owned_worker_id, last_oplog_index).await
+        oplog_service
+            .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+            .await
     } else {
         oplog
     };
@@ -900,7 +991,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: WorkerError::Unknown("last".to_string()),
         }))
         .await;
-    oplog.commit().await;
+    oplog.commit(CommitLevel::Always).await;
     drop(oplog);
 
     let entry1 = oplog_service
@@ -987,6 +1078,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
         10,
+        10,
     ));
     let account_id = AccountId {
         value: "user1".to_string(),
@@ -998,7 +1090,9 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-    let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+    let oplog = oplog_service
+        .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+        .await;
 
     // As we add 100 entries at once, and that exceeds the limit, we expect that all entries have
     // been moved to the secondary layer. By doing this 10 more times, we end up having all entries
@@ -1018,7 +1112,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         for entry in &entries {
             oplog.add(entry.clone()).await;
         }
-        oplog.commit().await;
+        oplog.commit(CommitLevel::Always).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -1032,6 +1126,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()
@@ -1088,6 +1183,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
         1000, // no transfer will occur by reaching limit in this test
+        10,
     ));
     let account_id = AccountId {
         value: "user1".to_string(),
@@ -1111,11 +1207,13 @@ async fn scheduled_archive_impl(use_blob: bool) {
     // Adding 100 entries to the primary oplog, schedule archive and immediately drop the oplog
     let archive_result = {
         let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-        let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+        let oplog = oplog_service
+            .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+            .await;
         for entry in &entries {
             oplog.add(entry.clone()).await;
         }
-        oplog.commit().await;
+        oplog.commit(CommitLevel::Always).await;
 
         let result = MultiLayerOplog::try_archive(&oplog).await;
         drop(oplog);
@@ -1130,6 +1228,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()
@@ -1153,7 +1252,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
     // Calling archive again
     let archive_result2 = {
         let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-        let oplog = oplog_service.open(&owned_worker_id, last_oplog_index).await;
+        let oplog = oplog_service
+            .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
+            .await;
         let result = MultiLayerOplog::try_archive(&oplog).await;
         drop(oplog);
         result
@@ -1165,6 +1266,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
+            ComponentType::Durable,
         )
         .await
         .length()

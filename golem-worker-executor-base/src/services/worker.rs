@@ -129,7 +129,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.last_known_status.total_linear_memory_size,
         );
         self.oplog_service
-            .create(&owned_worker_id, initial_oplog_entry)
+            .create(&owned_worker_id, initial_oplog_entry, component_type)
             .await;
 
         if component_type != ComponentType::Ephemeral {
