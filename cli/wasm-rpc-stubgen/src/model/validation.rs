@@ -21,10 +21,6 @@ impl<T> ValidatedResult<T> {
         }
     }
 
-    pub fn from_warns_and_errors(warns: Vec<String>, errors: Vec<String>) -> Self {
-        ValidatedResult::WarnsAndErrors(warns, errors)
-    }
-
     pub fn from_result<E: Display>(result: Result<T, E>) -> Self {
         ValidatedResult::Ok(result).flatten()
     }
@@ -144,7 +140,7 @@ impl<A> FromIterator<ValidatedResult<A>> for ValidatedResult<Vec<A>> {
                     elems.push(elem);
                     warns.into_iter().for_each(|warn| validation.add_warn(warn));
                 }
-                ValidatedResult::WarnsAndErrors(errors, warns) => {
+                ValidatedResult::WarnsAndErrors(warns, errors) => {
                     warns.into_iter().for_each(|warn| validation.add_warn(warn));
                     errors
                         .into_iter()

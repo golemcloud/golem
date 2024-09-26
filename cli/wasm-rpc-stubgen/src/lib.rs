@@ -267,6 +267,6 @@ pub fn run_declarative_command(command: Declarative) -> anyhow::Result<()> {
         Declarative::PreBuild(args) => {
             commands::declarative::pre_build(ApplicationResolveMode::Explicit(args.component))
         }
-        Declarative::PostBuild(args) => commands::declarative::post_build(),
+        Declarative::PostBuild(_args) => commands::declarative::post_build(),
     }
 }
