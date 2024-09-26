@@ -1,3 +1,6 @@
+use crate::model::validation::{ValidatedResult, ValidationBuilder};
+use anyhow::Context;
+use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,34 +16,54 @@ pub struct ApplicationWithSource {
 }
 
 impl ApplicationWithSource {
-    pub fn extract_components_by_type(
-        &mut self,
-        component_types: &BTreeSet<&'static str>,
-    ) -> BTreeMap<&'static str, Vec<Component>> {
-        let mut components = Vec::<Component>::new();
+    pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(file.as_path())
+            .with_context(|| format!("Failed to load file: {}", file.to_string_lossy()))?;
 
-        std::mem::swap(&mut components, &mut self.application.spec.components);
+        Ok(Self::from_yaml_string(file, content)?)
+    }
 
-        let mut matching_components = BTreeMap::<&'static str, Vec<Component>>::new();
-        let mut remaining_components = Vec::<Component>::new();
+    pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {
+        Ok(Self {
+            source,
+            application: Application::from_yaml_str(string.as_str())?,
+        })
+    }
 
-        for component in components {
-            if let Some(component_type) = component_types.get(component.component_type.as_str()) {
-                matching_components
-                    .entry(component_type)
-                    .or_default()
-                    .push(component)
-            } else {
-                remaining_components.push(component)
-            }
+    pub fn source_as_string(&self) -> String {
+        self.source.to_string_lossy().to_string()
+    }
+
+    // NOTE: unlike the wasm_rpc model, here validation is optional, so we can access the "raw" data
+    pub fn validate(self) -> ValidatedResult<Self> {
+        let mut validation = ValidationBuilder::new();
+        validation.push_context("source", self.source_as_string());
+
+        if self.application.api_version != API_VERSION_V1BETA1 {
+            validation.add_warn(format!("Expected apiVersion: {}", API_VERSION_V1BETA1))
         }
 
-        std::mem::swap(
-            &mut remaining_components,
-            &mut self.application.spec.components,
-        );
+        if self.application.kind != KIND_APPLICATION {
+            validation.add_error(format!("Expected kind: {}", KIND_APPLICATION))
+        }
 
-        matching_components
+        self.application
+            .spec
+            .components
+            .iter()
+            .map(|component| &component.name)
+            .counts()
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .for_each(|(component_name, count)| {
+                validation.add_warn(format!(
+                    "Component specified multiple times component: {}, count: {}",
+                    component_name, count
+                ));
+            });
+
+        validation.pop_context();
+        validation.build(self)
     }
 }
 
@@ -51,6 +74,29 @@ pub struct Application {
     pub kind: String,
     pub metadata: Metadata,
     pub spec: Spec,
+}
+
+impl Application {
+    pub fn new(name: String) -> Self {
+        Self {
+            api_version: API_VERSION_V1BETA1.to_string(),
+            kind: KIND_APPLICATION.to_string(),
+            metadata: Metadata {
+                name,
+                annotations: Default::default(),
+                labels: Default::default(),
+            },
+            spec: Spec { components: vec![] },
+        }
+    }
+
+    pub fn from_yaml_str(yaml: &str) -> serde_yaml::Result<Self> {
+        serde_yaml::from_str(yaml)
+    }
+
+    pub fn to_yaml_string(&self) -> String {
+        serde_yaml::to_string(self).expect("Failed to serialize Application as YAML")
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,6 +113,35 @@ pub struct Spec {
     pub components: Vec<Component>,
 }
 
+impl Spec {
+    pub fn extract_components_by_type(
+        &mut self,
+        component_types: &BTreeSet<&'static str>,
+    ) -> BTreeMap<&'static str, Vec<Component>> {
+        let mut components = Vec::<Component>::new();
+
+        std::mem::swap(&mut components, &mut self.components);
+
+        let mut matching_components = BTreeMap::<&'static str, Vec<Component>>::new();
+        let mut remaining_components = Vec::<Component>::new();
+
+        for component in components {
+            if let Some(component_type) = component_types.get(component.component_type.as_str()) {
+                matching_components
+                    .entry(component_type)
+                    .or_default()
+                    .push(component)
+            } else {
+                remaining_components.push(component)
+            }
+        }
+
+        std::mem::swap(&mut remaining_components, &mut self.components);
+
+        matching_components
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Component {
     pub name: String,
@@ -77,9 +152,27 @@ pub struct Component {
     pub traits: Vec<Trait>,
 }
 
+pub trait TypedComponentProperties: Serialize + DeserializeOwned {
+    fn component_type() -> &'static str;
+}
+
 impl Component {
-    pub fn clone_properties_as<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+    pub fn get_typed_properties<T: TypedComponentProperties>(
+        &self,
+    ) -> Result<T, serde_json::Error> {
+        if self.component_type != T::component_type() {
+            panic!(
+                "Component type mismatch in clone_properties_as, self: {}, requested: {}",
+                self.component_type,
+                T::component_type()
+            );
+        }
         serde_json::from_value(self.properties.clone())
+    }
+
+    pub fn set_typed_properties<T: TypedComponentProperties>(&mut self, properties: T) {
+        self.component_type = T::component_type().to_string();
+        self.properties = serde_json::to_value(properties).expect("Failed to serialize properties");
     }
 
     pub fn extract_traits_by_type(
@@ -108,6 +201,13 @@ impl Component {
 
         matching_traits
     }
+
+    pub fn add_typed_trait<T: TypedTraitProperties>(&mut self, properties: T) {
+        self.traits.push(Trait {
+            trait_type: T::trait_type().to_string(),
+            properties: serde_json::to_value(properties).expect("Failed to serialize typed trait"),
+        });
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -117,19 +217,18 @@ pub struct Trait {
     pub properties: serde_json::Value,
 }
 
-pub struct TypedTrait<T: DeserializeOwned> {
-    pub trait_type: String,
-    pub properties: T,
-}
+pub trait TypedTraitProperties: Serialize + DeserializeOwned {
+    fn trait_type() -> &'static str;
 
-impl<T: DeserializeOwned> TryFrom<Trait> for TypedTrait<T> {
-    type Error = serde_json::Error;
-
-    fn try_from(value: Trait) -> Result<Self, Self::Error> {
-        serde_json::from_value(value.properties).map(|properties| TypedTrait {
-            trait_type: value.trait_type,
-            properties,
-        })
+    fn from_generic_trait(value: Trait) -> Result<Self, serde_json::Error> {
+        if value.trait_type != Self::trait_type() {
+            panic!(
+                "Trait type mismatch in TryFrom<Trait>, value: {}, typed: {}",
+                value.trait_type,
+                Self::trait_type()
+            )
+        }
+        serde_json::from_value(value.properties)
     }
 }
 
