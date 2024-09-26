@@ -338,7 +338,10 @@ impl DynamicParsedFunctionReference {
                 resource_params,
             } => ParsedFunctionReference::IndexedResourceConstructor {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|expr| expr.to_string())
+                    .collect(),
             },
             Self::IndexedResourceMethod {
                 resource,
@@ -346,7 +349,10 @@ impl DynamicParsedFunctionReference {
                 method,
             } => ParsedFunctionReference::IndexedResourceMethod {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|expr| expr.to_string())
+                    .collect(),
                 method: method.clone(),
             },
             Self::IndexedResourceStaticMethod {
@@ -355,7 +361,10 @@ impl DynamicParsedFunctionReference {
                 method,
             } => ParsedFunctionReference::IndexedResourceStaticMethod {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|expr| expr.to_string())
+                    .collect(),
                 method: method.clone(),
             },
             Self::IndexedResourceDrop {
@@ -363,7 +372,10 @@ impl DynamicParsedFunctionReference {
                 resource_params,
             } => ParsedFunctionReference::IndexedResourceDrop {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
+                resource_params: resource_params
+                    .iter()
+                    .map(|expr| expr.to_string())
+                    .collect(),
             },
         }
     }
