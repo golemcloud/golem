@@ -2,6 +2,8 @@ package rpc:caller;
 
 world caller {
   import rpc:counters-stub/stub-counters;
+  import rpc:ephemeral-stub/stub-ephemeral;
+
   use rpc:counters-stub/stub-counters.{timeline-node};
 
   export test1: func() -> list<tuple<string, u64>>;
@@ -11,4 +13,6 @@ world caller {
   export test5: func() -> list<u64>;
 
   export bug-wasm-rpc-i32: func(in: timeline-node) -> timeline-node;
+
+  export ephemeral-test1: func() -> list<tuple<string, string>>;
 }

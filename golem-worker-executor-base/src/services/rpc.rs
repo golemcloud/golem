@@ -22,10 +22,11 @@ use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
 
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 
 use crate::error::GolemError;
 use crate::services::events::Events;
+use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
@@ -64,6 +65,11 @@ pub trait Rpc {
         self_args: &[String],
         self_env: &[(String, String)],
     ) -> Result<(), RpcError>;
+
+    async fn generate_unique_local_worker_id(
+        &self,
+        target_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -143,11 +149,18 @@ pub trait RpcDemand: Send + Sync {}
 
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+    shard_service: Arc<dyn ShardService + Send + Sync>,
 }
 
 impl RemoteInvocationRpc {
-    pub fn new(worker_proxy: Arc<dyn WorkerProxy + Send + Sync>) -> Self {
-        Self { worker_proxy }
+    pub fn new(
+        worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        shard_service: Arc<dyn ShardService + Send + Sync>,
+    ) -> Self {
+        Self {
+            worker_proxy,
+            shard_service,
+        }
     }
 }
 
@@ -224,6 +237,17 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
             )
             .await?)
+    }
+
+    async fn generate_unique_local_worker_id(
+        &self,
+        target_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError> {
+        let current_assignment = self.shard_service.current_assignment()?;
+        Ok(target_worker_id.into_worker_id(
+            &current_assignment.shard_ids,
+            current_assignment.number_of_shards,
+        ))
     }
 }
 
@@ -570,6 +594,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await
         }
+    }
+
+    async fn generate_unique_local_worker_id(
+        &self,
+        target_worker_id: TargetWorkerId,
+    ) -> Result<WorkerId, GolemError> {
+        self.remote_rpc
+            .generate_unique_local_worker_id(target_worker_id)
+            .await
     }
 }
 

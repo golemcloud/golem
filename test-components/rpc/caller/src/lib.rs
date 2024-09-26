@@ -2,6 +2,7 @@ mod bindings;
 
 use crate::bindings::golem::rpc::types::Uri;
 use crate::bindings::rpc::counters_stub::stub_counters::{Api, Counter};
+use crate::bindings::rpc::ephemeral_stub::stub_ephemeral::Api as EphemeralApi;
 use bindings::*;
 use std::env;
 
@@ -95,6 +96,25 @@ impl Guest for Component {
         };
         let api = Api::new(&counters_uri);
         api.blocking_bug_wasm_rpc_i32(in_)
+    }
+
+    fn ephemeral_test1() -> Vec<(String, String)> {
+        let component_id =
+            env::var("EPHEMERAL_COMPONENT_ID").expect("EPHEMERAL_COMPONENT_ID not set");
+        let ephemeral_uri: Uri = Uri {
+            value: format!("urn:worker:{component_id}"),
+        };
+        let api1 = EphemeralApi::new(&ephemeral_uri);
+        let name1: String = api1.blocking_get_worker_name();
+        let key1 = api1.blocking_get_idempotency_key();
+        let name2 = api1.blocking_get_worker_name();
+        let key2 = api1.blocking_get_idempotency_key();
+
+        let api2 = EphemeralApi::new(&ephemeral_uri);
+        let name3: String = api2.blocking_get_worker_name();
+        let key3: String = api2.blocking_get_idempotency_key();
+
+        vec![(name1, key1), (name2, key2), (name3, key3)]
     }
 }
 

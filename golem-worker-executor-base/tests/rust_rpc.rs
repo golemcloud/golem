@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::common;
+use crate::common::{start, TestContext};
 use assert2::check;
 use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::time::SystemTime;
-use tracing::debug;
+use tracing::{debug, info};
 
 #[tokio::test]
 #[tracing::instrument]
@@ -624,4 +625,68 @@ async fn error_message_non_existing_target_component() {
 
     check!(worker_error_message(&create_auction_result.err().unwrap())
         .contains("Could not find any component with the given id"));
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn ephemeral_worker_invocation_via_rpc1() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let ephemeral_component_id = executor.store_ephemeral_component("ephemeral").await;
+    let caller_component_id = executor.store_component("caller_composed").await;
+
+    let mut env = HashMap::new();
+    env.insert(
+        "EPHEMERAL_COMPONENT_ID".to_string(),
+        ephemeral_component_id.to_string(),
+    );
+    let caller_worker_id = executor
+        .start_worker_with(&caller_component_id, "rpc-ephemeral-1", vec![], env)
+        .await;
+
+    let result = executor
+        .invoke_and_await(&caller_worker_id, "ephemeral-test1", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    info!("result is: {result:?}");
+
+    match result.into_iter().next() {
+        Some(Value::List(items)) => {
+            let pairs = items
+                .into_iter()
+                .filter_map(|item| match item {
+                    Value::Tuple(values) if values.len() == 2 => {
+                        let mut iter = values.into_iter();
+                        let key = iter.next();
+                        let value = iter.next();
+                        match (key, value) {
+                            (Some(Value::String(key)), Some(Value::String(value))) => {
+                                Some((key, value))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<(String, String)>>();
+
+            check!(pairs.len() == 3);
+            let name1 = &pairs[0].0;
+            let value1 = &pairs[0].1;
+            let name2 = &pairs[1].0;
+            let value2 = &pairs[1].1;
+            let name3 = &pairs[2].0;
+            let value3 = &pairs[2].1;
+
+            check!(name1 == name2);
+            check!(name2 != name3);
+            check!(value1 != value2);
+            check!(value2 != value3);
+        }
+        _ => panic!("Unexpected result value"),
+    }
 }
