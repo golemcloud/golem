@@ -21,6 +21,7 @@ pub mod rust;
 pub mod stub;
 pub mod wit;
 
+use crate::commands::declarative::ApplicationResolveMode;
 use crate::stub::StubDefinition;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -192,7 +193,7 @@ pub enum Declarative {
 #[command(version, about, long_about = None)]
 pub struct DeclarativeInitArgs {
     #[clap(long, short, required = true)]
-    pub component_name: Vec<PathBuf>,
+    pub component_name: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -262,13 +263,10 @@ pub fn initialize_workspace(
 
 pub fn run_declarative_command(command: Declarative) -> anyhow::Result<()> {
     match command {
-        Declarative::Init(_) => {}
+        Declarative::Init(args) => commands::declarative::init(args.component_name),
         Declarative::PreBuild(args) => {
-            eprintln!("components: {:?}", args.component)
+            commands::declarative::pre_build(ApplicationResolveMode::Explicit(args.component))
         }
-        Declarative::PostBuild(args) => {
-            eprintln!("components: {:?}", args.component)
-        }
+        Declarative::PostBuild(args) => commands::declarative::post_build(),
     }
-    Ok(())
 }

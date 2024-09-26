@@ -1,15 +1,104 @@
 use crate::model::oam;
-use crate::model::validation::{ValidationBuilder, ValidationResult};
+use crate::model::oam::TypedTraitProperties;
+use crate::model::validation::{ValidatedResult, ValidationBuilder};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-pub type Result<T> = std::result::Result<(T, Vec<String>), Vec<String>>;
+pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
 pub const TRAIT_TYPE_WASM_RPC: &str = "wasm-rpc";
 
 pub const COMPONENT_TYPE_DURABLE: &str = "durable";
 pub const COMPONENT_TYPE_EPHEMERAL: &str = "ephemeral";
+
+pub fn init_oam_app(component_name: String) -> oam::Application {
+    let component = {
+        let mut component = oam::Component {
+            name: component_name.clone(),
+            component_type: COMPONENT_TYPE_DURABLE.to_string(),
+            properties: Default::default(),
+            traits: vec![],
+        };
+
+        component.set_typed_properties(DurableComponentProperties {
+            common: CommonComponentProperties {
+                wit: "wit".to_string(),
+                input_wasm: "target/input.wasm".to_string(),
+                output_wasm: "target/output.wasm".to_string(),
+                extra_properties: Default::default(),
+            },
+        });
+
+        component.add_typed_trait(WasmRpcTraitProperties {
+            component_name: component_name.clone(),
+            extra_properties: Default::default(),
+        });
+
+        component
+    };
+
+    let mut app = oam::Application::new(component_name);
+    app.spec.components.push(component);
+
+    app
+}
+
+#[derive(Clone, Debug)]
+pub struct Application {
+    pub components_by_name: BTreeMap<String, Component>,
+}
+
+impl Application {
+    pub fn from_components(components: Vec<Component>) -> ValidatedResult<Self> {
+        let mut component_sources = BTreeMap::<String, Vec<String>>::new();
+
+        let components_by_name = {
+            let mut components_by_name = BTreeMap::<String, Component>::new();
+            for component in components {
+                component_sources
+                    .entry(component.name.clone())
+                    .and_modify(|sources| sources.push(component.source_as_string()))
+                    .or_insert_with(|| vec![component.source_as_string()]);
+                components_by_name.insert(component.name.clone(), component);
+            }
+            components_by_name
+        };
+
+        let mut validation = ValidationBuilder::new();
+
+        let non_unique_components = component_sources
+            .into_iter()
+            .filter(|(_, sources)| sources.len() > 1);
+
+        for (component_name, sources) in non_unique_components {
+            validation.push_context("component name", component_name);
+            validation.add_error(format!(
+                "Component is specified multiple times in sources: {}",
+                sources.join(", ")
+            ));
+            validation.pop_context();
+        }
+
+        for (component_name, component) in &components_by_name {
+            validation.push_context("source", component.source_as_string());
+
+            for dep_component_name in &component.wasm_rpc_dependencies {
+                if !components_by_name.contains_key(dep_component_name) {
+                    validation.add_error(format!(
+                        "Component {} references unknown component {} as dependency",
+                        component_name, dep_component_name,
+                    ));
+                }
+            }
+
+            validation.pop_context();
+        }
+
+        validation.build(Self { components_by_name })
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Component {
@@ -20,6 +109,12 @@ pub struct Component {
     pub input_wasm: PathBuf,
     pub output_wasm: PathBuf,
     pub wasm_rpc_dependencies: Vec<String>,
+}
+
+impl Component {
+    pub fn source_as_string(&self) -> String {
+        self.source.to_string_lossy().to_string()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,7 +136,7 @@ impl TryFrom<&str> for ComponentType {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentProperties {
+pub struct CommonComponentProperties {
     pub wit: String,
     #[serde(rename = "inputWasm")]
     pub input_wasm: String,
@@ -52,29 +147,63 @@ pub struct ComponentProperties {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TraitWasmRpcProperties {
+pub struct DurableComponentProperties {
+    #[serde(flatten)]
+    pub common: CommonComponentProperties,
+}
+
+impl oam::TypedComponentProperties for DurableComponentProperties {
+    fn component_type() -> &'static str {
+        COMPONENT_TYPE_DURABLE
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EphemeralComponentProperties {
+    #[serde(flatten)]
+    pub common: CommonComponentProperties,
+}
+
+impl oam::TypedComponentProperties for EphemeralComponentProperties {
+    fn component_type() -> &'static str {
+        COMPONENT_TYPE_EPHEMERAL
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WasmRpcTraitProperties {
     #[serde(rename = "componentName")]
     pub component_name: String,
     #[serde(flatten)]
     pub extra_properties: BTreeMap<String, serde_json::Value>,
 }
 
+impl oam::TypedTraitProperties for WasmRpcTraitProperties {
+    fn trait_type() -> &'static str {
+        TRAIT_TYPE_WASM_RPC
+    }
+}
+
 impl Component {
     pub fn from_oam_application(
         mut application: oam::ApplicationWithSource,
-    ) -> Result<Vec<Component>> {
+    ) -> ValidatedResult<Vec<Component>> {
         let mut validation = ValidationBuilder::new();
-        validation.push_context("source", application.source.to_string_lossy().to_string());
+        validation.push_context("source", application.source_as_string());
 
         let mut components = Vec::<Component>::new();
 
         if application.application.spec.components.is_empty() {
             validation.add_error("Expected at least one component specification".to_string());
         } else {
-            let mut components_by_type = application.extract_components_by_type(&BTreeSet::from([
-                COMPONENT_TYPE_DURABLE,
-                COMPONENT_TYPE_EPHEMERAL,
-            ]));
+            let mut components_by_type =
+                application
+                    .application
+                    .spec
+                    .extract_components_by_type(&BTreeSet::from([
+                        COMPONENT_TYPE_DURABLE,
+                        COMPONENT_TYPE_EPHEMERAL,
+                    ]));
 
             let mut get_components_with_type = |type_str: &str, type_enum: ComponentType| {
                 components_by_type
@@ -95,7 +224,16 @@ impl Component {
                 validation.push_context("component name", component.name.clone());
                 validation.push_context("component type", component.component_type.clone());
 
-                let properties = component.clone_properties_as::<ComponentProperties>();
+                let properties = match component.component_type.as_str() {
+                    COMPONENT_TYPE_DURABLE => component
+                        .get_typed_properties::<DurableComponentProperties>()
+                        .map(|p| p.common),
+                    COMPONENT_TYPE_EPHEMERAL => component
+                        .get_typed_properties::<EphemeralComponentProperties>()
+                        .map(|p| p.common),
+                    other => panic!("Unexpected component type: {}", other),
+                };
+
                 if let Some(err) = properties.as_ref().err() {
                     validation.add_error(format!("Failed to get component properties: {}", err))
                 }
@@ -109,15 +247,15 @@ impl Component {
                 for wasm_rpc in wasm_rpc_traits {
                     validation.push_context("trait type", wasm_rpc.trait_type.clone());
 
-                    match oam::TypedTrait::<TraitWasmRpcProperties>::try_from(wasm_rpc) {
+                    match WasmRpcTraitProperties::from_generic_trait(wasm_rpc) {
                         Ok(wasm_rpc) => {
-                            if !wasm_rpc.properties.extra_properties.is_empty() {
+                            if !wasm_rpc.extra_properties.is_empty() {
                                 validation.push_context(
                                     "dep component name",
-                                    wasm_rpc.properties.component_name.clone(),
+                                    wasm_rpc.component_name.clone(),
                                 );
 
-                                for (name, _) in wasm_rpc.properties.extra_properties {
+                                for (name, _) in wasm_rpc.extra_properties {
                                     validation.add_warn(format!(
                                         "Unknown wasm-rpc trait property: {}",
                                         name
@@ -126,7 +264,7 @@ impl Component {
 
                                 validation.pop_context();
                             }
-                            wasm_rpc_dependencies.push(wasm_rpc.properties.component_name)
+                            wasm_rpc_dependencies.push(wasm_rpc.component_name)
                         }
                         Err(err) => validation
                             .add_error(format!("Failed to get wasm-rpc trait properties: {}", err)),
@@ -134,6 +272,23 @@ impl Component {
 
                     validation.pop_context();
                 }
+
+                wasm_rpc_dependencies
+                    .iter()
+                    .counts()
+                    .into_iter()
+                    .filter(|(_, count)| *count > 1)
+                    .for_each(|(dep_component_name, count)| {
+                        validation.add_warn(
+                            format!("WASM RPC dependency specified multiple times for component: {}, count: {}", dep_component_name, count)
+                        );
+                    });
+
+                let wasm_rpc_dependencies = wasm_rpc_dependencies
+                    .into_iter()
+                    .unique()
+                    .sorted()
+                    .collect::<Vec<_>>();
 
                 if !validation.has_any_errors() {
                     if let Ok(properties) = properties {
@@ -171,49 +326,88 @@ impl Component {
             }
         }
 
-        match validation.build() {
-            ValidationResult::Ok => Ok((components, vec![])),
-            ValidationResult::Warns(warns) => Ok((components, warns)),
-            ValidationResult::WarnsAndErrors(warns_and_errors) => Err(warns_and_errors),
-        }
+        validation.build(components)
     }
 
     pub fn from_oam_applications(
         applications: Vec<oam::ApplicationWithSource>,
-    ) -> Result<Vec<Component>> {
-        let mut validation_result = ValidationResult::Ok;
-        let mut components = Vec::<Component>::new();
+    ) -> ValidatedResult<Vec<Component>> {
+        let mut result = ValidatedResult::Ok(vec![]);
 
         for app in applications {
-            match Component::from_oam_application(app) {
-                Ok((app_components, warns)) => {
-                    components.extend(app_components);
-                    validation_result = validation_result.merge(ValidationResult::Warns(warns));
-                }
-                Err(warns_and_errors) => {
-                    validation_result =
-                        validation_result.merge(ValidationResult::WarnsAndErrors(warns_and_errors))
-                }
-            }
+            result = result.combine(Component::from_oam_application(app), |mut a, b| {
+                a.extend(b);
+                a
+            });
         }
 
-        match validation_result {
-            ValidationResult::Ok => Ok((components, vec![])),
-            ValidationResult::Warns(warns) => Ok((components, warns)),
-            ValidationResult::WarnsAndErrors(warns_and_errors) => Err(warns_and_errors),
-        }
+        result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::oam::Application;
+    use crate::model::oam;
     use assert2::assert;
 
     #[test]
-    fn deserialize_example_application() {
-        let application: Application = serde_yaml::from_str(
+    fn oam_app_to_components() {
+        let oam_app: oam::ApplicationWithSource = oam_app_one();
+        assert!(oam_app.application.api_version == oam::API_VERSION_V1BETA1);
+        assert!(oam_app.application.kind == oam::KIND_APPLICATION);
+        assert!(oam_app.application.metadata.name == "App name");
+        assert!(oam_app.application.spec.components.len() == 2);
+
+        let (components, warns, errors) = Component::from_oam_application(oam_app).into_product();
+
+        assert!(components.is_some());
+        let components = components.unwrap();
+
+        println!("Warns:\n{}", warns.join("\n"));
+        println!("Errors:\n{}", errors.join("\n"));
+
+        assert!(components.len() == 1);
+        assert!(warns.len() == 3);
+        assert!(errors.len() == 0);
+
+        let component = &components[0];
+
+        assert!(component.name == "component-one");
+        assert!(component.component_type == ComponentType::Durable);
+        assert!(component.wit.to_string_lossy() == "wit");
+        assert!(component.input_wasm.to_string_lossy() == "out/in.wasm");
+        assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
+        assert!(component.wasm_rpc_dependencies.len() == 2);
+
+        assert!(component.wasm_rpc_dependencies[0] == "component-two");
+        assert!(component.wasm_rpc_dependencies[1] == "component-three");
+    }
+
+    #[test]
+    fn oam_app_to_wasm_rpc_app_with_missing_deps() {
+        let application =
+            Component::from_oam_application(oam_app_one()).and_then(Application::from_components);
+
+        let (_app, warns, errors) = application.into_product();
+
+        println!("Warns:\n{}", warns.join("\n"));
+        println!("Errors:\n{}", errors.join("\n"));
+
+        assert!(errors.len() == 2);
+
+        assert!(errors[0].contains("component-one"));
+        assert!(errors[0].contains("component-two"));
+        assert!(errors[0].contains("test-oam-app-one.yaml"));
+
+        assert!(errors[0].contains("component-one"));
+        assert!(errors[1].contains("component-three"));
+        assert!(errors[1].contains("test-oam-app-one.yaml"));
+    }
+
+    fn oam_app_one() -> oam::ApplicationWithSource {
+        oam::ApplicationWithSource::from_yaml_string(
+            "test-oam-app-one.yaml".into(),
             r#"
 apiVersion: core.oam.dev/v1beta1
 metadata:
@@ -242,39 +436,9 @@ spec:
     - name: component-one
       type: unknown-component-type
       properties:
-"#,
+"#
+            .to_string(),
         )
-        .unwrap();
-
-        assert!(application.api_version == oam::API_VERSION_V1BETA1);
-        assert!(application.kind == oam::KIND_APPLICATION);
-        assert!(application.metadata.name == "App name");
-        assert!(application.spec.components.len() == 2);
-
-        let components = Component::from_oam_application(oam::ApplicationWithSource {
-            source: PathBuf::from("test"),
-            application,
-        });
-
-        assert!(components.as_ref().err() == None);
-
-        let (components, warns) = components.unwrap();
-
-        println!("{}", warns.join("\n"));
-
-        assert!(warns.len() == 3);
-        assert!(components.len() == 1);
-
-        let component = &components[0];
-
-        assert!(component.name == "component-one");
-        assert!(component.component_type == ComponentType::Durable);
-        assert!(component.wit.to_string_lossy() == "wit");
-        assert!(component.input_wasm.to_string_lossy() == "out/in.wasm");
-        assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
-        assert!(component.wasm_rpc_dependencies.len() == 2);
-
-        assert!(component.wasm_rpc_dependencies[0] == "component-two");
-        assert!(component.wasm_rpc_dependencies[1] == "component-three");
+        .unwrap()
     }
 }
