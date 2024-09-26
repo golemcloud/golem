@@ -16,9 +16,7 @@ use crate::call_type::CallType;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{
-    text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName, VariableId,
-};
+use crate::{text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName, VariableId, from_interpolated_string, from_string};
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
@@ -87,8 +85,8 @@ impl Expr {
             .map_err(|err| format!("{}", err))
     }
 
-    /// Parse an interpolated text as Rib expression. The input is always expected to be wrapped with `${..}`
-    /// This is mainly to keep the backward compatibility where Golem Cloud console passes a Rib Expression always wrapped in `${..}`
+    ///
+    /// This is kept for backward compatibility to accept rib expressions that are always wrapped in `${..}`.
     ///
     /// Explanation:
     /// Usually `Expr::from_text` is all that you need which takes a plain text and try to parse it as an Expr.
@@ -111,43 +109,16 @@ impl Expr {
     /// You can see the entire text is wrapped in `${..}` to specify that it's containing
     /// a Rib expression and anything outside is considered as a literal string.
     ///
-    /// The advantage of using `from_interpolated_str` is Rib the behaviour is consistent that only those texts
-    //  within `${..}` are considered as Rib expressions all the time.
-    ///
-    /// Example 2:
-    ///
-    /// ```rib
-    ///  worker-id-${request.user_id}
-    /// ```
-    /// ```rib
-    ///   ${"worker-id-${request.user_id}"}
-    /// ```
-    /// ```rib
-    ///   ${request.user_id}
-    /// ```
-    /// ```rib
-    ///   foo-${"worker-id-${request.user_id}"}
-    /// ```
-    /// etc.
-    ///
-    /// The first one will be parsed as `Expr::Concat(Expr::Literal("worker-id-"), Expr::SelectField(Expr::Identifier("request"), "user_id"))`.
-    ///
-    /// The following will work too.
-    /// In the below example, the entire if condition is a Rib expression  (because it is wrapped in ${..}) and
-    /// the else condition is resolved to  a literal where part of it is a Rib expression itself (user.id).
-    ///
-    /// ```rib
-    ///   ${if foo > 1 then bar else "baz-${user.id}"}
-    /// ```
-    /// If you need the following to be considered as Rib program (without interpolation), use `Expr::from_text` instead.
-    ///
-    /// ```rib
-    ///   if foo > 1 then bar else "baz-${user.id}"
-    /// ```
-    ///
     pub fn from_interpolated_str(input: &str) -> Result<Expr, String> {
-        let input = format!("\"{}\"", input);
-        Self::from_text(input.as_str())
+        let trimmed = input.trim();
+        // Removing interpolations. The parser don't support interpolation unless it is part of concatenation
+        if trimmed.starts_with("${") && trimmed.ends_with("}") {
+            let trimmed_open = trimmed.strip_prefix("${").unwrap();
+            let trimmed_closing = trimmed_open.strip_suffix('}').unwrap();
+            return Self::from_text(trimmed_closing);
+        } else {
+            Err("Rib expression is not wrapped in `${..}`. Use Expr::from_text()".to_string())
+        }
     }
 
     pub fn is_literal(&self) -> bool {
@@ -1439,12 +1410,6 @@ impl Display for Expr {
     }
 }
 
-impl FromStr for Expr {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Expr::from_interpolated_str(s).map_err(|err| err.to_string())
-    }
-}
 
 impl<'de> Deserialize<'de> for Expr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1453,13 +1418,25 @@ impl<'de> Deserialize<'de> for Expr {
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
-            Value::String(expr_string) => match text::from_string(expr_string.as_str()) {
-                Ok(expr) => Ok(expr),
-                Err(message) => Err(serde::de::Error::custom(message.to_string())),
+            Value::String(expr_string) => {
+                // For backward compatibility, we allow the expression to be wrapped in ${..}
+                // but the grammar doesn't support this anymore, and hence expressions need to be unwrapped
+                // which is done by from_interpolated_string
+                let trimmed = expr_string.trim();
+                let expr_res = if trimmed.starts_with("${") && trimmed.ends_with("}") {
+                    from_interpolated_string(expr_string.as_str())
+                } else {
+                    from_string(expr_string.as_str())
+                };
+
+                match expr_res {
+                    Ok(expr) => Ok(expr),
+                    Err(message) => Err(serde::de::Error::custom(message.to_string()))
+                }
             },
 
             e => Err(serde::de::Error::custom(format!(
-                "Failed to deserialise expression {}",
+                "Failed to deserialize expression {}",
                 e
             ))),
         }
@@ -1479,4 +1456,133 @@ impl Serialize for Expr {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::{ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, MatchArm};
+    use crate::expr::tests::internal::program;
+    use crate::ParsedFunctionSite::PackagedInterface;
+    use crate::parser::rib_expr::{rib_expr, rib_program};
+
+    #[test]
+    fn test_single_expr_in_interpolation_wrapped_in_quotes() {
+        let input = r#""${foo}""#;
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::concat(vec![Expr::identifier("foo")])));
+
+        let input = r#""${{foo}}""#;
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::concat(vec![Expr::flags(vec!["foo".to_string()])])));
+
+        let input = r#""${{foo: "bar"}}""#;
+        let result = Expr::from_text(input);
+        assert_eq!(result, Ok(Expr::concat(vec![Expr::record(vec![("foo".to_string(), Expr::literal("bar"))])])));
+    }
+
+    fn expected() -> Expr {
+        Expr::multiple(vec![
+            Expr::let_binding("x", Expr::number(1f64)),
+            Expr::let_binding("y", Expr::number(2f64)),
+            Expr::let_binding(
+                "result",
+                Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),
+            ),
+            Expr::let_binding("foo", Expr::option(Some(Expr::identifier("result")))),
+            Expr::let_binding("bar", Expr::ok(Expr::identifier("result"))),
+            Expr::let_binding(
+                "baz",
+                Expr::pattern_match(
+                    Expr::identifier("foo"),
+                    vec![
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
+                                "x",
+                            ))))),
+                            Expr::identifier("x"),
+                        ),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            Expr::boolean(false),
+                        ),
+                    ],
+                ),
+            ),
+            Expr::let_binding(
+                "qux",
+                Expr::pattern_match(
+                    Expr::identifier("bar"),
+                    vec![
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
+                            Expr::identifier("x"),
+                        ),
+                        MatchArm::new(
+                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("msg")))),
+                            Expr::boolean(false),
+                        ),
+                    ],
+                ),
+            ),
+            Expr::let_binding(
+                "result",
+                Expr::call(
+                    DynamicParsedFunctionName {
+                        site: PackagedInterface {
+                            namespace: "ns".to_string(),
+                            package: "name".to_string(),
+                            interface: "interface".to_string(),
+                            version: None,
+                        },
+                        function: DynamicParsedFunctionReference::RawResourceStaticMethod {
+                            resource: "resource1".to_string(),
+                            method: "do-something-static".to_string(),
+                        },
+                    },
+                    vec![Expr::identifier("baz"), Expr::identifier("qux")],
+                ),
+            ),
+            Expr::identifier("result"),
+        ])
+    }
+
+
+    #[test]
+    fn test_rib() {
+        let binding = program();
+        let result = Expr::from_text(binding.as_ref());
+        assert_eq!(result, Ok(expected()));
+    }
+
+    // Backward compatibility test where older expressions are wrapped in `${..}`
+    #[test]
+    fn test_interpolated_rib() {
+        let program_interpolated = format!("${{{}}}", program());
+        let result =  Expr::from_interpolated_str(program_interpolated.as_str());
+        assert_eq!(result, Ok((expected())));
+    }
+
+    mod internal {
+        pub(crate) fn program() -> String {
+            r#"
+         let x = 1;
+         let y = 2;
+         let result = x > y;
+         let foo = some(result);
+         let bar = ok(result);
+
+         let baz = match foo {
+           some(x) => x,
+           none => false
+         };
+
+         let qux = match bar {
+           ok(x) => x,
+           err(msg) => false
+         };
+
+         let result = ns:name/interface.{[static]resource1.do-something-static}(baz, qux);
+
+         result
+       "#
+                .to_string()
+        }
+    }
+}

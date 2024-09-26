@@ -508,9 +508,9 @@ mod tests {
 
     #[track_caller]
     fn test_string_expr_parse_and_encode(input: &str) {
-        let parsed_expr1 = rib::from_string(input).unwrap();
+        let parsed_expr1 = rib::from_interpolated_string(input).unwrap();
         let encoded_expr = parsed_expr1.to_string();
-        let parsed_expr2 = rib::from_string(encoded_expr.as_str()).unwrap();
+        let parsed_expr2 = rib::from_interpolated_string(encoded_expr.as_str()).unwrap();
 
         assert_eq!(
             parsed_expr1,

@@ -201,7 +201,7 @@ mod internal {
             )?;
 
             match response_mapping_optional {
-                Value::String(expr) => rib::from_string(expr).map_err(|err| err.to_string()),
+                Value::String(expr) => rib::from_interpolated_string(expr).map_err(|err| err.to_string()),
                 _ => Err(
                     "Invalid response mapping type. It should be a string representing expression"
                         .to_string(),
@@ -219,14 +219,14 @@ mod internal {
             .as_str()
             .ok_or("worker-name is not a string")?;
 
-        rib::from_string(worker_id).map_err(|err| err.to_string())
+        rib::from_interpolated_string(worker_id).map_err(|err| err.to_string())
     }
 
     pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
         if let Some(key) = worker_bridge_info.get("idempotency-key") {
             let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
             Ok(Some(
-                rib::from_string(key_expr).map_err(|err| err.to_string())?,
+                rib::from_interpolated_string(key_expr).map_err(|err| err.to_string())?,
             ))
         } else {
             Ok(None)

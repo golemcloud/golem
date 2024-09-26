@@ -52,22 +52,29 @@ mod internal {
                 between(
                     char_('\"'),
                     char_('\"'),
-                    many(choice((interpolation(), static_part()))),
+                    many(choice((dynamic_literal(), static_literal()))),
                 )
-                .map(|parts: Vec<Expr>| {
+                .map(|parts: Vec<LiteralTerm>| {
                     if parts.is_empty() {
                         Expr::literal("")
                     } else if parts.len() == 1 {
-                        parts.first().unwrap().clone()
+                        let first = parts.first().unwrap();
+                        match first {
+                            LiteralTerm::Static(s) => Expr::literal(s),
+                            LiteralTerm::Dynamic(expr) => match expr {
+                                Expr::Literal(s, _) => Expr::literal(s),
+                                _ => Expr::concat(vec![expr.clone()]), // "${foo}"  is to_string(Expr::identifier("foo"))
+                            },
+                        }
                     } else {
-                        Expr::concat(parts)
+                        Expr::concat(parts.into_iter().map(Expr::from).collect())
                     }
                 }),
             )
             .message("Invalid literal")
     }
 
-    fn static_part<Input>() -> impl Parser<Input, Output = Expr>
+    fn static_literal<Input>() -> impl Parser<Input, Output = LiteralTerm>
     where
         Input: combine::Stream<Token = char>,
         RibParseError: Into<
@@ -80,11 +87,11 @@ mod internal {
                 .or(char_('/'))
                 .or(char_(':').or(char_('@'))))),
         )
-        .map(|s: String| Expr::literal(s))
+        .map(|s: String| LiteralTerm::Static(s))
         .message("Unable to parse static part of literal")
     }
 
-    fn interpolation<Input>() -> impl Parser<Input, Output = Expr>
+    fn dynamic_literal<Input>() -> impl Parser<Input, Output = LiteralTerm>
     where
         Input: combine::Stream<Token = char>,
         RibParseError: Into<
@@ -95,7 +102,7 @@ mod internal {
             char_('$').with(char_('{')).skip(spaces()),
             char_('}'),
             block(),
-        )
+        ).map(|expr| LiteralTerm::Dynamic(expr))
     }
 
     pub fn block<Input>() -> impl Parser<Input, Output = Expr>
@@ -116,6 +123,20 @@ mod internal {
                 },
             ),
         )
+    }
+
+    enum LiteralTerm {
+        Static(String),
+        Dynamic(Expr),
+    }
+
+    impl From<LiteralTerm> for Expr {
+        fn from(term: LiteralTerm) -> Self {
+            match term {
+                LiteralTerm::Static(s) => Expr::literal(&s),
+                LiteralTerm::Dynamic(expr) => expr,
+            }
+        }
     }
 }
 
@@ -176,19 +197,5 @@ mod tests {
                 ""
             ))
         );
-    }
-
-    #[test]
-    fn test_direct_interpolation() {
-        let input = "\"${foo}\"";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::identifier("foo"), "")));
-    }
-
-    #[test]
-    fn test_direct_interpolation_flag() {
-        let input = "\"${{foo}}\"";
-        let result = rib_expr().easy_parse(input);
-        assert_eq!(result, Ok((Expr::flags(vec!["foo".to_string()]), "")));
     }
 }

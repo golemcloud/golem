@@ -288,15 +288,15 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
 
     fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
         let response: crate::worker_binding::ResponseMapping = {
-            let r = rib::from_string(self.response.as_str()).map_err(|e| e.to_string())?;
+            let r = rib::from_interpolated_string(self.response.as_str()).map_err(|e| e.to_string())?;
             crate::worker_binding::ResponseMapping(r)
         };
 
         let worker_name: Expr =
-            rib::from_string(self.worker_name.as_str()).map_err(|e| e.to_string())?;
+            rib::from_interpolated_string(self.worker_name.as_str()).map_err(|e| e.to_string())?;
 
         let idempotency_key = if let Some(key) = &self.idempotency_key {
-            Some(rib::from_string(key).map_err(|e| e.to_string())?)
+            Some(rib::from_interpolated_string(key).map_err(|e| e.to_string())?)
         } else {
             None
         };
