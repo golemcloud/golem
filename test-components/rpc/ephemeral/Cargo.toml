@@ -1,0 +1,21 @@
+[package]
+name = "ephemeral"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+once_cell = "1.17.1"
+rand = "0.8.5"
+uuid = { version = "1.4.1", features = ["v4"] }
+wit-bindgen-rt = { version = "0.26.0", features = ["bitflags"] }
+
+golem-rust = "1"
+
+[package.metadata.component.target]
+path = "wit"
+
+[package.metadata.component.dependencies]

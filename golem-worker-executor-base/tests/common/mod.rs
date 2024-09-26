@@ -764,7 +764,10 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         events: Arc<Events>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(worker_proxy.clone())),
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

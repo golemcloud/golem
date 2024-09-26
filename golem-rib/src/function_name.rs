@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{text, Expr};
+use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::easy;
 use combine::EasyParser;
@@ -338,7 +338,7 @@ impl DynamicParsedFunctionReference {
                 resource_params,
             } => ParsedFunctionReference::IndexedResourceConstructor {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
+                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
             },
             Self::IndexedResourceMethod {
                 resource,
@@ -346,7 +346,7 @@ impl DynamicParsedFunctionReference {
                 method,
             } => ParsedFunctionReference::IndexedResourceMethod {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
+                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
                 method: method.clone(),
             },
             Self::IndexedResourceStaticMethod {
@@ -355,7 +355,7 @@ impl DynamicParsedFunctionReference {
                 method,
             } => ParsedFunctionReference::IndexedResourceStaticMethod {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
+                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
                 method: method.clone(),
             },
             Self::IndexedResourceDrop {
@@ -363,7 +363,7 @@ impl DynamicParsedFunctionReference {
                 resource_params,
             } => ParsedFunctionReference::IndexedResourceDrop {
                 resource: resource.clone(),
-                resource_params: resource_params.iter().map(text::to_raw_string).collect(),
+                resource_params: resource_params.iter().map(|x| x.to_string()).collect(),
             },
         }
     }

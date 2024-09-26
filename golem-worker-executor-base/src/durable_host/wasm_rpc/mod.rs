@@ -50,9 +50,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         match location.parse_as_golem_urn() {
             Some((remote_worker_id, None)) => {
-                let remote_worker_id = remote_worker_id
-                    .try_into_worker_id()
-                    .ok_or(anyhow!("Must specify a worker name"))?; // TODO: this should not be a requirement here
+                let remote_worker_id =
+                    generate_unique_local_worker_id(self, remote_worker_id).await?;
+
                 let remote_worker_id =
                     OwnedWorkerId::new(&self.owned_worker_id.account_id, &remote_worker_id);
                 let demand = self.rpc().create_demand(&remote_worker_id).await;
@@ -562,6 +562,31 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {}
+
+async fn generate_unique_local_worker_id<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_worker_id: TargetWorkerId,
+) -> Result<WorkerId, GolemError> {
+    match remote_worker_id.clone().try_into_worker_id() {
+        Some(worker_id) => Ok(worker_id),
+        None => {
+            let worker_id = Durability::<Ctx, WorkerId, SerializableError>::wrap(
+                ctx,
+                WrappedFunctionType::ReadLocal,
+                "golem::rpc::wasm-rpc::generate_unique_local_worker_id",
+                |ctx| {
+                    Box::pin(async move {
+                        ctx.rpc()
+                            .generate_unique_local_worker_id(remote_worker_id)
+                            .await
+                    })
+                },
+            )
+            .await?;
+            Ok(worker_id)
+        }
+    }
+}
 
 pub struct WasmRpcEntryPayload {
     #[allow(dead_code)]

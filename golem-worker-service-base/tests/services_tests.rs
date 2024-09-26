@@ -457,7 +457,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get1",
-            "worker1",
+            "\"worker1\"",
             "${ let status: u64 = 200; { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(\"foo\"), status: status }  }",
             false,
         );
@@ -465,7 +465,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get2",
-            "worker2",
+            "\"worker2\"",
             "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
             true,
         );
@@ -474,7 +474,7 @@ mod tests {
             &Uuid::new_v4().to_string(),
             "0.0.1",
             "/api/get1",
-            "worker2",
+            "\"worker2\"",
             "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
             false,
         );

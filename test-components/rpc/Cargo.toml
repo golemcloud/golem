@@ -1,11 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = [
-    "counters",
-    "caller",
-    "counters-stub"
-]
+members = ["counters", "caller", "ephemeral", "ephemeral-stub", "counters-stub"]
 
 [profile.release]
 opt-level = "s"

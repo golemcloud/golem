@@ -21,33 +21,10 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut buf = vec![];
     let mut writer = Writer::new(&mut buf);
 
-    match internal::get_expr_type(expr) {
-        internal::ExprType::Text(text) => {
-            writer.write_str(text)?;
-        }
-        internal::ExprType::Code(expr) => {
-            writer.write_code_start()?;
-            writer.write_expr(expr)?;
-            writer.write_code_end()?;
-        }
-        // If the outer expression is interpolated text, then we don't need quotes outside
-        // If string interpolation happens within complex expression code, then we wrap it
-        // with quotes, and will be handled within the logic of ExprType::Code
-        internal::ExprType::StringInterpolated(concatenated) => {
-            internal::write_concatenated_exprs(&mut writer, concatenated)?;
-        }
-    }
-
-    Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
-}
-
-pub fn write_expr_without_interpolation(expr: &Expr) -> Result<String, WriterError> {
-    let mut buf = vec![];
-    let mut writer = Writer::new(&mut buf);
-
     writer.write_expr(expr)?;
 
-    Ok(String::from_utf8(buf).unwrap_or_else(|err| panic!("invalid UTF-8: {err:?}")))
+    String::from_utf8(buf)
+        .map_err(|err| WriterError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, err)))
 }
 
 struct Writer<W> {
@@ -320,13 +297,13 @@ mod internal {
     pub(crate) enum ExprType<'a> {
         Code(&'a Expr),
         Text(&'a str),
-        StringInterpolated(&'a Vec<Expr>),
+        StringInterpolated,
     }
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {
         match expr {
             Expr::Literal(str, _) => ExprType::Text(str),
-            Expr::Concat(vec, _) => ExprType::StringInterpolated(vec),
+            Expr::Concat(_, _) => ExprType::StringInterpolated,
             expr => ExprType::Code(expr),
         }
     }
@@ -350,7 +327,7 @@ mod internal {
                     writer.write_expr(expr)?;
                     writer.write_code_end()?;
                 }
-                ExprType::StringInterpolated(_) => {
+                ExprType::StringInterpolated => {
                     writer.write_code_start()?;
                     writer.write_expr(expr)?;
                     writer.write_code_end()?;
