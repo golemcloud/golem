@@ -83,7 +83,10 @@ impl Bootstrap<Context> for ServerBootstrap {
         let additional_deps = AdditionalDeps {};
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(worker_proxy.clone())),
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
