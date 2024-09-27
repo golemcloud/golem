@@ -83,13 +83,12 @@ impl CassandraSession {
             .query_unpaged(
                 Query::new(format!(
                     r#"
-            CREATE TABLE IF NOT EXISTS {}.kv_store (
-                namespace TEXT,
-                key TEXT,
-                value BLOB,
-                PRIMARY KEY (namespace, key)
-            );
-        "#,
+                CREATE TABLE IF NOT EXISTS {}.kv_store (
+                    namespace TEXT,
+                    key TEXT,
+                    value BLOB,
+                    PRIMARY KEY (namespace, key)
+                );"#,
                     self.keyspace
                 )),
                 &[],
@@ -101,13 +100,12 @@ impl CassandraSession {
             .query_unpaged(
                 Query::new(format!(
                     r#"
-            CREATE TABLE IF NOT EXISTS {}.kv_sets (
-                namespace TEXT,
-                key TEXT,
-                value BLOB,
-                PRIMARY KEY ((namespace, key), value)
-            );
-        "#,
+                CREATE TABLE IF NOT EXISTS {}.kv_sets (
+                    namespace TEXT,
+                    key TEXT,
+                    value BLOB,
+                    PRIMARY KEY ((namespace, key), value)
+                );"#,
                     self.keyspace
                 )),
                 &[],
@@ -125,8 +123,7 @@ impl CassandraSession {
                     score DOUBLE,
                     value BLOB,
                     PRIMARY KEY ((namespace, key), score, value)
-                );
-        "#,
+                );"#,
                     self.keyspace
                 )),
                 &[],

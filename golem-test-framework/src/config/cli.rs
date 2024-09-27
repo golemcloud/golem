@@ -1085,6 +1085,7 @@ impl TestDependencies for CliTestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
     }
+
     fn cassandra(
         &self,
     ) -> Arc<dyn crate::components::cassandra::Cassandra + Send + Sync + 'static> {

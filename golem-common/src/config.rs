@@ -479,6 +479,7 @@ pub struct CassandraConfig {
     pub username: Option<String>,
     pub password: Option<String>,
 }
+
 fn default_cassandra_keyspace() -> String {
     String::from("__golem")
 }
