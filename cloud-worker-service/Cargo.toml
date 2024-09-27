@@ -18,14 +18,18 @@ golem-service-base = { workspace = true }
 
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 cloud-common = { path = "../cloud-common" }
+
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+conditional-trait-gen = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
+headers = "0.3.9"
 http = { workspace = true }
 http_02 = { workspace = true }
 hyper = { workspace = true }
@@ -46,17 +50,11 @@ rusoto_sts = "0.48.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "migrate", "chrono", ] }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-sqlx = { version = "0.7", features = [
-    "runtime-tokio",
-    "sqlite",
-    "postgres",
-    "uuid",
-    "migrate",
-    "chrono",
-] }
 tap = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
@@ -68,9 +66,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 warp = { workspace = true }
 x509-certificate = "0.23.1"
-headers = "0.3.9"
-thiserror = { workspace = true } 
-anyhow = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true }

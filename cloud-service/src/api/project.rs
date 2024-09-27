@@ -1,98 +1,18 @@
-use crate::api::ApiTags;
+use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
 use crate::model::*;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::project::{ProjectError as ProjectServiceError, ProjectService};
-use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
+use crate::service::auth::AuthService;
+use crate::service::project::ProjectService;
+use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::ProjectAction;
-use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
+use golem_service_base::model::ErrorBody;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum ProjectError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Maximum number of projects exceeded
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
-    /// Project not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    /// Project already exists
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for ProjectError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            ProjectError::BadRequest(_) => "BadRequest",
-            ProjectError::NotFound(_) => "NotFound",
-            ProjectError::LimitExceeded(_) => "LimitExceeded",
-            ProjectError::Unauthorized(_) => "Unauthorized",
-            ProjectError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, ProjectError>;
-
-impl From<AuthServiceError> for ProjectError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(_) => ProjectError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            AuthServiceError::Internal(_) => ProjectError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-        }
-    }
-}
-
-impl From<ProjectServiceError> for ProjectError {
-    fn from(value: ProjectServiceError) -> Self {
-        match value {
-            ProjectServiceError::Internal(_) => ProjectError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            ProjectServiceError::Unauthorized(_) => ProjectError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            ProjectServiceError::LimitExceeded(_) => ProjectError::LimitExceeded(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-        }
-    }
-}
-
-impl From<ProjectAuthorisationError> for ProjectError {
-    fn from(value: ProjectAuthorisationError) -> Self {
-        match value {
-            ProjectAuthorisationError::Internal(_) => {
-                ProjectError::InternalError(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-            ProjectAuthorisationError::Unauthorized(_) => {
-                ProjectError::Unauthorized(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-        }
-    }
-}
 
 pub struct ProjectApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
@@ -112,7 +32,10 @@ impl ProjectApi {
         method = "get",
         operation_id = "get_default_project"
     )]
-    async fn get_default_project(&self, token: GolemSecurityScheme) -> Result<Json<Project>> {
+    async fn get_default_project(
+        &self,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Project>> {
         let record = recorded_http_api_request!("get_default_project",);
         let response = {
             let auth = self
@@ -143,7 +66,7 @@ impl ProjectApi {
         #[oai(name = "project-name")]
         project_name: Query<Option<String>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<Project>>> {
+    ) -> LimitedApiResult<Json<Vec<Project>>> {
         let record =
             recorded_http_api_request!("get_projects", project_name = project_name.0.as_ref(),);
         let response = {
@@ -184,7 +107,7 @@ impl ProjectApi {
         &self,
         request: Json<ProjectDataRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Project>> {
+    ) -> LimitedApiResult<Json<Project>> {
         let record = recorded_http_api_request!("create_project", project_name = request.0.name,);
         let response = {
             let auth = self
@@ -222,7 +145,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Project>> {
+    ) -> LimitedApiResult<Json<Project>> {
         let record =
             recorded_http_api_request!("get_project", project_id = project_id.0.to_string(),);
         let response = {
@@ -238,7 +161,7 @@ impl ProjectApi {
                 .await?;
             match project {
                 Some(p) => Ok(Json(p)),
-                None => Err(ProjectError::NotFound(Json(ErrorBody {
+                None => Err(LimitedApiError::NotFound(Json(ErrorBody {
                     error: "Project not found".to_string(),
                 }))),
             }
@@ -259,7 +182,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<DeleteProjectResponse>> {
+    ) -> LimitedApiResult<Json<DeleteProjectResponse>> {
         let record =
             recorded_http_api_request!("delete_project", project_id = project_id.0.to_string(),);
         let response = {
@@ -290,7 +213,7 @@ impl ProjectApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<ProjectAction>>> {
+    ) -> LimitedApiResult<Json<Vec<ProjectAction>>> {
         let record = recorded_http_api_request!(
             "get_project_actions",
             project_id = project_id.0.to_string(),

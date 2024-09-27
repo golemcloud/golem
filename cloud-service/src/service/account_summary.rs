@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
@@ -7,6 +6,7 @@ use crate::repo::account_summary::AccountSummaryRepo;
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::Role;
+use cloud_common::SafeDisplay;
 use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
@@ -14,21 +14,27 @@ pub enum AccountSummaryServiceError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    Internal(RepoError),
 }
 
 impl AccountSummaryServiceError {
-    fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
+    fn unauthorized(error: impl AsRef<str>) -> Self {
+        Self::Unauthorized(error.as_ref().to_string())
+    }
+}
+
+impl SafeDisplay for AccountSummaryServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            AccountSummaryServiceError::Unauthorized(_) => self.to_string(),
+            AccountSummaryServiceError::Internal(inner) => inner.to_safe_string(),
+        }
     }
 }
 
 impl From<RepoError> for AccountSummaryServiceError {
     fn from(error: RepoError) -> Self {
-        AccountSummaryServiceError::Internal(anyhow::Error::msg(error).context("Repository error"))
+        AccountSummaryServiceError::Internal(error)
     }
 }
 
@@ -62,7 +68,7 @@ impl AccountSummaryServiceDefault {
             Ok(())
         } else {
             Err(AccountSummaryServiceError::unauthorized(
-                "Insufficient privilege.".to_string(),
+                "Insufficient privilege.",
             ))
         }
     }
@@ -95,24 +101,5 @@ impl AccountSummaryService for AccountSummaryServiceDefault {
                 Err(error.into())
             }
         }
-    }
-}
-
-#[derive(Default)]
-pub struct AccountSummaryServiceNoOp {}
-
-#[async_trait]
-impl AccountSummaryService for AccountSummaryServiceNoOp {
-    async fn get(
-        &self,
-        _skip: i32,
-        _limit: i32,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Vec<AccountSummary>, AccountSummaryServiceError> {
-        Ok(vec![])
-    }
-
-    async fn count(&self, _auth: &AccountAuthorisation) -> Result<u64, AccountSummaryServiceError> {
-        Ok(0)
     }
 }

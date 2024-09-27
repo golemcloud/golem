@@ -1,36 +1,29 @@
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use cloud_common::model::PlanId;
-use tracing::info;
-
 use crate::config::PlansConfig;
-use crate::model::{Plan, PlanData};
+use crate::model::Plan;
 use crate::repo::plan::{PlanRecord, PlanRepo};
 use crate::repo::RepoError;
+use async_trait::async_trait;
+use cloud_common::model::PlanId;
+use cloud_common::SafeDisplay;
+use std::fmt::Debug;
+use std::sync::Arc;
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
+    #[error("Could not find default plan with id: {0}")]
+    CouldNotFindDefaultPlan(Uuid),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    InternalRepoError(#[from] RepoError),
 }
 
-impl PlanError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
-    }
-}
-
-impl From<RepoError> for PlanError {
-    fn from(error: RepoError) -> Self {
-        PlanError::internal(error, "Repository error")
+impl SafeDisplay for PlanError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            PlanError::CouldNotFindDefaultPlan(_) => self.to_string(),
+            PlanError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -80,10 +73,7 @@ impl PlanService for PlanServiceDefault {
 
         match plan {
             Some(plan) => Ok(plan.into()),
-            None => Err(PlanError::internal(
-                format!("Could not find default plan with id: {plan_id}"),
-                "Could not find default plan",
-            )),
+            None => Err(PlanError::CouldNotFindDefaultPlan(plan_id)),
         }
     }
 
@@ -91,26 +81,5 @@ impl PlanService for PlanServiceDefault {
         info!("Getting plan {}", plan_id);
         let result = self.plan_repo.get(&plan_id.0).await?;
         Ok(result.map(|p| p.into()))
-    }
-}
-
-#[derive(Default)]
-pub struct PlanServiceNoOp {}
-
-#[async_trait]
-impl PlanService for PlanServiceNoOp {
-    async fn create_initial_plan(&self) -> Result<Plan, PlanError> {
-        Ok(Plan::default())
-    }
-
-    async fn get_default_plan(&self) -> Result<Plan, PlanError> {
-        Ok(Plan::default())
-    }
-
-    async fn get(&self, plan_id: &PlanId) -> Result<Option<Plan>, PlanError> {
-        Ok(Some(Plan {
-            plan_id: plan_id.clone(),
-            plan_data: PlanData::default(),
-        }))
     }
 }

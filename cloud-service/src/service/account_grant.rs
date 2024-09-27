@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -10,6 +9,7 @@ use crate::repo::account::AccountRepo;
 use crate::repo::account_grant::AccountGrantRepo;
 use crate::repo::RepoError;
 use cloud_common::model::Role;
+use cloud_common::SafeDisplay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountGrantServiceError {
@@ -20,21 +20,23 @@ pub enum AccountGrantServiceError {
     #[error("Arg Validation error: {}", .0.join(", "))]
     ArgValidation(Vec<String>),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    InternalRepoError(#[from] RepoError),
 }
 
 impl AccountGrantServiceError {
-    fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
+    fn unauthorized(error: impl AsRef<str>) -> Self {
+        Self::Unauthorized(error.as_ref().to_string())
     }
 }
 
-impl From<RepoError> for AccountGrantServiceError {
-    fn from(error: RepoError) -> Self {
-        AccountGrantServiceError::Internal(anyhow::Error::msg(error).context("Repository error"))
+impl SafeDisplay for AccountGrantServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            AccountGrantServiceError::Unauthorized(_) => self.to_string(),
+            AccountGrantServiceError::AccountNotFound(_) => self.to_string(),
+            AccountGrantServiceError::ArgValidation(_) => self.to_string(),
+            AccountGrantServiceError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -84,7 +86,7 @@ impl AccountGrantServiceDefault {
             Ok(())
         } else {
             Err(AccountGrantServiceError::unauthorized(
-                "Access to another account.".to_string(),
+                "Access to another account.",
             ))
         }
     }
@@ -94,7 +96,7 @@ impl AccountGrantServiceDefault {
             Ok(())
         } else {
             Err(AccountGrantServiceError::unauthorized(
-                "Admin role required.".to_string(),
+                "Admin role required.",
             ))
         }
     }
@@ -161,37 +163,5 @@ impl AccountGrantService for AccountGrantServiceDefault {
                 Err(error.into())
             }
         }
-    }
-}
-
-#[derive(Default)]
-pub struct AccountGrantServiceNoOp {}
-
-#[async_trait]
-impl AccountGrantService for AccountGrantServiceNoOp {
-    async fn get(
-        &self,
-        _account_id: &AccountId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Vec<Role>, AccountGrantServiceError> {
-        Ok(vec![])
-    }
-
-    async fn add(
-        &self,
-        _account_id: &AccountId,
-        _role: &Role,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), AccountGrantServiceError> {
-        Ok(())
-    }
-
-    async fn remove(
-        &self,
-        _account_id: &AccountId,
-        _role: &Role,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), AccountGrantServiceError> {
-        Ok(())
     }
 }

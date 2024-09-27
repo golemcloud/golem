@@ -3,6 +3,7 @@ use crate::model::*;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::SafeDisplay;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;
@@ -46,19 +47,21 @@ impl From<PlanLimitError> for LimitsError {
     fn from(value: PlanLimitError) -> Self {
         match value {
             PlanLimitError::AccountNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_string()],
+                errors: vec![value.to_safe_string()],
             })),
             PlanLimitError::ProjectNotFound(_) => LimitsError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_string()],
+                errors: vec![value.to_safe_string()],
             })),
-            PlanLimitError::Internal(_) => LimitsError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
+            PlanLimitError::Internal(_) | PlanLimitError::InternalRepoError(_) => {
+                LimitsError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
             PlanLimitError::Unauthorized(_) => LimitsError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             })),
             PlanLimitError::LimitExceeded(_) => LimitsError::LimitExceeded(Json(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             })),
         }
     }
@@ -68,11 +71,14 @@ impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
         match value {
             AuthServiceError::InvalidToken(_) => LimitsError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             })),
-            AuthServiceError::Internal(_) => LimitsError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                LimitsError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }

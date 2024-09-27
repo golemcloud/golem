@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cloud_common::model::ProjectPolicyId;
 use cloud_common::model::{ProjectAction, ProjectActions};
+use conditional_trait_gen::trait_gen;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
@@ -189,6 +190,7 @@ impl<DB: Database> DbProjectPolicyRepo<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
     async fn create(&self, project_policy: &ProjectPolicyRecord) -> Result<(), RepoError> {
@@ -212,110 +214,6 @@ impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Postgres> {
                 )
             "#,
              )
-            .bind(project_policy.project_policy_id)
-            .bind(project_policy.name.clone())
-            .bind(project_policy.view_component)
-            .bind(project_policy.create_component)
-            .bind(project_policy.update_component)
-            .bind(project_policy.delete_component)
-            .bind(project_policy.view_worker)
-            .bind(project_policy.create_worker)
-            .bind(project_policy.update_worker)
-            .bind(project_policy.delete_worker)
-            .bind(project_policy.view_project_grants)
-            .bind(project_policy.create_project_grants)
-            .bind(project_policy.delete_project_grants)
-            .bind(project_policy.view_api_definition)
-            .bind(project_policy.create_api_definition)
-            .bind(project_policy.update_api_definition)
-            .bind(project_policy.delete_api_definition)
-            .execute(self.db_pool.deref())
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        project_policy_id: &Uuid,
-    ) -> Result<Option<ProjectPolicyRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectPolicyRecord>(
-            "SELECT * FROM project_policies WHERE project_policy_id = $1",
-        )
-        .bind(project_policy_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
-    }
-
-    async fn get_by_name(&self, name: &str) -> Result<Vec<ProjectPolicyRecord>, RepoError> {
-        sqlx::query_as::<_, ProjectPolicyRecord>("SELECT * FROM project_policies WHERE name = $1")
-            .bind(name)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn get_all(
-        &self,
-        project_policy_ids: Vec<Uuid>,
-    ) -> Result<Vec<ProjectPolicyRecord>, RepoError> {
-        if project_policy_ids.is_empty() {
-            Ok(vec![])
-        } else {
-            let params = (1..=project_policy_ids.len())
-                .map(|i| format!("${}", i))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let query_str = format!(
-                "SELECT * FROM project_policies WHERE project_policy_id IN ( { } )",
-                params
-            );
-
-            let mut query = sqlx::query_as::<_, ProjectPolicyRecord>(&query_str);
-            for id in project_policy_ids {
-                query = query.bind(id);
-            }
-
-            query
-                .fetch_all(self.db_pool.deref())
-                .await
-                .map_err(|e| e.into())
-        }
-    }
-
-    async fn delete(&self, project_policy_id: &Uuid) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM project_policies WHERE project_policy_id = $1")
-            .bind(project_policy_id)
-            .execute(self.db_pool.deref())
-            .await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl ProjectPolicyRepo for DbProjectPolicyRepo<sqlx::Sqlite> {
-    async fn create(&self, project_policy: &ProjectPolicyRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-              INSERT INTO project_policies
-                (
-                project_policy_id, name,
-                view_component, create_component, update_component, delete_component,
-                view_worker, create_worker, update_worker, delete_worker,
-                view_project_grants, create_project_grants, delete_project_grants,
-                view_api_definition, create_api_definition, update_api_definition, delete_api_definition
-                )
-              VALUES
-                (
-                 $1, $2,
-                 $3, $4, $5, $6,
-                 $7, $8, $9, $10,
-                 $11, $12, $13,
-                 $14, $15, $16, $17
-                )
-            "#,
-        )
             .bind(project_policy.project_policy_id)
             .bind(project_policy.name.clone())
             .bind(project_policy.view_component)

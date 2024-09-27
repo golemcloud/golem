@@ -3,12 +3,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
+use crate::services::config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::{
     batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
     BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
 };
+use cloud_common::UriBackConversion;
 use dashmap::DashMap;
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
@@ -23,9 +26,6 @@ use tokio::task::JoinHandle;
 use tonic::Request;
 use tracing::error;
 use uuid::Uuid;
-
-use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
-use crate::services::config::ResourceLimitsConfig;
 
 #[async_trait]
 pub trait ResourceLimits {
@@ -403,15 +403,5 @@ impl ResourceLimits for ResourceLimitsMock {
 
     async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, GolemError> {
         unimplemented!()
-    }
-}
-
-pub trait UriBackConversion {
-    fn as_http_02(&self) -> http_02::Uri;
-}
-
-impl UriBackConversion for http::Uri {
-    fn as_http_02(&self) -> http_02::Uri {
-        self.to_string().parse().unwrap()
     }
 }

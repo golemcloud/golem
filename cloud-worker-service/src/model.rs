@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 
-use crate::service::auth::CloudNamespace;
-use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
+use cloud_common::auth::CloudNamespace;
 use derive_more::FromStr;
 use golem_common::model::{AccountId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
@@ -11,33 +10,6 @@ use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSite, ApiVer
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ProjectView {
-    pub id: ProjectId,
-    pub owner_account_id: AccountId,
-    pub name: String,
-    pub description: String,
-}
-
-impl TryFrom<Project> for ProjectView {
-    type Error = String;
-
-    fn try_from(value: Project) -> Result<Self, Self::Error> {
-        let ProjectData {
-            name,
-            description,
-            owner_account_id,
-            ..
-        } = value.data.ok_or("Missing data")?;
-        Ok(Self {
-            id: value.id.ok_or("Missing id")?.try_into()?,
-            owner_account_id: owner_account_id.ok_or("Missing owner_account_id")?.into(),
-            name,
-            description,
-        })
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]

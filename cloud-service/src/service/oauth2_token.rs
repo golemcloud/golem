@@ -1,11 +1,5 @@
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::sync::Arc;
-
-use async_trait::async_trait;
-use cloud_common::model::Role;
-use cloud_common::model::TokenId;
-use golem_common::model::AccountId;
-use tracing::info;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{OAuth2Provider, OAuth2Token};
@@ -13,6 +7,12 @@ use crate::repo::account::AccountRepo;
 use crate::repo::oauth2_token::{OAuth2TokenRecord, OAuth2TokenRepo};
 use crate::repo::token::TokenRepo;
 use crate::repo::RepoError;
+use async_trait::async_trait;
+use cloud_common::model::Role;
+use cloud_common::model::TokenId;
+use cloud_common::SafeDisplay;
+use golem_common::model::AccountId;
+use tracing::info;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2TokenError {
@@ -22,32 +22,27 @@ pub enum OAuth2TokenError {
     AccountNotFound(AccountId),
     #[error("Token Not Found: {0}")]
     TokenNotFound(TokenId),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error("Internal error: Failed to convert OAuth2 Token record: {0}")]
+    InternalConversionError(String),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(#[from] RepoError),
 }
 
 impl OAuth2TokenError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
-    }
-
-    fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
+    fn unauthorized(error: impl AsRef<str>) -> Self {
+        Self::Unauthorized(error.as_ref().to_string())
     }
 }
 
-impl From<RepoError> for OAuth2TokenError {
-    fn from(error: RepoError) -> Self {
-        OAuth2TokenError::internal(error, "Repository error")
+impl SafeDisplay for OAuth2TokenError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            OAuth2TokenError::Unauthorized(_) => self.to_string(),
+            OAuth2TokenError::AccountNotFound(_) => self.to_string(),
+            OAuth2TokenError::TokenNotFound(_) => self.to_string(),
+            OAuth2TokenError::InternalConversionError(_) => self.to_string(),
+            OAuth2TokenError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -133,7 +128,7 @@ impl OAuth2TokenService for OAuth2TokenServiceDefault {
         let result = result
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()
-            .map_err(|e| OAuth2TokenError::internal(e, "Failed to convert OAuth2 Token record"))?;
+            .map_err(OAuth2TokenError::InternalConversionError)?;
 
         Ok(result)
     }
@@ -157,31 +152,6 @@ impl OAuth2TokenService for OAuth2TokenServiceDefault {
                 .await?;
         }
 
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-pub struct OAuth2TokenServiceNoOp {}
-
-#[async_trait]
-impl OAuth2TokenService for OAuth2TokenServiceNoOp {
-    async fn upsert(&self, _token: &OAuth2Token) -> Result<(), OAuth2TokenError> {
-        Ok(())
-    }
-    async fn get(
-        &self,
-        _provider: &OAuth2Provider,
-        _external_id: &str,
-    ) -> Result<Option<OAuth2Token>, OAuth2TokenError> {
-        Ok(None)
-    }
-
-    async fn unlink_token_id(
-        &self,
-        _token_id: &TokenId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), OAuth2TokenError> {
         Ok(())
     }
 }

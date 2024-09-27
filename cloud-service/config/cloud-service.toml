@@ -26,8 +26,8 @@ database = "golem_service.db"
 max_connections = 10
 
 [ed_dsa]
-private_key = ""
-public_key = ""
+private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
+public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
 
 [oauth2]
 github_client_id = "GITHUB_CLIENT_ID"

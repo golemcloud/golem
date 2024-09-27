@@ -52,8 +52,9 @@ pub struct EdDsaConfig {
 impl Default for EdDsaConfig {
     fn default() -> Self {
         EdDsaConfig {
-            private_key: "".to_string(),
-            public_key: "".to_string(),
+            private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
+                .to_string(),
+            public_key: "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg=".to_string(),
         }
     }
 }

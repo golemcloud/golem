@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
+use cloud_common::auth::CloudAuthCtx;
+use cloud_common::model::TokenSecret;
 use golem_common::model::WorkerId;
 use golem_service_base::model::validate_worker_name;
 use golem_worker_service_base::worker_bridge_execution::{
     WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
 };
-
-use crate::service::auth::CloudAuthCtx;
-use cloud_common::model::TokenSecret;
 use tracing::info;
 use uuid::Uuid;
 
@@ -58,13 +57,14 @@ async fn execute(
 
     let auth = CloudAuthCtx::new(TokenSecret::new(default_executor.access_token));
 
+    let worker_id = WorkerId {
+        component_id: worker_request_params.component_id,
+        worker_name: worker_request_params.worker_name,
+    };
     let type_annotated_value = default_executor
         .worker_service
         .invoke_and_await_function_json(
-            &WorkerId {
-                component_id: worker_request_params.component_id,
-                worker_name: worker_request_params.worker_name,
-            },
+            &worker_id.into_target_worker_id(),
             worker_request_params.idempotency_key,
             worker_request_params.function_name.to_string(),
             worker_request_params.function_params,

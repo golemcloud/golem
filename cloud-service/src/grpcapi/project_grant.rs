@@ -18,11 +18,12 @@ use crate::model;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::{project_grant, project_policy};
 use cloud_common::grpc::{proto_project_grant_id_string, proto_project_id_string};
-use cloud_common::model::ProjectGrantId;
 use cloud_common::model::ProjectPolicyId;
+use cloud_common::model::{ProjectAction, ProjectActions, ProjectGrantId};
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::ProjectId;
+use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
@@ -33,12 +34,15 @@ impl From<AuthServiceError> for ProjectGrantError {
         let error = match value {
             AuthServiceError::InvalidToken(_) => {
                 project_grant_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
-            AuthServiceError::Internal(_) => project_grant_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                project_grant_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         ProjectGrantError { error: Some(error) }
     }
@@ -47,29 +51,29 @@ impl From<AuthServiceError> for ProjectGrantError {
 impl From<project_grant::ProjectGrantError> for ProjectGrantError {
     fn from(value: project_grant::ProjectGrantError) -> Self {
         let error = match value {
-            project_grant::ProjectGrantError::Internal(_) => {
+            project_grant::ProjectGrantError::InternalRepoError(_) => {
                 project_grant_error::Error::InternalError(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             project_grant::ProjectGrantError::Unauthorized(_) => {
                 project_grant_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             project_grant::ProjectGrantError::ProjectNotFound(_) => {
                 project_grant_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
             project_grant::ProjectGrantError::AccountNotFound(_) => {
                 project_grant_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
             project_grant::ProjectGrantError::ProjectPolicyNotFound(_) => {
                 project_grant_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
         };
@@ -80,9 +84,9 @@ impl From<project_grant::ProjectGrantError> for ProjectGrantError {
 impl From<project_policy::ProjectPolicyError> for ProjectGrantError {
     fn from(value: project_policy::ProjectPolicyError) -> Self {
         let error = match value {
-            project_policy::ProjectPolicyError::Internal(_) => {
+            project_policy::ProjectPolicyError::InternalRepoError(_) => {
                 project_grant_error::Error::InternalError(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };
@@ -212,7 +216,7 @@ impl ProjectGrantGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing project id"))?;
 
-        let grantee_account_id: golem_common::model::AccountId = request
+        let grantee_account_id: AccountId = request
             .grantee_account_id
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;
@@ -220,7 +224,7 @@ impl ProjectGrantGrpcApi {
         let project_policy_id = match request.project_policy_id.and_then(|id| id.value) {
             Some(policy_id) => ProjectPolicyId(policy_id.into()),
             None => {
-                let actions: HashSet<cloud_common::model::ProjectAction> = request
+                let actions: HashSet<ProjectAction> = request
                     .project_actions
                     .into_iter()
                     .map(|action| action.try_into())
@@ -230,7 +234,7 @@ impl ProjectGrantGrpcApi {
                 let policy = model::ProjectPolicy {
                     id: ProjectPolicyId::new_v4(),
                     name: request.project_policy_name,
-                    project_actions: cloud_common::model::ProjectActions { actions },
+                    project_actions: ProjectActions { actions },
                 };
                 self.project_policy_service.create(&policy).await?;
                 policy.id

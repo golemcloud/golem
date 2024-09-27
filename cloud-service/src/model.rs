@@ -118,8 +118,8 @@ impl From<ProjectType> for i32 {
 pub struct Token {
     pub id: TokenId,
     pub account_id: AccountId,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub expires_at: chrono::DateTime<Utc>,
 }
 
 impl Token {
@@ -144,9 +144,9 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::token::Token> for Token {
         Ok(Self {
             id: value.id.ok_or("Missing id")?.try_into()?,
             account_id: value.account_id.ok_or("Missing account_id")?.into(),
-            created_at: chrono::DateTime::<chrono::Utc>::from_str(&value.created_at)
+            created_at: chrono::DateTime::<Utc>::from_str(&value.created_at)
                 .map_err(|err| format!("Invalid created_at value: {err}"))?,
-            expires_at: chrono::DateTime::<chrono::Utc>::from_str(&value.expires_at)
+            expires_at: chrono::DateTime::<Utc>::from_str(&value.expires_at)
                 .map_err(|err| format!("Invalid expires_at value: {err}"))?,
         })
     }
@@ -278,7 +278,7 @@ impl From<Project> for cloud_api_grpc::proto::golem::cloud::project::Project {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct CreateTokenDTO {
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<Utc>,
 }
 
 impl From<CreateTokenDTO> for cloud_api_grpc::proto::golem::cloud::token::CreateTokenDto {
@@ -554,7 +554,7 @@ pub struct AccountSummary {
     pub email: String,
     pub component_count: i64,
     pub worker_count: i64,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<Utc>,
 }
 
 impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::v1::AccountSummary>
@@ -571,7 +571,7 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::accountsummary::v1::AccountSum
             email: value.email,
             component_count: value.component_count,
             worker_count: value.worker_count,
-            created_at: chrono::DateTime::<chrono::Utc>::from_str(&value.created_at)
+            created_at: chrono::DateTime::<Utc>::from_str(&value.created_at)
                 .map_err(|err| format!("Invalid created_at value: {err}"))?,
         })
     }
@@ -626,7 +626,7 @@ impl From<cloud_api_grpc::proto::golem::cloud::account::AccountData> for Account
 pub struct OAuth2Data {
     pub url: String,
     pub user_code: String,
-    pub expires: chrono::DateTime<chrono::Utc>,
+    pub expires: chrono::DateTime<Utc>,
     pub encoded_session: String,
 }
 
@@ -639,7 +639,7 @@ impl TryFrom<cloud_api_grpc::proto::golem::cloud::login::OAuth2Data> for OAuth2D
         Ok(Self {
             url: value.url,
             user_code: value.user_code,
-            expires: chrono::DateTime::<chrono::Utc>::from_str(&value.expires)
+            expires: chrono::DateTime::<Utc>::from_str(&value.expires)
                 .map_err(|err| format!("Invalid expires value: {err}"))?,
             encoded_session: value.encoded_session,
         })
@@ -814,7 +814,7 @@ pub struct OAuth2Session {
     pub device_code: String,
     #[serde_as(as = "DurationSeconds<f64>")]
     pub interval: std::time::Duration,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

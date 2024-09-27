@@ -1,29 +1,29 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use crate::service::auth::AuthService;
 use async_trait::async_trait;
+use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
+use cloud_common::clients::auth::AuthServiceError;
+use cloud_common::clients::limit::{LimitError, LimitService};
+use cloud_common::model::ProjectAction;
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::worker::{
     IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult as ProtoInvokeResult,
     UpdateMode,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, ProjectId, ScanCursor, Timestamp,
-    WorkerFilter, WorkerId, WorkerStatus,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, ProjectId, ScanCursor,
+    TargetWorkerId, WorkerFilter, WorkerId,
 };
-use golem_wasm_rpc::protobuf::{TypedTuple, Val as ProtoVal};
+use golem_service_base::model::*;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_worker_service_base::service::worker::{
     WorkerRequestMetadata, WorkerService as BaseWorkerService,
     WorkerServiceError as BaseWorkerServiceError,
 };
-
-use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
-use cloud_common::model::ProjectAction;
-use golem_service_base::model::*;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 mod connect;
-
-use crate::service::limit::{LimitError, LimitService};
 pub use connect::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -36,8 +36,20 @@ pub enum WorkerError {
     ProjectNotFound(ProjectId),
     #[error(transparent)]
     Base(#[from] BaseWorkerServiceError),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error(transparent)]
+    InternalAuthServiceError(AuthServiceError),
+}
+
+impl SafeDisplay for WorkerError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            WorkerError::Unauthorized(_) => self.to_string(),
+            WorkerError::Forbidden(_) => self.to_string(),
+            WorkerError::ProjectNotFound(_) => self.to_string(),
+            WorkerError::Base(error) => error.to_string(), // TODO: Implement SafeDisplay for BaseWorkerServiceError
+            WorkerError::InternalAuthServiceError(error) => error.to_safe_string(),
+        }
+    }
 }
 
 impl From<AuthServiceError> for WorkerError {
@@ -45,7 +57,9 @@ impl From<AuthServiceError> for WorkerError {
         match value {
             AuthServiceError::Unauthorized(error) => WorkerError::Unauthorized(error),
             AuthServiceError::Forbidden(error) => WorkerError::Forbidden(error),
-            AuthServiceError::Internal(error) => WorkerError::Internal(error),
+            AuthServiceError::InternalClientError(_) => {
+                WorkerError::InternalAuthServiceError(value)
+            }
         }
     }
 }
@@ -53,11 +67,11 @@ impl From<AuthServiceError> for WorkerError {
 impl From<LimitError> for WorkerError {
     fn from(error: LimitError) -> Self {
         match error {
-            LimitError::Unauthorized(string) => WorkerError::Unauthorized(string),
-            LimitError::LimitExceeded(string) => WorkerError::Forbidden(string),
-            LimitError::Internal(e) => {
-                WorkerError::Base(BaseWorkerServiceError::Internal(anyhow::Error::msg(e)))
-            }
+            LimitError::Unauthorized(message) => WorkerError::Unauthorized(message),
+            LimitError::LimitExceeded(message) => WorkerError::Forbidden(message),
+            LimitError::InternalClientError(message) => WorkerError::Base(
+                BaseWorkerServiceError::Internal(anyhow::Error::msg(message)),
+            ),
         }
     }
 }
@@ -82,7 +96,7 @@ pub trait WorkerService {
 
     async fn invoke_and_await_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -92,7 +106,7 @@ pub trait WorkerService {
 
     async fn invoke_and_await_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -102,7 +116,7 @@ pub trait WorkerService {
 
     async fn invoke_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -112,7 +126,7 @@ pub trait WorkerService {
 
     async fn invoke_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -206,7 +220,7 @@ impl WorkerServiceDefault {
 
         Ok(WorkerNamespace {
             namespace,
-            resource_limits,
+            resource_limits: resource_limits.into(),
         })
     }
 }
@@ -296,7 +310,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -324,7 +338,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -352,7 +366,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_function_json(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<TypeAnnotatedValue>,
@@ -379,7 +393,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_function_proto(
         &self,
-        worker_id: &WorkerId,
+        worker_id: &TargetWorkerId,
         idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -574,7 +588,7 @@ impl WorkerService for WorkerServiceDefault {
 }
 
 fn convert_metadata(
-    metadata: golem_service_base::model::WorkerMetadata,
+    metadata: WorkerMetadata,
     account_id: AccountId,
 ) -> crate::model::WorkerMetadata {
     crate::model::WorkerMetadata {
@@ -607,165 +621,5 @@ impl WorkerNamespace {
             account_id: Some(self.namespace.account_id.clone()),
             limits: Some(self.resource_limits.clone()),
         }
-    }
-}
-
-#[derive(Default)]
-pub struct WorkerServiceNoop {}
-
-#[async_trait]
-impl WorkerService for WorkerServiceNoop {
-    async fn create(
-        &self,
-        worker_id: &WorkerId,
-        _component_version: u64,
-        _arguments: Vec<String>,
-        _environment_variables: HashMap<String, String>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<WorkerId, WorkerError> {
-        Ok(worker_id.clone())
-    }
-
-    async fn connect(
-        &self,
-        _worker_id: &WorkerId,
-        _auth: &CloudAuthCtx,
-    ) -> Result<ConnectWorkerStream, WorkerError> {
-        Err(WorkerError::Base(BaseWorkerServiceError::Internal(
-            anyhow::Error::msg("Not supported"),
-        )))
-    }
-
-    async fn delete(&self, _worker_id: &WorkerId, _auth: &CloudAuthCtx) -> Result<(), WorkerError> {
-        Ok(())
-    }
-
-    async fn invoke_and_await_function_json(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<TypeAnnotatedValue>,
-        _invocation_context: Option<InvocationContext>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<TypeAnnotatedValue, WorkerError> {
-        Ok(TypeAnnotatedValue::Tuple(TypedTuple {
-            value: vec![],
-            typ: vec![],
-        }))
-    }
-
-    async fn invoke_and_await_function_proto(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<ProtoIdempotencyKey>,
-        _function_name: String,
-        _params: Vec<ProtoVal>,
-        _invocation_context: Option<InvocationContext>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<ProtoInvokeResult, WorkerError> {
-        Ok(ProtoInvokeResult { result: vec![] })
-    }
-
-    async fn invoke_function_json(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _params: Vec<TypeAnnotatedValue>,
-        _invocation_context: Option<InvocationContext>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<(), WorkerError> {
-        Ok(())
-    }
-
-    async fn invoke_function_proto(
-        &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: Option<ProtoIdempotencyKey>,
-        _function_name: String,
-        _params: Vec<ProtoVal>,
-        _invocation_context: Option<InvocationContext>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<(), WorkerError> {
-        Ok(())
-    }
-
-    async fn complete_promise(
-        &self,
-        _worker_id: &WorkerId,
-        _oplog_id: u64,
-        _data: Vec<u8>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<bool, WorkerError> {
-        Ok(true)
-    }
-
-    async fn interrupt(
-        &self,
-        _worker_id: &WorkerId,
-        _recover_immediately: bool,
-        _auth: &CloudAuthCtx,
-    ) -> Result<(), WorkerError> {
-        Ok(())
-    }
-
-    async fn get_metadata(
-        &self,
-        worker_id: &WorkerId,
-        _auth: &CloudAuthCtx,
-    ) -> Result<crate::model::WorkerMetadata, WorkerError> {
-        Ok(crate::model::WorkerMetadata {
-            worker_id: worker_id.clone(),
-            account_id: AccountId::from(""),
-            args: vec![],
-            env: Default::default(),
-            status: WorkerStatus::Running,
-            component_version: 0,
-            retry_count: 0,
-            created_at: Timestamp::now_utc(),
-            pending_invocation_count: 0,
-            updates: vec![],
-            last_error: None,
-            component_size: 0,
-            total_linear_memory_size: 0,
-            owned_resources: Default::default(),
-        })
-    }
-
-    async fn find_metadata(
-        &self,
-        _component_id: &ComponentId,
-        _filter: Option<WorkerFilter>,
-        _cursor: ScanCursor,
-        _count: u64,
-        _precise: bool,
-        _auth: &CloudAuthCtx,
-    ) -> Result<(Option<ScanCursor>, Vec<crate::model::WorkerMetadata>), WorkerError> {
-        Ok((None, vec![]))
-    }
-
-    async fn resume(&self, _worker_id: &WorkerId, _auth: &CloudAuthCtx) -> Result<(), WorkerError> {
-        Ok(())
-    }
-
-    async fn update(
-        &self,
-        _worker_id: &WorkerId,
-        _update_mode: UpdateMode,
-        _target_version: ComponentVersion,
-        _auth: &CloudAuthCtx,
-    ) -> Result<(), WorkerError> {
-        Ok(())
-    }
-
-    async fn get_component_for_worker(
-        &self,
-        _worker_id: &WorkerId,
-        _auth_ctx: &CloudAuthCtx,
-    ) -> Result<Component, WorkerError> {
-        Err(WorkerError::Base(BaseWorkerServiceError::Internal(
-            anyhow::Error::msg("Cannot get component metadata in Noop"),
-        )))
     }
 }

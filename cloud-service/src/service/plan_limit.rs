@@ -1,7 +1,3 @@
-use std::collections::HashMap;
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
-
 use crate::auth::AccountAuthorisation;
 use crate::model::{Plan, ResourceLimits};
 use crate::repo::account::AccountRepo;
@@ -16,8 +12,13 @@ use crate::repo::project::ProjectRepo;
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::Role;
+use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::num::TryFromIntError;
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanLimitError {
@@ -30,38 +31,31 @@ pub enum PlanLimitError {
     #[error("Project Not Found: {0}")]
     ProjectNotFound(ProjectId),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    Internal(String),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(#[from] RepoError),
 }
 
 impl PlanLimitError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
+    fn unauthorized(error: impl AsRef<str>) -> Self {
+        Self::Unauthorized(error.as_ref().to_string())
     }
 
-    fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
-    }
-
-    fn limit_exceeded<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::LimitExceeded(error.to_string())
+    fn limit_exceeded(error: impl AsRef<str>) -> Self {
+        Self::LimitExceeded(error.as_ref().to_string())
     }
 }
 
-impl From<RepoError> for PlanLimitError {
-    fn from(error: RepoError) -> Self {
-        PlanLimitError::internal(error, "Repository error")
+impl SafeDisplay for PlanLimitError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            PlanLimitError::LimitExceeded(_) => self.to_string(),
+            PlanLimitError::Unauthorized(_) => self.to_string(),
+            PlanLimitError::AccountNotFound(_) => self.to_string(),
+            PlanLimitError::ProjectNotFound(_) => self.to_string(),
+            PlanLimitError::Internal(_) => self.to_string(),
+            PlanLimitError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -198,9 +192,9 @@ impl PlanLimitService for PlanLimitServiceDefault {
     ) -> Result<CheckLimitResult, PlanLimitError> {
         let limits = self.get_account_limits(account_id).await?;
         let num_projects = self.project_repo.get_own_count(&account_id.value).await?;
-        let count: i64 = num_projects
-            .try_into()
-            .map_err(|e| PlanLimitError::internal(e, "Failed to convert projects count"))?;
+        let count: i64 = num_projects.try_into().map_err(|e: TryFromIntError| {
+            PlanLimitError::Internal(format!("Failed to convert projects count: {e}"))
+        })?;
 
         Ok(CheckLimitResult {
             account_id: account_id.clone(),
@@ -439,93 +433,7 @@ impl PlanLimitServiceDefault {
         if auth.has_account_or_role(account_id, &Role::Admin) {
             Ok(())
         } else {
-            Err(PlanLimitError::unauthorized(
-                "Insufficient privilege.".to_string(),
-            ))
+            Err(PlanLimitError::unauthorized("Insufficient privilege."))
         }
-    }
-}
-
-#[derive(Default)]
-pub struct PlanLimitServiceNoOp {}
-
-#[async_trait]
-impl PlanLimitService for PlanLimitServiceNoOp {
-    async fn get_account_limits(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<LimitResult, PlanLimitError> {
-        Ok(LimitResult {
-            account_id: account_id.clone(),
-            plan: Plan::default(),
-        })
-    }
-
-    async fn get_project_limits(
-        &self,
-        _project_id: &ProjectId,
-    ) -> Result<LimitResult, PlanLimitError> {
-        Ok(LimitResult {
-            account_id: AccountId::from(""),
-            plan: Plan::default(),
-        })
-    }
-
-    async fn check_project_limit(
-        &self,
-        _account_id: &AccountId,
-    ) -> Result<CheckLimitResult, PlanLimitError> {
-        Ok(CheckLimitResult {
-            account_id: AccountId::from(""),
-            count: 0,
-            limit: 0,
-        })
-    }
-
-    async fn get_resource_limits(
-        &self,
-        _account_id: &AccountId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<ResourceLimits, PlanLimitError> {
-        Ok(ResourceLimits {
-            available_fuel: 0,
-            max_memory_per_worker: 0,
-        })
-    }
-
-    async fn record_fuel_consumption(
-        &self,
-        _updates: HashMap<AccountId, i64>,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), PlanLimitError> {
-        Ok(())
-    }
-
-    async fn update_component_limit(
-        &self,
-        _account_id: &AccountId,
-        _count: i32,
-        _size: i64,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), PlanLimitError> {
-        Ok(())
-    }
-
-    async fn update_worker_limit(
-        &self,
-        _account_id: &AccountId,
-        _value: i32,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), PlanLimitError> {
-        Ok(())
-    }
-
-    async fn update_worker_connection_limit(
-        &self,
-        _account_id: &AccountId,
-        _value: i32,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), PlanLimitError> {
-        Ok(())
     }
 }

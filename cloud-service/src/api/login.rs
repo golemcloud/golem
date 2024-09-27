@@ -4,6 +4,7 @@ use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::login::{LoginError as LoginServiceError, LoginService};
 use crate::service::oauth2::{OAuth2Error, OAuth2Service};
 use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::SafeDisplay;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::{ErrorBody, ErrorsBody};
@@ -51,11 +52,14 @@ impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
         match value {
             AuthServiceError::InvalidToken(_) => LoginError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_string()],
+                errors: vec![value.to_safe_string()],
             })),
-            AuthServiceError::Internal(_) => LoginError::Internal(Json(ErrorBody {
-                error: value.to_string(),
-            })),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                LoginError::Internal(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -63,12 +67,18 @@ impl From<AuthServiceError> for LoginError {
 impl From<LoginServiceError> for LoginError {
     fn from(value: LoginServiceError) -> Self {
         match value {
-            LoginServiceError::Internal(_) => LoginError::Internal(Json(ErrorBody {
-                error: value.to_string(),
-            })),
             LoginServiceError::External(_) => LoginError::External(Json(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             })),
+            LoginServiceError::InternalAccountError(_)
+            | LoginServiceError::Internal(_)
+            | LoginServiceError::InternalOAuth2ProviderClientError(_)
+            | LoginServiceError::InternalOAuth2TokenError(_)
+            | LoginServiceError::InternalTokenServiceError(_) => {
+                LoginError::Internal(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -76,12 +86,14 @@ impl From<LoginServiceError> for LoginError {
 impl From<OAuth2Error> for LoginError {
     fn from(value: OAuth2Error) -> Self {
         match value {
-            OAuth2Error::Internal(_) => LoginError::Internal(Json(ErrorBody {
-                error: value.to_string(),
-            })),
+            OAuth2Error::InternalGithubClientError(_) | OAuth2Error::InternalSessionError(_) => {
+                LoginError::Internal(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
             OAuth2Error::InvalidSession(_) | OAuth2Error::InvalidState(_) => {
                 LoginError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 }))
             }
         }
@@ -138,7 +150,7 @@ impl LoginApi {
         method = "get",
         operation_id = "current_login_token"
     )]
-    async fn current_token(&self, token: GolemSecurityScheme) -> Result<Json<crate::model::Token>> {
+    async fn current_token(&self, token: GolemSecurityScheme) -> Result<Json<Token>> {
         let record = recorded_http_api_request!("current_login_token",);
         let response = {
             let auth = self

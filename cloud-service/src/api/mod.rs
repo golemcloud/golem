@@ -1,12 +1,22 @@
-use std::ops::Deref;
-use std::sync::Arc;
-
+use crate::service::account::AccountError;
+use crate::service::account_grant::AccountGrantServiceError;
+use crate::service::auth::AuthServiceError;
+use crate::service::project::ProjectError;
+use crate::service::project_auth::ProjectAuthorisationError;
+use crate::service::project_grant::ProjectGrantError;
+use crate::service::project_policy::ProjectPolicyError;
+use crate::service::token::TokenServiceError;
+use crate::service::Services;
+use cloud_common::SafeDisplay;
+use golem_common::metrics::api::TraceErrorKind;
+use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem::endpoint::PrometheusExporter;
 use poem::Route;
-use poem_openapi::{OpenApiService, Tags};
+use poem_openapi::payload::Json;
+use poem_openapi::{ApiResponse, OpenApiService, Tags};
 use prometheus::Registry;
-
-use crate::service::Services;
+use std::ops::Deref;
+use std::sync::Arc;
 
 mod account;
 mod account_summary;
@@ -55,6 +65,270 @@ enum ApiTags {
     ProjectPolicy,
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
+}
+
+#[derive(ApiResponse, Debug, Clone)]
+pub enum ApiError {
+    /// Invalid request, returning with a list of issues detected in the request
+    #[oai(status = 400)]
+    BadRequest(Json<ErrorsBody>),
+    /// Unauthorized request
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorBody>),
+    /// Account not found
+    #[oai(status = 404)]
+    NotFound(Json<ErrorBody>),
+    /// Internal server error
+    #[oai(status = 500)]
+    InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for ApiError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            ApiError::BadRequest(_) => "BadRequest",
+            ApiError::NotFound(_) => "NotFound",
+            ApiError::Unauthorized(_) => "Unauthorized",
+            ApiError::InternalError(_) => "InternalError",
+        }
+    }
+}
+
+type ApiResult<T> = Result<T, ApiError>;
+
+impl From<AuthServiceError> for ApiError {
+    fn from(value: AuthServiceError) -> Self {
+        match value {
+            AuthServiceError::InvalidToken(_) => ApiError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                ApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+        }
+    }
+}
+
+impl From<AccountError> for ApiError {
+    fn from(value: AccountError) -> Self {
+        match value {
+            AccountError::Unauthorized(_) => ApiError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::Internal(_) => ApiError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::ArgValidation(errors) => {
+                ApiError::BadRequest(Json(ErrorsBody { errors }))
+            }
+            AccountError::AccountNotFound(_) => ApiError::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::InternalRepoError(_) => ApiError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountError::InternalPlanError(_) => ApiError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
+impl From<TokenServiceError> for ApiError {
+    fn from(value: TokenServiceError) -> Self {
+        match value {
+            TokenServiceError::Unauthorized(_) => ApiError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            TokenServiceError::InternalTokenError(_)
+            | TokenServiceError::InternalRepoError(_)
+            | TokenServiceError::InternalSerializationError { .. }
+            | TokenServiceError::InternalSecretAlreadyExists { .. } => {
+                ApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            TokenServiceError::ArgValidation(errors) => {
+                ApiError::BadRequest(Json(ErrorsBody { errors }))
+            }
+            TokenServiceError::UnknownToken(_) => ApiError::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            TokenServiceError::AccountNotFound(_) => ApiError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_safe_string()],
+            })),
+            TokenServiceError::UnknownTokenState(_) => ApiError::BadRequest(Json(ErrorsBody {
+                errors: vec![value.to_safe_string()],
+            })),
+        }
+    }
+}
+
+impl From<AccountGrantServiceError> for ApiError {
+    fn from(value: AccountGrantServiceError) -> Self {
+        match value {
+            AccountGrantServiceError::Unauthorized(_) => ApiError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AccountGrantServiceError::InternalRepoError(_) => {
+                ApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            AccountGrantServiceError::ArgValidation(errors) => {
+                ApiError::BadRequest(Json(ErrorsBody { errors }))
+            }
+            AccountGrantServiceError::AccountNotFound(_) => {
+                ApiError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+        }
+    }
+}
+
+impl From<ProjectPolicyError> for ApiError {
+    fn from(value: ProjectPolicyError) -> Self {
+        match value {
+            ProjectPolicyError::InternalRepoError(_) => ApiError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
+#[derive(ApiResponse, Debug, Clone)]
+pub enum LimitedApiError {
+    /// Invalid request, returning with a list of issues detected in the request
+    #[oai(status = 400)]
+    BadRequest(Json<ErrorsBody>),
+    /// Unauthorized
+    #[oai(status = 401)]
+    Unauthorized(Json<ErrorBody>),
+    /// Maximum number of projects exceeded
+    #[oai(status = 403)]
+    LimitExceeded(Json<ErrorBody>),
+    /// Project not found
+    #[oai(status = 404)]
+    NotFound(Json<ErrorBody>),
+    /// Project already exists
+    #[oai(status = 500)]
+    InternalError(Json<ErrorBody>),
+}
+
+impl TraceErrorKind for LimitedApiError {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self {
+            LimitedApiError::BadRequest(_) => "BadRequest",
+            LimitedApiError::NotFound(_) => "NotFound",
+            LimitedApiError::LimitExceeded(_) => "LimitExceeded",
+            LimitedApiError::Unauthorized(_) => "Unauthorized",
+            LimitedApiError::InternalError(_) => "InternalError",
+        }
+    }
+}
+
+type LimitedApiResult<T> = Result<T, LimitedApiError>;
+
+impl From<AuthServiceError> for LimitedApiError {
+    fn from(value: AuthServiceError) -> Self {
+        match value {
+            AuthServiceError::InvalidToken(_) => LimitedApiError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                LimitedApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+        }
+    }
+}
+
+impl From<ProjectError> for LimitedApiError {
+    fn from(value: ProjectError) -> Self {
+        match value {
+            ProjectError::InternalRepoError(_)
+            | ProjectError::FailedToCreateDefaultProject(_)
+            | ProjectError::InternalProjectAuthorisationError(_)
+            | ProjectError::InternalPlanLimitError(_) => {
+                LimitedApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            ProjectError::Unauthorized(_) => LimitedApiError::Unauthorized(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            ProjectError::LimitExceeded(_) => LimitedApiError::LimitExceeded(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+        }
+    }
+}
+
+impl From<ProjectAuthorisationError> for LimitedApiError {
+    fn from(value: ProjectAuthorisationError) -> Self {
+        match value {
+            ProjectAuthorisationError::InternalRepoError(_)
+            | ProjectAuthorisationError::InternalProjectGrantError(_)
+            | ProjectAuthorisationError::InternalProjectPolicyError(_) => {
+                LimitedApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            ProjectAuthorisationError::Unauthorized(_) => {
+                LimitedApiError::Unauthorized(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+        }
+    }
+}
+
+impl From<ProjectGrantError> for LimitedApiError {
+    fn from(value: ProjectGrantError) -> Self {
+        match value {
+            ProjectGrantError::InternalRepoError(_) => {
+                LimitedApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            ProjectGrantError::Unauthorized(_) => LimitedApiError::InternalError(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
+            ProjectGrantError::ProjectNotFound(_) => {
+                LimitedApiError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+            ProjectGrantError::ProjectPolicyNotFound(_) => {
+                LimitedApiError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+            ProjectGrantError::AccountNotFound(_) => {
+                LimitedApiError::BadRequest(Json(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                }))
+            }
+        }
+    }
+}
+
+impl From<ProjectPolicyError> for LimitedApiError {
+    fn from(value: ProjectPolicyError) -> Self {
+        match value {
+            ProjectPolicyError::InternalRepoError(_) => {
+                LimitedApiError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+        }
+    }
 }
 
 pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {

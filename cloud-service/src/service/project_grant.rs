@@ -1,14 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 use std::sync::Arc;
-
-use async_trait::async_trait;
-use cloud_common::model::Role;
-use cloud_common::model::{ProjectAction, ProjectGrantId, ProjectPolicyId};
-use golem_common::model::AccountId;
-use golem_common::model::ProjectId;
-use tracing::info;
-use uuid::Uuid;
 
 use crate::auth::AccountAuthorisation;
 use crate::model::{ProjectGrant, ProjectPolicy};
@@ -17,6 +8,14 @@ use crate::repo::project::ProjectRepo;
 use crate::repo::project_grant::{ProjectGrantRecord, ProjectGrantRepo};
 use crate::repo::project_policy::ProjectPolicyRepo;
 use crate::repo::RepoError;
+use async_trait::async_trait;
+use cloud_common::model::Role;
+use cloud_common::model::{ProjectAction, ProjectGrantId, ProjectPolicyId};
+use cloud_common::SafeDisplay;
+use golem_common::model::AccountId;
+use golem_common::model::ProjectId;
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectGrantError {
@@ -28,22 +27,25 @@ pub enum ProjectGrantError {
     ProjectNotFound(ProjectId),
     #[error("Project Policy Not Found: {0}")]
     ProjectPolicyNotFound(ProjectPolicyId),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(#[from] RepoError),
 }
 
 impl ProjectGrantError {
-    fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
+    fn unauthorized(error: impl AsRef<str>) -> Self {
+        Self::Unauthorized(error.as_ref().to_string())
     }
 }
 
-impl From<RepoError> for ProjectGrantError {
-    fn from(error: RepoError) -> Self {
-        ProjectGrantError::Internal(anyhow::Error::msg(error).context("Repository error"))
+impl SafeDisplay for ProjectGrantError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ProjectGrantError::Unauthorized(_) => self.to_string(),
+            ProjectGrantError::AccountNotFound(_) => self.to_string(),
+            ProjectGrantError::ProjectNotFound(_) => self.to_string(),
+            ProjectGrantError::ProjectPolicyNotFound(_) => self.to_string(),
+            ProjectGrantError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -347,54 +349,6 @@ impl ProjectGrantService for ProjectGrantServiceDefault {
                 self.project_grant_repo.delete(&project_grant_id.0).await?;
             }
         }
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-pub struct ProjectGrantServiceNoOp {}
-
-#[async_trait]
-impl ProjectGrantService for ProjectGrantServiceNoOp {
-    async fn create(
-        &self,
-        _project_grant: &ProjectGrant,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), ProjectGrantError> {
-        Ok(())
-    }
-
-    async fn get_by_project(
-        &self,
-        _project_id: &ProjectId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Vec<ProjectGrant>, ProjectGrantError> {
-        Ok(vec![])
-    }
-
-    async fn get_by_account(
-        &self,
-        _account_id: &AccountId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Vec<ProjectGrant>, ProjectGrantError> {
-        Ok(vec![])
-    }
-
-    async fn get(
-        &self,
-        _project_id: &ProjectId,
-        _project_grant_id: &ProjectGrantId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Option<ProjectGrant>, ProjectGrantError> {
-        Ok(None)
-    }
-
-    async fn delete(
-        &self,
-        _project_id: &ProjectId,
-        _project_grant_id: &ProjectGrantId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), ProjectGrantError> {
         Ok(())
     }
 }

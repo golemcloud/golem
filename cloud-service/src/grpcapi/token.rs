@@ -16,6 +16,7 @@ use cloud_api_grpc::proto::golem::cloud::token::v1::{
 use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
 use cloud_common::grpc::proto_token_id_string;
 use cloud_common::model::TokenId;
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
@@ -29,11 +30,14 @@ impl From<AuthServiceError> for TokenError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
             AuthServiceError::InvalidToken(_) => token_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
-            AuthServiceError::Internal(_) => token_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                token_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         TokenError { error: Some(error) }
     }
@@ -44,26 +48,31 @@ impl From<token::TokenServiceError> for TokenError {
         let error = match value {
             token::TokenServiceError::Unauthorized(_) => {
                 token_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
-            token::TokenServiceError::Internal(_) => token_error::Error::InternalError(ErrorBody {
-                error: value.to_string(),
-            }),
+            token::TokenServiceError::InternalTokenError(_)
+            | token::TokenServiceError::InternalRepoError(_)
+            | token::TokenServiceError::InternalSerializationError { .. }
+            | token::TokenServiceError::InternalSecretAlreadyExists { .. } => {
+                token_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
             token::TokenServiceError::UnknownToken(_) => token_error::Error::NotFound(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
             token::TokenServiceError::ArgValidation(errors) => {
                 token_error::Error::BadRequest(ErrorsBody { errors })
             }
             token::TokenServiceError::AccountNotFound(_) => {
                 token_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
             token::TokenServiceError::UnknownTokenState(_) => {
                 token_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
         };

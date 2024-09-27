@@ -1,12 +1,10 @@
-use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples, RetryConfig};
+use cloud_common::config::RemoteCloudServiceConfig;
+use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples};
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_service_base::config::ComponentStoreConfig;
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use url::Url;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
@@ -18,7 +16,7 @@ pub struct ComponentServiceConfig {
     pub db: DbConfig,
     pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
-    pub cloud_service: CloudServiceConfig,
+    pub cloud_service: RemoteCloudServiceConfig,
 }
 
 impl Default for ComponentServiceConfig {
@@ -32,43 +30,7 @@ impl Default for ComponentServiceConfig {
             db: DbConfig::default(),
             component_store: ComponentStoreConfig::default(),
             compilation: ComponentCompilationConfig::default(),
-            cloud_service: CloudServiceConfig::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CloudServiceConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: Uuid,
-    pub retries: RetryConfig,
-}
-
-impl CloudServiceConfig {
-    pub fn url(&self) -> Url {
-        Url::parse(&format!("http://{}:{}", self.host, self.port))
-            .expect("Failed to parse CloudService URL")
-    }
-
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build CloudService URI")
-    }
-}
-
-impl Default for CloudServiceConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 8080,
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
-            retries: RetryConfig::default(),
+            cloud_service: RemoteCloudServiceConfig::default(),
         }
     }
 }

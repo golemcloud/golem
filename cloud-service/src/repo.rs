@@ -13,6 +13,7 @@ use crate::repo::project::{DbProjectRepo, ProjectRepo};
 use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
+use cloud_common::SafeDisplay;
 use oauth2_web_flow_state::{DbOAuth2FlowState, OAuth2WebFlowStateRepo};
 use sqlx::{Pool, Postgres, Sqlite};
 use std::fmt::Display;
@@ -35,9 +36,17 @@ pub mod project_grant;
 pub mod project_policy;
 pub mod token;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RepoError {
     Internal(String),
+}
+
+impl SafeDisplay for RepoError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            RepoError::Internal(_) => "Internal repository error".to_string(),
+        }
+    }
 }
 
 impl From<sqlx::Error> for RepoError {

@@ -1,7 +1,6 @@
-use crate::service::auth::CloudNamespace;
-use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
+use cloud_common::auth::CloudNamespace;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{AccountId, ComponentType, ProjectId};
+use golem_common::model::{ComponentType, ProjectId};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use poem_openapi::Object;
 use std::time::SystemTime;
@@ -105,32 +104,5 @@ impl From<golem_component_service_base::model::Component<CloudNamespace>> for Co
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ProjectView {
-    pub id: ProjectId,
-    pub owner_account_id: AccountId,
-    pub name: String,
-    pub description: String,
-}
-
-impl TryFrom<Project> for ProjectView {
-    type Error = String;
-
-    fn try_from(value: Project) -> Result<Self, Self::Error> {
-        let ProjectData {
-            name,
-            description,
-            owner_account_id,
-            ..
-        } = value.data.ok_or("Missing data")?;
-        Ok(Self {
-            id: value.id.ok_or("Missing id")?.try_into()?,
-            owner_account_id: owner_account_id.ok_or("Missing owner_account_id")?.into(),
-            name,
-            description,
-        })
     }
 }

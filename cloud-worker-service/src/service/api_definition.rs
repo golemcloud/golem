@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
+use crate::service::auth::AuthService;
 use async_trait::async_trait;
+use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
+use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
 use golem_common::model::ProjectId;
 use golem_worker_service_base::{
@@ -16,8 +19,6 @@ use golem_worker_service_base::{
         http::http_api_definition_validator::RouteValidationError,
     },
 };
-
-use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
 
 pub type ApiDefResult<T> = Result<(T, CloudNamespace), ApiDefinitionError>;
 

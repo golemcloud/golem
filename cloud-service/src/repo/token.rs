@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_common::model::TokenId;
+use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
@@ -65,6 +66,7 @@ impl<DB: Database> DbTokenRepo<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl TokenRepo for DbTokenRepo<sqlx::Postgres> {
     async fn create(&self, token: &TokenRecord) -> Result<(), RepoError> {
@@ -87,7 +89,8 @@ impl TokenRepo for DbTokenRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(&self, token_id: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(&self, token_id: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
         sqlx::query_as::<_, TokenRecord>("SELECT id, account_id, secret, created_at::timestamptz, expires_at::timestamptz FROM tokens WHERE id = $1")
             .bind(token_id)
             .fetch_optional(self.db_pool.deref())
@@ -95,54 +98,8 @@ impl TokenRepo for DbTokenRepo<sqlx::Postgres> {
             .map_err(|e| e.into())
     }
 
-    async fn get_by_secret(&self, secret: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
-        sqlx::query_as::<_, TokenRecord>("SELECT id, account_id, secret, created_at::timestamptz, expires_at::timestamptz FROM tokens WHERE secret = $1")
-            .bind(secret)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn get_by_account(&self, account_id: &str) -> Result<Vec<TokenRecord>, RepoError> {
-        sqlx::query_as::<_, TokenRecord>("SELECT  id, account_id, secret, created_at::timestamptz, expires_at::timestamptz FROM tokens WHERE account_id = $1")
-            .bind(account_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn delete(&self, token_id: &Uuid) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM tokens WHERE id = $1")
-            .bind(token_id)
-            .execute(self.db_pool.deref())
-            .await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl TokenRepo for DbTokenRepo<sqlx::Sqlite> {
-    async fn create(&self, token: &TokenRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-              INSERT INTO tokens
-                (id, account_id, secret, created_at, expires_at)
-              VALUES
-                ($1, $2, $3, $4, $5)
-            "#,
-        )
-        .bind(token.id)
-        .bind(token.account_id.as_str())
-        .bind(token.secret)
-        .bind(token.created_at)
-        .bind(token.expires_at)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn get(&self, token_id: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(&self, token_id: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
         sqlx::query_as::<_, TokenRecord>(
             "SELECT id, account_id, secret, created_at, expires_at FROM tokens WHERE id = $1",
         )
@@ -152,7 +109,20 @@ impl TokenRepo for DbTokenRepo<sqlx::Sqlite> {
         .map_err(|e| e.into())
     }
 
-    async fn get_by_secret(&self, secret: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get_by_secret)]
+    async fn get_by_secret_postgres(
+        &self,
+        secret: &Uuid,
+    ) -> Result<Option<TokenRecord>, RepoError> {
+        sqlx::query_as::<_, TokenRecord>("SELECT id, account_id, secret, created_at::timestamptz, expires_at::timestamptz FROM tokens WHERE secret = $1")
+            .bind(secret)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get_by_secret)]
+    async fn get_by_secret_sqlite(&self, secret: &Uuid) -> Result<Option<TokenRecord>, RepoError> {
         sqlx::query_as::<_, TokenRecord>(
             "SELECT id, account_id, secret, created_at, expires_at FROM tokens WHERE secret = $1",
         )
@@ -162,7 +132,20 @@ impl TokenRepo for DbTokenRepo<sqlx::Sqlite> {
         .map_err(|e| e.into())
     }
 
-    async fn get_by_account(&self, account_id: &str) -> Result<Vec<TokenRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get_by_account)]
+    async fn get_by_account_postgres(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<TokenRecord>, RepoError> {
+        sqlx::query_as::<_, TokenRecord>("SELECT  id, account_id, secret, created_at::timestamptz, expires_at::timestamptz FROM tokens WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get_by_account)]
+    async fn get_by_account_sqlite(&self, account_id: &str) -> Result<Vec<TokenRecord>, RepoError> {
         sqlx::query_as::<_, TokenRecord>("SELECT  id, account_id, secret, created_at, expires_at FROM tokens WHERE account_id = $1")
             .bind(account_id)
             .fetch_all(self.db_pool.deref())

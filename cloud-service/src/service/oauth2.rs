@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use crate::model::{
     EncodedOAuth2Session, OAuth2AccessToken, OAuth2Data, OAuth2Provider, OAuth2Session,
 };
 use crate::service::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
 use crate::service::oauth2_session::{OAuth2SessionError, OAuth2SessionService};
+use async_trait::async_trait;
+use cloud_common::SafeDisplay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
@@ -14,23 +14,19 @@ pub enum OAuth2Error {
     InvalidSession(String),
     #[error("Invalid State: {0}")]
     InvalidState(String),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error("Internal github client error: {0}")]
+    InternalGithubClientError(#[from] OAuth2GithubClientError),
+    #[error("Internal session error: {0}")]
+    InternalSessionError(#[from] OAuth2SessionError),
 }
 
-impl From<OAuth2GithubClientError> for OAuth2Error {
-    fn from(err: OAuth2GithubClientError) -> Self {
-        match err {
-            OAuth2GithubClientError::Unexpected(error) => OAuth2Error::Internal(error),
-        }
-    }
-}
-
-impl From<OAuth2SessionError> for OAuth2Error {
-    fn from(err: OAuth2SessionError) -> Self {
-        match err {
-            OAuth2SessionError::Internal(error) => OAuth2Error::Internal(error),
-            OAuth2SessionError::InvalidSession(msg) => OAuth2Error::InvalidSession(msg),
+impl SafeDisplay for OAuth2Error {
+    fn to_safe_string(&self) -> String {
+        match self {
+            OAuth2Error::InvalidSession(_) => self.to_string(),
+            OAuth2Error::InvalidState(_) => self.to_string(),
+            OAuth2Error::InternalGithubClientError(inner) => inner.to_safe_string(),
+            OAuth2Error::InternalSessionError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -136,47 +132,5 @@ impl OAuth2Service for OAuth2ServiceDefault {
         match provider {
             OAuth2Provider::Github => Ok(self.client.exchange_code_for_token(code, state).await?),
         }
-    }
-}
-
-#[derive(Default)]
-pub struct OAuth2ServiceNoOp {}
-
-#[async_trait]
-impl OAuth2Service for OAuth2ServiceNoOp {
-    async fn start_workflow(&self) -> Result<OAuth2Data, OAuth2Error> {
-        Ok(OAuth2Data {
-            url: String::new(),
-            user_code: String::new(),
-            expires: chrono::Utc::now(),
-            encoded_session: String::new(),
-        })
-    }
-
-    async fn finish_workflow(
-        &self,
-        _encoded_session: &EncodedOAuth2Session,
-    ) -> Result<OAuth2AccessToken, OAuth2Error> {
-        Ok(OAuth2AccessToken {
-            provider: OAuth2Provider::Github,
-            access_token: String::new(),
-        })
-    }
-
-    async fn get_authorize_url(
-        &self,
-        _provider: OAuth2Provider,
-        _state: &str,
-    ) -> Result<String, OAuth2Error> {
-        Ok(String::new())
-    }
-
-    async fn exchange_code_for_token(
-        &self,
-        _provider: OAuth2Provider,
-        _code: &str,
-        _state: &str,
-    ) -> Result<String, OAuth2Error> {
-        Ok(String::new())
     }
 }

@@ -16,6 +16,7 @@ use cloud_api_grpc::proto::golem::cloud::account::v1::{
 };
 use cloud_api_grpc::proto::golem::cloud::account::Account;
 use cloud_api_grpc::proto::golem::cloud::plan::Plan;
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
@@ -29,11 +30,14 @@ impl From<AuthServiceError> for AccountError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
             AuthServiceError::InvalidToken(_) => account_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
-            AuthServiceError::Internal(_) => account_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                account_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         AccountError { error: Some(error) }
     }
@@ -44,19 +48,29 @@ impl From<account::AccountError> for AccountError {
         let error = match value {
             account::AccountError::Unauthorized(_) => {
                 account_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             account::AccountError::Internal(_) => account_error::Error::InternalError(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
             account::AccountError::AccountNotFound(_) => {
                 account_error::Error::NotFound(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             account::AccountError::ArgValidation(errors) => {
                 account_error::Error::BadRequest(ErrorsBody { errors })
+            }
+            account::AccountError::InternalRepoError(_) => {
+                account_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            account::AccountError::InternalPlanError(_) => {
+                account_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
             }
         };
         AccountError { error: Some(error) }

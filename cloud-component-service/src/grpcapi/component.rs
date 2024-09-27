@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use tracing::Instrument;
 
-use crate::service::auth::{get_authorisation_token, CloudAuthCtx};
 use crate::service::component;
+use cloud_common::auth::CloudAuthCtx;
+use cloud_common::clients::auth::get_authorisation_token;
 use cloud_common::grpc::proto_project_id_string;
+use cloud_common::SafeDisplay;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
@@ -36,34 +38,38 @@ impl From<component::ComponentError> for ComponentError {
         let error = match value {
             component::ComponentError::Unauthorized(_) => {
                 component_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
-            component::ComponentError::Internal(_) => {
+            component::ComponentError::InternalAuthServiceError(_)
+            | component::ComponentError::InternalBaseComponentError(_)
+            | component::ComponentError::InternalLimitError(_)
+            | component::ComponentError::InternalProjectError(_)
+            | component::ComponentError::InternalRepoError(_) => {
                 component_error::Error::InternalError(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             component::ComponentError::ComponentProcessing(_) => {
                 component_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
             component::ComponentError::LimitExceeded(_) => {
                 component_error::Error::LimitExceeded(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             component::ComponentError::AlreadyExists(_) => {
                 component_error::Error::AlreadyExists(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             component::ComponentError::UnknownComponentId(_)
             | component::ComponentError::UnknownVersionedComponentId(_)
             | component::ComponentError::UnknownProject(_) => {
                 component_error::Error::NotFound(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };
@@ -92,9 +98,7 @@ pub struct ComponentGrpcApi {
 }
 
 impl ComponentGrpcApi {
-    pub fn new(
-        component_service: Arc<dyn crate::service::component::ComponentService + Sync + Send>,
-    ) -> Self {
+    pub fn new(component_service: Arc<dyn component::ComponentService + Sync + Send>) -> Self {
         Self { component_service }
     }
 

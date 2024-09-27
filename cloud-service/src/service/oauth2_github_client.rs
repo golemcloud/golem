@@ -1,8 +1,10 @@
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_common::SafeDisplay;
+use http::StatusCode;
 use url::Url;
 
 #[async_trait]
@@ -12,7 +14,7 @@ pub trait OAuth2GithubClient {
     async fn get_access_token(
         &self,
         device_code: &str,
-        interval: std::time::Duration,
+        interval: Duration,
         expires: DateTime<Utc>,
     ) -> Result<String, OAuth2GithubClientError>;
 
@@ -36,17 +38,34 @@ pub struct DeviceWorkflowData {
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2GithubClientError {
-    #[error("Unexpected error: {0}")]
-    Unexpected(#[from] anyhow::Error),
+    #[error("Failed to parse access token: {0}")]
+    FailedToParseAccessToken(reqwest::Error),
+    #[error("Failed to read GitHub response body: {0}")]
+    FailedToReadResponseBody(reqwest::Error),
+    #[error("Failed to parse GitHub response body: {0}")]
+    FailedToParseResponseBody(serde_json::Error),
+    #[error("Failed to retrieve GitHub device code: {0}")]
+    FailedToRetrieveDeviceCode(reqwest::Error),
+    #[error("Failed to retrieve GitHub device code: {0}")]
+    FailedToRetrieveDeviceCodeNonOk(StatusCode),
+    #[error("Failed to retrieve GitHub access token: {0}")]
+    FailedToRetrieveAccessToken(reqwest::Error),
+    #[error("Failed to retrieve GitHub access token: {0}")]
+    ErrorResponseToRetrieveAccessToken(ErrorResponse),
+    #[error("Failed to exchange code for token: {0}")]
+    FailedToExchangeCode(reqwest::Error),
+    #[error("Failed to exchange code for token: {0}")]
+    FailedToExchangeCodeNonOk(StatusCode),
+    #[error("Github device code expired, expires at: {expires_at}, current time: {current_time}")]
+    Expired {
+        expires_at: DateTime<Utc>,
+        current_time: DateTime<Utc>,
+    },
 }
 
-impl OAuth2GithubClientError {
-    fn unexpected<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Unexpected(anyhow::Error::msg(error).context(context))
+impl SafeDisplay for OAuth2GithubClientError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -70,14 +89,13 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| {
-                OAuth2GithubClientError::unexpected(e, "Failed to retrieve Github device code")
-            })?;
+            .map_err(OAuth2GithubClientError::FailedToRetrieveDeviceCode)?;
 
         if res.status().is_success() {
-            let response: DeviceCodeResponse = res.json().await.map_err(|e| {
-                OAuth2GithubClientError::unexpected(e, "Failed to read Github response body")
-            })?;
+            let response: DeviceCodeResponse = res
+                .json()
+                .await
+                .map_err(OAuth2GithubClientError::FailedToReadResponseBody)?;
 
             Ok(DeviceWorkflowData {
                 device_code: response.device_code,
@@ -87,12 +105,8 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                 interval: Duration::from_secs(response.interval),
             })
         } else {
-            Err(OAuth2GithubClientError::unexpected(
-                format!(
-                    "Failed to retrieve device code with status: {}",
-                    res.status()
-                ),
-                "Failed to retrieve Github device code",
+            Err(OAuth2GithubClientError::FailedToRetrieveDeviceCodeNonOk(
+                res.status(),
             ))
         }
     }
@@ -100,22 +114,19 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
     async fn get_access_token(
         &self,
         device_code: &str,
-        interval: std::time::Duration,
+        interval: Duration,
         expires: DateTime<Utc>,
     ) -> Result<String, OAuth2GithubClientError> {
         let client = reqwest::Client::new();
         let mut interval = interval;
 
         loop {
-            let now = chrono::Utc::now();
+            let now = Utc::now();
             if now > expires {
-                break Err(OAuth2GithubClientError::unexpected(
-                    format!(
-                        "Github device code expired, expires at: {}, current time: {}",
-                        expires, now
-                    ),
-                    "Github device code expired",
-                ));
+                break Err(OAuth2GithubClientError::Expired {
+                    expires_at: expires,
+                    current_time: now,
+                });
             }
 
             let response =
@@ -132,13 +143,12 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
                     } else if error.error == ErrorResponseKind::SlowDown {
                         let new_interval = error
                             .interval
-                            .map(std::time::Duration::from_secs)
-                            .unwrap_or(std::time::Duration::from_secs(5));
+                            .map(Duration::from_secs)
+                            .unwrap_or(Duration::from_secs(5));
                         interval = new_interval;
                     } else {
-                        break Err(OAuth2GithubClientError::unexpected(
-                            format!("Failed to retrieve Github access token: {:?}", error),
-                            "Failed to retrieve Github access token",
+                        break Err(OAuth2GithubClientError::ErrorResponseToRetrieveAccessToken(
+                            error,
                         ));
                     }
                 }
@@ -180,18 +190,16 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| {
-                OAuth2GithubClientError::unexpected("Failed to exchange code for token", e)
-            })?;
+            .map_err(OAuth2GithubClientError::FailedToExchangeCode)?;
 
         if res.status().is_success() {
-            let access_token: AccessToken = res.json().await.map_err(|e| {
-                OAuth2GithubClientError::unexpected("Failed to parse access token", e)
-            })?;
+            let access_token: AccessToken = res
+                .json()
+                .await
+                .map_err(OAuth2GithubClientError::FailedToParseAccessToken)?;
             Ok(access_token.access_token)
         } else {
-            Err(OAuth2GithubClientError::unexpected(
-                "Failed to exchange code for token",
+            Err(OAuth2GithubClientError::FailedToExchangeCodeNonOk(
                 res.status(),
             ))
         }
@@ -216,22 +224,19 @@ async fn execute_access_token_request(
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| {
-            OAuth2GithubClientError::unexpected(e, "Github Access Token Request Failed")
-        })?;
+        .map_err(OAuth2GithubClientError::FailedToRetrieveAccessToken)?;
 
-    let body = response.text().await.map_err(|e| {
-        OAuth2GithubClientError::unexpected(e, "Failed to extract Github response body")
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(OAuth2GithubClientError::FailedToReadResponseBody)?;
 
     match serde_json::from_str::<ErrorResponse>(&body) {
         Ok(error_response) => Ok(AccessTokenResponse::ErrorResponse(error_response)),
 
         Err(_) => {
-            let access_token_response =
-                serde_json::from_str::<AccessToken>(&body).map_err(|e| {
-                    OAuth2GithubClientError::unexpected(e, "Failed to parse Github response body")
-                })?;
+            let access_token_response = serde_json::from_str::<AccessToken>(&body)
+                .map_err(OAuth2GithubClientError::FailedToParseResponseBody)?;
             Ok(AccessTokenResponse::AccessToken(access_token_response))
         }
     }
@@ -263,11 +268,21 @@ struct AccessToken {
 
 #[allow(dead_code)]
 #[derive(serde::Deserialize, Debug)]
-struct ErrorResponse {
+pub struct ErrorResponse {
     error: ErrorResponseKind,
     error_description: Option<String>,
     error_uri: Option<String>,
     interval: Option<u64>,
+}
+
+impl Display for ErrorResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Error: {}", self.error)?;
+        if let Some(descr) = &self.error_description {
+            write!(f, ": {}", descr)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -337,6 +352,25 @@ pub enum ErrorResponseKind {
     ExpiredToken,
     Other(String),
 }
+
+impl Display for ErrorResponseKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match *self {
+            ErrorResponseKind::InvalidRequest => "Invalid Request",
+            ErrorResponseKind::InvalidClient => "Invalid Client",
+            ErrorResponseKind::InvalidGrant => "Invalid Grant",
+            ErrorResponseKind::UnauthorizedClient => "Unauthorized Client",
+            ErrorResponseKind::UnsupportedGrantType => "Unsupported Grant Type",
+            ErrorResponseKind::InvalidScope => "Invalid Scope",
+            ErrorResponseKind::AuthorizationPending => "Authorization Pending",
+            ErrorResponseKind::SlowDown => "Slow Down",
+            ErrorResponseKind::AccessDenied => "Access Denied",
+            ErrorResponseKind::ExpiredToken => "Expired Token",
+            ErrorResponseKind::Other(ref code) => code.as_str(),
+        })
+    }
+}
+
 impl ErrorResponseKind {
     fn from_str(s: &str) -> Self {
         match s {
@@ -406,7 +440,7 @@ mod tests {
             config: crate::config::OAuth2Config {
                 github_client_id: CLIENT_ID.into(),
                 github_client_secret: "".into(),
-                github_redirect_uri: url::Url::parse(
+                github_redirect_uri: Url::parse(
                     "http://localhost:8085/v1/login/oauth2/web/callback/github",
                 )
                 .unwrap(),

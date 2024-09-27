@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
 use sqlx::{Database, Pool};
 
@@ -27,6 +28,7 @@ impl<DB: Database> DbAccountFuelRepo<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
     async fn get(&self, id: &AccountId) -> Result<i64, RepoError> {
@@ -46,7 +48,8 @@ impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
         Ok(result.map(|r| r.consumed).unwrap_or(0))
     }
 
-    async fn update(&self, id: &AccountId, delta: i64) -> Result<i64, RepoError> {
+    #[when(sqlx::Postgres -> update)]
+    async fn update_postgres(&self, id: &AccountId, delta: i64) -> Result<i64, RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         sqlx::query(
@@ -90,28 +93,9 @@ impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Postgres> {
 
         Ok(updated_fuel.consumed)
     }
-}
 
-#[async_trait]
-impl AccountFuelRepo for DbAccountFuelRepo<sqlx::Sqlite> {
-    async fn get(&self, id: &AccountId) -> Result<i64, RepoError> {
-        let result = sqlx::query_as::<_, AccountFuel>(
-            "
-            SELECT consumed
-            FROM account_fuel
-            WHERE account_id = $1
-              AND month = EXTRACT(MONTH FROM current_date)
-              AND year = EXTRACT(YEAR FROM current_date)
-            ",
-        )
-        .bind(id.value.clone())
-        .fetch_optional(self.db_pool.as_ref())
-        .await?;
-
-        Ok(result.map(|r| r.consumed).unwrap_or(0))
-    }
-
-    async fn update(&self, id: &AccountId, delta: i64) -> Result<i64, RepoError> {
+    #[when(sqlx::Sqlite -> update)]
+    async fn update_sqlite(&self, id: &AccountId, delta: i64) -> Result<i64, RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         sqlx::query(

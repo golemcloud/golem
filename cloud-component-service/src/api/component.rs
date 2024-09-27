@@ -1,8 +1,8 @@
 use crate::api::ApiTags;
 use crate::model::*;
-use crate::service::auth::CloudAuthCtx;
 use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
-use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use cloud_common::SafeDisplay;
 use futures_util::TryStreamExt;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ProjectId;
@@ -66,34 +66,40 @@ impl From<ComponentServiceError> for ComponentError {
         match value {
             ComponentServiceError::Unauthorized(_) => {
                 ComponentError::Unauthorized(Json(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 }))
             }
             ComponentServiceError::ComponentProcessing(_) => {
                 ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 }))
             }
             ComponentServiceError::UnknownComponentId(_)
             | ComponentServiceError::UnknownVersionedComponentId(_)
             | ComponentServiceError::UnknownProject(_) => {
                 ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 }))
             }
             ComponentServiceError::LimitExceeded(_) => {
                 ComponentError::LimitExceeded(Json(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 }))
             }
             ComponentServiceError::AlreadyExists(_) => {
                 ComponentError::AlreadyExists(Json(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 }))
             }
-            ComponentServiceError::Internal(_) => ComponentError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
+            ComponentServiceError::InternalAuthServiceError(_)
+            | ComponentServiceError::InternalBaseComponentError(_)
+            | ComponentServiceError::InternalLimitError(_)
+            | ComponentServiceError::InternalProjectError(_)
+            | ComponentServiceError::InternalRepoError(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -294,12 +300,7 @@ impl ComponentApi {
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
-                .and_then(|response| match response {
-                    Some(component) => Ok(Json(component)),
-                    None => Err(ComponentError::NotFound(Json(ErrorBody {
-                        error: "Component not found".to_string(),
-                    }))),
-                })
+                .and_then(Self::handle_not_found)
         };
 
         record.result(response)
@@ -330,12 +331,7 @@ impl ComponentApi {
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
-            .and_then(|response| match response {
-                Some(component) => Ok(Json(component)),
-                None => Err(ComponentError::NotFound(Json(ErrorBody {
-                    error: "Component not found".to_string(),
-                }))),
-            });
+            .and_then(Self::handle_not_found);
 
         record.result(response)
     }
@@ -370,5 +366,16 @@ impl ComponentApi {
             .map(Json);
 
         record.result(response)
+    }
+
+    fn handle_not_found(
+        response: Option<crate::model::Component>,
+    ) -> Result<Json<crate::model::Component>> {
+        match response {
+            Some(component) => Ok(Json(component)),
+            None => Err(ComponentError::NotFound(Json(ErrorBody {
+                error: "Component not found".to_string(),
+            }))),
+        }
     }
 }

@@ -1,7 +1,6 @@
 use crate::api::worker::WorkerError;
-use crate::service::auth::CloudAuthCtx;
 use crate::service::worker::{ConnectWorkerStream, WorkerService};
-use cloud_common::auth::WrappedGolemSecuritySchema;
+use cloud_common::auth::{CloudAuthCtx, WrappedGolemSecuritySchema};
 use cloud_common::model::TokenSecret;
 use futures_util::StreamExt;
 use golem_common::model::{ComponentId, WorkerId};

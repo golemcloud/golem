@@ -1,9 +1,9 @@
 use std::fmt::Display;
 
-use crate::config::CloudServiceConfig;
-use crate::model::ProjectView;
-use crate::service::auth::authorised_request;
-use crate::UriBackConversion;
+use crate::clients::auth::authorised_request;
+use crate::config::RemoteCloudServiceConfig;
+use crate::model::{ProjectAuthorisedActions, ProjectView, TokenSecret};
+use crate::{SafeDisplay, UriBackConversion};
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
@@ -11,10 +11,8 @@ use cloud_api_grpc::proto::golem::cloud::project::v1::{
     get_default_project_response, get_project_actions_response, get_project_response,
     GetDefaultProjectRequest, GetProjectActionsRequest, GetProjectRequest,
 };
-use cloud_common::model::{ProjectActions, ProjectAuthorisedActions, TokenSecret};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
-use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
 use tonic::transport::Channel;
@@ -44,7 +42,7 @@ pub struct ProjectServiceDefault {
 }
 
 impl ProjectServiceDefault {
-    pub fn new(config: &CloudServiceConfig) -> Self {
+    pub fn new(config: &RemoteCloudServiceConfig) -> Self {
         let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
             GrpcClient::new(
                 CloudProjectServiceClient::new,
@@ -256,53 +254,20 @@ impl Display for ProjectError {
     }
 }
 
+impl SafeDisplay for ProjectError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ProjectError::Server(_) => self.to_string(),
+            ProjectError::Connection(_) => self.to_string(),
+            ProjectError::Transport(_) => self.to_string(),
+            ProjectError::Unknown(_) => self.to_string(),
+        }
+    }
+}
+
 impl std::error::Error for ProjectError {
     // TODO
     // fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
     //     Some(&self.source)
     // }
-}
-
-pub struct ProjectServiceNoop {
-    account_id: AccountId,
-}
-
-impl Default for ProjectServiceNoop {
-    fn default() -> Self {
-        Self {
-            account_id: AccountId::from("a1"),
-        }
-    }
-}
-
-#[async_trait]
-impl ProjectService for ProjectServiceNoop {
-    async fn get(
-        &self,
-        project_id: &ProjectId,
-        _: &TokenSecret,
-    ) -> Result<ProjectView, ProjectError> {
-        Ok(ProjectView {
-            id: project_id.clone(),
-            owner_account_id: self.account_id.clone(),
-            name: "test".to_string(),
-            description: "test".to_string(),
-        })
-    }
-
-    async fn get_default(&self, _: &TokenSecret) -> Result<ProjectView, ProjectError> {
-        todo!()
-    }
-
-    async fn get_actions(
-        &self,
-        project_id: &ProjectId,
-        _: &TokenSecret,
-    ) -> Result<ProjectAuthorisedActions, ProjectError> {
-        Ok(ProjectAuthorisedActions {
-            project_id: project_id.clone(),
-            owner_account_id: AccountId::from(""),
-            actions: ProjectActions::empty(),
-        })
-    }
 }

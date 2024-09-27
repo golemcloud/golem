@@ -1,6 +1,7 @@
 use crate::model::{AccountApiDomain, ApiDomain, DomainRequest};
-use crate::service::auth::CloudNamespace;
 use async_trait::async_trait;
+use cloud_common::auth::CloudNamespace;
+use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
 use golem_worker_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
@@ -93,54 +94,7 @@ impl<DB: Database> DbApiDomainRepo<DB> {
     }
 }
 
-#[async_trait]
-impl ApiDomainRepo for DbApiDomainRepo<sqlx::Sqlite> {
-    async fn create_or_update(&self, record: &ApiDomainRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-               INSERT INTO api_domains
-                (namespace, domain_name, name_servers, created_at)
-              VALUES
-                ($1, $2, $3, $4)
-              ON CONFLICT (namespace, domain_name) DO UPDATE
-              SET name_servers = $3
-            "#,
-        )
-        .bind(record.namespace.clone())
-        .bind(record.domain_name.clone())
-        .bind(record.name_servers.clone())
-        .bind(record.created_at)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn get(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at FROM api_domains WHERE domain_name = $1")
-            .bind(domain_name)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn delete(&self, domain_name: &str) -> Result<bool, RepoError> {
-        sqlx::query("DELETE FROM api_domains WHERE domain_name = $1")
-            .bind(domain_name)
-            .execute(self.db_pool.deref())
-            .await?;
-        Ok(true)
-    }
-
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDomainRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at FROM api_domains WHERE namespace = $1")
-            .bind(namespace)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-}
-
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
     async fn create_or_update(&self, record: &ApiDomainRecord) -> Result<(), RepoError> {
@@ -164,7 +118,17 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError> {
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at FROM api_domains WHERE domain_name = $1")
+            .bind(domain_name)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(&self, domain_name: &str) -> Result<Option<ApiDomainRecord>, RepoError> {
         sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at::timestamptz FROM api_domains WHERE domain_name = $1")
             .bind(domain_name)
             .fetch_optional(self.db_pool.deref())
@@ -180,7 +144,17 @@ impl ApiDomainRepo for DbApiDomainRepo<sqlx::Postgres> {
         Ok(true)
     }
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDomainRecord>, RepoError> {
+    #[when(sqlx::Sqlite -> get_all)]
+    async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ApiDomainRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at FROM api_domains WHERE namespace = $1")
+            .bind(namespace)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Postgres -> get_all)]
+    async fn get_all_postgres(&self, namespace: &str) -> Result<Vec<ApiDomainRecord>, RepoError> {
         sqlx::query_as::<_, ApiDomainRecord>("SELECT namespace, domain_name, name_servers, created_at::timestamptz FROM api_domains WHERE namespace = $1")
             .bind(namespace)
             .fetch_all(self.db_pool.deref())

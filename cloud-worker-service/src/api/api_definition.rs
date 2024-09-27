@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::service::api_definition::ApiDefinitionService;
-use crate::service::auth::CloudAuthCtx;
-use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;

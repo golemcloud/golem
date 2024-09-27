@@ -17,14 +17,16 @@ golem-service-base = { workspace = true }
 cloud-common = { path = "../cloud-common" }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 
+async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-async-trait = { workspace = true }
 bigdecimal = "0.4.2"
 bytes = { workspace = true }
 chrono = { workspace = true }
+conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
 figment = { workspace = true }
+futures = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
@@ -32,20 +34,22 @@ hyper = { workspace = true }
 jsonwebtoken = "9.2.0"
 lazy_static = { workspace = true }
 mappable-rc = "0.1.1"
-poem = { workspace = true, features = ["prometheus", "opentelemetry", "cookie", "test"] }
-poem-openapi = { workspace = true }
-prometheus = { workspace = true }
+num-traits = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+poem = { workspace = true, features = ["prometheus", "opentelemetry", "cookie", "test"] }
+poem-openapi = { workspace = true }
+prometheus = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = "3.5.0"
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "migrate", "chrono", "any"] }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "migrate", "chrono"] }
 tap = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -54,12 +58,8 @@ tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
 url = { workspace = true }
-num-traits = { workspace = true }
-anyhow = { workspace = true }
-futures = { workspace = true }
-thiserror = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 futures.workspace = true

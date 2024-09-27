@@ -3,8 +3,13 @@ use poem_openapi::{
     auth::{ApiKey, Bearer},
     SecurityScheme,
 };
+use std::fmt;
+use std::fmt::{Display, Formatter};
 
 use crate::model::TokenSecret;
+use bincode::{Decode, Encode};
+use golem_common::model::{AccountId, ProjectId};
+use serde::Deserialize;
 use std::str::FromStr;
 
 #[derive(SecurityScheme)]
@@ -100,6 +105,68 @@ async fn cookie_checker(_: &Request, cookie: ApiKey) -> Option<TokenSecret> {
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct CloudAuthCtx {
+    pub token_secret: TokenSecret,
+}
+
+impl CloudAuthCtx {
+    pub fn new(token_secret: TokenSecret) -> Self {
+        Self { token_secret }
+    }
+}
+
+impl IntoIterator for CloudAuthCtx {
+    type Item = (String, String);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        vec![(
+            "authorization".to_string(),
+            format!("Bearer {}", self.token_secret.value),
+        )]
+        .into_iter()
+    }
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Encode, Decode, Deserialize)]
+pub struct CloudNamespace {
+    pub project_id: ProjectId,
+    // project owner account
+    pub account_id: AccountId,
+}
+
+impl CloudNamespace {
+    pub fn new(project_id: ProjectId, account_id: AccountId) -> Self {
+        Self {
+            project_id,
+            account_id,
+        }
+    }
+}
+
+impl Display for CloudNamespace {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.account_id, self.project_id)
+    }
+}
+
+impl TryFrom<String> for CloudNamespace {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid namespace: {s}"));
+        }
+
+        Ok(Self {
+            project_id: ProjectId::try_from(parts[1])?,
+            account_id: AccountId::from(parts[0]),
+        })
+    }
+}
 
 #[cfg(test)]
 mod test {

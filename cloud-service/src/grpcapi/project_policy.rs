@@ -12,7 +12,8 @@ use cloud_api_grpc::proto::golem::cloud::projectpolicy::v1::{
 };
 use cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy;
 use cloud_common::grpc::proto_project_policy_id_string;
-use cloud_common::model::ProjectPolicyId;
+use cloud_common::model::{ProjectActions, ProjectPolicyId};
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;
@@ -27,12 +28,15 @@ impl From<AuthServiceError> for ProjectPolicyError {
         let error = match value {
             AuthServiceError::InvalidToken(_) => {
                 project_policy_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
-            AuthServiceError::Internal(_) => project_policy_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                project_policy_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         ProjectPolicyError { error: Some(error) }
     }
@@ -41,9 +45,9 @@ impl From<AuthServiceError> for ProjectPolicyError {
 impl From<project_policy::ProjectPolicyError> for ProjectPolicyError {
     fn from(value: project_policy::ProjectPolicyError) -> Self {
         let error = match value {
-            project_policy::ProjectPolicyError::Internal(_) => {
+            project_policy::ProjectPolicyError::InternalRepoError(_) => {
                 project_policy_error::Error::InternalError(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };
@@ -117,10 +121,10 @@ impl ProjectPolicyGrpcApi {
         let policy: model::ProjectPolicy = request
             .project_policy_data
             .map(|p| {
-                let project_actions: cloud_common::model::ProjectActions = p
+                let project_actions: ProjectActions = p
                     .actions
                     .and_then(|a| a.try_into().ok())
-                    .unwrap_or(cloud_common::model::ProjectActions::empty());
+                    .unwrap_or(ProjectActions::empty());
                 model::ProjectPolicy {
                     id: ProjectPolicyId::new_v4(),
                     name: p.name,

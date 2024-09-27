@@ -1,12 +1,5 @@
-use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
-
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use cloud_common::model::{TokenId, TokenSecret};
-use golem_common::model::AccountId;
-use tracing::info;
 
 use crate::auth::AccountAuthorisation;
 use crate::config::{AccountConfig, AccountsConfig};
@@ -16,6 +9,12 @@ use crate::service::account_grant::AccountGrantService;
 use crate::service::oauth2_provider_client::{OAuth2ProviderClient, OAuth2ProviderClientError};
 use crate::service::oauth2_token::{OAuth2TokenError, OAuth2TokenService};
 use crate::service::token::{TokenService, TokenServiceError};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use cloud_common::model::{TokenId, TokenSecret};
+use cloud_common::SafeDisplay;
+use golem_common::model::AccountId;
+use tracing::info;
 
 use super::token::UnsafeTokenWithMetadata;
 
@@ -24,41 +23,45 @@ pub enum LoginError {
     #[error("External error: {0}")]
     External(String),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    Internal(String),
+    #[error(transparent)]
+    InternalAccountError(#[from] AccountError),
+    #[error(transparent)]
+    InternalOAuth2ProviderClientError(OAuth2ProviderClientError),
+    #[error(transparent)]
+    InternalOAuth2TokenError(#[from] OAuth2TokenError),
+    #[error(transparent)]
+    InternalTokenServiceError(TokenServiceError),
 }
 
 impl LoginError {
-    fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+    fn internal(error: impl AsRef<str>) -> Self {
+        Self::Internal(error.as_ref().to_string())
     }
 
-    fn external<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::External(error.to_string())
+    fn external(error: impl AsRef<str>) -> Self {
+        Self::External(error.as_ref().to_string())
+    }
+}
+
+impl SafeDisplay for LoginError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            LoginError::External(_) => self.to_string(),
+            LoginError::Internal(_) => self.to_string(),
+            LoginError::InternalAccountError(inner) => inner.to_safe_string(),
+            LoginError::InternalOAuth2ProviderClientError(inner) => inner.to_safe_string(),
+            LoginError::InternalOAuth2TokenError(inner) => inner.to_safe_string(),
+            LoginError::InternalTokenServiceError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
 impl From<OAuth2ProviderClientError> for LoginError {
     fn from(err: OAuth2ProviderClientError) -> Self {
         match err {
-            OAuth2ProviderClientError::Internal(error) => LoginError::Internal(error),
             OAuth2ProviderClientError::External(msg) => LoginError::external(msg),
-        }
-    }
-}
-
-impl From<OAuth2TokenError> for LoginError {
-    fn from(err: OAuth2TokenError) -> Self {
-        match err {
-            OAuth2TokenError::Internal(error) => LoginError::Internal(error),
-            OAuth2TokenError::Unauthorized(_) => LoginError::internal(err),
-            OAuth2TokenError::AccountNotFound(_) => LoginError::internal(err),
-            OAuth2TokenError::TokenNotFound(_) => LoginError::internal(err),
+            _ => LoginError::InternalOAuth2ProviderClientError(err),
         }
     }
 }
@@ -66,23 +69,8 @@ impl From<OAuth2TokenError> for LoginError {
 impl From<TokenServiceError> for LoginError {
     fn from(err: TokenServiceError) -> Self {
         match err {
-            TokenServiceError::ArgValidation(_) => LoginError::internal(err),
-            TokenServiceError::UnknownToken(_) => LoginError::internal(err),
-            TokenServiceError::AccountNotFound(_) => LoginError::internal(err),
-            TokenServiceError::Internal(error) => LoginError::Internal(error),
-            TokenServiceError::Unauthorized(_) => LoginError::internal(err),
-            TokenServiceError::UnknownTokenState(_) => LoginError::external(err),
-        }
-    }
-}
-
-impl From<AccountError> for LoginError {
-    fn from(account_error: AccountError) -> Self {
-        match account_error {
-            AccountError::AccountNotFound(_) => LoginError::internal(account_error),
-            AccountError::ArgValidation(_) => LoginError::internal(account_error),
-            AccountError::Internal(error) => LoginError::Internal(error),
-            AccountError::Unauthorized(_) => LoginError::internal(account_error),
+            TokenServiceError::UnknownTokenState(_) => LoginError::external(err.to_string()),
+            _ => LoginError::InternalTokenServiceError(err),
         }
     }
 }
@@ -181,9 +169,7 @@ impl LoginServiceDefault {
         let expiration = Utc::now()
             // Ten years.
             .checked_add_months(chrono::Months::new(10 * 12))
-            .ok_or(LoginError::internal(
-                "Failed to calculate token expiry".to_string(),
-            ))?;
+            .ok_or(LoginError::internal("Failed to calculate token expiry"))?;
 
         let unsafe_token = self
             .token_service
@@ -310,46 +296,6 @@ impl LoginService for LoginServiceDefault {
         for account_config in self.accounts_config.accounts.values() {
             self.create_account(account_config).await?
         }
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-pub struct LoginServiceNoOp {}
-
-#[async_trait]
-impl LoginService for LoginServiceNoOp {
-    async fn oauth2(
-        &self,
-        _provider: &OAuth2Provider,
-        _access_token: &str,
-    ) -> Result<UnsafeToken, LoginError> {
-        Err(LoginError::internal("Not implemented".to_string()))
-    }
-
-    async fn generate_temp_token_state(
-        &self,
-        _redirect: Option<url::Url>,
-    ) -> Result<String, LoginError> {
-        Err(LoginError::internal("Not implemented".to_string()))
-    }
-
-    async fn link_temp_token(
-        &self,
-        _token: &TokenId,
-        _state: &str,
-    ) -> Result<UnsafeTokenWithMetadata, LoginError> {
-        Err(LoginError::internal("Not implemented".to_string()))
-    }
-
-    async fn get_temp_token(
-        &self,
-        _state: &str,
-    ) -> Result<Option<UnsafeTokenWithMetadata>, LoginError> {
-        Err(LoginError::internal("Not implemented".to_string()))
-    }
-
-    async fn create_initial_users(&self) -> Result<(), LoginError> {
         Ok(())
     }
 }

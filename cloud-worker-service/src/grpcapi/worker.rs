@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use crate::service::auth::{get_authorisation_token, AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
+use cloud_common::auth::CloudAuthCtx;
+use cloud_common::clients::auth::get_authorisation_token;
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -22,9 +24,10 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
+    proto_invocation_context_parent_worker_id_string, proto_target_worker_id_string,
+    proto_worker_id_string,
 };
-use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::{ComponentVersion, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::validate_worker_name;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -192,7 +195,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_and_await",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_target_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -222,7 +225,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_json",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_target_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -252,7 +255,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_target_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -278,7 +281,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_json",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_target_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -404,28 +407,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         Ok(Response::new(UpdateWorkerResponse {
             result: Some(response),
         }))
-    }
-}
-
-impl From<AuthServiceError> for GrpcWorkerError {
-    fn from(value: AuthServiceError) -> Self {
-        let error = match value {
-            AuthServiceError::Unauthorized(_) => worker_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
-            AuthServiceError::Forbidden(_) => worker_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
-            // TODO: this used to be unauthorized. How do we handle internal server errors?
-            AuthServiceError::Internal(_) => {
-                worker_error::Error::InternalError(WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: value.to_string(),
-                    })),
-                })
-            }
-        };
-        GrpcWorkerError { error: Some(error) }
     }
 }
 
@@ -594,7 +575,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -620,7 +601,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
@@ -649,7 +630,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<InvokeResult, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -676,7 +657,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<String, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
 
         let idempotency_key = request
@@ -749,16 +730,16 @@ impl WorkerGrpcApi {
     }
 }
 
-impl From<crate::service::worker::WorkerError> for GrpcWorkerError {
-    fn from(error: crate::service::worker::WorkerError) -> Self {
+impl From<worker::WorkerError> for GrpcWorkerError {
+    fn from(error: worker::WorkerError) -> Self {
         GrpcWorkerError {
             error: Some(error.into()),
         }
     }
 }
 
-impl From<crate::service::worker::WorkerError> for worker_error::Error {
-    fn from(value: crate::service::worker::WorkerError) -> Self {
+impl From<worker::WorkerError> for worker_error::Error {
+    fn from(value: worker::WorkerError) -> Self {
         match value {
             worker::WorkerError::Base(error) => match error {
                 WorkerServiceError::Component(error) => error.into(),
@@ -792,20 +773,21 @@ impl From<crate::service::worker::WorkerError> for worker_error::Error {
             worker::WorkerError::Unauthorized(error) => {
                 worker_error::Error::Unauthorized(ErrorBody { error })
             }
-            worker::WorkerError::Internal(error) => {
+            worker::WorkerError::InternalAuthServiceError(error) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error.to_string(),
+                        details: error.to_safe_string(),
                     })),
                 })
             }
             worker::WorkerError::ProjectNotFound(_) => worker_error::Error::NotFound(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
         }
     }
 }
 
+// TODO: this should be defined in one of the base libraries
 fn validated_worker_id(
     component_id: golem_common::model::ComponentId,
     worker_name: String,
@@ -818,6 +800,22 @@ fn validated_worker_id(
     })
 }
 
+// TODO: this should be defined in one of the base libraries
+fn validated_target_worker_id(
+    component_id: golem_common::model::ComponentId,
+    worker_name: Option<String>,
+) -> Result<TargetWorkerId, GrpcWorkerError> {
+    if let Some(worker_name) = &worker_name {
+        validate_worker_name(worker_name)
+            .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
+    }
+    Ok(TargetWorkerId {
+        component_id,
+        worker_name,
+    })
+}
+
+// TODO: this should be defined in one of the base libraries
 fn validate_protobuf_worker_id(
     worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
 ) -> Result<WorkerId, GrpcWorkerError> {
@@ -826,6 +824,17 @@ fn validate_protobuf_worker_id(
         .try_into()
         .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
     validated_worker_id(worker_id.component_id, worker_id.worker_name)
+}
+
+// TODO: this should be defined in one of the base libraries
+fn validate_protobuf_target_worker_id(
+    worker_id: Option<golem_api_grpc::proto::golem::worker::TargetWorkerId>,
+) -> Result<TargetWorkerId, GrpcWorkerError> {
+    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
+    let worker_id: TargetWorkerId = worker_id
+        .try_into()
+        .map_err(|e| bad_request_error(format!("Invalid target worker id: {e}")))?;
+    validated_target_worker_id(worker_id.component_id, worker_id.worker_name)
 }
 
 fn bad_request_error<T>(error: T) -> GrpcWorkerError
@@ -842,20 +851,20 @@ where
 fn error_to_status(error: GrpcWorkerError) -> Status {
     match error.error {
         Some(worker_error::Error::BadRequest(ErrorsBody { errors })) => {
-            tonic::Status::invalid_argument(format!("Bad Request: {:?}", errors))
+            Status::invalid_argument(format!("Bad Request: {:?}", errors))
         }
         Some(worker_error::Error::Unauthorized(ErrorBody { error })) => {
-            tonic::Status::unauthenticated(error)
+            Status::unauthenticated(error)
         }
         Some(worker_error::Error::LimitExceeded(ErrorBody { error })) => {
-            tonic::Status::resource_exhausted(error)
+            Status::resource_exhausted(error)
         }
-        Some(worker_error::Error::NotFound(ErrorBody { error })) => tonic::Status::not_found(error),
+        Some(worker_error::Error::NotFound(ErrorBody { error })) => Status::not_found(error),
         Some(worker_error::Error::AlreadyExists(ErrorBody { error })) => {
-            tonic::Status::already_exists(error)
+            Status::already_exists(error)
         }
         Some(worker_error::Error::InternalError(WorkerExecutionError { error: None })) => {
-            tonic::Status::unknown("Unknown error")
+            Status::unknown("Unknown error")
         }
 
         Some(worker_error::Error::InternalError(WorkerExecutionError {
@@ -938,9 +947,9 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                     "Sharding Not Ready".to_string()
                 }
             };
-            tonic::Status::internal(message)
+            Status::internal(message)
         }
-        None => tonic::Status::unknown("Unknown error"),
+        None => Status::unknown("Unknown error"),
     }
 }
 

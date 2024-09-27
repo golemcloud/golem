@@ -1,6 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
+use conditional_trait_gen::{trait_gen, when};
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
@@ -100,6 +101,7 @@ impl<DB: Database> DbOAuth2FlowState<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<sqlx::Postgres> {
     async fn generate_temp_token_state(&self, metadata: &[u8]) -> Result<String, RepoError> {
@@ -130,7 +132,8 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<sqlx::Postgres> {
         Ok(count > 0)
     }
 
-    async fn link_temp_token(
+    #[when(sqlx::Postgres -> link_temp_token)]
+    async fn link_temp_token_postgres(
         &self,
         token_id: &Uuid,
         state: &str,
@@ -161,63 +164,8 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<sqlx::Postgres> {
         Ok(result.and_then(|token| token.into()))
     }
 
-    async fn get_temp_token(&self, state: &str) -> Result<LinkedTokenState, RepoError> {
-        let result: Option<MaybeToken> = sqlx::query_as(
-            r#"
-            SELECT t.id,
-                   t.account_id,
-                   t.secret,
-                   t.created_at::timestamptz,
-                   t.expires_at::timestamptz,
-                   flow_state.metadata
-            FROM oauth2_web_flow_state flow_state
-            LEFT JOIN tokens t ON t.id = flow_state.token_id
-            WHERE flow_state.oauth2_state = $1
-            "#,
-        )
-        .bind(state)
-        .fetch_optional(self.db_pool.deref())
-        .await?;
-
-        let token_state: LinkedTokenState = result.into();
-
-        Ok(token_state)
-    }
-
-    async fn delete_expired_states(&self) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM oauth2_web_flow_state WHERE created_at < $1")
-            .bind(chrono::Utc::now() - EXPIRATION_TIME)
-            .execute(self.db_pool.deref())
-            .await?;
-
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<sqlx::Sqlite> {
-    async fn generate_temp_token_state(&self, metadata: &[u8]) -> Result<String, RepoError> {
-        let state = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO oauth2_web_flow_state (oauth2_state, metadata) VALUES ($1, $2)")
-            .bind(&state)
-            .bind(metadata)
-            .execute(self.db_pool.deref())
-            .await?;
-
-        Ok(state)
-    }
-
-    async fn valid_temp_token(&self, state: &str) -> Result<bool, RepoError> {
-        let (count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM oauth2_web_flow_state WHERE oauth2_state = $1")
-                .bind(state)
-                .fetch_one(self.db_pool.deref())
-                .await?;
-
-        Ok(count > 0)
-    }
-
-    async fn link_temp_token(
+    #[when(sqlx::Sqlite -> link_temp_token)]
+    async fn link_temp_token_sqlite(
         &self,
         token_id: &Uuid,
         state: &str,
@@ -243,7 +191,32 @@ impl OAuth2WebFlowStateRepo for DbOAuth2FlowState<sqlx::Sqlite> {
         Ok(result.and_then(|token| token.into()))
     }
 
-    async fn get_temp_token(&self, state: &str) -> Result<LinkedTokenState, RepoError> {
+    #[when(sqlx::Postgres -> get_temp_token)]
+    async fn get_temp_token_postgres(&self, state: &str) -> Result<LinkedTokenState, RepoError> {
+        let result: Option<MaybeToken> = sqlx::query_as(
+            r#"
+            SELECT t.id,
+                   t.account_id,
+                   t.secret,
+                   t.created_at::timestamptz,
+                   t.expires_at::timestamptz,
+                   flow_state.metadata
+            FROM oauth2_web_flow_state flow_state
+            LEFT JOIN tokens t ON t.id = flow_state.token_id
+            WHERE flow_state.oauth2_state = $1
+            "#,
+        )
+        .bind(state)
+        .fetch_optional(self.db_pool.deref())
+        .await?;
+
+        let token_state: LinkedTokenState = result.into();
+
+        Ok(token_state)
+    }
+
+    #[when(sqlx::Sqlite -> get_temp_token)]
+    async fn get_temp_token_sqlite(&self, state: &str) -> Result<LinkedTokenState, RepoError> {
         let result: Option<MaybeToken> = sqlx::query_as(
             r#"
             SELECT t.id, t.account_id, t.secret, t.created_at, t.expires_at, flow_state.metadata

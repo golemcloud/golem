@@ -1,75 +1,16 @@
-use crate::api::ApiTags;
+use crate::api::{ApiError, ApiResult, ApiTags};
 use crate::model::*;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::project_policy::{
-    ProjectPolicyError as ProjectPolicyServiceError, ProjectPolicyService,
-};
+use crate::service::auth::AuthService;
+use crate::service::project_policy::ProjectPolicyService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::ProjectPolicyId;
-use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
+use golem_service_base::model::ErrorBody;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum ProjectPolicyError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Project not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    /// Internal server error
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for ProjectPolicyError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            ProjectPolicyError::BadRequest(_) => "BadRequest",
-            ProjectPolicyError::NotFound(_) => "NotFound",
-            ProjectPolicyError::Unauthorized(_) => "Unauthorized",
-            ProjectPolicyError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, ProjectPolicyError>;
-
-impl From<AuthServiceError> for ProjectPolicyError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(_) => {
-                ProjectPolicyError::Unauthorized(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-            AuthServiceError::Internal(_) => ProjectPolicyError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-        }
-    }
-}
-
-impl From<ProjectPolicyServiceError> for ProjectPolicyError {
-    fn from(value: ProjectPolicyServiceError) -> Self {
-        match value {
-            ProjectPolicyServiceError::Internal(_) => {
-                ProjectPolicyError::InternalError(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-        }
-    }
-}
 
 pub struct ProjectPolicyApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
@@ -90,7 +31,7 @@ impl ProjectPolicyApi {
         &self,
         project_policy_id: Path<ProjectPolicyId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<ProjectPolicy>> {
+    ) -> ApiResult<Json<ProjectPolicy>> {
         let record = recorded_http_api_request!(
             "get_project_policies",
             project_policy_id = project_policy_id.0.to_string(),
@@ -109,7 +50,7 @@ impl ProjectPolicyApi {
                 .await?;
             match policy {
                 Some(policy) => Ok(Json(policy)),
-                None => Err(ProjectPolicyError::NotFound(Json(ErrorBody {
+                None => Err(ApiError::NotFound(Json(ErrorBody {
                     error: "Project policy not found".to_string(),
                 }))),
             }
@@ -126,7 +67,7 @@ impl ProjectPolicyApi {
         &self,
         request: Json<ProjectPolicyData>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<ProjectPolicy>> {
+    ) -> ApiResult<Json<ProjectPolicy>> {
         let record = recorded_http_api_request!(
             "create_project_policy",
             project_policy_name = request.0.name.to_string(),

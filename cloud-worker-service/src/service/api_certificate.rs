@@ -1,11 +1,17 @@
-use std::error::Error;
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
-
+use crate::aws_config::AwsConfig;
+use crate::aws_load_balancer::AwsLoadBalancer;
+use crate::config::DomainRecordsConfig;
+use crate::model::{CertificateId, CertificateRequest};
+use crate::repo::api_certificate::{ApiCertificateRepo, CertificateRecord};
+use crate::service::api_certificate::CertificateServiceError::InternalConversionError;
+use crate::service::auth::AuthService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
+use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
+use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
+use cloud_common::SafeDisplay;
 use derive_more::Display;
 use golem_common::config::RetryConfig;
 use golem_common::model::AccountId;
@@ -20,16 +26,12 @@ use rusoto_core::RusotoError;
 use rusoto_elbv2::{
     AddListenerCertificatesInput, Certificate, Elb, ElbClient, RemoveListenerCertificatesInput,
 };
+use std::error::Error;
+use std::fmt::Debug;
+use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tracing::info;
 use x509_certificate::X509Certificate;
-
-use crate::aws_config::AwsConfig;
-use crate::aws_load_balancer::AwsLoadBalancer;
-use crate::config::DomainRecordsConfig;
-use crate::model::{CertificateId, CertificateRequest};
-use crate::repo::api_certificate::{ApiCertificateRepo, CertificateRecord};
-use crate::service::auth::{AuthService, AuthServiceError, CloudAuthCtx, CloudNamespace};
 
 const AWS_ACCOUNT_TAG_NAME: &str = "account";
 const AWS_WORKSPACE_TAG_NAME: &str = "workspace";
@@ -43,19 +45,29 @@ pub enum CertificateServiceError {
     CertificateNotFound(CertificateId),
     #[error("Certificate Not Available: {0}")]
     CertificateNotAvailable(String),
+    #[error("Internal certificate manager error: {0}")]
+    InternalCertificateManagerError(String),
+    #[error("Internal auth client error: {0}")]
+    InternalAuthClientError(String),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(RepoError),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    InternalConversionError(String),
 }
 
-impl CertificateServiceError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
+impl SafeDisplay for CertificateServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            CertificateServiceError::Unauthorized(_) => self.to_string(),
+            CertificateServiceError::CertificateNotFound(_) => self.to_string(),
+            CertificateServiceError::CertificateNotAvailable(_) => self.to_string(),
+            CertificateServiceError::InternalCertificateManagerError(_) => self.to_string(),
+            CertificateServiceError::InternalAuthClientError(_) => self.to_string(),
+            CertificateServiceError::InternalRepoError(_) => {
+                "Internal repository error".to_string()
+            } // TODO: add SafeDisplay to RepoError
+            InternalConversionError(_) => self.to_string(),
+        }
     }
 }
 
@@ -66,7 +78,7 @@ impl From<CertificateManagerError> for CertificateServiceError {
                 CertificateServiceError::CertificateNotAvailable(error)
             }
             CertificateManagerError::Internal(error) => {
-                CertificateServiceError::internal(error, "Certificate manager error")
+                CertificateServiceError::InternalCertificateManagerError(error)
             }
         }
     }
@@ -77,14 +89,16 @@ impl From<AuthServiceError> for CertificateServiceError {
         match value {
             AuthServiceError::Unauthorized(error) => CertificateServiceError::Unauthorized(error),
             AuthServiceError::Forbidden(error) => CertificateServiceError::Unauthorized(error),
-            AuthServiceError::Internal(error) => CertificateServiceError::Internal(error),
+            AuthServiceError::InternalClientError(error) => {
+                CertificateServiceError::InternalAuthClientError(error)
+            }
         }
     }
 }
 
 impl From<RepoError> for CertificateServiceError {
     fn from(value: RepoError) -> Self {
-        CertificateServiceError::internal(value, "Repository error")
+        CertificateServiceError::InternalRepoError(value)
     }
 }
 
@@ -182,10 +196,50 @@ impl CertificateService for CertificateServiceDefault {
         self.certificate_repo.create_or_update(&record).await?;
 
         let certificate = record.try_into().map_err(|e| {
-            CertificateServiceError::internal(e, "Failed to convert Certificate record")
+            InternalConversionError(format!("Failed to convert Certificate record: {e}"))
         })?;
 
         Ok(certificate)
+    }
+
+    async fn delete(
+        &self,
+        project_id: &ProjectId,
+        certificate_id: &CertificateId,
+        auth: &CloudAuthCtx,
+    ) -> Result<(), CertificateServiceError> {
+        let namespace = self
+            .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
+            .await?;
+
+        info!(
+            namespace = %namespace,
+            "Delete API certificate -id: {}",
+            certificate_id
+        );
+        let account_id = namespace.account_id.clone();
+
+        let data = self
+            .certificate_repo
+            .get(&namespace.to_string(), &certificate_id.0)
+            .await?;
+
+        if let Some(certificate) = data {
+            let _ = self
+                .certificate_manager
+                .delete(&account_id, &certificate.external_id)
+                .await?;
+
+            let _ = self
+                .certificate_repo
+                .delete(&namespace.to_string(), &certificate_id.0)
+                .await?;
+            Ok(())
+        } else {
+            Err(CertificateServiceError::CertificateNotFound(
+                certificate_id.clone(),
+            ))
+        }
     }
 
     async fn get(
@@ -229,82 +283,10 @@ impl CertificateService for CertificateServiceDefault {
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<crate::model::Certificate>, _>>()
             .map_err(|e| {
-                CertificateServiceError::internal(e, "Failed to convert Certificate record")
+                InternalConversionError(format!("Failed to convert Certificate record: {e}"))
             })?;
 
         Ok(values)
-    }
-
-    async fn delete(
-        &self,
-        project_id: &ProjectId,
-        certificate_id: &CertificateId,
-        auth: &CloudAuthCtx,
-    ) -> Result<(), CertificateServiceError> {
-        let namespace = self
-            .is_authorized(project_id, ProjectAction::DeleteApiDefinition, auth)
-            .await?;
-
-        info!(
-            namespace = %namespace,
-            "Delete API certificate -id: {}",
-            certificate_id
-        );
-        let account_id = namespace.account_id.clone();
-
-        let data = self
-            .certificate_repo
-            .get(&namespace.to_string(), &certificate_id.0)
-            .await?;
-
-        if let Some(certificate) = data {
-            let _ = self
-                .certificate_manager
-                .delete(&account_id, &certificate.external_id)
-                .await?;
-
-            let _ = self
-                .certificate_repo
-                .delete(&namespace.to_string(), &certificate_id.0)
-                .await?;
-            Ok(())
-        } else {
-            Err(CertificateServiceError::CertificateNotFound(
-                certificate_id.clone(),
-            ))
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct CertificateServiceNoop {}
-
-#[async_trait]
-impl CertificateService for CertificateServiceNoop {
-    async fn create(
-        &self,
-        request: &CertificateRequest,
-        _auth: &CloudAuthCtx,
-    ) -> Result<crate::model::Certificate, CertificateServiceError> {
-        Ok(crate::model::Certificate::new(request, Utc::now()))
-    }
-
-    async fn delete(
-        &self,
-        _project_id: &ProjectId,
-        _certificate_id: &CertificateId,
-        _auth: &CloudAuthCtx,
-    ) -> Result<(), CertificateServiceError> {
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        _project_id: ProjectId,
-        _certificate_id: Option<CertificateId>,
-        _auth: &CloudAuthCtx,
-    ) -> Result<Vec<crate::model::Certificate>, CertificateServiceError> {
-        Ok(vec![])
     }
 }
 
@@ -371,12 +353,12 @@ pub trait CertificateManager {
 }
 
 #[derive(Default)]
-pub struct CertificateManagerNoop {
+pub struct InMemoryCertificateManager {
     pub domain_records_config: DomainRecordsConfig,
 }
 
 #[async_trait]
-impl CertificateManager for CertificateManagerNoop {
+impl CertificateManager for InMemoryCertificateManager {
     async fn import(
         &self,
         _account_id: &AccountId,
@@ -809,11 +791,8 @@ async fn remove_certificate_from_load_balancer(
 mod tests {
     use crate::aws_config::AwsConfig;
     use crate::config::DomainRecordsConfig;
-    use crate::service::api_certificate::{
-        AwsCertificateManager, CertificateManager, CertificateServiceError,
-    };
+    use crate::service::api_certificate::{AwsCertificateManager, CertificateManager};
     use golem_common::model::AccountId;
-    use golem_worker_service_base::repo::RepoError;
 
     fn get_certificate_body() -> &'static str {
         r#"
@@ -913,15 +892,5 @@ rnhtC5zQq8F/lo4kJjmvwQ==
 
         println!("{:?}", delete_result);
         assert!(delete_result.is_ok());
-    }
-
-    #[test]
-    pub fn test_repo_error_to_service_error() {
-        let repo_err = RepoError::Internal("some sql error".to_string());
-        let service_err: CertificateServiceError = repo_err.into();
-        assert_eq!(
-            service_err.to_string(),
-            "Internal error: Repository error".to_string()
-        );
     }
 }

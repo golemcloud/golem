@@ -1,79 +1,17 @@
-use crate::api::ApiTags;
+use crate::api::{ApiError, ApiResult, ApiTags};
 use crate::model::*;
-use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
-use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::account_grant::AccountGrantService;
+use crate::service::auth::AuthService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::Role;
-use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
+use golem_service_base::model::ErrorBody;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum GrantError {
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for GrantError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            GrantError::BadRequest(_) => "BadRequest",
-            GrantError::NotFound(_) => "NotFound",
-            GrantError::Unauthorized(_) => "Unauthorized",
-            GrantError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, GrantError>;
-
-impl From<AuthServiceError> for GrantError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(_) => GrantError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            AuthServiceError::Internal(_) => GrantError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-        }
-    }
-}
-
-impl From<AccountGrantServiceError> for GrantError {
-    fn from(value: AccountGrantServiceError) -> Self {
-        match value {
-            AccountGrantServiceError::Unauthorized(_) => {
-                GrantError::Unauthorized(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-            AccountGrantServiceError::Internal(_) => GrantError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            AccountGrantServiceError::ArgValidation(errors) => {
-                GrantError::BadRequest(Json(ErrorsBody { errors }))
-            }
-            AccountGrantServiceError::AccountNotFound(_) => {
-                GrantError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
-                }))
-            }
-        }
-    }
-}
 
 pub struct GrantApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
@@ -91,7 +29,7 @@ impl GrantApi {
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<Role>>> {
+    ) -> ApiResult<Json<Vec<Role>>> {
         let record =
             recorded_http_api_request!("get_account_grants", account_id = account_id.0.to_string());
         let response = {
@@ -121,7 +59,7 @@ impl GrantApi {
         account_id: Path<AccountId>,
         role: Path<Role>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Role>> {
+    ) -> ApiResult<Json<Role>> {
         let record =
             recorded_http_api_request!("get_account_grant", account_id = account_id.0.to_string());
         let response = {
@@ -138,7 +76,7 @@ impl GrantApi {
             if roles.contains(&role.0) {
                 Ok(Json(role.0))
             } else {
-                Err(GrantError::NotFound(Json(ErrorBody {
+                Err(ApiError::NotFound(Json(ErrorBody {
                     error: "Role not found".to_string(),
                 })))
             }
@@ -157,7 +95,7 @@ impl GrantApi {
         account_id: Path<AccountId>,
         role: Path<Role>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Role>> {
+    ) -> ApiResult<Json<Role>> {
         let record = recorded_http_api_request!(
             "create_account_grant",
             account_id = account_id.0.to_string()
@@ -188,7 +126,7 @@ impl GrantApi {
         account_id: Path<AccountId>,
         role: Path<Role>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<DeleteGrantResponse>> {
+    ) -> ApiResult<Json<DeleteGrantResponse>> {
         let record = recorded_http_api_request!(
             "delete_account_grant",
             account_id = account_id.0.to_string()

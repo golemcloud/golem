@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use std::fmt::{Debug, Display};
-
 use crate::model::{ExternalLogin, OAuth2Provider};
+use async_trait::async_trait;
+use cloud_common::SafeDisplay;
+use std::fmt::Debug;
 
 #[async_trait]
 pub trait OAuth2ProviderClient {
@@ -17,31 +17,24 @@ pub enum OAuth2ProviderClientError {
     #[error("External error: {0}")]
     External(String),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    InternalClientError(#[from] reqwest::Error),
+    #[error("Internal error: {0}")]
+    InternalParseError(#[from] serde_json::Error),
 }
 
 impl OAuth2ProviderClientError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
-    }
-
-    fn external<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::External(error.to_string())
+    fn external(error: impl AsRef<str>) -> Self {
+        Self::External(error.as_ref().to_string())
     }
 }
 
-impl From<reqwest::Error> for OAuth2ProviderClientError {
-    fn from(error: reqwest::Error) -> Self {
-        OAuth2ProviderClientError::internal(error, "Github request error")
+impl SafeDisplay for OAuth2ProviderClientError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            OAuth2ProviderClientError::External(_) => self.to_string(),
+            OAuth2ProviderClientError::InternalClientError(_) => self.to_string(),
+            OAuth2ProviderClientError::InternalParseError(_) => self.to_string(),
+        }
     }
 }
 
@@ -142,12 +135,7 @@ where
         )))
     } else {
         let full = response.bytes().await?;
-        let json = serde_json::from_slice(&full).map_err(|e| {
-            OAuth2ProviderClientError::internal(
-                format!("Failed to deserialize JSON {prefix}: {e}, Status: {status}",),
-                "Failed to deserialize Github response",
-            )
-        })?;
+        let json = serde_json::from_slice(&full)?;
         Ok(json)
     }
 }

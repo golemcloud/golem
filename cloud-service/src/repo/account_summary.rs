@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
 use sqlx::{Database, Pool};
 
@@ -47,9 +48,11 @@ impl<DB: Database> DbAccountSummaryRepo<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl AccountSummaryRepo for DbAccountSummaryRepo<sqlx::Postgres> {
-    async fn get(&self, skip: i32, limit: i32) -> Result<Vec<AccountSummary>, RepoError> {
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(&self, skip: i32, limit: i32) -> Result<Vec<AccountSummary>, RepoError> {
         let result = sqlx::query_as::<_, AccountSummaryRecord>(
           "
           SELECT a.id, a.name, a.email, COALESCE(ac.counter, 0::bigint) AS components_count, COALESCE(aw.counter, 0::bigint) AS workers_count, t.created_at::timestamptz
@@ -72,17 +75,8 @@ impl AccountSummaryRepo for DbAccountSummaryRepo<sqlx::Postgres> {
         Ok(result.into_iter().map(|r| r.into()).collect())
     }
 
-    async fn count(&self) -> Result<u64, RepoError> {
-        let result = sqlx::query_as::<_, (i64,)>("SELECT count(*) FROM accounts")
-            .fetch_one(self.db_pool.as_ref())
-            .await?;
-        Ok(result.0 as u64)
-    }
-}
-
-#[async_trait]
-impl AccountSummaryRepo for DbAccountSummaryRepo<sqlx::Sqlite> {
-    async fn get(&self, skip: i32, limit: i32) -> Result<Vec<AccountSummary>, RepoError> {
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(&self, skip: i32, limit: i32) -> Result<Vec<AccountSummary>, RepoError> {
         let result = sqlx::query_as::<_, AccountSummaryRecord>(
             "
           SELECT a.id, a.name, a.email, CAST(IFNULL(ac.counter, 0) AS bigint) AS components_count, CAST(IFNULL(aw.counter, 0) AS bigint) AS workers_count, t.created_at

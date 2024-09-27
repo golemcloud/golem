@@ -3,6 +3,7 @@ use crate::model::*;
 use crate::service::account_summary::{AccountSummaryService, AccountSummaryServiceError};
 use crate::service::auth::{AuthService, AuthServiceError};
 use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::SafeDisplay;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::ErrorBody;
@@ -36,12 +37,15 @@ impl From<AuthServiceError> for AccountSummaryError {
         match value {
             AuthServiceError::InvalidToken(_) => {
                 AccountSummaryError::Unauthorized(Json(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 }))
             }
-            AuthServiceError::Internal(_) => AccountSummaryError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                AccountSummaryError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -51,12 +55,12 @@ impl From<AccountSummaryServiceError> for AccountSummaryError {
         match value {
             AccountSummaryServiceError::Unauthorized(_) => {
                 AccountSummaryError::Unauthorized(Json(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 }))
             }
             AccountSummaryServiceError::Internal(_) => {
                 AccountSummaryError::InternalError(Json(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 }))
             }
         }

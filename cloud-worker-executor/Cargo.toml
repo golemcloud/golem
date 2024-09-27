@@ -66,8 +66,7 @@ windows-sys = "0.52.0"
 log = "0.4.22"
 
 [dev-dependencies]
-golem-worker-executor-base = { workspace = true, features = ["mocks"] }
-fred = { workspace = true, features = ["metrics", "serde-json", "partial-tracing", "mocks"] }
+golem-worker-executor-base = { workspace = true }
 ctor = "0.2.6"
 assert2 = "0.3.11"
 serde_json = { workspace = true }

@@ -20,6 +20,8 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
 
+use crate::auth::CloudNamespace;
+use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use golem_common::newtype_uuid;
 
 newtype_uuid!(PlanId, cloud_api_grpc::proto::golem::cloud::plan::PlanId);
@@ -152,8 +154,8 @@ impl TryFrom<i32> for ProjectAction {
     }
 }
 
-impl std::fmt::Display for ProjectAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ProjectAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match *self {
             ProjectAction::ViewComponent => write!(f, "ViewComponent"),
             ProjectAction::CreateComponent => write!(f, "CreateComponent"),
@@ -330,7 +332,7 @@ impl FromStr for Role {
 }
 
 impl Display for Role {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             Role::Admin => write!(f, "Admin"),
             Role::MarketingAdmin => write!(f, "MarketingAdmin"),
@@ -339,5 +341,38 @@ impl Display for Role {
             Role::CreateProject => write!(f, "CreateProject"),
             Role::InstanceServer => write!(f, "InstanceServer"),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectView {
+    pub id: ProjectId,
+    pub owner_account_id: AccountId,
+    pub name: String,
+    pub description: String,
+}
+
+impl From<ProjectView> for CloudNamespace {
+    fn from(value: ProjectView) -> Self {
+        CloudNamespace::new(value.id, value.owner_account_id)
+    }
+}
+
+impl TryFrom<Project> for ProjectView {
+    type Error = String;
+
+    fn try_from(value: Project) -> Result<Self, Self::Error> {
+        let ProjectData {
+            name,
+            description,
+            owner_account_id,
+            ..
+        } = value.data.ok_or("Missing data")?;
+        Ok(Self {
+            id: value.id.ok_or("Missing id")?.try_into()?,
+            owner_account_id: owner_account_id.ok_or("Missing owner_account_id")?.into(),
+            name,
+            description,
+        })
     }
 }

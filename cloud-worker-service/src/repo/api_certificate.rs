@@ -1,6 +1,7 @@
 use crate::model::{Certificate, CertificateId, CertificateRequest};
-use crate::service::auth::CloudNamespace;
 use async_trait::async_trait;
+use cloud_common::auth::CloudNamespace;
+use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
 use golem_worker_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
@@ -75,66 +76,7 @@ impl<DB: Database> DbApiCertificateRepo<DB> {
     }
 }
 
-#[async_trait]
-impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Sqlite> {
-    async fn create_or_update(&self, record: &CertificateRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-               INSERT INTO api_certificates
-                (namespace, id, domain_name, external_id, created_at)
-              VALUES
-                ($1, $2, $3, $4, $5)
-              ON CONFLICT (namespace, id) DO UPDATE
-              SET domain_name = $3,
-                  external_id = $4
-            "#,
-        )
-        .bind(record.namespace.clone())
-        .bind(record.id)
-        .bind(record.domain_name.clone())
-        .bind(record.external_id.clone())
-        .bind(record.created_at)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        namespace: &str,
-        id: &Uuid,
-    ) -> Result<Option<CertificateRecord>, RepoError> {
-        sqlx::query_as::<_, CertificateRecord>(
-            "SELECT namespace, id, domain_name, external_id, created_at FROM api_certificates WHERE namespace = $1 AND id = $2",
-        )
-        .bind(namespace)
-        .bind(id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
-    }
-
-    async fn delete(&self, namespace: &str, id: &Uuid) -> Result<bool, RepoError> {
-        sqlx::query("DELETE FROM api_certificates WHERE namespace = $1 AND id = $2")
-            .bind(namespace)
-            .bind(id)
-            .execute(self.db_pool.deref())
-            .await?;
-        Ok(true)
-    }
-
-    async fn get_all(&self, namespace: &str) -> Result<Vec<CertificateRecord>, RepoError> {
-        sqlx::query_as::<_, CertificateRecord>(
-            "SELECT namespace, id, domain_name, external_id, created_at FROM api_certificates WHERE namespace = $1",
-        )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
-    }
-}
-
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
     async fn create_or_update(&self, record: &CertificateRecord) -> Result<(), RepoError> {
@@ -160,7 +102,24 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(
+        &self,
+        namespace: &str,
+        id: &Uuid,
+    ) -> Result<Option<CertificateRecord>, RepoError> {
+        sqlx::query_as::<_, CertificateRecord>(
+            "SELECT namespace, id, domain_name, external_id, created_at FROM api_certificates WHERE namespace = $1 AND id = $2",
+        )
+        .bind(namespace)
+        .bind(id)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(
         &self,
         namespace: &str,
         id: &Uuid,
@@ -168,11 +127,11 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
         sqlx::query_as::<_, CertificateRecord>(
             "SELECT namespace, id, domain_name, external_id, created_at::timestamptz FROM api_certificates WHERE namespace = $1 AND id = $2",
         )
-        .bind(namespace)
-        .bind(id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
+            .bind(namespace)
+            .bind(id)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn delete(&self, namespace: &str, id: &Uuid) -> Result<bool, RepoError> {
@@ -184,13 +143,25 @@ impl ApiCertificateRepo for DbApiCertificateRepo<sqlx::Postgres> {
         Ok(true)
     }
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<CertificateRecord>, RepoError> {
+    #[when(sqlx::Sqlite -> get_all)]
+    async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<CertificateRecord>, RepoError> {
         sqlx::query_as::<_, CertificateRecord>(
-            "SELECT namespace, id, domain_name, external_id, created_at::timestamptz FROM api_certificates WHERE namespace = $1",
+            "SELECT namespace, id, domain_name, external_id, created_at FROM api_certificates WHERE namespace = $1",
         )
         .bind(namespace)
         .fetch_all(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Postgres -> get_all)]
+    async fn get_all_postgres(&self, namespace: &str) -> Result<Vec<CertificateRecord>, RepoError> {
+        sqlx::query_as::<_, CertificateRecord>(
+            "SELECT namespace, id, domain_name, external_id, created_at::timestamptz FROM api_certificates WHERE namespace = $1",
+        )
+            .bind(namespace)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 }

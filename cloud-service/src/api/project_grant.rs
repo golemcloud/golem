@@ -1,113 +1,18 @@
-use crate::api::ApiTags;
+use crate::api::{ApiTags, LimitedApiError, LimitedApiResult};
 use crate::model::*;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::project_grant::{
-    ProjectGrantError as ProjectGrantServiceError, ProjectGrantService,
-};
-use crate::service::project_policy::{
-    ProjectPolicyError as ProjectPolicyServiceError, ProjectPolicyService,
-};
+use crate::service::auth::AuthService;
+use crate::service::project_grant::ProjectGrantService;
+use crate::service::project_policy::ProjectPolicyService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::{ProjectActions, ProjectGrantId, ProjectPolicyId};
-use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
+use golem_service_base::model::ErrorBody;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum ProjectGrantError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Maximum number of projects exceeded
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
-    /// Project not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    /// Internal server error
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for ProjectGrantError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            ProjectGrantError::BadRequest(_) => "BadRequest",
-            ProjectGrantError::NotFound(_) => "NotFound",
-            ProjectGrantError::LimitExceeded(_) => "LimitExceeded",
-            ProjectGrantError::Unauthorized(_) => "Unauthorized",
-            ProjectGrantError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, ProjectGrantError>;
-
-impl From<AuthServiceError> for ProjectGrantError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(_) => ProjectGrantError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            AuthServiceError::Internal(_) => ProjectGrantError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-        }
-    }
-}
-
-impl From<ProjectGrantServiceError> for ProjectGrantError {
-    fn from(value: ProjectGrantServiceError) -> Self {
-        match value {
-            ProjectGrantServiceError::Internal(_) => {
-                ProjectGrantError::InternalError(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-            ProjectGrantServiceError::Unauthorized(_) => {
-                ProjectGrantError::InternalError(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-            ProjectGrantServiceError::ProjectNotFound(_) => {
-                ProjectGrantError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
-                }))
-            }
-            ProjectGrantServiceError::ProjectPolicyNotFound(_) => {
-                ProjectGrantError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
-                }))
-            }
-            ProjectGrantServiceError::AccountNotFound(_) => {
-                ProjectGrantError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_string()],
-                }))
-            }
-        }
-    }
-}
-
-impl From<ProjectPolicyServiceError> for ProjectGrantError {
-    fn from(value: ProjectPolicyServiceError) -> Self {
-        match value {
-            ProjectPolicyServiceError::Internal(_) => {
-                ProjectGrantError::InternalError(Json(ErrorBody {
-                    error: value.to_string(),
-                }))
-            }
-        }
-    }
-}
 
 pub struct ProjectGrantApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
@@ -135,7 +40,7 @@ impl ProjectGrantApi {
         &self,
         project_id: Path<ProjectId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<ProjectGrant>>> {
+    ) -> LimitedApiResult<Json<Vec<ProjectGrant>>> {
         let record = recorded_http_api_request!(
             "get_project_grants",
             project_id = project_id.0.to_string(),
@@ -170,7 +75,7 @@ impl ProjectGrantApi {
         project_id: Path<ProjectId>,
         grant_id: Path<ProjectGrantId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<ProjectGrant>> {
+    ) -> LimitedApiResult<Json<ProjectGrant>> {
         let record = recorded_http_api_request!(
             "get_project_grant",
             project_id = project_id.0.to_string(),
@@ -189,7 +94,7 @@ impl ProjectGrantApi {
                 .await?;
             match grant {
                 Some(grant) => Ok(Json(grant)),
-                None => Err(ProjectGrantError::NotFound(Json(ErrorBody {
+                None => Err(LimitedApiError::NotFound(Json(ErrorBody {
                     error: "Project grant not found".to_string(),
                 }))),
             }
@@ -204,7 +109,7 @@ impl ProjectGrantApi {
     /// - `granteeAccountId` the account that gets access for the project
     /// - `projectPolicyId` the associated policy - see the project policy API below
     ///
-    /// The response describes the new project grant including it's id that can be used to query specifically this grant in the future.
+    /// The response describes the new project grant including its id that can be used to query specifically this grant in the future.
     #[oai(
         path = "/:project_id/grants",
         method = "post",
@@ -215,7 +120,7 @@ impl ProjectGrantApi {
         project_id: Path<ProjectId>,
         request: Json<ProjectGrantDataRequest>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<ProjectGrant>> {
+    ) -> LimitedApiResult<Json<ProjectGrant>> {
         let record = recorded_http_api_request!(
             "create_project_grant",
             project_id = project_id.0.to_string()
@@ -280,7 +185,7 @@ impl ProjectGrantApi {
         project_id: Path<ProjectId>,
         grant_id: Path<ProjectGrantId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<DeleteProjectGrantResponse>> {
+    ) -> LimitedApiResult<Json<DeleteProjectGrantResponse>> {
         let record = recorded_http_api_request!(
             "delete_project_grant",
             project_id = project_id.0.to_string(),

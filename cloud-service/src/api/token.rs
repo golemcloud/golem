@@ -1,85 +1,16 @@
-use crate::api::ApiTags;
+use crate::api::{ApiResult, ApiTags};
 use crate::model::*;
-use crate::service::auth::{AuthService, AuthServiceError};
-use crate::service::token::{TokenService, TokenServiceError};
+use crate::service::auth::AuthService;
+use crate::service::token::TokenService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::TokenId;
-use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
 use golem_common::recorded_http_api_request;
-use golem_service_base::model::{ErrorBody, ErrorsBody};
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum TokenError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Token not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    /// Internal server error
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for TokenError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            TokenError::BadRequest(_) => "BadRequest",
-            TokenError::NotFound(_) => "NotFound",
-            TokenError::Unauthorized(_) => "Unauthorized",
-            TokenError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, TokenError>;
-
-impl From<AuthServiceError> for TokenError {
-    fn from(value: AuthServiceError) -> Self {
-        match value {
-            AuthServiceError::InvalidToken(_) => TokenError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            AuthServiceError::Internal(_) => TokenError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-        }
-    }
-}
-
-impl From<TokenServiceError> for TokenError {
-    fn from(value: TokenServiceError) -> Self {
-        match value {
-            TokenServiceError::Unauthorized(_) => TokenError::Unauthorized(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            TokenServiceError::Internal(_) => TokenError::InternalError(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            TokenServiceError::ArgValidation(errors) => {
-                TokenError::BadRequest(Json(ErrorsBody { errors }))
-            }
-            TokenServiceError::UnknownToken(_) => TokenError::NotFound(Json(ErrorBody {
-                error: value.to_string(),
-            })),
-            TokenServiceError::AccountNotFound(_) => TokenError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_string()],
-            })),
-            TokenServiceError::UnknownTokenState(_) => TokenError::BadRequest(Json(ErrorsBody {
-                errors: vec![value.to_string()],
-            })),
-        }
-    }
-}
 
 pub struct TokenApi {
     pub auth_service: Arc<dyn AuthService + Sync + Send>,
@@ -101,7 +32,7 @@ impl TokenApi {
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<crate::model::Token>>> {
+    ) -> ApiResult<Json<Vec<Token>>> {
         let record =
             recorded_http_api_request!("get_tokens", account_id = account_id.0.to_string());
         let response = {
@@ -136,7 +67,7 @@ impl TokenApi {
         account_id: Path<AccountId>,
         token_id: Path<TokenId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::Token>> {
+    ) -> ApiResult<Json<Token>> {
         let record = recorded_http_api_request!(
             "get_token",
             account_id = account_id.0.to_string(),
@@ -175,7 +106,7 @@ impl TokenApi {
         account_id: Path<AccountId>,
         request: Json<CreateTokenDTO>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<UnsafeToken>> {
+    ) -> ApiResult<Json<UnsafeToken>> {
         let record =
             recorded_http_api_request!("create_token", account_id = account_id.0.to_string());
         let response = {
@@ -209,7 +140,7 @@ impl TokenApi {
         account_id: Path<AccountId>,
         token_id: Path<TokenId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<DeleteTokenResponse>> {
+    ) -> ApiResult<Json<DeleteTokenResponse>> {
         let record = recorded_http_api_request!(
             "delete_token",
             account_id = account_id.0.to_string(),

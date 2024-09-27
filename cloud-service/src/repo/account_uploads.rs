@@ -2,6 +2,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
 use sqlx::{Database, Pool};
 
@@ -28,6 +29,7 @@ struct AccountUploads {
     counter: i32,
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl AccountUploadsRepo for DbAccountUploadsRepo<sqlx::Postgres> {
     async fn get(&self, id: &AccountId) -> Result<i32, RepoError> {
@@ -47,7 +49,8 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<sqlx::Postgres> {
         Ok(result.map(|r| r.counter).unwrap_or(0))
     }
 
-    async fn update(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
+    #[when(sqlx::Postgres -> update)]
+    async fn update_postgres(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
         sqlx::query(
@@ -93,28 +96,9 @@ impl AccountUploadsRepo for DbAccountUploadsRepo<sqlx::Postgres> {
 
         Ok(new_counter.map(|r| r.counter).unwrap_or(0))
     }
-}
 
-#[async_trait]
-impl AccountUploadsRepo for DbAccountUploadsRepo<sqlx::Sqlite> {
-    async fn get(&self, id: &AccountId) -> Result<i32, RepoError> {
-        let result = sqlx::query_as::<_, AccountUploads>(
-            "
-            select counter
-            from account_uploads
-            where account_id = $1
-                and month = extract(month from get_current_date())
-                and year = extract(year from get_current_date())
-            ",
-        )
-        .bind(id.value.clone())
-        .fetch_optional(self.db_pool.deref())
-        .await?;
-
-        Ok(result.map(|r| r.counter).unwrap_or(0))
-    }
-
-    async fn update(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
+    #[when(sqlx::Sqlite -> update)]
+    async fn update_sqlite(&self, id: &AccountId, value: i32) -> Result<i32, RepoError> {
         sqlx::query("
             with upsert as (
                 update account_uploads

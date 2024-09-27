@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use crate::api::common::ApiTags;
-use crate::service::auth::{AuthServiceError, CloudAuthCtx};
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
-use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use cloud_common::clients::auth::AuthServiceError;
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::{ComponentId, IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::{
+    ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
@@ -145,10 +147,10 @@ impl From<WorkerServiceError> for WorkerError {
                     WorkerError::InternalError(Json(GolemErrorBody { golem_error }))
                 }
             },
-            WorkerServiceError::Internal(error) => {
+            WorkerServiceError::InternalAuthServiceError(_) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
                     golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: error.to_string(),
+                        details: value.to_string(),
                     }),
                 }))
             }
@@ -165,11 +167,11 @@ impl From<AuthServiceError> for WorkerError {
             AuthServiceError::Forbidden(error) => {
                 WorkerError::Unauthorized(Json(ErrorBody { error }))
             }
-            AuthServiceError::Internal(error) => WorkerError::InternalError(Json(GolemErrorBody {
-                golem_error: GolemError::Unknown(GolemErrorUnknown {
-                    details: error.to_string(),
-                }),
-            })),
+            AuthServiceError::InternalClientError(error) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
+                }))
+            }
         }
     }
 }
@@ -318,7 +320,51 @@ impl WorkerApi {
         let response = self
             .worker_service
             .invoke_and_await_function_json(
-                &worker_id,
+                &worker_id.into_target_worker_id(),
+                idempotency_key.0,
+                function.0,
+                params.0.params,
+                None,
+                &auth,
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|result| Json(InvokeResult { result }));
+
+        record.result(response)
+    }
+
+    /// Invoke a function and await it's resolution on a new worker with a random generated name
+    ///
+    /// Ideal for invoking ephemeral components, but works with durable ones as well.
+    /// Supply the parameters in the request body as JSON.
+    #[oai(
+        path = "/:component_id/invoke-and-await",
+        method = "post",
+        operation_id = "invoke_and_await_function_without_name"
+    )]
+    async fn invoke_and_await_function_without_name(
+        &self,
+        component_id: Path<ComponentId>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
+        function: Query<String>,
+        params: Json<InvokeParameters>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<InvokeResult>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let target_worker_id = make_target_worker_id(component_id.0, None)?;
+
+        let record = recorded_http_api_request!(
+            "invoke_and_await_function",
+            worker_id = target_worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+        let response = self
+            .worker_service
+            .invoke_and_await_function_json(
+                &target_worker_id,
                 idempotency_key.0,
                 function.0,
                 params.0.params,
@@ -364,7 +410,53 @@ impl WorkerApi {
         let response = self
             .worker_service
             .invoke_function_json(
-                &worker_id,
+                &worker_id.into_target_worker_id(),
+                idempotency_key.0,
+                function.0,
+                params.0.params,
+                None,
+                &auth,
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(InvokeResponse {}));
+
+        record.result(response)
+    }
+
+    /// Invoke a function on a new worker with a random generated name
+    ///
+    /// Ideal for invoking ephemeral components, but works with durable ones as well.
+    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+    #[oai(
+        path = "/:component_id/invoke",
+        method = "post",
+        operation_id = "invoke_function_without_name"
+    )]
+    async fn invoke_function_without_name(
+        &self,
+        component_id: Path<ComponentId>,
+        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
+        /// name of the exported function to be invoked
+        function: Query<String>,
+        params: Json<InvokeParameters>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<InvokeResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let target_worker_id = make_target_worker_id(component_id.0, None)?;
+
+        let record = recorded_http_api_request!(
+            "invoke_function",
+            worker_id = target_worker_id.to_string(),
+            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
+            function = function.0
+        );
+
+        let response = self
+            .worker_service
+            .invoke_function_json(
+                &target_worker_id,
                 idempotency_key.0,
                 function.0,
                 params.0.params,
@@ -699,6 +791,7 @@ impl WorkerApi {
     }
 }
 
+// TODO: should be in a base library
 fn validated_worker_id(
     component_id: ComponentId,
     worker_name: String,
@@ -706,6 +799,25 @@ fn validated_worker_id(
     validate_worker_name(&worker_name)
         .map_err(|error| WorkerError::bad_request(format!("Invalid worker name: {error}")))?;
     Ok(WorkerId {
+        component_id,
+        worker_name,
+    })
+}
+
+// TODO: should be in a base library
+fn make_target_worker_id(
+    component_id: ComponentId,
+    worker_name: Option<String>,
+) -> std::result::Result<TargetWorkerId, WorkerError> {
+    if let Some(worker_name) = &worker_name {
+        validate_worker_name(worker_name).map_err(|error| {
+            WorkerError::BadRequest(Json(ErrorsBody {
+                errors: vec![format!("Invalid worker name: {error}")],
+            }))
+        })?;
+    }
+
+    Ok(TargetWorkerId {
         component_id,
         worker_name,
     })

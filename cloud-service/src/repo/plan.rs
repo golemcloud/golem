@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
+use conditional_trait_gen::trait_gen;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
@@ -74,81 +75,9 @@ impl<DB: Database> DbPlanRepo<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl PlanRepo for DbPlanRepo<sqlx::Postgres> {
-    async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError> {
-        sqlx::query(r#"
-              INSERT INTO plans
-                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
-              VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
-            "#)
-            .bind(plan.plan_id)
-            .bind(plan.project_limit)
-            .bind(plan.component_limit)
-            .bind(plan.worker_limit)
-            .bind(plan.storage_limit)
-            .bind(plan.monthly_gas_limit)
-            .bind(plan.monthly_upload_limit)
-            .execute(self.db_pool.deref())
-            .await?;
-
-        Ok(())
-    }
-
-    async fn update(&self, plan: &PlanRecord) -> Result<(), RepoError> {
-        sqlx::query(r#"
-              INSERT INTO plans
-                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
-              VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
-              ON CONFLICT (plan_id) DO UPDATE
-              SET project_limit = $2,
-                  component_limit = $3,
-                  worker_limit = $4,
-                  storage_limit = $5,
-                  monthly_gas_limit = $6,
-                  monthly_upload_limit = $7
-            "#)
-            .bind(plan.plan_id)
-            .bind(plan.project_limit)
-            .bind(plan.component_limit)
-            .bind(plan.worker_limit)
-            .bind(plan.storage_limit)
-            .bind(plan.monthly_gas_limit)
-            .bind(plan.monthly_upload_limit)
-            .execute(self.db_pool.deref())
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get(&self, plan_id: &Uuid) -> Result<Option<PlanRecord>, RepoError> {
-        sqlx::query_as::<_, PlanRecord>("SELECT * FROM plans WHERE plan_id = $1")
-            .bind(plan_id)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn get_all(&self) -> Result<Vec<PlanRecord>, RepoError> {
-        sqlx::query_as::<_, PlanRecord>("SELECT * FROM plans")
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn delete(&self, plan_id: &Uuid) -> Result<(), RepoError> {
-        sqlx::query("DELETE FROM plans WHERE plan_id = $1")
-            .bind(plan_id)
-            .execute(self.db_pool.deref())
-            .await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl PlanRepo for DbPlanRepo<sqlx::Sqlite> {
     async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         sqlx::query(r#"
               INSERT INTO plans

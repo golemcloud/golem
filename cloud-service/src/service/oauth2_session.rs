@@ -1,8 +1,9 @@
 use crate::model::{EncodedOAuth2Session, OAuth2Session};
+use cloud_common::SafeDisplay;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
 pub trait OAuth2SessionService {
     fn encode_session(
@@ -20,19 +21,16 @@ pub trait OAuth2SessionService {
 pub enum OAuth2SessionError {
     #[error("Invalid Session: {0}")]
     InvalidSession(String),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error("Failed to encode OAuth2 session: {0}")]
+    EncodeError(#[from] jsonwebtoken::errors::Error),
 }
 
-impl OAuth2SessionError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(
-            anyhow::Error::msg(error).context(context),
-        ))
+impl SafeDisplay for OAuth2SessionError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            OAuth2SessionError::InvalidSession(_) => self.to_string(),
+            OAuth2SessionError::EncodeError(_) => self.to_string(),
+        }
     }
 }
 
@@ -69,6 +67,16 @@ impl OAuth2SessionServiceDefault {
 }
 
 impl OAuth2SessionService for OAuth2SessionServiceDefault {
+    fn encode_session(
+        &self,
+        session: &OAuth2Session,
+    ) -> Result<EncodedOAuth2Session, OAuth2SessionError> {
+        let header = Header::new(Algorithm::EdDSA);
+        let claims = Claims::from(session.clone());
+        let encoded = encode(&header, &claims, &self.private_key)?;
+        Ok(EncodedOAuth2Session { value: encoded })
+    }
+
     fn decode_session(
         &self,
         encoded_session: &EncodedOAuth2Session,
@@ -81,17 +89,6 @@ impl OAuth2SessionService for OAuth2SessionServiceDefault {
             .map_err(OAuth2SessionError::InvalidSession)?;
 
         Ok(session)
-    }
-
-    fn encode_session(
-        &self,
-        session: &OAuth2Session,
-    ) -> Result<EncodedOAuth2Session, OAuth2SessionError> {
-        let header = Header::new(Algorithm::EdDSA);
-        let claims = Claims::from(session.clone());
-        let encoded = encode(&header, &claims, &self.private_key)
-            .map_err(|e| OAuth2SessionError::internal(e, "Failed to encode OAuth2 session"))?;
-        Ok(EncodedOAuth2Session { value: encoded })
     }
 }
 
@@ -148,30 +145,6 @@ impl TryFrom<Claims> for OAuth2Session {
             expires_at,
             device_code: value.device_code,
             interval: value.interval,
-        })
-    }
-}
-
-#[derive(Default)]
-pub struct OAuth2SessionServiceNoOp {}
-
-impl OAuth2SessionService for OAuth2SessionServiceNoOp {
-    fn decode_session(
-        &self,
-        _encoded_session: &EncodedOAuth2Session,
-    ) -> Result<OAuth2Session, OAuth2SessionError> {
-        Ok(OAuth2Session {
-            device_code: String::new(),
-            interval: std::time::Duration::ZERO,
-            expires_at: chrono::Utc::now(),
-        })
-    }
-    fn encode_session(
-        &self,
-        _session: &OAuth2Session,
-    ) -> Result<EncodedOAuth2Session, OAuth2SessionError> {
-        Ok(EncodedOAuth2Session {
-            value: String::new(),
         })
     }
 }

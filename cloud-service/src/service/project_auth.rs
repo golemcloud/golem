@@ -1,14 +1,13 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::auth::AccountAuthorisation;
 use async_trait::async_trait;
 use cloud_common::model::{ProjectAction, ProjectActions, Role};
 use cloud_common::model::{ProjectAuthorisedActions, ProjectPolicyId};
+use cloud_common::SafeDisplay;
 use golem_common::model::{AccountId, ProjectId};
 use tracing::info;
-
-use crate::auth::AccountAuthorisation;
 
 use crate::repo::project::ProjectRepo;
 use crate::repo::RepoError;
@@ -19,52 +18,38 @@ use crate::service::project_policy::{ProjectPolicyError, ProjectPolicyService};
 pub enum ProjectAuthorisationError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error(transparent)]
+    InternalProjectGrantError(ProjectGrantError),
+    #[error(transparent)]
+    InternalProjectPolicyError(#[from] ProjectPolicyError),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(#[from] RepoError),
 }
 
 impl ProjectAuthorisationError {
-    fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-
-    fn unauthorized<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Unauthorized(error.to_string())
+    fn unauthorized(error: impl AsRef<str>) -> Self {
+        Self::Unauthorized(error.as_ref().to_string())
     }
 }
 
-impl From<RepoError> for ProjectAuthorisationError {
-    fn from(error: RepoError) -> Self {
-        ProjectAuthorisationError::Internal(anyhow::Error::msg(error).context("Repository error"))
+impl SafeDisplay for ProjectAuthorisationError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ProjectAuthorisationError::Unauthorized(_) => self.to_string(),
+            ProjectAuthorisationError::InternalProjectGrantError(inner) => inner.to_safe_string(),
+            ProjectAuthorisationError::InternalProjectPolicyError(inner) => inner.to_safe_string(),
+            ProjectAuthorisationError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
 impl From<ProjectGrantError> for ProjectAuthorisationError {
     fn from(error: ProjectGrantError) -> Self {
         match error {
-            ProjectGrantError::Internal(error) => ProjectAuthorisationError::Internal(error),
             ProjectGrantError::Unauthorized(error) => {
                 ProjectAuthorisationError::Unauthorized(error)
             }
-            ProjectGrantError::ProjectNotFound(_) => ProjectAuthorisationError::internal(error),
-            ProjectGrantError::ProjectPolicyNotFound(_) => {
-                ProjectAuthorisationError::internal(error)
-            }
-            ProjectGrantError::AccountNotFound(_) => ProjectAuthorisationError::internal(error),
-        }
-    }
-}
-
-impl From<ProjectPolicyError> for ProjectAuthorisationError {
-    fn from(error: ProjectPolicyError) -> Self {
-        match error {
-            ProjectPolicyError::Internal(error) => ProjectAuthorisationError::Internal(error),
+            _ => ProjectAuthorisationError::InternalProjectGrantError(error),
         }
     }
 }
@@ -198,30 +183,5 @@ impl ProjectAuthorisationService for ProjectAuthorisationServiceDefault {
         }
 
         Ok(project_actions)
-    }
-}
-
-#[derive(Default)]
-pub struct ProjectAuthorisationServiceNoOp {}
-
-#[async_trait]
-impl ProjectAuthorisationService for ProjectAuthorisationServiceNoOp {
-    async fn get_by_project(
-        &self,
-        project_id: &ProjectId,
-        auth: &AccountAuthorisation,
-    ) -> Result<ProjectAuthorisedActions, ProjectAuthorisationError> {
-        Ok(ProjectAuthorisedActions {
-            project_id: project_id.clone(),
-            owner_account_id: auth.token.account_id.clone(),
-            actions: ProjectActions::empty(),
-        })
-    }
-
-    async fn get_all(
-        &self,
-        _auth: &AccountAuthorisation,
-    ) -> Result<HashMap<ProjectId, ProjectActions>, ProjectAuthorisationError> {
-        Ok(HashMap::new())
     }
 }

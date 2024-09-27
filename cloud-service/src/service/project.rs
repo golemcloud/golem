@@ -1,18 +1,17 @@
-use std::fmt::Display;
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use cloud_common::model::Role;
-use golem_common::model::AccountId;
-use golem_common::model::ProjectId;
-use tracing::info;
-
 use crate::auth::AccountAuthorisation;
 use crate::model::{Project, ProjectData, ProjectType};
 use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::repo::RepoError;
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
+use async_trait::async_trait;
+use cloud_common::model::Role;
+use cloud_common::SafeDisplay;
+use golem_common::model::AccountId;
+use golem_common::model::ProjectId;
+use std::fmt::Display;
+use std::sync::Arc;
+use tracing::info;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
@@ -20,18 +19,17 @@ pub enum ProjectError {
     LimitExceeded(String),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error(transparent)]
+    InternalPlanLimitError(PlanLimitError),
+    #[error(transparent)]
+    InternalProjectAuthorisationError(ProjectAuthorisationError),
+    #[error("Failed to create default project for account {0}")]
+    FailedToCreateDefaultProject(AccountId),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(#[from] RepoError),
 }
 
 impl ProjectError {
-    fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
-    }
-
     fn unauthorized<M>(error: M) -> Self
     where
         M: Display,
@@ -47,17 +45,24 @@ impl ProjectError {
     }
 }
 
-impl From<RepoError> for ProjectError {
-    fn from(error: RepoError) -> Self {
-        ProjectError::Internal(anyhow::Error::msg(error).context("Repository error"))
+impl SafeDisplay for ProjectError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ProjectError::LimitExceeded(_) => self.to_string(),
+            ProjectError::Unauthorized(_) => self.to_string(),
+            ProjectError::InternalPlanLimitError(inner) => inner.to_safe_string(),
+            ProjectError::InternalProjectAuthorisationError(inner) => inner.to_safe_string(),
+            ProjectError::FailedToCreateDefaultProject(_) => self.to_string(),
+            ProjectError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
 impl From<ProjectAuthorisationError> for ProjectError {
     fn from(error: ProjectAuthorisationError) -> Self {
         match error {
-            ProjectAuthorisationError::Internal(error) => ProjectError::Internal(error),
             ProjectAuthorisationError::Unauthorized(error) => ProjectError::unauthorized(error),
+            _ => ProjectError::InternalProjectAuthorisationError(error),
         }
     }
 }
@@ -66,10 +71,8 @@ impl From<PlanLimitError> for ProjectError {
     fn from(error: PlanLimitError) -> Self {
         match error {
             PlanLimitError::Unauthorized(error) => ProjectError::Unauthorized(error),
-            PlanLimitError::Internal(error) => ProjectError::Internal(error),
-            PlanLimitError::AccountNotFound(_) => ProjectError::internal(error),
-            PlanLimitError::ProjectNotFound(_) => ProjectError::internal(error),
             PlanLimitError::LimitExceeded(error) => ProjectError::limit_exceeded(error),
+            _ => ProjectError::InternalPlanLimitError(error),
         }
     }
 }
@@ -214,7 +217,9 @@ impl ProjectService for ProjectServiceDefault {
                 .get_own_default(account_id.value.as_str())
                 .await?;
             Ok(result
-                .ok_or(ProjectError::internal("Failed to create default project"))?
+                .ok_or(ProjectError::FailedToCreateDefaultProject(
+                    account_id.clone(),
+                ))?
                 .into())
         }
     }
@@ -300,60 +305,6 @@ pub fn is_authorised_by_account(
         Ok(())
     } else {
         Err(ProjectError::unauthorized("Unauthorized"))
-    }
-}
-
-#[derive(Default)]
-pub struct ProjectServiceNoOp {}
-
-#[async_trait]
-impl ProjectService for ProjectServiceNoOp {
-    async fn create(
-        &self,
-        _project: &Project,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), ProjectError> {
-        Ok(())
-    }
-
-    async fn delete(
-        &self,
-        _project_id: &ProjectId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<(), ProjectError> {
-        Ok(())
-    }
-
-    async fn get_own_default(&self, auth: &AccountAuthorisation) -> Result<Project, ProjectError> {
-        Ok(create_default_project(&auth.token.account_id))
-    }
-
-    async fn get_own(&self, _auth: &AccountAuthorisation) -> Result<Vec<Project>, ProjectError> {
-        Ok(vec![])
-    }
-
-    async fn get_own_by_name(
-        &self,
-        _name: &str,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Vec<Project>, ProjectError> {
-        Ok(vec![])
-    }
-
-    async fn get_own_count(&self, _auth: &AccountAuthorisation) -> Result<u64, ProjectError> {
-        Ok(0)
-    }
-
-    async fn get_all(&self, _auth: &AccountAuthorisation) -> Result<Vec<Project>, ProjectError> {
-        Ok(vec![])
-    }
-
-    async fn get(
-        &self,
-        _project_id: &ProjectId,
-        _auth: &AccountAuthorisation,
-    ) -> Result<Option<Project>, ProjectError> {
-        Ok(None)
     }
 }
 

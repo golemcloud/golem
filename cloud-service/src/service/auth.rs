@@ -1,66 +1,46 @@
-use std::fmt::Display;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use cloud_common::model::TokenSecret;
+use std::sync::Arc;
 
 use crate::auth::AccountAuthorisation;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::token::{TokenService, TokenServiceError};
 use cloud_common::model::Role;
+use cloud_common::SafeDisplay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthServiceError {
     #[error("Invalid Token: {0}")]
     InvalidToken(String),
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error(transparent)]
+    InternalAccountGrantError(#[from] AccountGrantServiceError),
+    #[error(transparent)]
+    InternalTokenServiceError(TokenServiceError),
 }
 
 impl AuthServiceError {
-    fn internal<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        Self::Internal(anyhow::Error::msg(error.to_string()))
+    fn invalid_token(error: impl AsRef<str>) -> Self {
+        AuthServiceError::InvalidToken(error.as_ref().to_string())
     }
+}
 
-    fn invalid_token<M>(error: M) -> Self
-    where
-        M: Display,
-    {
-        AuthServiceError::InvalidToken(error.to_string())
+impl SafeDisplay for AuthServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            AuthServiceError::InvalidToken(_) => self.to_string(),
+            AuthServiceError::InternalAccountGrantError(inner) => inner.to_safe_string(),
+            AuthServiceError::InternalTokenServiceError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
 impl From<TokenServiceError> for AuthServiceError {
     fn from(error: TokenServiceError) -> Self {
         match error {
-            TokenServiceError::ArgValidation(_) => AuthServiceError::internal(error),
             TokenServiceError::UnknownToken(id) => {
                 AuthServiceError::invalid_token(format!("Invalid token id: {}", id))
             }
-            TokenServiceError::AccountNotFound(_) => AuthServiceError::internal(error),
-            TokenServiceError::Internal(error) => AuthServiceError::Internal(error),
-            TokenServiceError::Unauthorized(message) => {
-                AuthServiceError::internal(format!("Failed access with Admin account: {}", message))
-            }
-            TokenServiceError::UnknownTokenState(_) => {
-                AuthServiceError::internal(format!("Unknown token state: {}", error))
-            }
-        }
-    }
-}
-
-impl From<AccountGrantServiceError> for AuthServiceError {
-    fn from(error: AccountGrantServiceError) -> Self {
-        match error {
-            AccountGrantServiceError::ArgValidation(_) => AuthServiceError::internal(error),
-            AccountGrantServiceError::AccountNotFound(_) => AuthServiceError::internal(error),
-            AccountGrantServiceError::Internal(error) => AuthServiceError::Internal(error),
-            AccountGrantServiceError::Unauthorized(message) => {
-                AuthServiceError::internal(format!("Failed access with Admin account: {}", message))
-            }
+            _ => AuthServiceError::InternalTokenServiceError(error),
         }
     }
 }
@@ -115,18 +95,5 @@ impl AuthService for AuthServiceDefault {
         } else {
             Err(AuthServiceError::invalid_token("Expired auth token."))
         }
-    }
-}
-
-#[derive(Default)]
-pub struct AuthServiceNoOp {}
-
-#[async_trait]
-impl AuthService for AuthServiceNoOp {
-    async fn authorization(
-        &self,
-        _secret: &TokenSecret,
-    ) -> Result<AccountAuthorisation, AuthServiceError> {
-        Ok(AccountAuthorisation::admin())
     }
 }

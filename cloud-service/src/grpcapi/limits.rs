@@ -14,6 +14,7 @@ use cloud_api_grpc::proto::golem::cloud::limit::v1::{
     GetResourceLimitsResponse, LimitsError, UpdateComponentLimitRequest,
     UpdateComponentLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
 };
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, ResourceLimits};
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_worker_id_string,
@@ -29,11 +30,14 @@ impl From<AuthServiceError> for LimitsError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
             AuthServiceError::InvalidToken(_) => limits_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
-            AuthServiceError::Internal(_) => limits_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                limits_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         LimitsError { error: Some(error) }
     }
@@ -43,20 +47,22 @@ impl From<PlanLimitError> for LimitsError {
     fn from(value: PlanLimitError) -> Self {
         let error = match value {
             PlanLimitError::AccountNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_string()],
+                errors: vec![value.to_safe_string()],
             }),
             PlanLimitError::ProjectNotFound(_) => limits_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_string()],
+                errors: vec![value.to_safe_string()],
             }),
             PlanLimitError::Unauthorized(_) => limits_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
             PlanLimitError::LimitExceeded(_) => limits_error::Error::LimitExceeded(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
-            PlanLimitError::Internal(_) => limits_error::Error::InternalError(ErrorBody {
-                error: value.to_string(),
-            }),
+            PlanLimitError::Internal(_) | PlanLimitError::InternalRepoError(_) => {
+                limits_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         LimitsError { error: Some(error) }
     }
@@ -196,35 +202,6 @@ impl LimitsGrpcApi {
 
 #[async_trait::async_trait]
 impl CloudLimitsService for LimitsGrpcApi {
-    async fn update_component_limit(
-        &self,
-        request: Request<UpdateComponentLimitRequest>,
-    ) -> Result<Response<UpdateComponentLimitResponse>, Status> {
-        let (m, _, r) = request.into_parts();
-
-        let record = recorded_grpc_api_request!(
-            "update_component_limit",
-            component_id = proto_component_id_string(&r.component_id),
-            account_id = proto_account_id_string(&r.account_id)
-        );
-
-        let response = match self
-            .update_component_limit(r, m)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(update_component_limit_response::Result::Success(Empty {})),
-            Err(error) => record.fail(
-                update_component_limit_response::Result::Error(error.clone()),
-                &LimitsTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(UpdateComponentLimitResponse {
-            result: Some(response),
-        }))
-    }
-
     async fn update_worker_limit(
         &self,
         request: Request<UpdateWorkerLimitRequest>,
@@ -279,6 +256,35 @@ impl CloudLimitsService for LimitsGrpcApi {
         };
 
         Ok(Response::new(UpdateWorkerLimitResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn update_component_limit(
+        &self,
+        request: Request<UpdateComponentLimitRequest>,
+    ) -> Result<Response<UpdateComponentLimitResponse>, Status> {
+        let (m, _, r) = request.into_parts();
+
+        let record = recorded_grpc_api_request!(
+            "update_component_limit",
+            component_id = proto_component_id_string(&r.component_id),
+            account_id = proto_account_id_string(&r.account_id)
+        );
+
+        let response = match self
+            .update_component_limit(r, m)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(update_component_limit_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_component_limit_response::Result::Error(error.clone()),
+                &LimitsTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateComponentLimitResponse {
             result: Some(response),
         }))
     }

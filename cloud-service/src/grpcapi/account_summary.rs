@@ -9,6 +9,7 @@ use cloud_api_grpc::proto::golem::cloud::accountsummary::v1::{
     AccountSummaryError, GetAccountCountRequest, GetAccountCountResponse, GetAccountsRequest,
     GetAccountsResponse, GetAccountsSuccessResponse,
 };
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;
@@ -23,12 +24,13 @@ impl From<AuthServiceError> for AccountSummaryError {
         let error = match value {
             AuthServiceError::InvalidToken(_) => {
                 account_summary_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
-            AuthServiceError::Internal(_) => {
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
                 account_summary_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };
@@ -41,12 +43,12 @@ impl From<AccountSummaryServiceError> for AccountSummaryError {
         let error = match value {
             AccountSummaryServiceError::Unauthorized(_) => {
                 account_summary_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             AccountSummaryServiceError::Internal(_) => {
                 account_summary_error::Error::InternalError(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };

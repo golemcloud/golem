@@ -18,9 +18,10 @@ use tracing::error;
 
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        let service = make_open_api_service(&Services::noop());
-        println!("{}", service.spec_yaml());
-        Ok(())
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
         init_tracing_with_default_env_filter(&config.tracing);
 
@@ -39,12 +40,22 @@ fn main() -> Result<(), std::io::Error> {
 
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .build()
-            .unwrap()
+            .build()?
             .block_on(async_main(&config, prometheus))
     } else {
         Ok(())
     }
+}
+
+async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
+    let config = CloudServiceConfig::default();
+    let services = Services::new(&config).await.map_err(|e| {
+        error!("Services - init error: {}", e);
+        std::io::Error::new(std::io::ErrorKind::Other, e)
+    })?;
+    let open_api_service = make_open_api_service(&services);
+    println!("{}", open_api_service.spec_yaml());
+    Ok(())
 }
 
 async fn async_main(

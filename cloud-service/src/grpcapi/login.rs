@@ -16,6 +16,7 @@ use cloud_api_grpc::proto::golem::cloud::login::v1::{
 };
 use cloud_api_grpc::proto::golem::cloud::login::OAuth2Data;
 use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;
@@ -27,11 +28,14 @@ impl From<AuthServiceError> for LoginError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
             AuthServiceError::InvalidToken(_) => login_error::Error::BadRequest(ErrorsBody {
-                errors: vec![value.to_string()],
+                errors: vec![value.to_safe_string()],
             }),
-            AuthServiceError::Internal(_) => login_error::Error::Internal(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                login_error::Error::Internal(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         LoginError { error: Some(error) }
     }
@@ -41,11 +45,17 @@ impl From<login::LoginError> for LoginError {
     fn from(value: login::LoginError) -> Self {
         let error = match value {
             login::LoginError::External(_) => login_error::Error::External(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
-            login::LoginError::Internal(_) => login_error::Error::Internal(ErrorBody {
-                error: value.to_string(),
-            }),
+            login::LoginError::InternalAccountError(_)
+            | login::LoginError::Internal(_)
+            | login::LoginError::InternalOAuth2TokenError(_)
+            | login::LoginError::InternalOAuth2ProviderClientError(_)
+            | login::LoginError::InternalTokenServiceError(_) => {
+                login_error::Error::Internal(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         LoginError { error: Some(error) }
     }
@@ -54,12 +64,14 @@ impl From<login::LoginError> for LoginError {
 impl From<OAuth2Error> for LoginError {
     fn from(value: OAuth2Error) -> Self {
         let error = match value {
-            OAuth2Error::Internal(_) => login_error::Error::Internal(ErrorBody {
-                error: value.to_string(),
-            }),
+            OAuth2Error::InternalSessionError(_) | OAuth2Error::InternalGithubClientError(_) => {
+                login_error::Error::Internal(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
             OAuth2Error::InvalidSession(_) | OAuth2Error::InvalidState(_) => {
                 login_error::Error::BadRequest(ErrorsBody {
-                    errors: vec![value.to_string()],
+                    errors: vec![value.to_safe_string()],
                 })
             }
         };

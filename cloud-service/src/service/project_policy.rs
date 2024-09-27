@@ -1,23 +1,25 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use cloud_common::model::ProjectPolicyId;
-use tracing::info;
-use uuid::Uuid;
-
 use crate::model::ProjectPolicy;
 use crate::repo::project_policy::{ProjectPolicyRecord, ProjectPolicyRepo};
 use crate::repo::RepoError;
+use async_trait::async_trait;
+use cloud_common::model::ProjectPolicyId;
+use cloud_common::SafeDisplay;
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectPolicyError {
-    #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(#[from] RepoError),
 }
 
-impl From<RepoError> for ProjectPolicyError {
-    fn from(error: RepoError) -> Self {
-        ProjectPolicyError::Internal(anyhow::Error::msg(error).context("Repository error"))
+impl SafeDisplay for ProjectPolicyError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ProjectPolicyError::InternalRepoError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -90,34 +92,6 @@ impl ProjectPolicyService for ProjectPolicyServiceDefault {
         self.project_policy_repo
             .delete(&project_policy_id.0)
             .await?;
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-pub struct ProjectPolicyServiceNoOp {}
-
-#[async_trait]
-impl ProjectPolicyService for ProjectPolicyServiceNoOp {
-    async fn create(&self, _project_policy: &ProjectPolicy) -> Result<(), ProjectPolicyError> {
-        Ok(())
-    }
-
-    async fn get_all(
-        &self,
-        _project_policy_ids: Vec<ProjectPolicyId>,
-    ) -> Result<Vec<ProjectPolicy>, ProjectPolicyError> {
-        Ok(vec![])
-    }
-
-    async fn get(
-        &self,
-        _project_policy_id: &ProjectPolicyId,
-    ) -> Result<Option<ProjectPolicy>, ProjectPolicyError> {
-        Ok(None)
-    }
-
-    async fn delete(&self, _project_policy_id: &ProjectPolicyId) -> Result<(), ProjectPolicyError> {
         Ok(())
     }
 }

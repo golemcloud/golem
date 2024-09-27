@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloud_common::model::TokenId;
+use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
@@ -70,67 +71,9 @@ impl<DB: Database> DbOAuth2TokenRepo<DB> {
     }
 }
 
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl OAuth2TokenRepo for DbOAuth2TokenRepo<sqlx::Postgres> {
-    async fn upsert(&self, token: &OAuth2TokenRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-              INSERT INTO oauth2_tokens
-                (provider, external_id, account_id, token_id)
-              VALUES
-                ($1, $2, $3, $4)
-              ON CONFLICT (provider, external_id) DO UPDATE
-              SET account_id = $3,
-                  token_id = $4
-            "#,
-        )
-        .bind(token.provider.as_str())
-        .bind(token.external_id.as_str())
-        .bind(token.account_id.as_str())
-        .bind(token.token_id)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        provider: &str,
-        external_id: &str,
-    ) -> Result<Option<OAuth2TokenRecord>, RepoError> {
-        sqlx::query_as::<_, OAuth2TokenRecord>(
-            "SELECT * FROM oauth2_tokens WHERE provider = $1 AND external_id = $2",
-        )
-        .bind(provider)
-        .bind(external_id)
-        .fetch_optional(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
-    }
-
-    async fn get_by_token_id(&self, token_id: &Uuid) -> Result<Vec<OAuth2TokenRecord>, RepoError> {
-        sqlx::query_as::<_, OAuth2TokenRecord>("SELECT * FROM oauth2_tokens WHERE token_id = $1")
-            .bind(token_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn clean_token_id(&self, provider: &str, external_id: &str) -> Result<(), RepoError> {
-        sqlx::query(
-            "UPDATE oauth2_tokens SET token_id = NULL WHERE provider = $1 AND external_id = $2",
-        )
-        .bind(provider)
-        .bind(external_id)
-        .execute(self.db_pool.deref())
-        .await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl OAuth2TokenRepo for DbOAuth2TokenRepo<sqlx::Sqlite> {
     async fn upsert(&self, token: &OAuth2TokenRecord) -> Result<(), RepoError> {
         sqlx::query(
             r#"

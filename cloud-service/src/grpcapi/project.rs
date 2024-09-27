@@ -20,9 +20,10 @@ use cloud_api_grpc::proto::golem::cloud::project::v1::{
 };
 use cloud_api_grpc::proto::golem::cloud::project::Project;
 use cloud_common::grpc::proto_project_id_string;
+use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::ProjectId;
+use golem_common::model::{AccountId, ProjectId};
 use golem_common::recorded_grpc_api_request;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
@@ -32,11 +33,14 @@ impl From<AuthServiceError> for ProjectError {
     fn from(value: AuthServiceError) -> Self {
         let error = match value {
             AuthServiceError::InvalidToken(_) => project_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
+                error: value.to_safe_string(),
             }),
-            AuthServiceError::Internal(_) => project_error::Error::Unauthorized(ErrorBody {
-                error: value.to_string(),
-            }),
+            AuthServiceError::InternalTokenServiceError(_)
+            | AuthServiceError::InternalAccountGrantError(_) => {
+                project_error::Error::Unauthorized(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         ProjectError { error: Some(error) }
     }
@@ -45,17 +49,22 @@ impl From<AuthServiceError> for ProjectError {
 impl From<project::ProjectError> for ProjectError {
     fn from(value: project::ProjectError) -> Self {
         let error = match value {
-            project::ProjectError::Internal(_) => project_error::Error::InternalError(ErrorBody {
-                error: value.to_string(),
-            }),
+            project::ProjectError::InternalRepoError(_)
+            | project::ProjectError::FailedToCreateDefaultProject(_)
+            | project::ProjectError::InternalProjectAuthorisationError(_)
+            | project::ProjectError::InternalPlanLimitError(_) => {
+                project_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
             project::ProjectError::Unauthorized(_) => {
                 project_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             project::ProjectError::LimitExceeded(_) => {
                 project_error::Error::LimitExceeded(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };
@@ -66,14 +75,16 @@ impl From<project::ProjectError> for ProjectError {
 impl From<project_auth::ProjectAuthorisationError> for ProjectError {
     fn from(value: project_auth::ProjectAuthorisationError) -> Self {
         let error = match value {
-            project_auth::ProjectAuthorisationError::Internal(_) => {
+            project_auth::ProjectAuthorisationError::InternalRepoError(_)
+            | project_auth::ProjectAuthorisationError::InternalProjectGrantError(_)
+            | project_auth::ProjectAuthorisationError::InternalProjectPolicyError(_) => {
                 project_error::Error::InternalError(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
             project_auth::ProjectAuthorisationError::Unauthorized(_) => {
                 project_error::Error::Unauthorized(ErrorBody {
-                    error: value.to_string(),
+                    error: value.to_safe_string(),
                 })
             }
         };
@@ -211,7 +222,7 @@ impl ProjectGrpcApi {
     ) -> Result<Project, ProjectError> {
         let auth = self.auth(metadata).await?;
 
-        let owner_account_id: golem_common::model::AccountId = request
+        let owner_account_id: AccountId = request
             .owner_account_id
             .map(|id| id.into())
             .ok_or_else(|| bad_request_error("Missing account id"))?;

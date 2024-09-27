@@ -1,12 +1,10 @@
-pub mod auth;
 pub mod component;
-pub mod limit;
-pub mod project;
 
 use crate::config::ComponentServiceConfig;
-use crate::service::auth::{AuthService, CloudAuthService, CloudNamespace};
-use crate::service::limit::{LimitService, LimitServiceDefault};
-use crate::service::project::{ProjectService, ProjectServiceDefault};
+use cloud_common::auth::CloudNamespace;
+use cloud_common::clients::auth::{BaseAuthService, CloudAuthService};
+use cloud_common::clients::limit::{LimitService, LimitServiceDefault};
+use cloud_common::clients::project::{ProjectService, ProjectServiceDefault};
 use golem_common::config::DbConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
@@ -55,7 +53,7 @@ impl Services {
         let project_service: Arc<dyn ProjectService + Sync + Send> =
             Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let auth_service: Arc<dyn AuthService + Sync + Send> =
+        let auth_service: Arc<dyn BaseAuthService + Sync + Send> =
             Arc::new(CloudAuthService::new(project_service.clone()));
 
         let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
@@ -100,18 +98,5 @@ impl Services {
             component_service,
             compilation_service,
         })
-    }
-
-    pub fn noop() -> Self {
-        let component_service: Arc<dyn component::ComponentService + Sync + Send> =
-            Arc::new(component::ComponentServiceNoop::default());
-
-        let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-            Arc::new(ComponentCompilationServiceDisabled);
-
-        Services {
-            component_service,
-            compilation_service,
-        }
     }
 }

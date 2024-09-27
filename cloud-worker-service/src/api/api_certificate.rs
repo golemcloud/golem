@@ -1,12 +1,11 @@
 use std::result::Result;
 use std::sync::Arc;
 
-use cloud_common::auth::GolemSecurityScheme;
+use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::model::{Certificate, CertificateId, CertificateRequest};
 use crate::service::api_certificate::CertificateService;
-use crate::service::auth::CloudAuthCtx;
 use golem_common::model::ProjectId;
 use golem_common::recorded_http_api_request;
 use poem_openapi::param::Query;

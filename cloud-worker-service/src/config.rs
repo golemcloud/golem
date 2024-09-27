@@ -1,54 +1,9 @@
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use url::Url;
-use uuid::Uuid;
 
-use cloud_common::config::MergedConfigLoaderOrDumper;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CloudServiceConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: Uuid,
-    pub retries: RetryConfig,
-}
-
-impl CloudServiceConfig {
-    pub fn url(&self) -> Url {
-        Url::parse(&format!("http://{}:{}", self.host, self.port))
-            .expect("Failed to parse CloudService URL")
-    }
-
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build CloudService URI")
-    }
-}
-
-impl Default for CloudServiceConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 8080,
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
-            retries: RetryConfig::default(),
-        }
-    }
-}
-
-impl HasConfigExamples<CloudServiceConfig> for CloudServiceConfig {
-    fn examples() -> Vec<ConfigExample<CloudServiceConfig>> {
-        vec![]
-    }
-}
+use cloud_common::config::{MergedConfigLoaderOrDumper, RemoteCloudServiceConfig};
 
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct WorkerServiceCloudConfig {
@@ -60,7 +15,7 @@ pub struct WorkerServiceCloudConfig {
 pub struct CloudSpecificWorkerServiceConfig {
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
-    pub cloud_service: CloudServiceConfig,
+    pub cloud_service: RemoteCloudServiceConfig,
 }
 
 impl Default for CloudSpecificWorkerServiceConfig {
@@ -68,7 +23,7 @@ impl Default for CloudSpecificWorkerServiceConfig {
         Self {
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
-            cloud_service: CloudServiceConfig::default(),
+            cloud_service: RemoteCloudServiceConfig::default(),
         }
     }
 }
