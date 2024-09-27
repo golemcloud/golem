@@ -1,5 +1,6 @@
 use crate::model::oam;
 use crate::model::oam::TypedTraitProperties;
+use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
 use crate::model::validation::{ValidatedResult, ValidationBuilder};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -27,13 +28,13 @@ pub fn init_oam_app(component_name: String) -> oam::Application {
                 wit: "wit".to_string(),
                 input_wasm: "target/input.wasm".to_string(),
                 output_wasm: "target/output.wasm".to_string(),
-                extra_properties: Default::default(),
+                unknown_properties: Default::default(),
             },
         });
 
         component.add_typed_trait(WasmRpcTraitProperties {
             component_name: component_name.clone(),
-            extra_properties: Default::default(),
+            unknown_properties: Default::default(),
         });
 
         component
@@ -47,6 +48,7 @@ pub fn init_oam_app(component_name: String) -> oam::Application {
 
 #[derive(Clone, Debug)]
 pub struct Application {
+    pub metadata: oam::Metadata,
     pub components_by_name: BTreeMap<String, Component>,
 }
 
@@ -168,7 +170,13 @@ pub struct CommonComponentProperties {
     #[serde(rename = "outputWasm")]
     pub output_wasm: String,
     #[serde(flatten)]
-    pub extra_properties: BTreeMap<String, serde_json::Value>,
+    pub unknown_properties: UnknownProperties,
+}
+
+impl HasUnknownProperties for CommonComponentProperties {
+    fn unknown_properties(&self) -> &UnknownProperties {
+        &self.unknown_properties
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -200,7 +208,13 @@ pub struct WasmRpcTraitProperties {
     #[serde(rename = "componentName")]
     pub component_name: String,
     #[serde(flatten)]
-    pub extra_properties: BTreeMap<String, serde_json::Value>,
+    pub unknown_properties: UnknownProperties,
+}
+
+impl HasUnknownProperties for WasmRpcTraitProperties {
+    fn unknown_properties(&self) -> &UnknownProperties {
+        &self.unknown_properties
+    }
 }
 
 impl oam::TypedTraitProperties for WasmRpcTraitProperties {
@@ -274,21 +288,10 @@ impl Component {
 
                     match WasmRpcTraitProperties::from_generic_trait(wasm_rpc) {
                         Ok(wasm_rpc) => {
-                            if !wasm_rpc.extra_properties.is_empty() {
-                                validation.push_context(
-                                    "dep component name",
-                                    wasm_rpc.component_name.clone(),
-                                );
-
-                                for (name, _) in wasm_rpc.extra_properties {
-                                    validation.add_warn(format!(
-                                        "Unknown wasm-rpc trait property: {}",
-                                        name
-                                    ));
-                                }
-
-                                validation.pop_context();
-                            }
+                            wasm_rpc.add_unknown_property_warns(
+                                || vec![("dep component name", wasm_rpc.component_name.clone())],
+                                &mut validation,
+                            );
                             wasm_rpc_dependencies.push(wasm_rpc.component_name)
                         }
                         Err(err) => validation
@@ -317,12 +320,7 @@ impl Component {
 
                 if !validation.has_any_errors() {
                     if let Ok(properties) = properties {
-                        if !properties.extra_properties.is_empty() {
-                            for (name, _) in properties.extra_properties {
-                                validation
-                                    .add_warn(format!("Unknown component property: {}", name));
-                            }
-                        }
+                        properties.add_unknown_property_warns(Vec::new, &mut validation);
 
                         components.push(Component {
                             name: component.name,
