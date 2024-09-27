@@ -203,7 +203,7 @@ fn top_level_get_worker(
 
     let url = WorkerUrl {
         component_name: component.component_name.to_string(),
-        worker_name: worker_name.to_string(),
+        worker_name: Some(worker_name.to_string()),
     };
 
     let worker: WorkerMetadataView = cli.run(&["get", &url.to_string()])?;
@@ -249,7 +249,7 @@ fn top_level_get_worker_function(
     );
 
     let urn = WorkerFunctionUrn {
-        id: worker_urn.id,
+        id: worker_urn.id.try_into_worker_id().unwrap(),
         function: function_name.to_string(),
     };
 

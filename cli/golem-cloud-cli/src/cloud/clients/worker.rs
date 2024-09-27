@@ -4,7 +4,7 @@ use crate::cloud::model::to_cloud::ToCloud;
 use crate::cloud::model::to_oss::ToOss;
 use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
-use golem_cli::clients::worker::WorkerClient;
+use golem_cli::clients::worker::{worker_name_required, WorkerClient};
 use golem_cli::command::worker::WorkerConnectOptions;
 use golem_cli::connect_output::ConnectOutput;
 use golem_cli::model::{
@@ -68,18 +68,32 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     ) -> Result<golem_client::model::InvokeResult, GolemError> {
         info!("Invoke and await for function {function} in {worker_urn}");
 
-        Ok(self
-            .client
-            .invoke_and_await_function(
-                &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
-                idempotency_key.as_ref().map(|k| k.0.as_str()),
-                &function,
-                &parameters.to_cloud(),
-            )
-            .await
-            .map_err(CloudGolemError::from)?
-            .to_oss())
+        if let Some(worker_name) = &worker_urn.id.worker_name {
+            Ok(self
+                .client
+                .invoke_and_await_function(
+                    &worker_urn.id.component_id.0,
+                    worker_name,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters.to_cloud(),
+                )
+                .await
+                .map_err(CloudGolemError::from)?
+                .to_oss())
+        } else {
+            Ok(self
+                .client
+                .invoke_and_await_function_without_name(
+                    &worker_urn.id.component_id.0,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters.to_cloud(),
+                )
+                .await
+                .map_err(CloudGolemError::from)?
+                .to_oss())
+        }
     }
 
     async fn invoke(
@@ -91,17 +105,30 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
     ) -> Result<(), GolemError> {
         info!("Invoke function {function} in {worker_urn}");
 
-        let _ = self
-            .client
-            .invoke_function(
-                &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
-                idempotency_key.as_ref().map(|k| k.0.as_str()),
-                &function,
-                &parameters.to_cloud(),
-            )
-            .await
-            .map_err(CloudGolemError::from)?;
+        if let Some(worker_name) = &worker_urn.id.worker_name {
+            let _ = self
+                .client
+                .invoke_function(
+                    &worker_urn.id.component_id.0,
+                    worker_name,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters.to_cloud(),
+                )
+                .await
+                .map_err(CloudGolemError::from)?;
+        } else {
+            let _ = self
+                .client
+                .invoke_function_without_name(
+                    &worker_urn.id.component_id.0,
+                    idempotency_key.as_ref().map(|k| k.0.as_str()),
+                    &function,
+                    &parameters.to_cloud(),
+                )
+                .await
+                .map_err(CloudGolemError::from)?;
+        }
         Ok(())
     }
 
@@ -112,7 +139,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .client
             .interrupt_worker(
                 &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
+                &worker_name_required(&worker_urn)?,
                 Some(false),
             )
             .await
@@ -125,7 +152,10 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         let _ = self
             .client
-            .resume_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .resume_worker(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
             .await
             .map_err(CloudGolemError::from)?;
         Ok(())
@@ -138,7 +168,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .client
             .interrupt_worker(
                 &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
+                &worker_name_required(&worker_urn)?,
                 Some(true),
             )
             .await
@@ -151,7 +181,10 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         let _ = self
             .client
-            .delete_worker(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .delete_worker(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
             .await
             .map_err(CloudGolemError::from)?;
         Ok(())
@@ -162,7 +195,10 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
 
         Ok(self
             .client
-            .get_worker_metadata(&worker_urn.id.component_id.0, &worker_urn.id.worker_name)
+            .get_worker_metadata(
+                &worker_urn.id.component_id.0,
+                &worker_name_required(&worker_urn)?,
+            )
             .await
             .map_err(CloudGolemError::from)?
             .to_cli())
@@ -250,7 +286,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .push("components")
             .push(&worker_urn.id.component_id.0.to_string())
             .push("workers")
-            .push(&worker_urn.id.worker_name)
+            .push(&worker_name_required(&worker_urn)?)
             .push("connect");
 
         let mut request = url
@@ -433,7 +469,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .client
             .update_worker(
                 &worker_urn.id.component_id.0,
-                &worker_urn.id.worker_name,
+                &worker_name_required(&worker_urn)?,
                 &golem_cloud_client::model::UpdateWorkerRequest {
                     mode: update_mode,
                     target_version,

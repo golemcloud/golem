@@ -253,7 +253,10 @@ async fn get_resource_by_urn(
             factory.worker_service().get(w, p).await
         }
         ResourceUrn::WorkerFunction(wf) => {
-            let (w, p) = WorkerUri::URN(WorkerUrn { id: wf.id }).to_oss_uri();
+            let (w, p) = WorkerUri::URN(WorkerUrn {
+                id: wf.id.into_target_worker_id(),
+            })
+            .to_oss_uri();
             let p = resolve_project_id(factory, p).await?;
 
             factory
@@ -329,7 +332,7 @@ async fn get_resource_by_url(
         ResourceUrl::WorkerFunction(wf) => {
             let (w, p) = WorkerUri::URL(WorkerUrl {
                 component_name: wf.component_name.clone(),
-                worker_name: wf.worker_name.clone(),
+                worker_name: Some(wf.worker_name.clone()),
                 project: wf.project.clone(),
             })
             .to_oss_uri();

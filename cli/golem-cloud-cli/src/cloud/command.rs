@@ -17,7 +17,7 @@ use golem_cli::command::worker::{WorkerRefSplit, WorkerSubcommand};
 use golem_cli::completion::PrintCompletion;
 use golem_cli::model::{Format, HasFormatConfig, HasVerbosity, WorkerName};
 use golem_cli::{completion, diagnose};
-use golem_common::model::WorkerId;
+use golem_common::model::TargetWorkerId;
 use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ResourceUri, ToOssUri, WorkerUri};
 use golem_common::uri::cloud::url::{ComponentUrl, ProjectUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
@@ -140,9 +140,9 @@ impl From<&CloudWorkerNameOrUriArg> for CloudWorkerUriArg {
                 match &value.component {
                     Some(ComponentUri::URN(component_urn)) => {
                         let uri = WorkerUri::URN(WorkerUrn {
-                            id: WorkerId {
+                            id: TargetWorkerId {
                                 component_id: component_urn.id.clone(),
-                                worker_name,
+                                worker_name: Some(worker_name),
                             },
                         });
                         CloudWorkerUriArg {
@@ -158,7 +158,7 @@ impl From<&CloudWorkerNameOrUriArg> for CloudWorkerUriArg {
                     Some(ComponentUri::URL(component_url)) => {
                         let uri = WorkerUri::URL(WorkerUrl {
                             component_name: component_url.name.to_string(),
-                            worker_name,
+                            worker_name: Some(worker_name),
                             project: component_url.project.clone(),
                         });
 
@@ -197,7 +197,7 @@ impl From<&CloudWorkerNameOrUriArg> for CloudWorkerUriArg {
 
                         let uri = WorkerUri::URL(WorkerUrl {
                             component_name,
-                            worker_name,
+                            worker_name: Some(worker_name),
                             project: None,
                         });
 
@@ -260,7 +260,7 @@ impl From<&CloudWorkerUriArg> for CloudWorkerNameOrUriArg {
                         project,
                         project_name,
                         component_name: None,
-                        worker_name: Some(WorkerName(urn.id.worker_name.to_string())),
+                        worker_name: urn.id.worker_name.as_ref().map(|n| WorkerName(n.clone())),
                     }
                 }
                 WorkerUri::URL(url) => {
@@ -271,7 +271,7 @@ impl From<&CloudWorkerUriArg> for CloudWorkerNameOrUriArg {
                             project,
                             project_name,
                             component_name: Some(url.component_name.to_string()),
-                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                            worker_name: url.worker_name.as_ref().map(|n| WorkerName(n.clone())),
                         }
                     } else {
                         let component_uri = ComponentUri::URL(ComponentUrl {
@@ -285,7 +285,7 @@ impl From<&CloudWorkerUriArg> for CloudWorkerNameOrUriArg {
                             project,
                             project_name,
                             component_name: None,
-                            worker_name: Some(WorkerName(url.worker_name.to_string())),
+                            worker_name: url.worker_name.as_ref().map(|n| WorkerName(n.clone())),
                         }
                     }
                 }
@@ -442,7 +442,7 @@ pub enum CloudCommand<ProfileAdd: clap::Args> {
     #[command()]
     Completion {
         #[arg(long = "generate", value_enum)]
-        generator: clap_complete::Shell,
+        generator: Shell,
     },
 
     /// Diagnose required tooling

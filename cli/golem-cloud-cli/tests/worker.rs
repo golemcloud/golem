@@ -184,7 +184,7 @@ fn worker_new_instance(
     ])?;
 
     assert_eq!(worker_urn.id.component_id, component.component_urn.id);
-    assert_eq!(worker_urn.id.worker_name, worker_name);
+    assert_eq!(worker_urn.id.worker_name, Some(worker_name));
     Ok(())
 }
 
@@ -208,16 +208,16 @@ fn worker_ref(
         RefKind::Url => {
             let url = WorkerUrl {
                 component_name: component.component_name.clone(),
-                worker_name,
+                worker_name: Some(worker_name),
             };
 
             vec![cfg.arg('W', "worker"), url.to_string()]
         }
         RefKind::Urn => {
             let urn = WorkerUrn {
-                id: golem_common::model::WorkerId {
+                id: golem_common::model::TargetWorkerId {
                     component_id: component.component_urn.id.clone(),
-                    worker_name,
+                    worker_name: Some(worker_name),
                 },
             };
 
@@ -786,7 +786,7 @@ fn worker_list(
             &component_ref_key(cfg, ref_kind),
             &component_ref_value(&component, ref_kind),
             &cfg.arg('f', "filter"),
-            format!("name = {}", worker_urn.id.worker_name).as_str(),
+            format!("name = {}", worker_urn.id.worker_name.unwrap()).as_str(),
             &cfg.arg('f', "filter"),
             "version >= 0",
             "--precise",
