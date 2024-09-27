@@ -34,7 +34,7 @@ impl ApplicationWithSource {
         self.source.to_string_lossy().to_string()
     }
 
-    // NOTE: unlike the wasm_rpc model, here validation is optional, so we can access the "raw" data
+    // NOTE: unlike the wasm_rpc model, here validation is optional separate step, so we can access the "raw" data
     pub fn validate(self) -> ValidatedResult<Self> {
         let mut validation = ValidationBuilder::new();
         validation.push_context("source", self.source_as_string());
