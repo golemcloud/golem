@@ -1761,13 +1761,13 @@ mod type_inference_tests {
             let component_metadata =
                 internal::get_analysed_exports("foo", vec![request_type.clone()], return_type);
 
-            let expr_str = r#"${
+            let expr_str = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               match result {  some(value) => "personal-id", none =>  x.body.titles[1] }
-            }"#;
+            "#;
 
-            let mut expr = Expr::from_interpolated_str(expr_str).unwrap();
+            let mut expr = Expr::from_text(expr_str).unwrap();
 
             let function_type_registry =
                 FunctionTypeRegistry::from_export_metadata(&component_metadata);

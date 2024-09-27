@@ -619,7 +619,7 @@ mod tests {
         "#;
 
         let api_specification: HttpApiDefinition =
-            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+            get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
 
@@ -671,7 +671,7 @@ mod tests {
         "#;
 
         let api_specification: HttpApiDefinition =
-            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+            get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
 
@@ -723,7 +723,7 @@ mod tests {
         "#;
 
         let api_specification: HttpApiDefinition =
-            get_api_spec("foo/{user-id}", "shopping-cart", expression);
+            get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
 

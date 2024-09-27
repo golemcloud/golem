@@ -17,10 +17,12 @@ pub use expr::*;
 pub use function_name::*;
 pub use inferred_type::*;
 pub use interpreter::*;
+pub use parser::type_name::TypeName;
 pub use text::*;
 pub use type_inference::*;
 pub use type_registry::*;
 pub use variable_id::*;
+
 mod call_type;
 mod compiler;
 mod expr;

@@ -527,75 +527,73 @@ mod tests {
 
     #[test]
     fn expr_parser_with_vars() {
-        test_string_expr_parse_and_encode("worker-id-${request.path.user_id}");
+        test_string_expr_parse_and_encode("\"worker-id-${request.path.user_id}\"");
     }
 
     #[test]
     fn expression_with_predicate0() {
-        test_string_expr_parse_and_encode("${1<2}");
+        test_string_expr_parse_and_encode("1<2");
     }
 
     #[test]
     fn expression_with_predicate1() {
-        test_string_expr_parse_and_encode("${request.path.user-id>request.path.id}");
+        test_string_expr_parse_and_encode("request.path.user-id>request.path.id");
     }
 
     #[test]
     fn expression_with_predicate2() {
-        test_string_expr_parse_and_encode("${request.path.user-id>2}");
+        test_string_expr_parse_and_encode("request.path.user-id>2");
     }
 
     #[test]
     fn expression_with_predicate3() {
-        test_string_expr_parse_and_encode("${request.path.user-id==2}");
+        test_string_expr_parse_and_encode("request.path.user-id==2");
     }
 
     #[test]
     fn expression_with_predicate4() {
-        test_string_expr_parse_and_encode("${request.path.user-id<2}");
+        test_string_expr_parse_and_encode("request.path.user-id<2");
     }
 
     #[test]
     fn expr_with_if_condition() {
-        test_string_expr_parse_and_encode("${if request.path.user_id>1 then 1 else 0}");
+        test_string_expr_parse_and_encode("if request.path.user_id>1 then 1 else 0");
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_left() {
         test_string_expr_parse_and_encode(
-            "${if request.path.user_id>1 then request.path.user_id else 0}",
+            "if request.path.user_id>1 then request.path.user_id else 0",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_left_right() {
         test_string_expr_parse_and_encode(
-            "${if request.path.user_id>1 then request.path.user_id else request.path.id}",
+            "if request.path.user_id>1 then request.path.user_id else request.path.id",
         );
     }
 
     #[test]
     fn expr_with_if_condition_with_expr_right() {
-        test_string_expr_parse_and_encode(
-            "${if request.path.user_id>1 then 0 else request.path.id}",
-        );
+        test_string_expr_parse_and_encode("if request.path.user_id>1 then 0 else request.path.id");
     }
 
     #[test]
     fn expr_with_if_condition_with_with_literals() {
         test_string_expr_parse_and_encode(
-            "foo-${if request.path.user_id>1 then request.path.user_id else 0}",
+            "\"foo-${if request.path.user_id>1 then request.path.user_id else 0}\"",
         );
     }
 
     #[test]
     fn expr_request() {
-        test_string_expr_parse_and_encode("${request}");
+        test_string_expr_parse_and_encode("request");
     }
 
     #[test]
     fn expr_worker_response() {
-        test_string_expr_parse_and_encode("${worker.response}");
+        test_string_expr_parse_and_encode("worker.response");
     }
 
     // TODO; Avoid having to pass null to fix tests
@@ -632,25 +630,25 @@ mod tests {
     fn test_api_spec_serde() {
         test_serde(
             "foo/{user-id}?{id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_serde(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_serde(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_serde(
             "foo",
-            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
@@ -679,6 +677,7 @@ mod tests {
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
+            dbg!(original.clone());
             let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();
             assert_eq!(original, decoded);
@@ -686,25 +685,25 @@ mod tests {
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo/{user-id}",
-            "shopping-cart-${if request.path.user-id>100 then 0 else 1}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
 
         test_encode_decode(
             "foo",
-            "shopping-cart-${if request.body.user-id>100 then 0 else 1}",
+            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }

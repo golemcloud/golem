@@ -253,10 +253,10 @@ mod tests {
     fn test_get_route_from_path_item() {
         let path_item = PathItem {
             extensions: vec![("x-golem-worker-bridge".to_string(), json!({
-                "worker-name": "worker-${request.body.user}",
+                "worker-name": "let x: str = request.body.user; \"worker-${x}\"",
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "component-version": 0,
-                "idempotency-key": "test-key",
+                "idempotency-key": "\"test-key\"",
                 "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
@@ -273,12 +273,16 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::concat(vec![
-                        Expr::literal("worker-"),
-                        Expr::select_field(
-                            Expr::select_field(Expr::identifier("request"), "body"),
-                            "user"
-                        )
+                    worker_name: Expr::multiple(vec![
+                        Expr::let_binding_with_type(
+                            "x",
+                            rib::TypeName::Str,
+                            Expr::select_field(
+                                Expr::select_field(Expr::identifier("request"), "body"),
+                                "user"
+                            )
+                        ),
+                        Expr::concat(vec![Expr::literal("worker-"), Expr::identifier("x"),])
                     ]),
                     component_id: golem_service_base::model::VersionedComponentId {
                         component_id: ComponentId(Uuid::nil()),
