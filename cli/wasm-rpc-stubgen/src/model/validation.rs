@@ -25,6 +25,14 @@ impl<T> ValidatedResult<T> {
         ValidatedResult::Ok(result).flatten()
     }
 
+    pub fn as_ok_ref(&self) -> Option<&T> {
+        match self {
+            ValidatedResult::Ok(value) => Some(value),
+            ValidatedResult::OkWithWarns(value, _) => Some(value),
+            ValidatedResult::WarnsAndErrors(_, _) => None,
+        }
+    }
+
     pub fn into_product(self) -> (Option<T>, Vec<String>, Vec<String>) {
         match self {
             ValidatedResult::Ok(result) => (Some(result), vec![], vec![]),
@@ -201,7 +209,7 @@ impl ValidationBuilder {
             "".to_string()
         } else {
             format!(
-                " [{}]",
+                ", {}",
                 self.context
                     .iter()
                     .map(|c| format!("{}: {}", c.name, c.value))

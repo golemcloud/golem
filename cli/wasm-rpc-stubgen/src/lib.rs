@@ -261,11 +261,11 @@ pub fn initialize_workspace(
     )
 }
 
-pub fn run_declarative_command(command: Declarative) -> anyhow::Result<()> {
+pub async fn run_declarative_command(command: Declarative) -> anyhow::Result<()> {
     match command {
         Declarative::Init(args) => commands::declarative::init(args.component_name),
         Declarative::PreBuild(args) => {
-            commands::declarative::pre_build(ApplicationResolveMode::Explicit(args.component))
+            commands::declarative::pre_build(ApplicationResolveMode::Explicit(args.component)).await
         }
         Declarative::PostBuild(_args) => commands::declarative::post_build(),
     }

@@ -4,7 +4,7 @@ use crate::model::validation::{ValidatedResult, ValidationBuilder};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
@@ -98,6 +98,18 @@ impl Application {
 
         validation.build(Self { components_by_name })
     }
+
+    pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<String> {
+        self.components_by_name
+            .iter()
+            .flat_map(|(_, component)| {
+                component
+                    .wasm_rpc_dependencies
+                    .iter()
+                    .map(|component_name| component_name.to_string())
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +126,19 @@ pub struct Component {
 impl Component {
     pub fn source_as_string(&self) -> String {
         self.source.to_string_lossy().to_string()
+    }
+
+    pub fn resolve_component_path(&self) -> &Path {
+        self.source.parent().unwrap_or_else(|| {
+            panic!(
+                "Failed to get component path for source: {}",
+                self.source.to_string_lossy()
+            )
+        })
+    }
+
+    pub fn resolve_wit_path(&self) -> PathBuf {
+        self.resolve_component_path().join(self.wit.as_path())
     }
 }
 
