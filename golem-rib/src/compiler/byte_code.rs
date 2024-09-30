@@ -990,7 +990,7 @@ mod compiler_tests {
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeOption,
-            TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant,
+            TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
 
         #[tokio::test]
@@ -1224,6 +1224,50 @@ mod compiler_tests {
                match x {
                  { path : { user : some_name } } => some_name,
                  _ => name
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_tuple_global_input() {
+            let request_value_type = AnalysedType::Tuple(TypeTuple {
+                items: vec![
+                    AnalysedType::Str(TypeStr),
+                    AnalysedType::U32(TypeU32),
+                    AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "user".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    }),
+                ],
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Tuple,
+            // implies the type of request is a Tuple.
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                (_, _, record) =>  record.user,
+                 _ => "fallback"
                }
             "#;
 
