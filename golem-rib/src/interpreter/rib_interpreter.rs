@@ -1880,7 +1880,7 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
-            AnalysedType, TypeEnum, TypeList, TypeOption, TypeResult, TypeStr, TypeTuple, TypeU64,
+            AnalysedType, TypeList, TypeOption, TypeResult, TypeStr, TypeU64,
         };
         use std::collections::HashMap;
 
@@ -1890,6 +1890,7 @@ mod interpreter_tests {
               let input = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let optional_result = function-option(input);
               let id: str = request.body.id;
+
               let a = match optional_result {  some(value) => "personal-id", none => id };
               let b = match optional_result {  some(value) => "personal-id", none =>  input.body.titles[1] };
               let c = match optional_result {  some(value) => "personal-id", none =>  request.body.address.street };
@@ -1914,9 +1915,13 @@ mod interpreter_tests {
 
               let ok_record_result = function-ok-record(input);
 
-              let g = match ok_record_result { ok(success_rec) => success_rec.a, err(failure_rec) => "${failure_rec.d}" };
+              let g = match ok_record_result { ok(success_rec) => success_rec.b[0], err(failure_rec) => "${failure_rec.d}" };
 
-              { a : a, b : b, c: c, d: d, e: e, f: f, g: g}
+              let err_record_result = function-err-record(input);
+
+              let h = match err_record_result { ok(success_rec) => success_rec.b[0], err(failure_rec) => "${failure_rec.d}" };
+
+              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -1941,18 +1946,8 @@ mod interpreter_tests {
                     ),
                 ]))),
                 err: Some(Box::new(internal::analysed_type_record(vec![
-                    (
-                        "c",
-                        AnalysedType::Tuple(TypeTuple {
-                            items: vec![AnalysedType::Str(TypeStr), AnalysedType::U64(TypeU64)],
-                        }),
-                    ),
-                    (
-                        "d",
-                        AnalysedType::Enum(TypeEnum {
-                            cases: vec!["a".to_string(), "b".to_string()],
-                        }),
-                    ),
+                    ("c", AnalysedType::Str(TypeStr)),
+                    ("d", AnalysedType::Str(TypeStr)),
                 ]))),
             });
 
@@ -1964,6 +1959,11 @@ mod interpreter_tests {
             let ok_record_result = internal::get_type_annotated_value(
                 &ok_err_record_result_type,
                 r#"ok({a : "foo", b: ["bar", "baz"]})"#,
+            );
+
+            let err_record_result = internal::get_type_annotated_value(
+                &ok_err_record_result_type,
+                r#"err({c : "bar", d: "fuuz"})"#,
             );
 
             let input_type = internal::analysed_type_record(vec![
@@ -2047,6 +2047,12 @@ mod interpreter_tests {
             let function_ok_record_metadata = internal::get_component_metadata(
                 "function-ok-record",
                 vec![input_type.clone()],
+                Some(ok_err_record_result_type.clone()),
+            );
+
+            let function_err_record_metadata = internal::get_component_metadata(
+                "function-err-record",
+                vec![input_type.clone()],
                 Some(ok_err_record_result_type),
             );
 
@@ -2055,6 +2061,7 @@ mod interpreter_tests {
             function_option_metadata.extend(function_ok_metadata);
             function_option_metadata.extend(function_err_metadata);
             function_option_metadata.extend(function_ok_record_metadata);
+            function_option_metadata.extend(function_err_record_metadata);
 
             let compiled = compiler::compile(&expr, &function_option_metadata).unwrap();
 
@@ -2078,6 +2085,10 @@ mod interpreter_tests {
                     Some(ok_record_result),
                 ),
                 (
+                    internal::FunctionName("function-err-record".to_string()),
+                    Some(err_record_result),
+                ),
+                (
                     internal::FunctionName("function-no-arg-unit".to_string()),
                     None,
                 ),
@@ -2096,8 +2107,9 @@ mod interpreter_tests {
                     ("e", AnalysedType::Str(TypeStr)),
                     ("f", AnalysedType::Str(TypeStr)),
                     ("g", AnalysedType::Str(TypeStr)),
+                    ("h", AnalysedType::Str(TypeStr)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "foo" }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
