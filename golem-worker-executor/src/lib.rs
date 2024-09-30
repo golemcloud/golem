@@ -46,7 +46,7 @@ use tokio::runtime::Handle;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
-
+use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
 use crate::context::Context;
 use crate::services::AdditionalDeps;
 
@@ -135,7 +135,8 @@ impl Bootstrap<Context> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem::api::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0_rc1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

@@ -57,7 +57,7 @@ use tokio::runtime::Handle;
 
 use tokio::task::JoinHandle;
 
-use golem::api;
+use golem::api0_2_0;
 use golem_common::config::RedisConfig;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -88,6 +88,7 @@ use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
 
 pub struct TestWorkerExecutor {
     handle: Option<JoinHandle<Result<(), String>>>,
@@ -815,7 +816,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        api::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0_rc1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
