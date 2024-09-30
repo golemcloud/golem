@@ -1335,10 +1335,11 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::ArmPattern> for ArmPattern {
                     .into_iter()
                     .map(|field| {
                         let name = field.name;
-                        let pattern = field.pattern.ok_or("Missing pattern")?;
-                        Ok((name, Box::new((*pattern).try_into()?)))
+                        let proto_pattern = field.pattern.ok_or("Missing pattern")?;
+                        let arm_pattern = ArmPattern::try_from(proto_pattern)?;
+                        Ok((name, arm_pattern))
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, String>>()?;
                 Ok(ArmPattern::RecordConstructor(fields))
             }
             golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::FlagConstructor(
