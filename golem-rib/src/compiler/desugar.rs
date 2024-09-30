@@ -31,8 +31,8 @@ pub fn desugar_pattern_match(
 }
 
 mod internal {
-    use golem_wasm_ast::analysis::AnalysedType;
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -98,40 +98,44 @@ mod internal {
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::Constructor(constructor_name, expressions) => hande_constructor(
+            ArmPattern::Constructor(constructor_name, arm_patterns) => hande_constructor(
                 pred_expr,
                 constructor_name,
-                expressions,
+                arm_patterns,
                 resolution,
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::TupleConstructor(expressions) => hande_constructor(
+            ArmPattern::TupleConstructor(arm_patterns) => hande_constructor(
                 pred_expr,
                 "tuple",
-                expressions,
+                arm_patterns,
                 resolution,
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::ListConstructor(expressions) => hande_constructor(
+            ArmPattern::ListConstructor(arm_patterns) => hande_constructor(
                 pred_expr,
                 "list",
-                expressions,
+                arm_patterns,
                 resolution,
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::FlagConstructor(expressions) => hande_constructor(
+            ArmPattern::FlagConstructor(arm_patterns) => hande_constructor(
                 pred_expr,
                 "flag",
-                expressions,
+                arm_patterns,
                 resolution,
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::RecordConstructor(fields) => todo!("Implement record constructor"),
-
+            ArmPattern::RecordConstructor(field_arm_pattern_collection) => handle_record(
+                pred_expr,
+                field_arm_pattern_collection,
+                resolution,
+                inferred_type_of_pred,
+            ),
 
             ArmPattern::As(name, inner_pattern) => handle_as_pattern(
                 name,
@@ -255,6 +259,63 @@ mod internal {
                 };
                 Some(branch)
             }
+        }
+    }
+
+    fn handle_record(
+        pred_expr: &Expr,
+        bind_patterns: &[(String, ArmPattern)],
+        resolution: &Expr,
+        pred_expr_inferred_type: InferredType,
+    ) -> Option<IfThenBranch> {
+        match pred_expr_inferred_type {
+            InferredType::Record(field_and_types) => {
+                // Resolution body is a list of expressions which grows (may be with some let bindings)
+                // as we recursively iterate over the bind patterns
+                // where bind patterns are {name: x, age: _, address : _ } in the case of `match record { {name: x, age: _, address : _ } ) =>`
+                // These will exist prior to the original resolution of a successful tuple match.
+                let mut resolution_body = vec![];
+
+                // The conditions keep growing as we recursively iterate over the bind patterns
+                // and there are multiple conditions (if condition) for each element in the tuple
+                let mut conditions = vec![];
+
+                // We assume pred-expr can be queried by field using Expr::select_field and we pick each element in the bind pattern
+                // to get the corresponding expr in pred-expr and keep recursively iterating until the record is completed.
+                // However there is no resolution body for each of this iteration, so we use an empty expression
+                // and finally push the original resolution body once we fully build the conditions.
+                for (field, arm_pattern) in bind_patterns.iter() {
+                    let new_pred = Expr::select_field(pred_expr.clone(), field);
+                    let new_pred_type = field_and_types
+                        .iter()
+                        .find(|(f, _)| f == field)
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(InferredType::Unknown);
+
+                    let branch = get_conditions(
+                        &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
+                        &new_pred,
+                        None,
+                        new_pred_type.clone(),
+                    );
+
+                    if let Some(x) = branch {
+                        conditions.push(x.condition);
+                        resolution_body.push(x.body)
+                    }
+                }
+
+                resolution_body.push(resolution.clone());
+
+                let and_cond = Expr::and_combine(conditions);
+
+                and_cond.map(|c| IfThenBranch {
+                    condition: c,
+                    body: Expr::multiple(resolution_body),
+                })
+            }
+
+            _ => None,
         }
     }
 
@@ -395,7 +456,7 @@ mod internal {
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
                         &new_pred,
                         None,
-                        new_pred_type
+                        new_pred_type,
                     );
 
                     if let Some(x) = branch {
@@ -413,7 +474,6 @@ mod internal {
                     body: Expr::multiple(resolution_body),
                 })
             }
-
 
             InferredType::List(inferred_type) => {
                 // Resolution body is a list of expressions which grows (may be with some let bindings)
@@ -438,7 +498,7 @@ mod internal {
                         &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
                         &new_pred,
                         None,
-                        *new_pred_type
+                        *new_pred_type,
                     );
 
                     if let Some(x) = branch {
