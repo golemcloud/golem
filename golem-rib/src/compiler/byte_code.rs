@@ -496,8 +496,10 @@ mod internal {
 #[cfg(test)]
 mod compiler_tests {
     use super::*;
-    use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
+    use crate::{compiler, ArmPattern, InferredType, MatchArm, Number, VariableId};
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameTypePair, TypeList, TypeRecord, TypeStr, TypeU32,
+    };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[test]
@@ -1313,6 +1315,64 @@ mod compiler_tests {
 
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
+    }
+
+    #[tokio::test]
+    async fn test_str_global_input() {
+        let request_value_type = AnalysedType::Str(TypeStr);
+
+        let output_analysed_type = AnalysedType::Str(TypeStr);
+
+        let analysed_exports = internal::get_component_metadata(
+            "my-worker-function",
+            vec![request_value_type.clone()],
+            output_analysed_type,
+        );
+
+        let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                "foo"  => "success",
+                 _ => "fallback"
+               }
+            "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let expected_type_info =
+            internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+        assert_eq!(compiled.global_input_type_info, expected_type_info);
+    }
+
+    #[tokio::test]
+    async fn test_number_global_input() {
+        let request_value_type = AnalysedType::U32(TypeU32);
+
+        let output_analysed_type = AnalysedType::Str(TypeStr);
+
+        let analysed_exports = internal::get_component_metadata(
+            "my-worker-function",
+            vec![request_value_type.clone()],
+            output_analysed_type,
+        );
+
+        let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                1  => "success",
+                0 => "failure"
+               }
+            "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let expected_type_info =
+            internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+        assert_eq!(compiled.global_input_type_info, expected_type_info);
     }
 
     mod internal {

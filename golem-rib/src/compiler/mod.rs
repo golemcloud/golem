@@ -30,20 +30,39 @@ pub fn compile(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
 ) -> Result<CompilerOutput, String> {
+    compile_with_limited_globals(expr, export_metadata, None)
+}
+
+// Rib allows global input variables, however, we can choose to fail compilation
+// if they don't fall under a pre-defined set of global variables.
+// There is no restriction imposed to the type of this variable.
+pub fn compile_with_limited_globals(
+    expr: &Expr,
+    export_metadata: &Vec<AnalysedExport>,
+    allowed_global_variables: Option<Vec<String>>,
+) -> Result<CompilerOutput, String> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let mut expr_cloned = expr.clone();
     expr_cloned
         .infer_types(&type_registry)
         .map_err(|e| e.join("\n"))?;
 
-    let rib_input =
+    let global_input_type_info =
         RibInputTypeInfo::from_expr(&mut expr_cloned).map_err(|e| format!("Error: {}", e))?;
 
-    let rib_byte_code = RibByteCode::from_expr(expr_cloned)?;
+    if let Some(allowed_global_variables) = &allowed_global_variables {
+        for variable in allowed_global_variables {
+            if !global_input_type_info.types.contains_key(variable) {
+                return Err(format!("Variable {} not found in global input", variable));
+            }
+        }
+    }
+
+    let byte_code = RibByteCode::from_expr(expr_cloned)?;
 
     Ok(CompilerOutput {
-        byte_code: rib_byte_code,
-        global_input_type_info: rib_input,
+        byte_code,
+        global_input_type_info,
     })
 }
 
