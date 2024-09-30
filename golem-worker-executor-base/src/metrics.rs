@@ -278,9 +278,26 @@ pub mod oplog {
             &["api"]
         )
         .unwrap();
+        static ref SCHEDULED_ARCHIVE_TIME: HistogramVec = register_histogram_vec!(
+            "oplog_scheduled_archive",
+            "Time taken to archive the oplog of a worker",
+            &["type"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_oplog_call(api_name: &'static str) {
         OPLOG_SVC_CALL_TOTAL.with_label_values(&[api_name]).inc();
+    }
+
+    pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {
+        SCHEDULED_ARCHIVE_TIME
+            .with_label_values(if has_more {
+                &["intermediate"]
+            } else {
+                &["final"]
+            })
+            .observe(duration.as_secs_f64());
     }
 }
