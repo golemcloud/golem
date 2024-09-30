@@ -1897,16 +1897,18 @@ mod interpreter_tests {
               let failure: u64 = 401;
               let d = if authorisation == "admin" then success else failure;
               function-no-arg-unit();
+              let unit_result = function-unit(input);
+
               { a : a, b : b, c: c, d: d}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let foo_result_type = AnalysedType::Option(TypeOption {
+            let non_unit_result_type = AnalysedType::Option(TypeOption {
                 inner: Box::new(AnalysedType::Str(TypeStr)),
             });
 
-            let foo_result_value = internal::get_type_annotated_value(&foo_result_type, "none");
+            let non_unit_result_value = internal::get_type_annotated_value(&non_unit_result_type, "none");
 
             let input_type = internal::analysed_type_record(vec![
                 (
@@ -1964,14 +1966,21 @@ mod interpreter_tests {
             let mut component_metadata = internal::get_component_metadata(
                 "function-option",
                 vec![input_type.clone()],
-                Some(foo_result_type.clone()),
+                Some(non_unit_result_type.clone()),
             );
 
             // bar is a no-arg unit function
-            let bar_component_metadata =
+            let function_no_arg_unit_metadata =
                 internal::get_component_metadata("function-no-arg-unit", vec![], None);
 
-            component_metadata.extend(bar_component_metadata);
+            let function_unit_metadata = internal::get_component_metadata(
+                "function-unit",
+                vec![input_type.clone()],
+               None
+            );
+
+            component_metadata.extend(function_no_arg_unit_metadata);
+            component_metadata.extend(function_unit_metadata);
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
@@ -1980,7 +1989,7 @@ mod interpreter_tests {
             let functions_and_result = HashMap::from_iter(vec![
                 (
                     internal::FunctionName("function-option".to_string()),
-                    Some(foo_result_value),
+                    Some(non_unit_result_value),
                 ),
                 (internal::FunctionName("function-no-arg-unit".to_string()), None),
             ]);
