@@ -689,7 +689,7 @@ mod tests {
 
         assert_eq!(result, Ok(expected));
     }
-    
+
     #[tokio::test]
     async fn test_evaluation_with_pattern_match_variant_construction_and_pattern_match() {
         let noop_executor = DefaultEvaluator::noop();

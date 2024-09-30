@@ -1891,9 +1891,20 @@ mod interpreter_tests {
               let optional_result = function-option(input);
               let id: str = request.body.id;
 
-              let a = match optional_result {  some(value) => "personal-id", none => id };
-              let b = match optional_result {  some(value) => "personal-id", none =>  input.body.titles[1] };
-              let c = match optional_result {  some(value) => "personal-id", none =>  request.body.address.street };
+              let a = match optional_result {
+                some(value) => "personal-id",
+                none => id
+               };
+
+              let b = match optional_result {
+                some(value) => "personal-id",
+                none =>  input.body.titles[1]
+               };
+
+              let c = match optional_result {
+                some(value) => "personal-id",
+                none =>  request.body.address.street
+              };
 
               let authorisation: str = request.headers.authorisation;
               let success: u64 = 200;
@@ -1907,7 +1918,10 @@ mod interpreter_tests {
 
               let ok_result = function-ok(input);
 
-              let e = if id == "foo" then "bar" else match ok_result { ok(value) => value, err(msg) => "empty" };
+              let e = if id == "foo" then "bar" else match ok_result {
+                ok(value) => value,
+                err(msg) => "empty"
+               };
 
               let err_result = function-err(input);
 
@@ -1915,7 +1929,10 @@ mod interpreter_tests {
 
               let ok_record_result = function-ok-record(input);
 
-              let g = match ok_record_result { ok(success_rec) => success_rec.b[0], err(failure_rec) => "${failure_rec.d}" };
+              let g = match ok_record_result {
+                ok(success_rec) => success_rec.b[0],
+                err(failure_rec) => "${failure_rec.d}"
+              };
 
               let err_record_result = function-err-record(input);
 
@@ -1923,7 +1940,15 @@ mod interpreter_tests {
               let i = match err_record_result { ok(_) => 1u8, err(_) => 0u8 };
               let j = match ok_record_result { ok(_) => 1u8, err(_) => 0u8 };
 
-              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h, i: i, j: j}
+              let variant_result = function-variant(input);
+
+              let k = match variant_result {
+                 process-user(value) => value,
+                 register-user(value) => "${value}",
+                 validate => "validated"
+              };
+
+              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h, i: i, j: j, k: k}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -1953,6 +1978,8 @@ mod interpreter_tests {
                 ]))),
             });
 
+            let variant_result_type = internal::get_analysed_type_variant();
+
             let optional_result = internal::get_type_annotated_value(&optional_result_type, "none");
             let ok_result =
                 internal::get_type_annotated_value(&ok_err_result_type, r#"ok("success")"#);
@@ -1967,6 +1994,9 @@ mod interpreter_tests {
                 &ok_err_record_result_type,
                 r#"err({c : "bar", d: "fuuz"})"#,
             );
+
+            let variant_result =
+                internal::get_type_annotated_value(&variant_result_type, r#"validate"#);
 
             let input_type = internal::analysed_type_record(vec![
                 (
@@ -2058,12 +2088,19 @@ mod interpreter_tests {
                 Some(ok_err_record_result_type),
             );
 
+            let function_variant_metadata = internal::get_component_metadata(
+                "function-variant",
+                vec![input_type.clone()],
+                Some(variant_result_type),
+            );
+
             function_option_metadata.extend(function_no_arg_unit_metadata);
             function_option_metadata.extend(function_unit_metadata);
             function_option_metadata.extend(function_ok_metadata);
             function_option_metadata.extend(function_err_metadata);
             function_option_metadata.extend(function_ok_record_metadata);
             function_option_metadata.extend(function_err_record_metadata);
+            function_option_metadata.extend(function_variant_metadata);
 
             let compiled = compiler::compile(&expr, &function_option_metadata).unwrap();
 
@@ -2091,6 +2128,10 @@ mod interpreter_tests {
                     Some(err_record_result),
                 ),
                 (
+                    internal::FunctionName("function-variant".to_string()),
+                    Some(variant_result),
+                ),
+                (
                     internal::FunctionName("function-no-arg-unit".to_string()),
                     None,
                 ),
@@ -2112,8 +2153,9 @@ mod interpreter_tests {
                     ("h", AnalysedType::Str(TypeStr)),
                     ("i", AnalysedType::U8(TypeU8)),
                     ("j", AnalysedType::U8(TypeU8)),
+                    ("k", AnalysedType::Str(TypeStr)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz", i: 0, j: 1 }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz", i: 0, j: 1, k: "validated" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
