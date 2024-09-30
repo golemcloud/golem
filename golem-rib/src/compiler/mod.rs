@@ -43,14 +43,14 @@ pub fn compile(
 
     Ok(CompilerOutput {
         byte_code: rib_byte_code,
-        rib_input,
+        global_input_type_info: rib_input,
     })
 }
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
     pub byte_code: RibByteCode,
-    pub rib_input: RibInputTypeInfo,
+    pub global_input_type_info: RibInputTypeInfo,
 }
 
 impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
@@ -64,7 +64,7 @@ impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
 
         Ok(CompilerOutput {
             byte_code,
-            rib_input,
+            global_input_type_info: rib_input,
         })
     }
 }
@@ -76,7 +76,7 @@ impl From<CompilerOutput> for ProtoCompilerOutput {
                 value.byte_code,
             )),
             rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
-                value.rib_input,
+                value.global_input_type_info,
             )),
         }
     }

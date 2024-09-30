@@ -1538,7 +1538,7 @@ mod interpreter_tests {
            let user_id = "user";
            golem:it/api.{cart(user_id).drop}();
            "success"
-        "#;
+        ";
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata =
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();

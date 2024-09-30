@@ -59,7 +59,7 @@ impl WorkerNameCompiled {
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
             compiled_worker_name: worker_name_compiled.byte_code,
-            rib_input: worker_name_compiled.rib_input,
+            rib_input: worker_name_compiled.global_input_type_info,
         })
     }
 }
@@ -81,7 +81,7 @@ impl IdempotencyKeyCompiled {
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
             compiled_idempotency_key: idempotency_key_compiled.byte_code,
-            rib_input: idempotency_key_compiled.rib_input,
+            rib_input: idempotency_key_compiled.global_input_type_info,
         })
     }
 }
@@ -103,7 +103,7 @@ impl ResponseMappingCompiled {
         Ok(ResponseMappingCompiled {
             response_rib_expr: response_mapping.0.clone(),
             compiled_response: response_compiled.byte_code,
-            rib_input: response_compiled.rib_input,
+            rib_input: response_compiled.global_input_type_info,
         })
     }
 }

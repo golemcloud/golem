@@ -983,4 +983,150 @@ mod compiler_tests {
 
         assert_eq!(instructions, expected_instructions);
     }
+
+    #[cfg(test)]
+    mod global_input_tests {
+        use std::collections::HashMap;
+        use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, NameTypePair, TypeOption, TypeRecord, TypeStr, TypeU64, TypeVariant};
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+        use poem_openapi::__private::poem::http::Uri;
+        use crate::{compiler, Expr, FunctionTypeRegistry, RibInputTypeInfo};
+        use crate::compiler::byte_code::compiler_tests::internal;
+
+
+        #[tokio::test]
+        async fn test_variant_type_info() {
+            let request_value_type = AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "register-user".to_string(),
+                        typ: Some(AnalysedType::U64(TypeU64)),
+                    },
+                    NameOptionTypePair {
+                        name: "process-user".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                    NameOptionTypePair {
+                        name: "validate".to_string(),
+                        typ: None,
+                    },
+                ],
+            });
+
+            let request_type = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "request".to_string(),
+                    typ: request_value_type.clone(),
+                }],
+            });
+
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_type],
+                output_analysed_type,
+            );
+
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 process-user(user) => user,
+                 _ => "default"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_record_global_input() {
+            let request_value_type = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "path".to_string(),
+                    typ: AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "user".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    }),
+                }],
+            });
+
+            let request_type = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "request".to_string(),
+                    typ: request_value_type.clone(),
+                }],
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_type],
+                output_analysed_type,
+            );
+
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               x.path.user
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+    }
+
+    mod internal {
+        use std::collections::HashMap;
+        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
+        use crate::RibInputTypeInfo;
+
+        pub(crate) fn get_component_metadata(
+            function_name: &str,
+            input_types: Vec<AnalysedType>,
+            output: AnalysedType,
+        ) -> Vec<AnalysedExport> {
+            let analysed_function_parameters = input_types
+                .into_iter()
+                .enumerate()
+                .map(|(index, typ)| AnalysedFunctionParameter {
+                    name: format!("param{}", index),
+                    typ,
+                })
+                .collect();
+
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }],
+            })]
+        }
+
+        pub(crate) fn rib_input_type_info(types: Vec<(&str, AnalysedType)>) -> RibInputTypeInfo {
+            let mut type_info = HashMap::new();
+            for (name, typ) in types {
+                type_info.insert(name.to_string(), typ);
+            }
+            RibInputTypeInfo {
+                types: type_info,
+            }
+        }
+
+    }
 }
