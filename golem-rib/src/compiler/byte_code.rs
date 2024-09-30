@@ -987,14 +987,11 @@ mod compiler_tests {
     #[cfg(test)]
     mod global_input_tests {
         use crate::compiler::byte_code::compiler_tests::internal;
-        use crate::{compiler, Expr, FunctionTypeRegistry, RibInputTypeInfo};
+        use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeOption,
             TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant,
         };
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-        use poem_openapi::__private::poem::http::Uri;
-        use std::collections::HashMap;
 
         #[tokio::test]
         async fn test_variant_type_info() {
@@ -1142,8 +1139,8 @@ mod compiler_tests {
                my-worker-function(request);
                match request {
                  prod  => "p",
-                 "dev" => "d",
-                 "test" => "t"
+                 dev => "d",
+                 test => "t"
                }
             "#;
 
@@ -1171,16 +1168,14 @@ mod compiler_tests {
 
             // x = request, implies we are expecting a global variable
             // called request as the input to Rib.
-            // my-worker-function is a function that takes a Option as input,
+            // my-worker-function is a function that takes a Flag as input,
             // implies the type of request is a Result.
             // This means the rib interpreter env has to have a request variable in it,
-            // with a value that should be of the type Option
+            // with a value that should be of the type Flag
             let expr = r#"
                my-worker-function(request);
                match request {
-                 prod  => "p",
-                 "dev" => "d",
-                 "test" => "t"
+                 {prod, dev, test}  => "${prod} is enabled",
                }
             "#;
 
