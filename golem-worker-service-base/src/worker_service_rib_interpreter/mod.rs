@@ -627,7 +627,7 @@ mod tests {
 
         assert!(error_message.contains("Types do not match. Inferred to be both Str and Bool"));
     }
-    
+
     #[tokio::test]
     async fn test_evaluation_for_no_arg_function() {
         let noop_executor = DefaultEvaluator::noop();

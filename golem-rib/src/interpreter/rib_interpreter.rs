@@ -1266,131 +1266,6 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
     }
 
-    mod record_tests {
-        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr};
-        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr, TypeU64};
-        use std::collections::HashMap;
-
-        #[tokio::test]
-        async fn test_interpreter_with_record() {
-            let expr = r#"
-              let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
-              let result = foo(x);
-              let result2: str = request.body.id;
-              let a = match result {  some(value) => "personal-id", none => result2 };
-              let b = match result {  some(value) => "personal-id", none =>  x.body.titles[1] };
-              let c = match result {  some(value) => "personal-id", none =>  request.body.address.street };
-
-              let input: str = request.headers.authorisation;
-              let success: u64 = 200;
-              let failure: u64 = 401;
-              let d = if input == "admin" then success else failure;
-              bar();
-              { a : a, b : b, c: c, d: d}
-        "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-
-            let foo_result_type = AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            });
-
-            let foo_result_value = internal::get_type_annotated_value(&foo_result_type, "none");
-
-
-            let input_type = internal::analysed_type_record(vec![
-                ("headers", internal::analysed_type_record(
-                    vec![("authorisation", AnalysedType::Str(TypeStr))]
-                )),
-                (
-                "body",
-                internal::analysed_type_record(vec![
-                    ("id", AnalysedType::Str(TypeStr)),
-                    ("name", AnalysedType::Str(TypeStr)),
-                    (
-                        "titles",
-                        AnalysedType::List(TypeList {
-                            inner: Box::new(AnalysedType::Str(TypeStr)),
-                        }),
-                    ),
-                    (
-                        "address",
-                        internal::analysed_type_record(vec![
-                            ("street", AnalysedType::Str(TypeStr)),
-                            ("city", AnalysedType::Str(TypeStr)),
-                        ]),
-                    ),
-                ]),
-            )]);
-
-            let input_value = internal::get_type_annotated_value(
-                &input_type,
-                r#" {
-                   headers : {
-                      authorisation : "admin"
-                   },
-                   body : {
-
-
-                           id: "bId",
-                           name: "bName",
-                           titles: [
-                             "bTitle1", "bTitle2"
-                           ],
-                           address: {
-                             street: "bStreet",
-                             city: "bCity"
-                           }
-
-                    }
-                 }"#,
-            );
-
-            let mut component_metadata = internal::get_component_metadata(
-                "foo",
-                vec![input_type.clone()],
-                Some(foo_result_type.clone()),
-            );
-
-            // bar is a no-arg unit function
-            let bar_component_metadata = internal::get_component_metadata(
-                "bar",
-                vec![],
-                None
-            );
-
-            component_metadata.extend(bar_component_metadata);
-
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
-
-            let interpreter_input = HashMap::from_iter(vec![("request".to_string(), input_value)]);
-
-            let functions_and_result = HashMap::from_iter(
-                vec![
-                    (internal::FunctionName("foo".to_string()), Some(foo_result_value)),
-                    (internal::FunctionName("bar".to_string()), None),
-                ]
-            );
-            let mut rib_executor = internal::dynamic_test_interpreter(
-                functions_and_result,
-                interpreter_input,
-            );
-            let result = rib_executor.run(compiled.byte_code).await.unwrap();
-
-            let expected_result = internal::get_type_annotated_value(
-                &internal::analysed_type_record(vec![
-                    ("a", AnalysedType::Str(TypeStr)),
-                    ("b", AnalysedType::Str(TypeStr)),
-                    ("c", AnalysedType::Str(TypeStr)),
-                    ("d", AnalysedType::U64(TypeU64)),
-                ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200 }"#,
-            );
-            assert_eq!(result.get_val().unwrap(), expected_result);
-        }
-    }
-
     mod pattern_match_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, FunctionTypeRegistry, Interpreter};
@@ -1498,8 +1373,11 @@ mod interpreter_tests {
 
             let tuple = internal::get_analysed_type_tuple();
 
-            let analysed_exports =
-                internal::get_component_metadata("foo", vec![tuple], Some(AnalysedType::Str(TypeStr)));
+            let analysed_exports = internal::get_component_metadata(
+                "foo",
+                vec![tuple],
+                Some(AnalysedType::Str(TypeStr)),
+            );
 
             let expr = r#"
 
@@ -1564,7 +1442,8 @@ mod interpreter_tests {
             let result_value =
                 internal::get_type_annotated_value(&output_analysed_type, r#"ok(1)"#);
 
-            let mut interpreter = internal::static_test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter =
+                internal::static_test_interpreter(&output_analysed_type, &result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1613,7 +1492,8 @@ mod interpreter_tests {
             let result_value =
                 internal::get_type_annotated_value(&output_analysed_type, r#"err("failed")"#);
 
-            let mut interpreter = internal::static_test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter =
+                internal::static_test_interpreter(&output_analysed_type, &result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
@@ -1994,6 +1874,132 @@ mod interpreter_tests {
         }
     }
 
+    // The test consist of all possibilities, such as no-arg functions, unit function, no-arg unit functions,
+    // simple functions, pattern matches, if-else condition etc
+    mod complex_rib_test {
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::{compiler, Expr};
+        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr, TypeU64};
+        use std::collections::HashMap;
+
+        #[tokio::test]
+        async fn test_interpreter_with_record() {
+            let expr = r#"
+              let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
+              let result = foo(x);
+              let result2: str = request.body.id;
+              let a = match result {  some(value) => "personal-id", none => result2 };
+              let b = match result {  some(value) => "personal-id", none =>  x.body.titles[1] };
+              let c = match result {  some(value) => "personal-id", none =>  request.body.address.street };
+
+              let input: str = request.headers.authorisation;
+              let success: u64 = 200;
+              let failure: u64 = 401;
+              let d = if input == "admin" then success else failure;
+              bar();
+              { a : a, b : b, c: c, d: d}
+        "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+
+            let foo_result_type = AnalysedType::Option(TypeOption {
+                inner: Box::new(AnalysedType::Str(TypeStr)),
+            });
+
+            let foo_result_value = internal::get_type_annotated_value(&foo_result_type, "none");
+
+            let input_type = internal::analysed_type_record(vec![
+                (
+                    "headers",
+                    internal::analysed_type_record(vec![(
+                        "authorisation",
+                        AnalysedType::Str(TypeStr),
+                    )]),
+                ),
+                (
+                    "body",
+                    internal::analysed_type_record(vec![
+                        ("id", AnalysedType::Str(TypeStr)),
+                        ("name", AnalysedType::Str(TypeStr)),
+                        (
+                            "titles",
+                            AnalysedType::List(TypeList {
+                                inner: Box::new(AnalysedType::Str(TypeStr)),
+                            }),
+                        ),
+                        (
+                            "address",
+                            internal::analysed_type_record(vec![
+                                ("street", AnalysedType::Str(TypeStr)),
+                                ("city", AnalysedType::Str(TypeStr)),
+                            ]),
+                        ),
+                    ]),
+                ),
+            ]);
+
+            let input_value = internal::get_type_annotated_value(
+                &input_type,
+                r#" {
+                   headers : {
+                      authorisation : "admin"
+                   },
+                   body : {
+
+
+                           id: "bId",
+                           name: "bName",
+                           titles: [
+                             "bTitle1", "bTitle2"
+                           ],
+                           address: {
+                             street: "bStreet",
+                             city: "bCity"
+                           }
+
+                    }
+                 }"#,
+            );
+
+            let mut component_metadata = internal::get_component_metadata(
+                "foo",
+                vec![input_type.clone()],
+                Some(foo_result_type.clone()),
+            );
+
+            // bar is a no-arg unit function
+            let bar_component_metadata = internal::get_component_metadata("bar", vec![], None);
+
+            component_metadata.extend(bar_component_metadata);
+
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+
+            let interpreter_input = HashMap::from_iter(vec![("request".to_string(), input_value)]);
+
+            let functions_and_result = HashMap::from_iter(vec![
+                (
+                    internal::FunctionName("foo".to_string()),
+                    Some(foo_result_value),
+                ),
+                (internal::FunctionName("bar".to_string()), None),
+            ]);
+            let mut rib_executor =
+                internal::dynamic_test_interpreter(functions_and_result, interpreter_input);
+            let result = rib_executor.run(compiled.byte_code).await.unwrap();
+
+            let expected_result = internal::get_type_annotated_value(
+                &internal::analysed_type_record(vec![
+                    ("a", AnalysedType::Str(TypeStr)),
+                    ("b", AnalysedType::Str(TypeStr)),
+                    ("c", AnalysedType::Str(TypeStr)),
+                    ("d", AnalysedType::U64(TypeU64)),
+                ]),
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200 }"#,
+            );
+            assert_eq!(result.get_val().unwrap(), expected_result);
+        }
+    }
+
     mod internal {
         use crate::interpreter::env::InterpreterEnv;
         use crate::interpreter::stack::InterpreterStack;
@@ -2123,7 +2129,6 @@ mod interpreter_tests {
                 // Representing Unit
                 vec![]
             };
-
 
             vec![AnalysedExport::Function(AnalysedFunction {
                 name: function_name.to_string(),
@@ -2353,7 +2358,10 @@ mod interpreter_tests {
         ) -> Interpreter {
             Interpreter {
                 stack: InterpreterStack::default(),
-                env: InterpreterEnv::from(interpreter_env_input, dynamic_worker_invoke(functions_and_result)),
+                env: InterpreterEnv::from(
+                    interpreter_env_input,
+                    dynamic_worker_invoke(functions_and_result),
+                ),
             }
         }
 
@@ -2387,7 +2395,6 @@ mod interpreter_tests {
                                 value: vec![],
                             }))
                         }
-
                     }
                 })
             })
