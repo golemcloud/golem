@@ -1358,10 +1358,7 @@ mod interpreter_tests {
                 ]),
                 r#" { a : "bId", b : "bTitle2", c : "bStreet" }"#,
             );
-            assert_eq!(
-                result.get_val().unwrap(),
-                expected_result
-            );
+            assert_eq!(result.get_val().unwrap(), expected_result);
         }
     }
 
