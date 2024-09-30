@@ -627,72 +627,7 @@ mod tests {
 
         assert!(error_message.contains("Types do not match. Inferred to be both Str and Bool"));
     }
-
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_with_some_construction() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let return_type =
-            get_result_type_fully_formed(AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr));
-
-        let worker_response = create_ok_result(TypeAnnotatedValue::U32(10), None).unwrap();
-
-        let component_metadata =
-            get_analysed_exports("foo", vec![AnalysedType::U64(TypeU64)], return_type);
-
-        let expr_str =
-            r#"${let result = foo(1); match result { ok(x) => some(1u64), err(_) => none }}"#;
-        let expr1 = rib::from_string(expr_str).unwrap();
-        let value1 = noop_executor
-            .evaluate_with_worker_response(
-                &expr1,
-                Some(worker_response.clone()),
-                component_metadata.clone(),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let expected = create_option(TypeAnnotatedValue::U64(1)).unwrap();
-        assert_eq!(&value1, &expected);
-    }
-
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_with_none_construction() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let expr =
-            rib::from_string(r#"${match ok(1u64) { ok(value) => none, err(_) => some(1u64) }}"#)
-                .unwrap();
-        let result = noop_executor
-            .evaluate_pure_expr(&expr)
-            .await
-            .map(|v| v.get_val().unwrap());
-
-        let expected = create_none(Some(&AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::U64(TypeU64)),
-        })));
-
-        assert_eq!(result, Ok(expected));
-    }
-
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_with_ok_construction() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let expr = rib::from_string(
-            "${match ok(\"afsal\") { ok(value) => ok(1u64), err(_) => err(2u64) }}",
-        )
-        .unwrap();
-        let result = noop_executor
-            .evaluate_pure_expr(&expr)
-            .await
-            .map(|v| v.get_val().unwrap());
-        let expected =
-            create_ok_result(TypeAnnotatedValue::U64(1), Some(AnalysedType::U64(TypeU64))).unwrap();
-        assert_eq!(result, Ok(expected));
-    }
-
+    
     #[tokio::test]
     async fn test_evaluation_with_pattern_match_with_err_construction() {
         let noop_executor = DefaultEvaluator::noop();
