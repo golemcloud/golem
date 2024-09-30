@@ -1175,7 +1175,7 @@ mod compiler_tests {
             let expr = r#"
                my-worker-function(request);
                match request {
-                 {prod, dev, test}  => "${prod} is enabled",
+                 {"prod", _, _}  => "enabled"
                }
             "#;
 
@@ -1218,7 +1218,13 @@ mod compiler_tests {
             let expr = r#"
                let x = request;
                my-worker-function(x);
-               x.path.user
+
+               let name = x.path.user;
+
+               match x {
+                 { path : { user : some_name } } => some_name,
+                 _ => name
+               }
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
