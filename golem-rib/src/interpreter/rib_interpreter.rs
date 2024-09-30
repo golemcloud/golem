@@ -1270,16 +1270,18 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr};
-        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use std::collections::HashMap;
 
         #[tokio::test]
-        async fn test_interpreter_with_record1() {
+        async fn test_interpreter_with_record() {
             let expr = r#"
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               let result2: str = request.body.id;
-              match result {  some(value) => "personal-id", none => result2 }
+              let x1 = match result {  some(value) => "personal-id", none => result2 };
+              let x2 = match result {  some(value) => "personal-id", none =>  x.body.titles[1] };
+              let x3 = match result {  some(value) => "personal-id", none =>  request.body.address.street };
+              { a : x1, b : x2, c: x3 }
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -1348,9 +1350,17 @@ mod interpreter_tests {
             );
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
+            let expected_result = internal::get_type_annotated_value(
+                &internal::analysed_type_record(vec![
+                    ("a", AnalysedType::Str(TypeStr)),
+                    ("b", AnalysedType::Str(TypeStr)),
+                    ("c", AnalysedType::Str(TypeStr)),
+                ]),
+                r#" { a : "bId", b : "bTitle2", c : "bStreet" }"#,
+            );
             assert_eq!(
                 result.get_val().unwrap(),
-                TypeAnnotatedValue::Str("bId".to_string())
+                expected_result
             );
         }
     }
