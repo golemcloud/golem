@@ -21,7 +21,6 @@ pub mod rust;
 pub mod stub;
 pub mod wit;
 
-use crate::commands::declarative::ApplicationResolveMode;
 use crate::stub::StubDefinition;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -181,7 +180,7 @@ pub struct InitializeWorkspaceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Declarative {
-    /// TODO
+    /// Creates open application model for component
     Init(DeclarativeInitArgs),
     /// Runs the pre-build steps (stub generation and adding wit dependencies) based on declarative component specifications
     PreBuild(DeclarativeBuildArgs),
@@ -200,7 +199,7 @@ pub struct DeclarativeInitArgs {
 #[command(version, about, long_about = None)]
 pub struct DeclarativeBuildArgs {
     /// List of Open Application Model specifications for component dependencies, can be defined multiple times
-    #[clap(long, short, required = true)]
+    #[clap(long, short)]
     pub component: Vec<PathBuf>,
 }
 
@@ -265,8 +264,23 @@ pub async fn run_declarative_command(command: Declarative) -> anyhow::Result<()>
     match command {
         Declarative::Init(args) => commands::declarative::init(args.component_name),
         Declarative::PreBuild(args) => {
-            commands::declarative::pre_build(ApplicationResolveMode::Explicit(args.component)).await
+            commands::declarative::pre_build(dec_build_args_to_config(args)).await
         }
-        Declarative::PostBuild(_args) => commands::declarative::post_build(),
+        Declarative::PostBuild(args) => {
+            commands::declarative::post_build(dec_build_args_to_config(args))
+        }
+    }
+}
+
+fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative::Config {
+    commands::declarative::Config {
+        app_resolve_mode: {
+            if args.component.is_empty() {
+                commands::declarative::ApplicationResolveMode::Automatic
+            } else {
+                commands::declarative::ApplicationResolveMode::Explicit(args.component)
+            }
+        },
+        skip_up_to_date_checks: false,
     }
 }

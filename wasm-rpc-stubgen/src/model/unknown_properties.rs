@@ -22,9 +22,12 @@ pub trait HasUnknownProperties {
             validation_builder.push_context(context.0, context.1);
         }
 
-        for (unknown_property_name, _) in self.unknown_properties() {
-            validation_builder.add_warn(format!("Unknown property: {}", unknown_property_name))
-        }
+        validation_builder.add_warns(self.unknown_properties().keys(), |unknown_property_name| {
+            Some((
+                vec![],
+                format!("Unknown property: {}", unknown_property_name),
+            ))
+        });
 
         for _ in 0..context_count {
             validation_builder.pop_context();
