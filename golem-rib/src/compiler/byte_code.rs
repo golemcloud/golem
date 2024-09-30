@@ -987,7 +987,7 @@ mod compiler_tests {
     #[cfg(test)]
     mod global_input_tests {
         use std::collections::HashMap;
-        use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, NameTypePair, TypeOption, TypeRecord, TypeStr, TypeU64, TypeVariant};
+        use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, NameTypePair, TypeOption, TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use poem_openapi::__private::poem::http::Uri;
         use crate::{compiler, Expr, FunctionTypeRegistry, RibInputTypeInfo};
@@ -1013,27 +1013,63 @@ mod compiler_tests {
                 ],
             });
 
-            let request_type = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "request".to_string(),
-                    typ: request_value_type.clone(),
-                }],
-            });
-
-
             let output_analysed_type = AnalysedType::Str(TypeStr);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
-                vec![request_type],
+                vec![request_value_type.clone()],
                 output_analysed_type,
             );
 
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Variant as input,
+            // implies the type of request is a Variant.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Variant
             let expr = r#"
                my-worker-function(request);
                match request {
                  process-user(user) => user,
                  _ => "default"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+
+        #[tokio::test]
+        async fn test_result_type_info() {
+            let request_value_type =   AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Result as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Result
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 ok(x) => "${x}",
+                 err(msg) => msg
                }
             "#;
 
@@ -1059,21 +1095,20 @@ mod compiler_tests {
                 }],
             });
 
-            let request_type = AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "request".to_string(),
-                    typ: request_value_type.clone(),
-                }],
-            });
-
             let output_analysed_type = AnalysedType::Str(TypeStr);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
-                vec![request_type],
+                vec![request_value_type.clone()],
                 output_analysed_type,
             );
 
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Record of path -> user -> str as input
+            // implies the type of request is a Record.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Record
             let expr = r#"
                let x = request;
                my-worker-function(x);
