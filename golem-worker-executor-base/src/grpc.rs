@@ -820,13 +820,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        let result: Vec<golem::worker::WorkerMetadata> = workers
-            .into_iter()
-            .map(|worker| {
-                let status = worker.last_known_status.clone();
-                Self::create_proto_metadata(worker, status, None)
-            })
-            .collect();
+        let mut result = Vec::new();
+
+        for worker in workers {
+            let status = worker.last_known_status.clone();
+            let last_error_and_retry_count =
+                Ctx::get_last_error_and_retry_count(self, &worker.owned_worker_id()).await;
+            let metadata = Self::create_proto_metadata(worker, status, last_error_and_retry_count);
+            result.push(metadata);
+        }
 
         Ok((
             new_cursor.map(|cursor| Cursor {
