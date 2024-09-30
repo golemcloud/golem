@@ -1269,7 +1269,7 @@ mod interpreter_tests {
     mod record_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr};
-        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr};
+        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr, TypeU64};
         use std::collections::HashMap;
 
         #[tokio::test]
@@ -1278,10 +1278,16 @@ mod interpreter_tests {
               let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let result = foo(x);
               let result2: str = request.body.id;
-              let x1 = match result {  some(value) => "personal-id", none => result2 };
-              let x2 = match result {  some(value) => "personal-id", none =>  x.body.titles[1] };
-              let x3 = match result {  some(value) => "personal-id", none =>  request.body.address.street };
-              { a : x1, b : x2, c: x3 }
+              let a = match result {  some(value) => "personal-id", none => result2 };
+              let b = match result {  some(value) => "personal-id", none =>  x.body.titles[1] };
+              let c = match result {  some(value) => "personal-id", none =>  request.body.address.street };
+
+              let input: str = request.headers.authorisation;
+              let success: u64 = 200;
+              let failure: u64 = 401;
+              let d = if input == "admin" then success else failure;
+              bar();
+              { a : a, b : b, c: c, d: d}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -1292,7 +1298,12 @@ mod interpreter_tests {
 
             let foo_result_value = internal::get_type_annotated_value(&foo_result_type, "none");
 
-            let input_type = internal::analysed_type_record(vec![(
+
+            let input_type = internal::analysed_type_record(vec![
+                ("headers", internal::analysed_type_record(
+                    vec![("authorisation", AnalysedType::Str(TypeStr))]
+                )),
+                (
                 "body",
                 internal::analysed_type_record(vec![
                     ("id", AnalysedType::Str(TypeStr)),
@@ -1316,6 +1327,9 @@ mod interpreter_tests {
             let input_value = internal::get_type_annotated_value(
                 &input_type,
                 r#" {
+                   headers : {
+                      authorisation : "admin"
+                   },
                    body : {
 
 
@@ -1333,19 +1347,33 @@ mod interpreter_tests {
                  }"#,
             );
 
-            let component_metadata = internal::get_component_metadata(
+            let mut component_metadata = internal::get_component_metadata(
                 "foo",
                 vec![input_type.clone()],
-                foo_result_type.clone(),
+                Some(foo_result_type.clone()),
             );
+
+            // bar is a no-arg unit function
+            let bar_component_metadata = internal::get_component_metadata(
+                "bar",
+                vec![],
+                None
+            );
+
+            component_metadata.extend(bar_component_metadata);
 
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
             let interpreter_input = HashMap::from_iter(vec![("request".to_string(), input_value)]);
 
-            let mut rib_executor = internal::test_interpreter_with_input(
-                &foo_result_type,
-                &foo_result_value,
+            let functions_and_result = HashMap::from_iter(
+                vec![
+                    (internal::FunctionName("foo".to_string()), Some(foo_result_value)),
+                    (internal::FunctionName("bar".to_string()), None),
+                ]
+            );
+            let mut rib_executor = internal::dynamic_test_interpreter(
+                functions_and_result,
                 interpreter_input,
             );
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
@@ -1355,8 +1383,9 @@ mod interpreter_tests {
                     ("a", AnalysedType::Str(TypeStr)),
                     ("b", AnalysedType::Str(TypeStr)),
                     ("c", AnalysedType::Str(TypeStr)),
+                    ("d", AnalysedType::U64(TypeU64)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet" }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200 }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
@@ -1470,7 +1499,7 @@ mod interpreter_tests {
             let tuple = internal::get_analysed_type_tuple();
 
             let analysed_exports =
-                internal::get_component_metadata("foo", vec![tuple], AnalysedType::Str(TypeStr));
+                internal::get_component_metadata("foo", vec![tuple], Some(AnalysedType::Str(TypeStr)));
 
             let expr = r#"
 
@@ -1503,7 +1532,7 @@ mod interpreter_tests {
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
                 vec![tuple],
-                AnalysedType::Str(TypeStr),
+                Some(AnalysedType::Str(TypeStr)),
             );
 
             let expr = r#"
@@ -1535,12 +1564,12 @@ mod interpreter_tests {
             let result_value =
                 internal::get_type_annotated_value(&output_analysed_type, r#"ok(1)"#);
 
-            let mut interpreter = internal::test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter = internal::static_test_interpreter(&output_analysed_type, &result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
                 vec![input_analysed_type],
-                output_analysed_type,
+                Some(output_analysed_type),
             );
 
             let expr = r#"
@@ -1584,12 +1613,12 @@ mod interpreter_tests {
             let result_value =
                 internal::get_type_annotated_value(&output_analysed_type, r#"err("failed")"#);
 
-            let mut interpreter = internal::test_interpreter(&output_analysed_type, &result_value);
+            let mut interpreter = internal::static_test_interpreter(&output_analysed_type, &result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
                 vec![input_analysed_type],
-                output_analysed_type,
+                Some(output_analysed_type),
             );
 
             let expr = r#"
@@ -1688,7 +1717,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -1738,7 +1767,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(
@@ -1868,7 +1897,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(
@@ -1938,7 +1967,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_interpreter(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -2074,7 +2103,7 @@ mod interpreter_tests {
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,
-            output: AnalysedType,
+            output: Option<AnalysedType>,
         ) -> Vec<AnalysedExport> {
             let analysed_function_parameters = input_types
                 .into_iter()
@@ -2085,13 +2114,21 @@ mod interpreter_tests {
                 })
                 .collect();
 
+            let results = if let Some(output) = output {
+                vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }]
+            } else {
+                // Representing Unit
+                vec![]
+            };
+
+
             vec![AnalysedExport::Function(AnalysedFunction {
                 name: function_name.to_string(),
                 parameters: analysed_function_parameters,
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: output,
-                }],
+                results,
             })]
         }
 
@@ -2307,7 +2344,56 @@ mod interpreter_tests {
             golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str).unwrap()
         }
 
-        pub(crate) fn test_interpreter(
+        #[derive(Clone, Hash, PartialEq, Eq)]
+        pub(crate) struct FunctionName(pub(crate) String);
+
+        pub(crate) fn dynamic_test_interpreter(
+            functions_and_result: HashMap<FunctionName, Option<TypeAnnotatedValue>>,
+            interpreter_env_input: HashMap<String, TypeAnnotatedValue>,
+        ) -> Interpreter {
+            Interpreter {
+                stack: InterpreterStack::default(),
+                env: InterpreterEnv::from(interpreter_env_input, dynamic_worker_invoke(functions_and_result)),
+            }
+        }
+
+        fn dynamic_worker_invoke(
+            functions_and_result: HashMap<FunctionName, Option<TypeAnnotatedValue>>,
+        ) -> RibFunctionInvoke {
+            let value = functions_and_result.clone();
+
+            Arc::new(move |a, _| {
+                Box::pin({
+                    let value = value.get(&FunctionName(a)).cloned().flatten();
+                    let analysed_type = value.clone().map(|x| AnalysedType::try_from(&x).unwrap());
+
+                    async move {
+                        let analysed_type = analysed_type.clone();
+                        let value = value.clone();
+
+                        if let Some(value) = value {
+                            Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                                typ: vec![golem_wasm_ast::analysis::protobuf::Type::from(
+                                    &analysed_type.unwrap(),
+                                )],
+                                value: vec![golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                                    type_annotated_value: Some(value),
+                                }],
+                            }))
+                        } else {
+                            // Representing Unit
+                            Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                                typ: vec![],
+                                value: vec![],
+                            }))
+                        }
+
+                    }
+                })
+            })
+        }
+
+        pub(crate) fn static_test_interpreter(
             result_type: &AnalysedType,
             result_value: &TypeAnnotatedValue,
         ) -> Interpreter {
@@ -2317,17 +2403,6 @@ mod interpreter_tests {
                     env: HashMap::new(),
                     call_worker_function_async: static_worker_invoke(result_type, result_value),
                 },
-            }
-        }
-
-        pub(crate) fn test_interpreter_with_input(
-            result_type: &AnalysedType,
-            result_value: &TypeAnnotatedValue,
-            input: HashMap<String, TypeAnnotatedValue>,
-        ) -> Interpreter {
-            Interpreter {
-                stack: InterpreterStack::default(),
-                env: InterpreterEnv::from(input, static_worker_invoke(result_type, result_value)),
             }
         }
 
