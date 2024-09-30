@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{
+use crate::storage::{
     cassandra::CassandraSession,
-    storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace},
+    keyvalue::{KeyValueStorage, KeyValueStorageNamespace},
 };
 use async_trait::async_trait;
 use bytes::Bytes;

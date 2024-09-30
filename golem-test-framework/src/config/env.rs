@@ -43,6 +43,7 @@ use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
+use once_cell::sync::Lazy;
 use tracing::Level;
 
 pub struct EnvBasedTestDependenciesConfig {
@@ -153,7 +154,7 @@ pub struct EnvBasedTestDependencies {
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
-    cassandra: Arc<dyn Cassandra + Send + Sync + 'static>,
+    cassandra: Lazy<Arc<dyn Cassandra + Send + Sync + 'static>>,
 }
 
 impl EnvBasedTestDependencies {
@@ -411,8 +412,8 @@ impl EnvBasedTestDependencies {
 
     fn make_cassandra(
         _config: Arc<EnvBasedTestDependenciesConfig>,
-    ) -> Arc<dyn Cassandra + Send + Sync + 'static> {
-        Arc::new(DockerCassandra::new(false))
+    ) -> Lazy<Arc<dyn Cassandra + Send + Sync + 'static>> {
+        Lazy::new(|| Arc::new(DockerCassandra::new(false)))
     }
 
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> Self {

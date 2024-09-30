@@ -19,7 +19,7 @@ use golem_common::redis::RedisPool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::config::TestDependencies;
-use golem_worker_executor_base::cassandra::CassandraSession;
+use golem_worker_executor_base::storage::cassandra::CassandraSession;
 use golem_worker_executor_base::storage::keyvalue::cassandra::CassandraKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::redis::RedisKeyValueStorage;
