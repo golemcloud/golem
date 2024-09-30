@@ -989,8 +989,8 @@ mod compiler_tests {
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
-            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeOption,
-            TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeList,
+            TypeOption, TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
 
         #[tokio::test]
@@ -1267,6 +1267,41 @@ mod compiler_tests {
                my-worker-function(x);
                match x {
                 (_, _, record) =>  record.user,
+                 _ => "fallback"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_list_global_input() {
+            let request_value_type = AnalysedType::List(TypeList {
+                inner: Box::new(AnalysedType::Str(TypeStr)),
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a List,
+            // implies the type of request should be a List
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+               [a, b, c]  => a,
                  _ => "fallback"
                }
             "#;
