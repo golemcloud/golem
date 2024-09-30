@@ -185,11 +185,51 @@ impl ValidationBuilder {
     }
 
     pub fn add_error(&mut self, error: String) {
-        self.errors.push(format!("{}{}", error, self.context()));
+        self.errors.push(format!("{}{}", error, self.context(),));
     }
 
-    pub fn add_warn(&mut self, error: String) {
-        self.warns.push(format!("{}{}", error, self.context(),));
+    pub fn add_warn(&mut self, warn: String) {
+        self.warns.push(format!("{}{}", warn, self.context(),));
+    }
+
+    pub fn add_errors<T, C, F>(&mut self, elems: C, context_and_error: F)
+    where
+        C: IntoIterator<Item = T>,
+        F: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
+    {
+        self.add(elems, context_and_error, Self::add_error);
+    }
+
+    pub fn add_warns<T, C, F>(&mut self, elems: C, context_and_error: F)
+    where
+        C: IntoIterator<Item = T>,
+        F: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
+    {
+        self.add(elems, context_and_error, Self::add_warn);
+    }
+
+    pub fn add<T, C, CE, A>(&mut self, elems: C, context_and_error: CE, add: A)
+    where
+        C: IntoIterator<Item = T>,
+        CE: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
+        A: Fn(&mut Self, String),
+    {
+        for elem in elems {
+            if let Some((context, error)) = context_and_error(elem) {
+                let context_count = context.len();
+                if !context.is_empty() {
+                    context
+                        .into_iter()
+                        .for_each(|(name, value)| self.push_context(name, value))
+                }
+
+                add(self, error);
+
+                for _ in 0..context_count {
+                    self.pop_context()
+                }
+            }
+        }
     }
 
     pub fn has_any_errors(&self) -> bool {
