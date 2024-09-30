@@ -82,7 +82,7 @@ pub trait TestDsl {
     async fn get_worker_metadata(
         &self,
         worker_id: &WorkerId,
-    ) -> crate::Result<Option<WorkerMetadata>>;
+    ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>>;
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -90,7 +90,7 @@ pub trait TestDsl {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> crate::Result<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
+    ) -> crate::Result<(Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>)>;
     async fn delete_worker(&self, worker_id: &WorkerId) -> crate::Result<()>;
 
     async fn invoke(
@@ -283,7 +283,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn get_worker_metadata(
         &self,
         worker_id: &WorkerId,
-    ) -> crate::Result<Option<WorkerMetadata>> {
+    ) -> crate::Result<Option<(WorkerMetadata, Option<String>)>> {
         let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
         let response = self
             .worker_service()
@@ -319,7 +319,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> crate::Result<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
+    ) -> crate::Result<(Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>)> {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self
@@ -945,117 +945,120 @@ pub fn worker_error_message(error: &Error) -> String {
 
 pub fn to_worker_metadata(
     metadata: &golem_api_grpc::proto::golem::worker::WorkerMetadata,
-) -> WorkerMetadata {
-    WorkerMetadata {
-        worker_id: metadata
-            .worker_id
-            .clone()
-            .expect("no worker_id")
-            .clone()
-            .try_into()
-            .expect("invalid worker_id"),
-        args: metadata.args.clone(),
-        env: metadata
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<Vec<_>>(),
-        account_id: metadata
-            .account_id
-            .clone()
-            .expect("no account_id")
-            .clone()
-            .into(),
-        created_at: metadata
-            .created_at
-            .as_ref()
-            .expect("no created_at")
-            .clone()
-            .into(),
-        last_known_status: WorkerStatusRecord {
-            oplog_idx: OplogIndex::default(),
-            status: metadata.status.try_into().expect("invalid status"),
-            overridden_retry_config: None, // not passed through gRPC
-            deleted_regions: DeletedRegions::new(),
-            pending_invocations: vec![],
-            pending_updates: metadata
-                .updates
+) -> (WorkerMetadata, Option<String>) {
+    (
+        WorkerMetadata {
+            worker_id: metadata
+                .worker_id
+                .clone()
+                .expect("no worker_id")
+                .clone()
+                .try_into()
+                .expect("invalid worker_id"),
+            args: metadata.args.clone(),
+            env: metadata
+                .env
                 .iter()
-                .filter_map(|u| match &u.update {
-                    Some(Update::Pending(_)) => Some(TimestampedUpdateDescription {
-                        timestamp: u
-                            .timestamp
-                            .as_ref()
-                            .expect("no timestamp on update record")
-                            .clone()
-                            .into(),
-                        oplog_index: OplogIndex::from_u64(0),
-                        description: UpdateDescription::Automatic {
-                            target_version: u.target_version,
-                        },
-                    }),
-                    _ => None,
-                })
-                .collect(),
-            failed_updates: metadata
-                .updates
-                .iter()
-                .filter_map(|u| match &u.update {
-                    Some(Update::Failed(failed_update)) => Some(FailedUpdateRecord {
-                        timestamp: u
-                            .timestamp
-                            .as_ref()
-                            .expect("no timestamp on update record")
-                            .clone()
-                            .into(),
-                        target_version: u.target_version,
-                        details: failed_update.details.clone(),
-                    }),
-                    _ => None,
-                })
-                .collect(),
-            successful_updates: metadata
-                .updates
-                .iter()
-                .filter_map(|u| match &u.update {
-                    Some(Update::Successful(_)) => Some(SuccessfulUpdateRecord {
-                        timestamp: u
-                            .timestamp
-                            .as_ref()
-                            .expect("no timestamp on update record")
-                            .clone()
-                            .into(),
-                        target_version: u.target_version,
-                    }),
-                    _ => None,
-                })
-                .collect(),
-            invocation_results: HashMap::new(),
-            current_idempotency_key: None,
-            component_version: metadata.component_version,
-            component_size: metadata.component_size,
-            total_linear_memory_size: metadata.total_linear_memory_size,
-            owned_resources: metadata
-                .owned_resources
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        WorkerResourceId(*k),
-                        WorkerResourceDescription {
-                            created_at: v
-                                .created_at
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<Vec<_>>(),
+            account_id: metadata
+                .account_id
+                .clone()
+                .expect("no account_id")
+                .clone()
+                .into(),
+            created_at: metadata
+                .created_at
+                .as_ref()
+                .expect("no created_at")
+                .clone()
+                .into(),
+            last_known_status: WorkerStatusRecord {
+                oplog_idx: OplogIndex::default(),
+                status: metadata.status.try_into().expect("invalid status"),
+                overridden_retry_config: None, // not passed through gRPC
+                deleted_regions: DeletedRegions::new(),
+                pending_invocations: vec![],
+                pending_updates: metadata
+                    .updates
+                    .iter()
+                    .filter_map(|u| match &u.update {
+                        Some(Update::Pending(_)) => Some(TimestampedUpdateDescription {
+                            timestamp: u
+                                .timestamp
                                 .as_ref()
-                                .expect("no timestamp on resource metadata")
+                                .expect("no timestamp on update record")
                                 .clone()
                                 .into(),
-                            indexed_resource_key: v.indexed.clone().map(|i| i.into()),
-                        },
-                    )
-                })
-                .collect(),
+                            oplog_index: OplogIndex::from_u64(0),
+                            description: UpdateDescription::Automatic {
+                                target_version: u.target_version,
+                            },
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+                failed_updates: metadata
+                    .updates
+                    .iter()
+                    .filter_map(|u| match &u.update {
+                        Some(Update::Failed(failed_update)) => Some(FailedUpdateRecord {
+                            timestamp: u
+                                .timestamp
+                                .as_ref()
+                                .expect("no timestamp on update record")
+                                .clone()
+                                .into(),
+                            target_version: u.target_version,
+                            details: failed_update.details.clone(),
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+                successful_updates: metadata
+                    .updates
+                    .iter()
+                    .filter_map(|u| match &u.update {
+                        Some(Update::Successful(_)) => Some(SuccessfulUpdateRecord {
+                            timestamp: u
+                                .timestamp
+                                .as_ref()
+                                .expect("no timestamp on update record")
+                                .clone()
+                                .into(),
+                            target_version: u.target_version,
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+                invocation_results: HashMap::new(),
+                current_idempotency_key: None,
+                component_version: metadata.component_version,
+                component_size: metadata.component_size,
+                total_linear_memory_size: metadata.total_linear_memory_size,
+                owned_resources: metadata
+                    .owned_resources
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            WorkerResourceId(*k),
+                            WorkerResourceDescription {
+                                created_at: v
+                                    .created_at
+                                    .as_ref()
+                                    .expect("no timestamp on resource metadata")
+                                    .clone()
+                                    .into(),
+                                indexed_resource_key: v.indexed.clone().map(|i| i.into()),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+            parent: None,
         },
-        parent: None,
-    }
+        metadata.last_error.clone(),
+    )
 }
 
 fn dump_component_info(path: &Path) -> golem_common::model::component_metadata::ComponentMetadata {
@@ -1121,7 +1124,10 @@ pub trait TestDslUnsafe {
         args: Vec<String>,
         env: HashMap<String, String>,
     ) -> Result<WorkerId, Error>;
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata>;
+    async fn get_worker_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Option<(WorkerMetadata, Option<String>)>;
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -1129,7 +1135,7 @@ pub trait TestDslUnsafe {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>);
+    ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>);
     async fn delete_worker(&self, worker_id: &WorkerId) -> ();
 
     async fn invoke(
@@ -1246,7 +1252,10 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to start worker")
     }
 
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> Option<WorkerMetadata> {
+    async fn get_worker_metadata(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Option<(WorkerMetadata, Option<String>)> {
         <T as TestDsl>::get_worker_metadata(self, worker_id)
             .await
             .expect("Failed to get worker metadata")
@@ -1259,7 +1268,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>) {
+    ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>) {
         <T as TestDsl>::get_workers_metadata(self, component_id, filter, cursor, count, precise)
             .await
             .expect("Failed to get workers metadata")

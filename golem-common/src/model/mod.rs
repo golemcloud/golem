@@ -2108,7 +2108,7 @@ impl WorkerEvent {
             }),
             WorkerEvent::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
-                level: oplog::LogLevel::Stdout,
+                level: oplog::LogLevel::Stderr,
                 context: String::new(),
                 message: String::from_utf8_lossy(bytes).to_string(),
             }),

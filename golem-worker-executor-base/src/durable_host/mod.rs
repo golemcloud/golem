@@ -1394,11 +1394,13 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
         None
     } else {
         let mut first_error = None;
+        let mut last_error_index = idx;
         let result = loop {
             let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
             match oplog_entry.first_key_value() {
                 Some((_, OplogEntry::Error { error, .. })) => {
                     retry_count += 1;
+                    last_error_index = idx;
                     if first_error.is_none() {
                         first_error = Some(error.clone());
                     }
@@ -1409,7 +1411,8 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                         break Some(LastError {
                             error: first_error.unwrap(),
                             retry_count,
-                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await,
+                            stderr: recover_stderr_logs(this, owned_worker_id, last_error_index)
+                                .await,
                         });
                     }
                 }
@@ -1424,7 +1427,12 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                                 break Some(LastError {
                                     error,
                                     retry_count,
-                                    stderr: recover_stderr_logs(this, owned_worker_id, idx).await,
+                                    stderr: recover_stderr_logs(
+                                        this,
+                                        owned_worker_id,
+                                        last_error_index,
+                                    )
+                                    .await,
                                 })
                             }
                             None => break None,
@@ -1436,7 +1444,8 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                         break Some(LastError {
                             error,
                             retry_count,
-                            stderr: recover_stderr_logs(this, owned_worker_id, idx).await,
+                            stderr: recover_stderr_logs(this, owned_worker_id, last_error_index)
+                                .await,
                         })
                     }
                     None => break None,
@@ -1488,7 +1497,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
         }
     }
     stderr_entries.reverse();
-    stderr_entries.join("\n")
+    stderr_entries.join("")
 }
 
 /// Indicates which step of the http request handling is responsible for closing an open

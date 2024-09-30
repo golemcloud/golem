@@ -223,7 +223,7 @@ async fn counter_resource_test_1() {
         )
         .await;
 
-    let metadata1 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
 
     let _ = DEPS
         .invoke_and_await(
@@ -237,7 +237,7 @@ async fn counter_resource_test_1() {
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    let metadata2 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
 
     check!(result1 == Ok(vec![Value::U64(5)]));
 
@@ -366,7 +366,7 @@ async fn counter_resource_test_1_json() {
         )
         .await;
 
-    let metadata1 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
 
     let _ = DEPS
         .invoke_and_await_json(
@@ -380,7 +380,7 @@ async fn counter_resource_test_1_json() {
         .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    let metadata2 = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
 
     check!(
         result1
@@ -829,10 +829,10 @@ async fn auction_example_1() {
     check!(create_results.iter().all(|r| r.is_ok()));
 }
 
-fn get_worker_ids(workers: Vec<WorkerMetadata>) -> HashSet<WorkerId> {
+fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<WorkerId> {
     workers
         .into_iter()
-        .map(|w| w.worker_id)
+        .map(|w| w.0.worker_id)
         .collect::<HashSet<WorkerId>>()
 }
 
@@ -1083,7 +1083,7 @@ async fn auto_update_on_idle() {
         .unwrap();
 
     info!("result: {:?}", result);
-    let metadata = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
@@ -1135,7 +1135,7 @@ async fn auto_update_on_idle_via_host_function() {
         .unwrap();
 
     info!("result: {:?}", result);
-    let metadata = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
