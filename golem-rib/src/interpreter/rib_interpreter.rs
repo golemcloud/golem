@@ -1948,7 +1948,22 @@ mod interpreter_tests {
                  validate => "validated"
               };
 
-              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h, i: i, j: j, k: k}
+              let processed = process-user("jon");
+              let registered = register-user(1);
+
+              let m = match processed {
+                process-user(name) => name,
+                register-user(value) => "${value}",
+                validate => "validated"
+              };
+
+              let n = match registered {
+                process-user(name) => name,
+                register-user(value) => "${value}",
+                validate => "validated"
+              };
+
+              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h, i: i, j: j, k: k, m: m, n: n}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -2154,8 +2169,10 @@ mod interpreter_tests {
                     ("i", AnalysedType::U8(TypeU8)),
                     ("j", AnalysedType::U8(TypeU8)),
                     ("k", AnalysedType::Str(TypeStr)),
+                    ("m", AnalysedType::Str(TypeStr)),
+                    ("n", AnalysedType::Str(TypeStr)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz", i: 0, j: 1, k: "validated" }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz", i: 0, j: 1, k: "validated", m:"jon", n: "1" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
