@@ -986,13 +986,15 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod global_input_tests {
-        use std::collections::HashMap;
-        use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeOption, TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant};
+        use crate::compiler::byte_code::compiler_tests::internal;
+        use crate::{compiler, Expr, FunctionTypeRegistry, RibInputTypeInfo};
+        use golem_wasm_ast::analysis::{
+            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeOption,
+            TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant,
+        };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use poem_openapi::__private::poem::http::Uri;
-        use crate::{compiler, Expr, FunctionTypeRegistry, RibInputTypeInfo};
-        use crate::compiler::byte_code::compiler_tests::internal;
-
+        use std::collections::HashMap;
 
         #[tokio::test]
         async fn test_variant_type_info() {
@@ -1043,10 +1045,9 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-
         #[tokio::test]
         async fn test_result_type_info() {
-            let request_value_type =   AnalysedType::Result(TypeResult {
+            let request_value_type = AnalysedType::Result(TypeResult {
                 ok: Some(Box::new(AnalysedType::U64(TypeU64))),
                 err: Some(Box::new(AnalysedType::Str(TypeStr))),
             });
@@ -1120,7 +1121,7 @@ mod compiler_tests {
         #[tokio::test]
         async fn test_enum_type_info() {
             let request_value_type = AnalysedType::Enum(TypeEnum {
-                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
+                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
             });
 
             let output_analysed_type = AnalysedType::Str(TypeStr);
@@ -1157,7 +1158,7 @@ mod compiler_tests {
         #[tokio::test]
         async fn test_flag_type_info() {
             let request_value_type = AnalysedType::Flags(TypeFlags {
-                names: vec!["1".to_string(), "0".to_string()]
+                names: vec!["1".to_string(), "0".to_string()],
             });
 
             let output_analysed_type = AnalysedType::Str(TypeStr);
@@ -1190,8 +1191,6 @@ mod compiler_tests {
 
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
-
-
 
         #[tokio::test]
         async fn test_record_global_input() {
@@ -1237,9 +1236,12 @@ mod compiler_tests {
     }
 
     mod internal {
-        use std::collections::HashMap;
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedType};
         use crate::RibInputTypeInfo;
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedType,
+        };
+        use std::collections::HashMap;
 
         pub(crate) fn get_component_metadata(
             function_name: &str,
@@ -1270,10 +1272,7 @@ mod compiler_tests {
             for (name, typ) in types {
                 type_info.insert(name.to_string(), typ);
             }
-            RibInputTypeInfo {
-                types: type_info,
-            }
+            RibInputTypeInfo { types: type_info }
         }
-
     }
 }

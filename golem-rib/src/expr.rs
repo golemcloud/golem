@@ -23,6 +23,7 @@ use crate::{
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
+use golem_api_grpc::proto::golem::rib::RecordFieldArmPattern;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize, Serializer};
@@ -30,7 +31,6 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
-use golem_api_grpc::proto::golem::rib::RecordFieldArmPattern;
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Expr {
@@ -1429,11 +1429,9 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                             golem_api_grpc::proto::golem::rib::RecordConstructorArmPattern {
                                 fields: fields
                                     .into_iter()
-                                    .map(|(name, pattern)| {
-                                        RecordFieldArmPattern {
-                                            name,
-                                            pattern: Some(pattern.into()),
-                                        }
+                                    .map(|(name, pattern)| RecordFieldArmPattern {
+                                        name,
+                                        pattern: Some(pattern.into()),
                                     })
                                     .collect(),
                             },
@@ -1442,20 +1440,18 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                 }
             }
 
-            ArmPattern::FlagConstructor(flags) => {
-                golem_api_grpc::proto::golem::rib::ArmPattern {
-                    pattern: Some(
-                        golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::FlagConstructor(
-                            golem_api_grpc::proto::golem::rib::FlagConstructorArmPattern {
-                                patterns: flags
-                                    .into_iter()
-                                    .map(golem_api_grpc::proto::golem::rib::ArmPattern::from)
-                                    .collect(),
-                            },
-                        ),
+            ArmPattern::FlagConstructor(flags) => golem_api_grpc::proto::golem::rib::ArmPattern {
+                pattern: Some(
+                    golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::FlagConstructor(
+                        golem_api_grpc::proto::golem::rib::FlagConstructorArmPattern {
+                            patterns: flags
+                                .into_iter()
+                                .map(golem_api_grpc::proto::golem::rib::ArmPattern::from)
+                                .collect(),
+                        },
                     ),
-                }
-            }
+                ),
+            },
 
             ArmPattern::ListConstructor(patterns) => {
                 golem_api_grpc::proto::golem::rib::ArmPattern {

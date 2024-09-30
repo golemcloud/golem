@@ -118,14 +118,14 @@ mod arm_pattern {
 }
 
 mod internal {
-    use combine::{attempt, between, parser, sep_by1, Stream};
+    use crate::Expr;
     use combine::many1;
     use combine::parser::char::{digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
+    use combine::{attempt, between, parser, sep_by1, Stream};
     use combine::{choice, ParseError};
     use combine::{parser::char::char as char_, Parser};
-    use crate::Expr;
 
     use crate::expr::ArmPattern;
     use crate::parser::errors::RibParseError;
@@ -241,11 +241,11 @@ mod internal {
     }
 
     fn record_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
-        where
-            Input: combine::Stream<Token = char>,
-            RibParseError: Into<
-                <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-            >,
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         (
             string("{").skip(spaces()),
@@ -264,11 +264,11 @@ mod internal {
     }
 
     fn key_arm_pattern<Input>() -> impl Parser<Input, Output = KeyArmPattern>
-        where
-            Input: combine::Stream<Token = char>,
-            RibParseError: Into<
-                <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-            >,
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         (
             record_key().skip(spaces()),
@@ -282,11 +282,11 @@ mod internal {
     }
 
     fn record_key<Input>() -> impl Parser<Input, Output = String>
-        where
-            Input: combine::Stream<Token = char>,
-            RibParseError: Into<
-                <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-            >,
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         many1(letter().or(char_('_').or(char_('-'))))
             .map(|s: Vec<char>| s.into_iter().collect())
@@ -294,11 +294,11 @@ mod internal {
     }
 
     fn constructor_type_name<Input>() -> impl Parser<Input, Output = String>
-        where
-            Input: combine::Stream<Token = char>,
-            RibParseError: Into<
-                <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-            >,
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
     {
         many1(letter().or(digit()).or(char_('_')).or(char_('-')))
             .map(|s: Vec<char>| s.into_iter().collect())

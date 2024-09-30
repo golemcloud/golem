@@ -394,7 +394,6 @@ mod internal {
                 }
 
                 writer.write_str("}")
-
             }
 
             ArmPattern::ListConstructor(patterns) => {
