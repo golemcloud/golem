@@ -497,9 +497,7 @@ mod internal {
 mod compiler_tests {
     use super::*;
     use crate::{compiler, ArmPattern, InferredType, MatchArm, Number, VariableId};
-    use golem_wasm_ast::analysis::{
-        AnalysedType, NameTypePair, TypeList, TypeRecord, TypeStr, TypeU32,
-    };
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[test]
