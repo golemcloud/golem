@@ -386,6 +386,25 @@ mod internal {
                     push_arm_pattern_expr(pattern, queue);
                 }
             }
+
+            ArmPattern::ListConstructor(patterns) => {
+                for pattern in patterns {
+                    push_arm_pattern_expr(pattern, queue);
+                }
+            }
+
+            ArmPattern::RecordConstructor(fields) => {
+                for (_, pattern) in fields {
+                    push_arm_pattern_expr(pattern, queue);
+                }
+            }
+
+            ArmPattern::FlagConstructor(patterns) => {
+                for pattern in patterns {
+                    push_arm_pattern_expr(pattern, queue);
+                }
+            }
+
             ArmPattern::WildCard => {}
         }
     }

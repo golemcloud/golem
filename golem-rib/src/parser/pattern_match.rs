@@ -118,12 +118,11 @@ mod arm_pattern {
 }
 
 mod internal {
-    use crate::Expr;
     use combine::many1;
     use combine::parser::char::{digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
-    use combine::{attempt, between, parser, sep_by1, Stream};
+    use combine::{attempt, sep_by1};
     use combine::{choice, ParseError};
     use combine::{parser::char::char as char_, Parser};
 

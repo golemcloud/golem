@@ -32,7 +32,6 @@ pub fn desugar_pattern_match(
 
 mod internal {
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
-    use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -433,7 +432,7 @@ mod internal {
                 })
             }
 
-            InferredType::Flags(inferred_types) => {
+            InferredType::Flags(_) => {
                 // Resolution body is a list of expressions which grows (may be with some let bindings)
                 // as we recursively iterate over the bind patterns
                 // where bind patterns are x, _, y in the case of `match flag_variable { (x, _, y)) =>`

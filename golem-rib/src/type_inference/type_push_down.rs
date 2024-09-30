@@ -288,6 +288,36 @@ mod internal {
                     }
                 }
             }
+
+            ArmPattern::ListConstructor(patterns) => {
+                if let InferredType::List(inner_type) = predicate_type {
+                    for pattern in &mut *patterns {
+                        update_arm_pattern_type(pattern, inner_type)?;
+                    }
+                }
+            }
+
+            ArmPattern::FlagConstructor(patterns) => {
+                if let InferredType::Flags(_) = predicate_type {
+                    for pattern in &mut *patterns {
+                        update_arm_pattern_type(pattern, &InferredType::Str)?;
+                    }
+                }
+            }
+
+            ArmPattern::RecordConstructor(fields) => {
+                if let InferredType::Record(record_fields) = predicate_type {
+                    for (field, pattern) in fields {
+                        let inner_type = record_fields
+                            .iter()
+                            .find(|(name, _)| name == field)
+                            .map(|(_, typ)| typ)
+                            .ok_or(format!("Field {} not found in record type", field))?;
+                        update_arm_pattern_type(pattern, inner_type)?;
+                    }
+                }
+            }
+
             ArmPattern::WildCard => {}
         }
 
