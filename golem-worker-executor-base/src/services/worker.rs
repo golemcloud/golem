@@ -46,6 +46,8 @@ pub trait WorkerService {
 
     async fn remove(&self, owned_worker_id: &OwnedWorkerId);
 
+    async fn remove_cached_status(&self, owned_worker_id: &OwnedWorkerId);
+
     async fn update_status(
         &self,
         owned_worker_id: &OwnedWorkerId,
@@ -276,17 +278,7 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("remove");
 
         self.oplog_service.delete(owned_worker_id).await;
-
-        self.key_value_storage
-            .with("worker", "remove")
-            .del(
-                KeyValueStorageNamespace::Worker,
-                &Self::status_key(&owned_worker_id.worker_id),
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove worker status in the KV storage: {err}")
-            });
+        self.remove_cached_status(owned_worker_id).await;
 
         let shard_assignment = self
             .shard_service
@@ -306,6 +298,21 @@ impl WorkerService for DefaultWorkerService {
                 panic!(
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
                 )
+            });
+    }
+
+    async fn remove_cached_status(&self, owned_worker_id: &OwnedWorkerId) {
+        record_worker_call("remove_cached_status");
+
+        self.key_value_storage
+            .with("worker", "remove")
+            .del(
+                KeyValueStorageNamespace::Worker,
+                &Self::status_key(&owned_worker_id.worker_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to remove worker status in the KV storage: {err}")
             });
     }
 

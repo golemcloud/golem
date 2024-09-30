@@ -20,18 +20,20 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use tokio::task::JoinHandle;
-use tracing::{error, span, warn, Instrument, Level};
+use tokio::time::Instant;
+use tracing::{error, info, span, warn, Instrument, Level};
 
-use golem_common::model::{ComponentType, ScheduleId, ScheduledAction};
-
+use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::oplog::{MultiLayerOplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
+use crate::services::worker::WorkerService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use golem_common::model::{ComponentType, ScheduleId, ScheduledAction};
 
 #[async_trait]
 pub trait SchedulerService {
@@ -48,6 +50,7 @@ pub struct SchedulerServiceDefault {
     promise_service: Arc<dyn PromiseService + Send + Sync>,
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     oplog_service: Arc<dyn OplogService + Send + Sync>,
+    worker_service: Arc<dyn WorkerService + Send + Sync>,
 }
 
 impl SchedulerServiceDefault {
@@ -57,6 +60,7 @@ impl SchedulerServiceDefault {
         promise_service: Arc<dyn PromiseService + Send + Sync>,
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
         process_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
@@ -65,6 +69,7 @@ impl SchedulerServiceDefault {
             shard_service,
             promise_service,
             oplog_service,
+            worker_service,
             worker_activator,
         };
         let svc = Arc::new(svc);
@@ -165,7 +170,10 @@ impl SchedulerServiceDefault {
                                 .oplog_service
                                 .open(&owned_worker_id, last_oplog_index, ComponentType::Durable)
                                 .await;
+
+                            let start = Instant::now();
                             if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                record_scheduled_archive(start.elapsed(), more);
                                 if more {
                                     self.schedule(
                                         now.add(next_after),
@@ -176,6 +184,15 @@ impl SchedulerServiceDefault {
                                         },
                                     )
                                     .await;
+                                } else {
+                                    info!(
+                                        worker_id = owned_worker_id.to_string(),
+                                        "Deleting cached status of fully archived worker"
+                                    );
+                                    // The oplog is fully archived, so we can also delete the cached worker status
+                                    self.worker_service
+                                        .remove_cached_status(&owned_worker_id)
+                                        .await;
                                 }
                             }
                         }
@@ -288,6 +305,7 @@ mod tests {
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
     use crate::services::shard::{ShardService, ShardServiceDefault};
+    use crate::services::worker::{DefaultWorkerService, WorkerService};
     use crate::services::worker_activator::{WorkerActivator, WorkerActivatorMock};
     use crate::storage::blob::memory::InMemoryBlobStorage;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -329,6 +347,14 @@ mod tests {
         )
     }
 
+    fn create_worker_service_mock(
+        kvs: Arc<InMemoryKeyValueStorage>,
+        shard_service: Arc<dyn ShardService + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
+    ) -> Arc<dyn WorkerService + Send + Sync> {
+        Arc::new(DefaultWorkerService::new(kvs, shard_service, oplog_service))
+    }
+
     #[tokio::test]
     pub async fn promises_added_to_expected_buckets() {
         let uuid = Uuid::new_v4();
@@ -365,6 +391,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_activator = create_worker_activator_mock();
         let oplog_service = create_oplog_service_mock().await;
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -372,6 +400,7 @@ mod tests {
             promise_service,
             worker_activator,
             oplog_service,
+            worker_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
@@ -479,6 +508,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_activator = create_worker_activator_mock();
         let oplog_service = create_oplog_service_mock().await;
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -486,6 +517,7 @@ mod tests {
             promise_service,
             worker_activator,
             oplog_service,
+            worker_service,
             Duration::from_secs(1000), // not testing process() here
         );
 
@@ -578,6 +610,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_activator = create_worker_activator_mock();
         let oplog_service = create_oplog_service_mock().await;
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -585,6 +619,7 @@ mod tests {
             promise_service.clone(),
             worker_activator,
             oplog_service,
+            worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -682,6 +717,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_activator = create_worker_activator_mock();
         let oplog_service = create_oplog_service_mock().await;
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -689,6 +726,7 @@ mod tests {
             promise_service.clone(),
             worker_activator,
             oplog_service,
+            worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -784,6 +822,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_activator = create_worker_activator_mock();
         let oplog_service = create_oplog_service_mock().await;
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -791,6 +831,7 @@ mod tests {
             promise_service.clone(),
             worker_activator,
             oplog_service,
+            worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
@@ -892,6 +933,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_activator = create_worker_activator_mock();
         let oplog_service = create_oplog_service_mock().await;
+        let worker_service =
+            create_worker_service_mock(kvs.clone(), shard_service.clone(), oplog_service.clone());
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -899,6 +942,7 @@ mod tests {
             promise_service.clone(),
             worker_activator,
             oplog_service,
+            worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
