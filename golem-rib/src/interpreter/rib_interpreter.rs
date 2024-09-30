@@ -1886,11 +1886,11 @@ mod interpreter_tests {
         async fn test_interpreter_with_record() {
             let expr = r#"
               let input = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
-              let optional-result = function-option(input);
+              let optional_result = function-option(input);
               let id: str = request.body.id;
-              let a = match optional-result {  some(value) => "personal-id", none => id };
-              let b = match optional-result {  some(value) => "personal-id", none =>  input.body.titles[1] };
-              let c = match optional-result {  some(value) => "personal-id", none =>  request.body.address.street };
+              let a = match optional_result {  some(value) => "personal-id", none => id };
+              let b = match optional_result {  some(value) => "personal-id", none =>  input.body.titles[1] };
+              let c = match optional_result {  some(value) => "personal-id", none =>  request.body.address.street };
 
               let authorisation: str = request.headers.authorisation;
               let success: u64 = 200;
@@ -1906,7 +1906,12 @@ mod interpreter_tests {
 
               let e = if id == "foo" then "bar" else match ok_result { ok(value) => value, err(msg) => "empty" };
 
-              { a : a, b : b, c: c, d: d, e: e}
+              let err_result = function-err(input);
+
+              let f = if id == "foo" then "bar" else match err_result { ok(value) => value, err(msg) => msg };
+
+
+              { a : a, b : b, c: c, d: d, e: e, f: f}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -1922,6 +1927,7 @@ mod interpreter_tests {
 
             let optional_result = internal::get_type_annotated_value(&optional_result_type, "none");
             let ok_result = internal::get_type_annotated_value(&ok_err_result_type, r#"ok("success")"#);
+            let err_result = internal::get_type_annotated_value(&ok_err_result_type, r#"err("failure")"#);
 
             let input_type = internal::analysed_type_record(vec![
                 (
@@ -1995,12 +2001,19 @@ mod interpreter_tests {
             let function_ok_metadata = internal::get_component_metadata(
                 "function-ok",
                 vec![input_type.clone()],
+                Some(ok_err_result_type.clone()),
+            );
+
+            let function_err_metadata = internal::get_component_metadata(
+                "function-err",
+                vec![input_type.clone()],
                 Some(ok_err_result_type),
             );
 
             function_option_metadata.extend(function_no_arg_unit_metadata);
             function_option_metadata.extend(function_unit_metadata);
             function_option_metadata.extend(function_ok_metadata);
+            function_option_metadata.extend(function_err_metadata);
 
             let compiled = compiler::compile(&expr, &function_option_metadata).unwrap();
 
@@ -2014,6 +2027,10 @@ mod interpreter_tests {
                 (
                     internal::FunctionName("function-ok".to_string()),
                     Some(ok_result),
+                ),
+                (
+                    internal::FunctionName("function-err".to_string()),
+                    Some(err_result),
                 ),
                 (internal::FunctionName("function-no-arg-unit".to_string()), None),
                 (internal::FunctionName("function-unit".to_string()), None),
@@ -2029,8 +2046,9 @@ mod interpreter_tests {
                     ("c", AnalysedType::Str(TypeStr)),
                     ("d", AnalysedType::U64(TypeU64)),
                     ("e", AnalysedType::Str(TypeStr)),
+                    ("f", AnalysedType::Str(TypeStr)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success" }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
