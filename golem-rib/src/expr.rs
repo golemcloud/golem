@@ -432,7 +432,6 @@ impl Expr {
     // to infer the types
     pub fn inference_scan(&mut self) -> Result<(), String> {
         self.infer_all_identifiers()?;
-        dbg!(&self);
         self.push_types_down()?;
         self.infer_all_identifiers()?;
         self.pull_types_up()?;
@@ -680,8 +679,11 @@ impl MatchArm {
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
-    Constructor(String, Vec<ArmPattern>),
-    TupleConstructor(Vec<ArmPattern>), // Just because tuple doesn't have a name to fall into Constructor
+    Constructor(String, Vec<ArmPattern>), // Can handle enums, variants, option, result etc
+    TupleConstructor(Vec<ArmPattern>),
+    FlagConstructor(Vec<ArmPattern>),
+    RecordConstructor(Vec<(String, ArmPattern)>),
+    ListConstructor(Vec<ArmPattern>),
     Literal(Box<Expr>),
 }
 
@@ -698,6 +700,27 @@ impl ArmPattern {
                 result
             }
             ArmPattern::TupleConstructor(patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
+            ArmPattern::FlagConstructor(patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
+            ArmPattern::RecordConstructor(patterns) => {
+                let mut result = vec![];
+                for (_, pattern) in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
+            ArmPattern::ListConstructor(patterns) => {
                 let mut result = vec![];
                 for pattern in patterns {
                     result.extend(pattern.get_expr_literals_mut());

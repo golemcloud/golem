@@ -203,6 +203,9 @@ message ArmPattern {
     ConstructorArmPattern constructor = 3;
     LiteralArmPattern literal = 4;
     TupleConstructorArmPattern tuple_constructor = 5;
+    FlagConstructorArmPattern flag_constructor = 6;
+    ListConstructorArmPattern list_constructor = 7;
+    RecordConstructorArmPattern record_constructor = 8;
   }
 }
 
@@ -223,6 +226,24 @@ message ConstructorArmPattern {
 message TupleConstructorArmPattern {
   repeated ArmPattern patterns = 1;
 }
+
+message FlagConstructorArmPattern {
+  repeated ArmPattern patterns = 1;
+}
+
+message ListConstructorArmPattern {
+  repeated ArmPattern patterns = 1;
+}
+
+message RecordConstructorArmPattern {
+   repeated RecordFieldArmPattern fields = 1;
+}
+
+message RecordFieldArmPattern {
+    string name = 1;
+    ArmPattern pattern = 2;
+}
+
 
 message LiteralArmPattern {
   Expr expr = 1;

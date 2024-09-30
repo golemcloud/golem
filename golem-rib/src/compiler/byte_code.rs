@@ -987,7 +987,7 @@ mod compiler_tests {
     #[cfg(test)]
     mod global_input_tests {
         use std::collections::HashMap;
-        use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, NameTypePair, TypeOption, TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant};
+        use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeOption, TypeRecord, TypeResult, TypeStr, TypeU64, TypeVariant};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use poem_openapi::__private::poem::http::Uri;
         use crate::{compiler, Expr, FunctionTypeRegistry, RibInputTypeInfo};
@@ -1080,6 +1080,118 @@ mod compiler_tests {
 
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
+
+        #[tokio::test]
+        async fn test_option_type_info() {
+            let request_value_type = AnalysedType::Option(TypeOption {
+                inner: Box::new(AnalysedType::Str(TypeStr)),
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the input to Rib.
+            // my-worker-function is a function that takes a Option as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Option
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 some(x) => x,
+                 none => "error"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_enum_type_info() {
+            let request_value_type = AnalysedType::Enum(TypeEnum {
+                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()]
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the input to Rib.
+            // my-worker-function is a function that takes a Option as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Option
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 prod  => "p",
+                 "dev" => "d",
+                 "test" => "t"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_flag_type_info() {
+            let request_value_type = AnalysedType::Flags(TypeFlags {
+                names: vec!["1".to_string(), "0".to_string()]
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the input to Rib.
+            // my-worker-function is a function that takes a Option as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Option
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 prod  => "p",
+                 "dev" => "d",
+                 "test" => "t"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+
 
         #[tokio::test]
         async fn test_record_global_input() {
