@@ -1880,7 +1880,7 @@ mod interpreter_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
-            AnalysedType, TypeList, TypeOption, TypeResult, TypeStr, TypeU64,
+            AnalysedType, TypeList, TypeOption, TypeResult, TypeStr, TypeU64, TypeU8,
         };
         use std::collections::HashMap;
 
@@ -1920,8 +1920,10 @@ mod interpreter_tests {
               let err_record_result = function-err-record(input);
 
               let h = match err_record_result { ok(success_rec) => success_rec.b[0], err(failure_rec) => "${failure_rec.d}" };
+              let i = match err_record_result { ok(_) => 1u8, err(_) => 0u8 };
+              let j = match ok_record_result { ok(_) => 1u8, err(_) => 0u8 };
 
-              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h}
+              { a : a, b : b, c: c, d: d, e: e, f: f, g: g, h: h, i: i, j: j}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -2108,8 +2110,10 @@ mod interpreter_tests {
                     ("f", AnalysedType::Str(TypeStr)),
                     ("g", AnalysedType::Str(TypeStr)),
                     ("h", AnalysedType::Str(TypeStr)),
+                    ("i", AnalysedType::U8(TypeU8)),
+                    ("j", AnalysedType::U8(TypeU8)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz" }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz", i: 0, j: 1 }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }

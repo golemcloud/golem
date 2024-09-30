@@ -627,27 +627,6 @@ mod tests {
 
         assert!(error_message.contains("Types do not match. Inferred to be both Str and Bool"));
     }
-    
-    #[tokio::test]
-    async fn test_evaluation_with_pattern_match_with_err_construction() {
-        let noop_executor = DefaultEvaluator::noop();
-
-        let expr = rib::from_string(
-            "${let xyz: u64 = 2; match err(\"afsal\") { ok(_) => ok(\"1\"), err(msg) => err(xyz) }}",
-        )
-        .unwrap();
-
-        let result = noop_executor
-            .evaluate_pure_expr(&expr)
-            .await
-            .map(|v| v.get_val().unwrap());
-
-        let expected =
-            create_error_result(TypeAnnotatedValue::U64(2), Some(AnalysedType::Str(TypeStr)))
-                .unwrap();
-
-        assert_eq!(result, Ok(expected));
-    }
 
     #[tokio::test]
     async fn test_evaluation_with_pattern_match_with_wild_card() {

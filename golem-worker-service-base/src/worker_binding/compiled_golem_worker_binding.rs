@@ -54,7 +54,7 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let worker_name_compiled = rib::compile(worker_name, exports)?;
+        let worker_name_compiled = rib::compile_with_limited_globals(worker_name, exports, Some(vec!["request".to_string()]))?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -76,7 +76,7 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let idempotency_key_compiled = rib::compile(idempotency_key, exports)?;
+        let idempotency_key_compiled = rib::compile_with_limited_globals(idempotency_key, exports, Some(vec!["request".to_string()]))?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
@@ -98,7 +98,7 @@ impl ResponseMappingCompiled {
         response_mapping: &ResponseMapping,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let response_compiled = rib::compile(&response_mapping.0, exports)?;
+        let response_compiled = rib::compile_with_limited_globals(&response_mapping.0, exports, Some(vec!["request".to_string()]))?;
 
         Ok(ResponseMappingCompiled {
             response_rib_expr: response_mapping.0.clone(),
