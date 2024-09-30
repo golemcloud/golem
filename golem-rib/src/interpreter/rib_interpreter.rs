@@ -1879,11 +1879,13 @@ mod interpreter_tests {
     mod complex_rib_test {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr};
-        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeResult, TypeStr, TypeU64};
+        use golem_wasm_ast::analysis::{
+            AnalysedType, TypeEnum, TypeList, TypeOption, TypeResult, TypeStr, TypeTuple, TypeU64,
+        };
         use std::collections::HashMap;
 
         #[tokio::test]
-        async fn test_interpreter_with_record() {
+        async fn test_interpreter_complex_rib() {
             let expr = r#"
               let input = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
               let optional_result = function-option(input);
@@ -1910,8 +1912,11 @@ mod interpreter_tests {
 
               let f = if id == "foo" then "bar" else match err_result { ok(value) => value, err(msg) => msg };
 
+              let ok_record_result = function-ok-record(input);
 
-              { a : a, b : b, c: c, d: d, e: e, f: f}
+              let g = match ok_record_result { ok(success_rec) => success_rec.a, err(failure_rec) => "${failure_rec.d}" };
+
+              { a : a, b : b, c: c, d: d, e: e, f: f, g: g}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
@@ -1925,9 +1930,41 @@ mod interpreter_tests {
                 err: Some(Box::new(AnalysedType::Str(TypeStr))),
             });
 
+            let ok_err_record_result_type = AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(internal::analysed_type_record(vec![
+                    ("a", AnalysedType::Str(TypeStr)),
+                    (
+                        "b",
+                        AnalysedType::List(TypeList {
+                            inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                    ),
+                ]))),
+                err: Some(Box::new(internal::analysed_type_record(vec![
+                    (
+                        "c",
+                        AnalysedType::Tuple(TypeTuple {
+                            items: vec![AnalysedType::Str(TypeStr), AnalysedType::U64(TypeU64)],
+                        }),
+                    ),
+                    (
+                        "d",
+                        AnalysedType::Enum(TypeEnum {
+                            cases: vec!["a".to_string(), "b".to_string()],
+                        }),
+                    ),
+                ]))),
+            });
+
             let optional_result = internal::get_type_annotated_value(&optional_result_type, "none");
-            let ok_result = internal::get_type_annotated_value(&ok_err_result_type, r#"ok("success")"#);
-            let err_result = internal::get_type_annotated_value(&ok_err_result_type, r#"err("failure")"#);
+            let ok_result =
+                internal::get_type_annotated_value(&ok_err_result_type, r#"ok("success")"#);
+            let err_result =
+                internal::get_type_annotated_value(&ok_err_result_type, r#"err("failure")"#);
+            let ok_record_result = internal::get_type_annotated_value(
+                &ok_err_record_result_type,
+                r#"ok({a : "foo", b: ["bar", "baz"]})"#,
+            );
 
             let input_type = internal::analysed_type_record(vec![
                 (
@@ -1992,11 +2029,8 @@ mod interpreter_tests {
             let function_no_arg_unit_metadata =
                 internal::get_component_metadata("function-no-arg-unit", vec![], None);
 
-            let function_unit_metadata = internal::get_component_metadata(
-                "function-unit",
-                vec![input_type.clone()],
-               None
-            );
+            let function_unit_metadata =
+                internal::get_component_metadata("function-unit", vec![input_type.clone()], None);
 
             let function_ok_metadata = internal::get_component_metadata(
                 "function-ok",
@@ -2010,10 +2044,17 @@ mod interpreter_tests {
                 Some(ok_err_result_type),
             );
 
+            let function_ok_record_metadata = internal::get_component_metadata(
+                "function-ok-record",
+                vec![input_type.clone()],
+                Some(ok_err_record_result_type),
+            );
+
             function_option_metadata.extend(function_no_arg_unit_metadata);
             function_option_metadata.extend(function_unit_metadata);
             function_option_metadata.extend(function_ok_metadata);
             function_option_metadata.extend(function_err_metadata);
+            function_option_metadata.extend(function_ok_record_metadata);
 
             let compiled = compiler::compile(&expr, &function_option_metadata).unwrap();
 
@@ -2032,7 +2073,14 @@ mod interpreter_tests {
                     internal::FunctionName("function-err".to_string()),
                     Some(err_result),
                 ),
-                (internal::FunctionName("function-no-arg-unit".to_string()), None),
+                (
+                    internal::FunctionName("function-ok-record".to_string()),
+                    Some(ok_record_result),
+                ),
+                (
+                    internal::FunctionName("function-no-arg-unit".to_string()),
+                    None,
+                ),
                 (internal::FunctionName("function-unit".to_string()), None),
             ]);
             let mut rib_executor =
@@ -2047,8 +2095,9 @@ mod interpreter_tests {
                     ("d", AnalysedType::U64(TypeU64)),
                     ("e", AnalysedType::Str(TypeStr)),
                     ("f", AnalysedType::Str(TypeStr)),
+                    ("g", AnalysedType::Str(TypeStr)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure" }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "foo" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
