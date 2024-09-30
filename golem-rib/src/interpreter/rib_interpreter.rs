@@ -1879,7 +1879,7 @@ mod interpreter_tests {
     mod complex_rib_test {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr};
-        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr, TypeU64};
+        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeResult, TypeStr, TypeU64};
         use std::collections::HashMap;
 
         #[tokio::test]
@@ -1895,20 +1895,33 @@ mod interpreter_tests {
               let authorisation: str = request.headers.authorisation;
               let success: u64 = 200;
               let failure: u64 = 401;
+
               let d = if authorisation == "admin" then success else failure;
+
               function-no-arg-unit();
+
               let unit_result = function-unit(input);
 
-              { a : a, b : b, c: c, d: d}
+              let ok_result = function-ok(input);
+
+              let e = if id == "foo" then "bar" else match ok_result { ok(value) => value, err(msg) => "empty" };
+
+              { a : a, b : b, c: c, d: d, e: e}
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let non_unit_result_type = AnalysedType::Option(TypeOption {
+            let optional_result_type = AnalysedType::Option(TypeOption {
                 inner: Box::new(AnalysedType::Str(TypeStr)),
             });
 
-            let non_unit_result_value = internal::get_type_annotated_value(&non_unit_result_type, "none");
+            let ok_err_result_type = AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::Str(TypeStr))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            });
+
+            let optional_result = internal::get_type_annotated_value(&optional_result_type, "none");
+            let ok_result = internal::get_type_annotated_value(&ok_err_result_type, r#"ok("success")"#);
 
             let input_type = internal::analysed_type_record(vec![
                 (
@@ -1963,10 +1976,10 @@ mod interpreter_tests {
                  }"#,
             );
 
-            let mut component_metadata = internal::get_component_metadata(
+            let mut function_option_metadata = internal::get_component_metadata(
                 "function-option",
                 vec![input_type.clone()],
-                Some(non_unit_result_type.clone()),
+                Some(optional_result_type.clone()),
             );
 
             // bar is a no-arg unit function
@@ -1979,19 +1992,31 @@ mod interpreter_tests {
                None
             );
 
-            component_metadata.extend(function_no_arg_unit_metadata);
-            component_metadata.extend(function_unit_metadata);
+            let function_ok_metadata = internal::get_component_metadata(
+                "function-ok",
+                vec![input_type.clone()],
+                Some(ok_err_result_type),
+            );
 
-            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            function_option_metadata.extend(function_no_arg_unit_metadata);
+            function_option_metadata.extend(function_unit_metadata);
+            function_option_metadata.extend(function_ok_metadata);
+
+            let compiled = compiler::compile(&expr, &function_option_metadata).unwrap();
 
             let interpreter_input = HashMap::from_iter(vec![("request".to_string(), input_value)]);
 
             let functions_and_result = HashMap::from_iter(vec![
                 (
                     internal::FunctionName("function-option".to_string()),
-                    Some(non_unit_result_value),
+                    Some(optional_result),
+                ),
+                (
+                    internal::FunctionName("function-ok".to_string()),
+                    Some(ok_result),
                 ),
                 (internal::FunctionName("function-no-arg-unit".to_string()), None),
+                (internal::FunctionName("function-unit".to_string()), None),
             ]);
             let mut rib_executor =
                 internal::dynamic_test_interpreter(functions_and_result, interpreter_input);
@@ -2003,8 +2028,9 @@ mod interpreter_tests {
                     ("b", AnalysedType::Str(TypeStr)),
                     ("c", AnalysedType::Str(TypeStr)),
                     ("d", AnalysedType::U64(TypeU64)),
+                    ("e", AnalysedType::Str(TypeStr)),
                 ]),
-                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200 }"#,
+                r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
         }
