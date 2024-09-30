@@ -1885,18 +1885,18 @@ mod interpreter_tests {
         #[tokio::test]
         async fn test_interpreter_with_record() {
             let expr = r#"
-              let x = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
-              let result = foo(x);
-              let result2: str = request.body.id;
-              let a = match result {  some(value) => "personal-id", none => result2 };
-              let b = match result {  some(value) => "personal-id", none =>  x.body.titles[1] };
-              let c = match result {  some(value) => "personal-id", none =>  request.body.address.street };
+              let input = { body : { id: "bId", name: "bName", titles: request.body.titles, address: request.body.address } };
+              let optional-result = function-option(input);
+              let id: str = request.body.id;
+              let a = match optional-result {  some(value) => "personal-id", none => id };
+              let b = match optional-result {  some(value) => "personal-id", none =>  input.body.titles[1] };
+              let c = match optional-result {  some(value) => "personal-id", none =>  request.body.address.street };
 
-              let input: str = request.headers.authorisation;
+              let authorisation: str = request.headers.authorisation;
               let success: u64 = 200;
               let failure: u64 = 401;
-              let d = if input == "admin" then success else failure;
-              bar();
+              let d = if authorisation == "admin" then success else failure;
+              function-no-arg-unit();
               { a : a, b : b, c: c, d: d}
         "#;
 
@@ -1962,13 +1962,14 @@ mod interpreter_tests {
             );
 
             let mut component_metadata = internal::get_component_metadata(
-                "foo",
+                "function-option",
                 vec![input_type.clone()],
                 Some(foo_result_type.clone()),
             );
 
             // bar is a no-arg unit function
-            let bar_component_metadata = internal::get_component_metadata("bar", vec![], None);
+            let bar_component_metadata =
+                internal::get_component_metadata("function-no-arg-unit", vec![], None);
 
             component_metadata.extend(bar_component_metadata);
 
@@ -1978,10 +1979,10 @@ mod interpreter_tests {
 
             let functions_and_result = HashMap::from_iter(vec![
                 (
-                    internal::FunctionName("foo".to_string()),
+                    internal::FunctionName("function-option".to_string()),
                     Some(foo_result_value),
                 ),
-                (internal::FunctionName("bar".to_string()), None),
+                (internal::FunctionName("function-no-arg-unit".to_string()), None),
             ]);
             let mut rib_executor =
                 internal::dynamic_test_interpreter(functions_and_result, interpreter_input);
