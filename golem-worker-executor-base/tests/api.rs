@@ -44,7 +44,7 @@ use golem_test_framework::dsl::{
 };
 use tokio::time::sleep;
 use tonic::transport::Body;
-use tracing::debug;
+use tracing::{debug, info};
 use warp::Filter;
 use wasmtime_wasi::runtime::spawn;
 
@@ -961,7 +961,7 @@ async fn get_workers() {
         filter: Option<WorkerFilter>,
         expected_count: usize,
         executor: &mut TestWorkerExecutor,
-    ) -> Vec<WorkerMetadata> {
+    ) -> Vec<(WorkerMetadata, Option<String>)> {
         let (cursor, values) = executor
             .get_workers_metadata(component_id, filter, ScanCursor::default(), 20, true)
             .await;
@@ -1157,12 +1157,12 @@ async fn get_worker_metadata() {
 
     sleep(Duration::from_secs(5)).await;
 
-    let metadata1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
     let _ = fiber.await;
 
     sleep(Duration::from_secs(2)).await;
 
-    let metadata2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
 
@@ -1543,7 +1543,7 @@ async fn long_running_poll_loop_works_as_expected() {
 
     sleep(Duration::from_secs(2)).await;
 
-    let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     {
         let mut response = response.lock().unwrap();
@@ -1551,7 +1551,7 @@ async fn long_running_poll_loop_works_as_expected() {
     }
 
     sleep(Duration::from_secs(2)).await;
-    let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -1607,7 +1607,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
         .unwrap();
 
     sleep(Duration::from_secs(2)).await;
-    let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
     let values1 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
@@ -1622,7 +1622,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     executor.interrupt(&worker_id).await;
 
     sleep(Duration::from_secs(2)).await;
-    let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
     let values2 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
@@ -1648,7 +1648,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     });
 
     sleep(Duration::from_secs(2)).await;
-    let status3 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status3, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     {
         let mut response = response.lock().unwrap();
@@ -1658,7 +1658,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     fiber.await;
 
     sleep(Duration::from_secs(3)).await;
-    let status4 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     {
         let mut response = response.lock().unwrap();
@@ -1666,7 +1666,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     }
 
     sleep(Duration::from_secs(2)).await;
-    let status5 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status5, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -1801,11 +1801,11 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     executor.interrupt(&worker_id).await;
 
     let _ = drain_connection(rx).await;
-    let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     let _rx = executor.capture_output_with_termination(&worker_id).await;
     sleep(Duration::from_secs(2)).await;
-    let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -1862,18 +1862,18 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
         .unwrap();
 
     sleep(Duration::from_secs(2)).await;
-    let status1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.interrupt(&worker_id).await;
 
     let mut events = drain_connection(rx).await;
-    let status2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     executor.resume(&worker_id).await;
     sleep(Duration::from_secs(2)).await;
 
     let mut rx = executor.capture_output_with_termination(&worker_id).await;
-    let status3 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status3, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     {
         let mut response = response.lock().unwrap();
@@ -1884,7 +1884,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
 
     rx.recv_many(&mut events, 100).await;
 
-    let status4 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (status4, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -2067,28 +2067,28 @@ async fn shopping_cart_resource_example() {
 
     drop(executor);
 
-    assert!(
-        contents
-            == Ok(vec![Value::List(vec![
-                Value::Record(vec![
-                    Value::String("G1000".to_string()),
-                    Value::String("Golem T-Shirt M".to_string()),
-                    Value::F32(100.0),
-                    Value::U32(5),
-                ]),
-                Value::Record(vec![
-                    Value::String("G1001".to_string()),
-                    Value::String("Golem Cloud Subscription 1y".to_string()),
-                    Value::F32(999999.0),
-                    Value::U32(1),
-                ]),
-                Value::Record(vec![
-                    Value::String("G1002".to_string()),
-                    Value::String("Mud Golem".to_string()),
-                    Value::F32(11.0),
-                    Value::U32(20),
-                ]),
-            ])])
+    assert_eq!(
+        contents,
+        Ok(vec![Value::List(vec![
+            Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
+            ]),
+            Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
+            ]),
+            Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(20),
+            ]),
+        ])])
     )
 }
 
@@ -2127,7 +2127,7 @@ async fn counter_resource_test_1() {
         )
         .await;
 
-    let metadata1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     let _ = executor
         .invoke_and_await(
@@ -2141,7 +2141,7 @@ async fn counter_resource_test_1() {
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    let metadata2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
 
@@ -2247,7 +2247,7 @@ async fn counter_resource_test_2() {
         )
         .await;
 
-    let metadata1 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     let _ = executor
         .invoke_and_await(
@@ -2268,7 +2268,7 @@ async fn counter_resource_test_2() {
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    let metadata2 = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
 
@@ -2380,6 +2380,7 @@ async fn reconstruct_interrupted_state() {
         .get_worker_metadata(&worker_id)
         .await
         .unwrap()
+        .0
         .last_known_status
         .status;
 
@@ -2517,4 +2518,67 @@ async fn invoke_with_non_existing_function() {
                 "Hello".to_string()
             ))))])
     );
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn stderr_returned_for_failed_component() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let component_id = executor.store_component("failing-component").await;
+    let worker_id = executor
+        .start_worker(&component_id, "failing-worker-1")
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{add}", vec![Value::U64(5)])
+        .await;
+
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{add}",
+            vec![Value::U64(50)],
+        )
+        .await;
+
+    let result3 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .await;
+
+    let (metadata, last_error) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    let (next, all) = executor
+        .get_workers_metadata(&component_id, None, ScanCursor::default(), 100, true)
+        .await;
+
+    drop(executor);
+
+    info!(
+        "result2: {:?}",
+        worker_error_message(&result2.clone().err().unwrap())
+    );
+    info!(
+        "result3: {:?}",
+        worker_error_message(&result3.clone().err().unwrap())
+    );
+
+    check!(result1.is_ok());
+    check!(result2.is_err());
+    check!(result3.is_err());
+
+    let expected_stderr = "\n\nthread '<unnamed>' panicked at src/lib.rs:29:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+
+    check!(worker_error_message(&result2.clone().err().unwrap()).ends_with(&expected_stderr));
+    check!(worker_error_message(&result3.clone().err().unwrap()).ends_with(&expected_stderr));
+
+    check!(metadata.last_known_status.status == WorkerStatus::Failed);
+    check!(last_error.is_some());
+    check!(last_error.unwrap().ends_with(&expected_stderr));
+
+    check!(next.is_none());
+    check!(all.len() == 1);
+    check!(all[0].1.is_some());
+    check!(all[0].1.clone().unwrap().ends_with(&expected_stderr));
 }
