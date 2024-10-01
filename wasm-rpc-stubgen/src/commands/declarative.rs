@@ -61,8 +61,8 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
 
         commands::generate::build(
             &stub_def,
-            &app.stub_dest_wasm(&component_name),
-            &app.stub_dest_wit(&component_name),
+            &app.stub_wasm(&component_name),
+            &app.stub_wit(&component_name),
         )
         .await?
     }
@@ -85,7 +85,7 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
             );
 
             commands::dependencies::add_stub_dependency(
-                &app.stub_dest_wit(dep_component_name),
+                &app.stub_wit(dep_component_name),
                 &app.component_wit(component_name),
                 true,  // TODO: is overwrite ever not needed?
                 false, // TODO: should update cargo toml be exposed?
@@ -96,8 +96,56 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn post_build(_config: Config) -> anyhow::Result<()> {
-    todo!()
+pub fn post_build(config: Config) -> anyhow::Result<()> {
+    let app = to_anyhow(
+        "Failed to load application manifest(s), see problems above".to_string(),
+        load_app(config.app_resolve_mode),
+    )?;
+
+    for (component_name, component) in &app.components_by_name {
+        let input_wasm = app.component_input_wasm(component_name);
+        let output_wasm = app.component_output_wasm(component_name);
+        if component.wasm_rpc_dependencies.is_empty() {
+            log_action(
+                "Copying",
+                format!(
+                    "{} to {} (no wasm rpc dependencies found)",
+                    input_wasm.to_string_lossy(),
+                    output_wasm.to_string_lossy()
+                ),
+            );
+            std::fs::create_dir_all(
+                output_wasm
+                    .parent()
+                    .expect("Failed to get parent dir of output wasm"),
+            )?;
+            std::fs::copy(&input_wasm, &output_wasm)?;
+        } else {
+            log_action(
+                "Composing",
+                format!(
+                    "wasm rpc dependencies ({}) into {}, dependencies",
+                    component.wasm_rpc_dependencies.iter().join(", "),
+                    component_name,
+                ),
+            );
+
+            // TODO: "no dependencies of component were found" in not handled yet
+            let stub_wasms = component
+                .wasm_rpc_dependencies
+                .iter()
+                .map(|dep| app.stub_wasm(dep))
+                .collect::<Vec<_>>();
+
+            commands::composition::compose(
+                app.component_input_wasm(component_name).as_path(),
+                &stub_wasms,
+                app.component_output_wasm(component_name).as_path(),
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 fn load_app(mode: ApplicationResolveMode) -> ValidatedResult<Application> {
