@@ -636,17 +636,6 @@ impl Application {
         component.source_dir().join(component.output_wasm.clone())
     }
 
-    pub fn component_composed_wasm(
-        &self,
-        component_name: &str,
-        dep_component_name: &str,
-    ) -> PathBuf {
-        self.build_dir()
-            .join("compose")
-            .join(component_name)
-            .join(format!("{}.wasm", dep_component_name))
-    }
-
     pub fn stub_source_wit_root(&self, component_name: &str) -> PathBuf {
         let component = self.component(component_name);
         component.source_dir().join(component.wit.clone())
@@ -688,6 +677,7 @@ impl Application {
         })
         .flatten()
         .unwrap_or_else(|| self.build_dir())
+        .join("stub")
     }
 
     pub fn stub_wasm(&self, component_name: &str) -> PathBuf {

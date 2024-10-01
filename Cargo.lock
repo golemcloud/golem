@@ -1901,6 +1901,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.19",
+ "walkdir",
  "wasm-compose 0.207.0",
  "wit-bindgen-rust 0.26.0",
  "wit-parser 0.207.0",
