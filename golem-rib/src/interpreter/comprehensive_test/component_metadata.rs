@@ -1,6 +1,6 @@
+use crate::interpreter::comprehensive_test::function_metadata;
 #[cfg(test)]
 use golem_wasm_ast::analysis::AnalysedExport;
-use crate::interpreter::comprehensive_test::function_metadata;
 
 pub(crate) fn component_metadata() -> Vec<AnalysedExport> {
     let mut exports = vec![];

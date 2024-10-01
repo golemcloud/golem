@@ -1,5 +1,4 @@
 #[cfg(test)]
-
 use golem_wasm_ast::analysis::*;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -19,12 +18,14 @@ pub(crate) fn get_type_annotated_value(
     analysed_type: &AnalysedType,
     wasm_wave_str: &str,
 ) -> TypeAnnotatedValue {
-
     let result = golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str);
 
     match result {
         Ok(value) => value,
-        Err(err) => panic!("Wasm wave syntax error {:?} {} {}", analysed_type, wasm_wave_str, err),
+        Err(err) => panic!(
+            "Wasm wave syntax error {:?} {} {}",
+            analysed_type, wasm_wave_str, err
+        ),
     }
 }
 

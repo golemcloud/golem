@@ -1,6 +1,6 @@
+use crate::interpreter::comprehensive_test::{data_types, test_utils};
 #[cfg(test)]
 use golem_wasm_ast::analysis::AnalysedExport;
-use crate::interpreter::comprehensive_test::{data_types, test_utils};
 
 pub(crate) fn function_unit_response() -> Vec<AnalysedExport> {
     test_utils::get_function_component_metadata(
@@ -11,7 +11,11 @@ pub(crate) fn function_unit_response() -> Vec<AnalysedExport> {
 }
 
 pub(crate) fn function_no_arg() -> Vec<AnalysedExport> {
-    test_utils::get_function_component_metadata("function-no-arg", vec![], Some(data_types::str_type()))
+    test_utils::get_function_component_metadata(
+        "function-no-arg",
+        vec![],
+        Some(data_types::str_type()),
+    )
 }
 
 pub(crate) fn function_no_arg_unit() -> Vec<AnalysedExport> {
@@ -233,7 +237,6 @@ pub(crate) fn function_result_of_list_response() -> Vec<AnalysedExport> {
         Some(data_types::result_of_list_type()),
     )
 }
-
 
 pub(crate) fn function_tuple_response() -> Vec<AnalysedExport> {
     test_utils::get_function_component_metadata(

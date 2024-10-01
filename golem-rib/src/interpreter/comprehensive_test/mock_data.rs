@@ -1,7 +1,6 @@
-#[cfg(test)]
-
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::interpreter::comprehensive_test::{data_types, test_utils};
+#[cfg(test)]
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 pub(crate) fn result_of_str() -> TypeAnnotatedValue {
     test_utils::get_type_annotated_value(&data_types::result_of_str_type(), "ok(\"foo\")")
@@ -16,7 +15,10 @@ pub(crate) fn result_of_option() -> TypeAnnotatedValue {
 }
 
 pub(crate) fn result_of_variant() -> TypeAnnotatedValue {
-    test_utils::get_type_annotated_value(&data_types::result_of_variant_type(), "ok(case-str(\"foo\"))")
+    test_utils::get_type_annotated_value(
+        &data_types::result_of_variant_type(),
+        "ok(case-str(\"foo\"))",
+    )
 }
 
 pub(crate) fn result_of_enum() -> TypeAnnotatedValue {
@@ -88,11 +90,17 @@ pub(crate) fn option_of_str() -> TypeAnnotatedValue {
 }
 
 pub(crate) fn option_of_option() -> TypeAnnotatedValue {
-    test_utils::get_type_annotated_value(&data_types::option_of_option_type(), "some(some(\"foo\"))")
+    test_utils::get_type_annotated_value(
+        &data_types::option_of_option_type(),
+        "some(some(\"foo\"))",
+    )
 }
 
 pub(crate) fn option_of_variant() -> TypeAnnotatedValue {
-    test_utils::get_type_annotated_value(&data_types::option_of_variant_type(), "some(case-str(\"foo\"))")
+    test_utils::get_type_annotated_value(
+        &data_types::option_of_variant_type(),
+        "some(case-str(\"foo\"))",
+    )
 }
 
 pub(crate) fn option_of_enum() -> TypeAnnotatedValue {
@@ -115,11 +123,13 @@ pub(crate) fn option_of_list() -> TypeAnnotatedValue {
     test_utils::get_type_annotated_value(&data_types::option_of_list(), "some([\"foo\"])")
 }
 
-    pub(crate) fn tuple() -> TypeAnnotatedValue {
-        test_utils::get_type_annotated_value(&data_types::tuple_type(), r#"
-          ("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})"#
-        )
-    }
+pub(crate) fn tuple() -> TypeAnnotatedValue {
+    test_utils::get_type_annotated_value(
+        &data_types::tuple_type(),
+        r#"
+          ("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})"#,
+    )
+}
 
 pub(crate) fn enum_data() -> TypeAnnotatedValue {
     test_utils::get_type_annotated_value(&data_types::enum_type(), "enum-a")
@@ -142,7 +152,9 @@ pub(crate) fn variant() -> TypeAnnotatedValue {
 }
 
 pub(crate) fn record() -> TypeAnnotatedValue {
-    test_utils::get_type_annotated_value(&data_types::record_type(), r#"
+    test_utils::get_type_annotated_value(
+        &data_types::record_type(),
+        r#"
           {
             string_headers: {authorization_string: "foo"},
             data_body: {
@@ -202,5 +214,6 @@ pub(crate) fn record() -> TypeAnnotatedValue {
               u8_data : 42,
               s8_data : 42,
               boolean_data : true,
-           }"#)
+           }"#,
+    )
 }

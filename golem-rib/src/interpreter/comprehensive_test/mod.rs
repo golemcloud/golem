@@ -1,13 +1,13 @@
+mod component_metadata;
+mod data_types;
+mod function_metadata;
+mod mock_data;
 #[cfg(test)]
 mod mock_interpreter;
-mod function_metadata;
-mod component_metadata;
 mod test_utils;
-mod data_types;
-mod mock_data;
 
-use golem_wasm_ast::analysis::{AnalysedType, TypeStr, TypeU64, TypeU8};
 use crate::{compiler, Expr};
+use golem_wasm_ast::analysis::{AnalysedType, TypeStr, TypeU64, TypeU8};
 
 #[tokio::test]
 async fn test_interpreter_complex_rib() {
@@ -30,7 +30,9 @@ async fn test_interpreter_complex_rib() {
 
     let expr = Expr::from_text(expr).unwrap();
 
-    let compiled_expr = compiler::compile(&expr, &component_metadata::component_metadata()).unwrap().byte_code;
+    let compiled_expr = compiler::compile(&expr, &component_metadata::component_metadata())
+        .unwrap()
+        .byte_code;
 
     let mut rib_executor = mock_interpreter::interpreter();
     let result = rib_executor.run(compiled_expr).await.unwrap();
@@ -55,4 +57,3 @@ async fn test_interpreter_complex_rib() {
     );
     assert_eq!(result.get_val().unwrap(), expected_result);
 }
-
