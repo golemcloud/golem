@@ -1902,7 +1902,7 @@ mod interpreter_tests {
                 ],
             })
         }
-        
+
         pub(crate) fn get_analysed_type_record() -> AnalysedType {
             AnalysedType::Record(TypeRecord {
                 fields: vec![
