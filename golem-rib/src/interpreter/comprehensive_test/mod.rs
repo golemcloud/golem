@@ -4,6 +4,137 @@ mod complex_test {
 
 }
 
+
+mod data {
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use crate::interpret;
+    use crate::interpreter::comprehensive_test::{data_types, internal};
+
+    pub(crate) fn result_of_str() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_str_type(), "foo")
+    }
+
+    pub(crate) fn result_of_number() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_number_type(), "42")
+    }
+
+    pub(crate) fn result_of_option() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_option_type(), "Some(\"foo\")")
+    }
+
+    pub(crate) fn result_of_variant() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_variant_type(), "CaseStr(\"foo\")")
+    }
+
+    pub(crate) fn result_of_enum() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_enum_type(), "EnumA")
+    }
+
+    // TBD
+    pub(crate) fn result_of_tuple() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_tuple_type(), "(\"foo\", 42)")
+    }
+
+    pub(crate) fn result_of_flag() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_flag_type(), "FeatureX")
+    }
+
+    pub(crate) fn result_of_record() -> TypeAnnotatedValue {
+        todo!()
+        ///  internal::get_type_annotated_value(&data_types::result_of_record_type(), r#"{"string_headers": {"authorization_string": "foo"}, "data_body": {"str": "foo", "list_of_str": ["foo"], "list_of_option": ["foo"], "list_of_list": [["foo"]], "list_of_variant": ["CaseStr(\"foo\")"], "list_of_enum": ["EnumA"], "list_of_tuple": [("foo", 42)], "list_of_record": [{"field_string_one": "foo", "field_string_two": "foo"}], "option_of_str": "foo", "option_of_option": "foo", "option_of_variant": "CaseStr(\"foo\")", "option_of_enum": "EnumA", "option_of_tuple": ("foo", 42), "option_of_record": {"field_string_one": "foo", "field_string_two": "foo"}, "option_of_list": ["foo"], "nested_record": {"field_string_one": "foo", "field_string_two": "foo"}, "variant_data_1": "CaseStr(\"foo\")", "variant_data_2": "CaseStr(\"foo\")", "variant_data_3": "CaseStr(\"foo\")", "variant_data_4": "CaseStr(\"foo\")", "variant_data_5": "CaseStr(\"foo\")", "variant_data_6": "CaseStr(\"foo\")", "enum_data_1": "EnumA", "enum_data_2": "EnumA", "enum_data_3": "EnumA", "flags_data_1": "FeatureX", "flags_data_2": "FeatureX", "flags_data_3": "FeatureX", "result_data_1": {"ok": "foo", "err": "foo"}, "result_data_2": {"ok": 42, "err": 42}, "result_data_3": {"ok": "EnumA", "err": "EnumA"}, "result_data_4": {"ok": "CaseStr(\"foo\")", "err": "CaseStr(\"foo\")"}, "result_data_5": {"ok": ("foo", 42), "err": ("foo", 42)}, "result_data_6": {"ok": "Some(\"foo\")", "err": "Some(\"foo\")
+    }
+
+    pub(crate) fn result_of_list() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::result_of_list_type(), "[\"foo\"]")
+    }
+
+    pub(crate) fn list_of_number() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::list_of_number_type_type(), "[42]")
+    }
+
+    pub(crate) fn list_of_str() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::list_of_str_type(), "[\"foo\"]")
+    }
+
+    pub(crate) fn list_of_option() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::list_of_option_type(), "[Some(\"foo\")]")
+    }
+
+    pub(crate) fn list_of_list() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::list_of_list_type(), "[[\"foo\"]]")
+    }
+
+    pub(crate) fn list_of_variant() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::list_of_variant_type(), "[CaseStr(\"foo\")]")
+    }
+
+    pub(crate) fn list_of_enum() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::list_of_enum_type(), "[EnumA]")
+    }
+
+    pub(crate) fn list_of_tuple() -> TypeAnnotatedValue {
+        let tuple_str = internal::convert_type_annotated_value_to_str(&tuple());
+        let wave_str = format!("[{}, {}]", &tuple_str, &tuple_str);
+        internal::get_type_annotated_value(&data_types::list_of_tuple(), wave_str.as_str())
+    }
+
+    pub(crate) fn list_of_record() -> TypeAnnotatedValue {
+        todo!()
+        /// internal::get_type_annotated_value(&data_types::list_of_record_type(), r#"[{"field_string_one": "foo", "field_string_two": "foo"}]"#)
+    }
+
+    pub(crate) fn option_of_number() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::option_of_number_type(), "Some(42)")
+    }
+
+    pub(crate) fn option_of_str() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::option_of_str_type(), "Some(\"foo\")")
+    }
+
+    pub(crate) fn option_of_option() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::option_of_option_type(), "Some(Some(\"foo\"))")
+    }
+
+    pub(crate) fn option_of_variant() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::option_of_variant_type(), "Some(CaseStr(\"foo\"))")
+    }
+
+    pub(crate) fn option_of_enum() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::option_of_enum_type(), "Some(EnumA)")
+    }
+
+    pub(crate) fn option_of_tuple() -> TypeAnnotatedValue {
+        let tuple_str = internal::convert_type_annotated_value_to_str(&tuple());
+        let wave_str = format!("Some({})", tuple_str);
+        internal::get_type_annotated_value(&data_types::option_of_tuple(), wave_str.as_str())
+    }
+
+    pub(crate) fn option_of_record() -> TypeAnnotatedValue {
+        todo!()
+        /// internal::get_type_annotated_value(&data_types::option_of_record_type(), r#"Some({"field_string_one": "foo", "field_string_two": "foo"})"#)
+    }
+
+    pub(crate) fn option_of_list() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::option_of_list(), "Some([\"foo\"])")
+    }
+
+    pub(crate) fn tuple() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::tuple_type(), "(\"foo\", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], CaseF64(42.0), {\"field_one\": true, \"field_two\": \"foo\"})")
+    }
+
+    pub(crate) fn enum_data() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::enum_type(), "EnumA")
+    }
+
+    pub(crate) fn str_data() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::str_type(), "foo")
+    }
+
+    pub(crate) fn flag_data() -> TypeAnnotatedValue {
+        internal::get_type_annotated_value(&data_types::flag_type(), "FeatureX")
+    }
+}
+
 mod data_types {
     use golem_wasm_ast::analysis::*;
     use crate::interpreter::comprehensive_test::internal;
@@ -540,6 +671,7 @@ mod data_types {
 
 mod internal {
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord};
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     pub(crate) fn analysed_type_record(fields: Vec<(&str, AnalysedType)>) -> AnalysedType {
         AnalysedType::Record(TypeRecord {
@@ -551,5 +683,18 @@ mod internal {
                 })
                 .collect(),
         })
+    }
+
+    pub(crate) fn get_type_annotated_value(
+        analysed_type: &AnalysedType,
+        wasm_wave_str: &str,
+    ) -> TypeAnnotatedValue {
+        golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str).unwrap()
+    }
+
+    pub(crate) fn convert_type_annotated_value_to_str(
+        type_annotated_value: &TypeAnnotatedValue,
+    ) -> String {
+        golem_wasm_rpc::type_annotated_value_to_string(type_annotated_value).unwrap()
     }
 }
