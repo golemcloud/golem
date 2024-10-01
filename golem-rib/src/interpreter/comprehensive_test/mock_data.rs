@@ -32,7 +32,7 @@ pub(crate) fn result_of_tuple() -> TypeAnnotatedValue {
 }
 
 pub(crate) fn result_of_flag() -> TypeAnnotatedValue {
-    test_utils::get_type_annotated_value(&data_types::result_of_flag_type(), "ok({FeatureX})")
+    test_utils::get_type_annotated_value(&data_types::result_of_flag_type(), "ok({featurex})")
 }
 
 pub(crate) fn result_of_record() -> TypeAnnotatedValue {
@@ -116,7 +116,7 @@ pub(crate) fn option_of_tuple() -> TypeAnnotatedValue {
 pub(crate) fn option_of_record() -> TypeAnnotatedValue {
     let record_str = test_utils::convert_type_annotated_value_to_str(&record());
     let wave_str = format!("some({})", &record_str);
-    test_utils::get_type_annotated_value(&data_types::list_of_record_type(), wave_str.as_str())
+    test_utils::get_type_annotated_value(&data_types::option_of_record_type(), wave_str.as_str())
 }
 
 pub(crate) fn option_of_list() -> TypeAnnotatedValue {
@@ -144,7 +144,7 @@ pub(crate) fn number_data() -> TypeAnnotatedValue {
 }
 
 pub(crate) fn flag() -> TypeAnnotatedValue {
-    test_utils::get_type_annotated_value(&data_types::flag_type(), "{FeatureX}")
+    test_utils::get_type_annotated_value(&data_types::flag_type(), "{featurex}")
 }
 
 pub(crate) fn variant() -> TypeAnnotatedValue {
@@ -163,45 +163,45 @@ pub(crate) fn record() -> TypeAnnotatedValue {
               list-of-option: ["foo"],
               list-of-list: [["foo"]],
               list-of-variant: [case-str("foo")],
-              list-of-enum: ["enum-a"],
-              list-of-tuple: [("foo", 42)],
+              list-of-enum: [enum-a],
+              list-of-tuple: [("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})],
               list-of-record: [{field-string-one: "foo", field-string-two: "foo"}],
+              nested-record: {field-string-one: "foo", field-string-two: "foo"},
               option-of-str: some("foo"),
               option-of-option: some(some("foo")),
               option-of-variant: some(case-str("foo")),
-              option-of-enum: some("enum-a"),
-              option-of-tuple: some(("foo", 42)),
+              option-of-enum: some(enum-a),
+              option-of-tuple: some(("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})),
               option-of-record: some({field-string-one: "foo", field-string-two: "foo"}),
               option-of-list: some(["foo"]),
-              nested-record: {field-string-one: "foo", field-string-two: "foo"},
-              variant-data-1: case-str("foo"),
-              variant-data-2: case-str("foo"),
-              variant-data-3: case-str("foo"),
-              variant-data-4: case-str("foo"),
-              variant-data-5: case-str("foo"),
-              variant-data-6: case-str("foo"),
-              enum-data-1: enum-a,
-              enum-data-2: enum-b,
-              enum-data-3: EnumC,
-              flags-data-1: { FeatureX },
-              flags-data-2: { FeatureX, FeatureY },
-              flags-data-3: { FeatureX, FeatureY, FeatureZ },
-              result-data-1: ok("foo"),
-              result-data-2: ok(42),
-              result-data-3: ok(enum-a),
-              result-data-4: ok(case-str("foo")),
-              result-data-5: ok(("foo", 42)),
-              result-data-6: ok(some("foo")),
-              result-data-7: err("foo"),
-              result-data-8: err(42),
-              result-data-9: err(enum-a),
-              result-data-10: err(case-str("foo")),
-              result-data-11: err(("foo", 42)),
-              result-data-12: err(some("foo")),
-              result-data-13: ok({field-string-one: "foo", field-string-two: "foo"}),
-              result-data-14: err({field-string-one: "foo", field-string-two: "foo"}),
-              result-data-15: ok({ FeatureX, FeatureY, FeatureZ }),
-              result-data-16: err({ FeatureX, FeatureY, FeatureZ }),
+              variant-data-a: case-str("foo")
+              variant-data-b: case-str("foo"),
+              variant-data-c: case-str("foo"),
+              variant-data-d: case-str("foo"),
+              variant-data-e: case-str("foo"),
+              variant-data-f: case-str("foo"),
+              variant-data-g: case-str("foo"),
+              enum-data-a: enum-a,
+              enum-data-b: enum-b,
+              enum-data-c: enum-c,
+              flags-data-a: { featurex },
+              flags-data-b: { featurex, featurey },
+              flags-data-c: { featurex, featurey, featurez },
+              result-data-a: ok("foo"),
+              result-data-b: ok(42),
+              result-data-c: ok(enum-a),
+              result-data-d: ok(case-str("foo")),
+              result-data-e: ok(("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})),
+              result-data-f: ok(some("foo")),
+              result-data-g: err("foo"),
+              result-data-h: err(42),
+              result-data-i: err(enum-a),
+              result-data-j: err(case-str("foo")),
+              result-data-k: err(("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"})),
+              result-data-l: err(some("foo")),
+              result-data-m: ok({ featurex, featurey, featurez }),
+              result-data-n: err({ featurex, featurey, featurez })
+              tuple-data: ("foo", 42, 42, 42, 42, true, 'a', some(42), ok(42), [true], case-hello(42.0), {field-one: true, field-two: "foo"}),
               character-data : 'x',
               f64-data : 3.14,
               f32-data : 3.14,
@@ -213,7 +213,8 @@ pub(crate) fn record() -> TypeAnnotatedValue {
               s16-data : 42,
               u8-data : 42,
               s8-data : 42,
-              boolean-data : true,
-           }"#,
+              boolean-data : true
+           }
+          }"#,
     )
 }

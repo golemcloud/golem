@@ -183,7 +183,7 @@ pub(crate) fn record_type() -> AnalysedType {
             )]),
         ),
         (
-            "data_body",
+            "data-body",
             test_utils::analysed_type_record(vec![
                 ("str", AnalysedType::Str(TypeStr)),
                 ("list-of-str", list_of_str_type()),
@@ -223,62 +223,35 @@ pub(crate) fn record_type() -> AnalysedType {
                         ("field-string-two", AnalysedType::Str(TypeStr)),
                     ]),
                 ),
-                ("variant-data-1", variant_type()),
-                ("variant-data-2", variant_type()),
-                ("variant-data-3", variant_type()),
-                ("variant-data-4", variant_type()),
-                ("variant-data-5", variant_type()),
-                ("variant-data-6", variant_type()),
-                ("enum-data-1", enum_type()),
-                ("enum-data-2", enum_type()),
-                ("enum-data-3", enum_type()),
-                ("flags-data-1", flag_type()),
-                ("flags-data-2", flag_type()),
-                ("flags-data-3", flag_type()),
-                ("result-data-1", result_of_str_type()),
-                ("result-data-2", result_of_number_type()),
-                ("result-data-3", result_of_enum_type()),
-                ("result-data-4", result_of_variant_type()),
-                ("result-data-5", result_of_tuple_type()),
-                ("result-data-6", result_of_option_type()),
-                ("result-data-7", result_of_str_type()),
-                ("result-data-8", result_of_number_type()),
-                ("result-data-9", result_of_enum_type()),
-                ("result-data-10", result_of_variant_type()),
-                ("result-data-11", result_of_tuple_type()),
-                ("result-data-12", result_of_option_type()),
-                (
-                    "result-data-13",
-                    test_utils::analysed_type_record(vec![
-                        ("field_string_one", AnalysedType::Str(TypeStr)),
-                        ("field_string_two", AnalysedType::Str(TypeStr)),
-                    ]),
-                ),
-                (
-                    "result-data-14",
-                    test_utils::analysed_type_record(vec![
-                        ("field_string_one", AnalysedType::Str(TypeStr)),
-                        ("field_string_two", AnalysedType::Str(TypeStr)),
-                    ]),
-                ),
-                ("result-data-15", result_of_flag_type()),
-                ("result-data-16", result_of_flag_type()),
-                (
-                    "nested-record",
-                    test_utils::analysed_type_record(vec![
-                        ("field-string-one", AnalysedType::Str(TypeStr)),
-                        ("field-string-two", AnalysedType::Str(TypeStr)),
-                    ]),
-                ),
+                ("variant-data-a", variant_type()),
+                ("variant-data-b", variant_type()),
+                ("variant-data-c", variant_type()),
+                ("variant-data-d", variant_type()),
+                ("variant-data-e", variant_type()),
+                ("variant-data-f", variant_type()),
+                ("enum-data-a", enum_type()),
+                ("enum-data-b", enum_type()),
+                ("enum-data-c", enum_type()),
+                ("flags-data-a", flag_type()),
+                ("flags-data-b", flag_type()),
+                ("flags-data-c", flag_type()),
+                ("result-data-a", result_of_str_type()),
+                ("result-data-b", result_of_number_type()),
+                ("result-data-c", result_of_enum_type()),
+                ("result-data-d", result_of_variant_type()),
+                ("result-data-e", result_of_tuple_type()),
+                ("result-data-f", result_of_option_type()),
+                ("result-data-g", result_of_str_type()),
+                ("result-data-h", result_of_number_type()),
+                ("result-data-i", result_of_enum_type()),
+                ("result-data-j", result_of_variant_type()),
+                ("result-data-k", result_of_tuple_type()),
+                ("result-data-l", result_of_option_type()),
+                ("result-data-m", result_of_flag_type()),
+                ("result-data-n", result_of_flag_type()),
                 (
                     "tuple-data",
-                    AnalysedType::Tuple(TypeTuple {
-                        items: vec![
-                            AnalysedType::Str(TypeStr),
-                            AnalysedType::U32(TypeU32),
-                            AnalysedType::Bool(TypeBool),
-                        ],
-                    }),
+                    tuple_type(),
                 ),
                 ("character-data", AnalysedType::Chr(TypeChr)),
                 ("f64-data", AnalysedType::F64(TypeF64)),
@@ -372,15 +345,15 @@ pub(crate) fn number_type() -> AnalysedType {
 pub(crate) fn flag_type() -> AnalysedType {
     AnalysedType::Flags(TypeFlags {
         names: vec![
-            "FeatureX".to_string(),
-            "FeatureY".to_string(),
-            "FeatureZ".to_string(),
+            "featurex".to_string(),
+            "featurey".to_string(),
+            "featurez".to_string(),
         ],
     })
 }
 
 // Variant
-pub(crate) fn variant_type() -> AnalysedType {
+pub(crate) fn   variant_type() -> AnalysedType {
     AnalysedType::Variant(TypeVariant {
         cases: vec![
             NameOptionTypePair {
