@@ -87,8 +87,8 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
             commands::dependencies::add_stub_dependency(
                 &app.stub_dest_wit(dep_component_name),
                 &app.component_wit(component_name),
-                true,  // overwrite
-                false, // update cargo toml
+                true,  // TODO: is overwrite ever not needed?
+                false, // TODO: should update cargo toml be exposed?
             )?
         }
     }

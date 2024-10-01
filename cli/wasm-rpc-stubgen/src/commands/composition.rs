@@ -1,3 +1,4 @@
+use crate::commands::log::log_action;
 use anyhow::{anyhow, Context};
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysisContext, AnalysisFailure};
 use golem_wasm_ast::component::Component;
@@ -34,7 +35,7 @@ pub fn compose(source_wasm: &Path, stub_wasm: &[PathBuf], dest_wasm: &Path) -> a
 
     let composer = wasm_compose::composer::ComponentComposer::new(source_wasm, &config);
     let result = composer.compose()?;
-    println!("Writing composed component to {:?}", dest_wasm);
+    log_action("Writing", format!("composed component to {:?}", dest_wasm));
     fs::write(dest_wasm, result).context("Failed to write the composed component")?;
     Ok(())
 }

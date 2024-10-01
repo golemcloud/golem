@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::commands::log::{log_action, log_warn_action};
 use crate::{cargo, GenerateArgs, WasmRpcOverride};
 use heck::ToSnakeCase;
 use std::fs;
@@ -440,7 +441,10 @@ pub fn initialize_workspace(
                 stubgen_prefix,
             );
             let makefile = makefile.to_string()?;
-            println!("Overwriting cargo-make Makefile {:?}", makefile_path);
+            log_warn_action(
+                "Overwriting",
+                format!("cargo-make Makefile {:?}", makefile_path),
+            );
             fs::write(makefile_path, makefile)?;
         } else if has_cargo_make() {
             let mut makefile = CargoMake::new();
@@ -453,7 +457,10 @@ pub fn initialize_workspace(
                 stubgen_prefix,
             );
             let makefile = makefile.to_string()?;
-            println!("Writing cargo-make Makefile to {:?}", makefile_path);
+            log_action(
+                "Writing",
+                format!("cargo-make Makefile to {:?}", makefile_path),
+            );
             fs::write(makefile_path, makefile)?;
         } else {
             return Err(anyhow::anyhow!(
@@ -463,7 +470,7 @@ pub fn initialize_workspace(
 
         let mut new_members = Vec::new();
         for target in targets {
-            println!("Generating initial stub for {target}");
+            log_action("Generating", format!("initial stub for {target}"));
 
             let stub_name = format!("{target}-stub");
             crate::generate(GenerateArgs {
