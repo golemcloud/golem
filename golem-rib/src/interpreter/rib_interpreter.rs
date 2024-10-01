@@ -2013,7 +2013,7 @@ mod interpreter_tests {
             let variant_result =
                 internal::get_type_annotated_value(&variant_result_type, r#"validate"#);
 
-            let input_type = internal::analysed_type_record(vec![
+            let record_input_type = internal::analysed_type_record(vec![
                 (
                     "headers",
                     internal::analysed_type_record(vec![(
@@ -2044,7 +2044,7 @@ mod interpreter_tests {
             ]);
 
             let input_value = internal::get_type_annotated_value(
-                &input_type,
+                &record_input_type,
                 r#" {
                    headers : {
                       authorisation : "admin"
@@ -2068,44 +2068,43 @@ mod interpreter_tests {
 
             let mut function_option_metadata = internal::get_component_metadata(
                 "function-option",
-                vec![input_type.clone()],
+                vec![record_input_type.clone()],
                 Some(optional_result_type.clone()),
             );
 
-            // bar is a no-arg unit function
             let function_no_arg_unit_metadata =
                 internal::get_component_metadata("function-no-arg-unit", vec![], None);
 
             let function_unit_metadata =
-                internal::get_component_metadata("function-unit", vec![input_type.clone()], None);
+                internal::get_component_metadata("function-unit", vec![record_input_type.clone()], None);
 
             let function_ok_metadata = internal::get_component_metadata(
                 "function-ok",
-                vec![input_type.clone()],
+                vec![record_input_type.clone()],
                 Some(ok_err_result_type.clone()),
             );
 
             let function_err_metadata = internal::get_component_metadata(
                 "function-err",
-                vec![input_type.clone()],
+                vec![record_input_type.clone()],
                 Some(ok_err_result_type),
             );
 
             let function_ok_record_metadata = internal::get_component_metadata(
                 "function-ok-record",
-                vec![input_type.clone()],
+                vec![record_input_type.clone()],
                 Some(ok_err_record_result_type.clone()),
             );
 
             let function_err_record_metadata = internal::get_component_metadata(
                 "function-err-record",
-                vec![input_type.clone()],
+                vec![record_input_type.clone()],
                 Some(ok_err_record_result_type),
             );
 
             let function_variant_metadata = internal::get_component_metadata(
                 "function-variant",
-                vec![input_type.clone()],
+                vec![record_input_type.clone()],
                 Some(variant_result_type),
             );
 
@@ -2175,6 +2174,44 @@ mod interpreter_tests {
                 r#" { a : "bId", b : "bTitle2", c : "bStreet", d: 200, e: "success", f: "failure", g: "bar", h : "fuuz", i: 0, j: 1, k: "validated", m:"jon", n: "1" }"#,
             );
             assert_eq!(result.get_val().unwrap(), expected_result);
+        }
+
+
+        mod data {
+            use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeStr};
+            use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+
+            pub(crate) fn record_input_type() -> AnalysedType {
+                internal::analysed_type_record(vec![
+                    (
+                        "headers",
+                        internal::analysed_type_record(vec![(
+                            "authorisation",
+                            AnalysedType::Str(TypeStr),
+                        )]),
+                    ),
+                    (
+                        "body",
+                        internal::analysed_type_record(vec![
+                            ("id", AnalysedType::Str(TypeStr)),
+                            ("name", AnalysedType::Str(TypeStr)),
+                            (
+                                "titles",
+                                AnalysedType::List(TypeList {
+                                    inner: Box::new(AnalysedType::Str(TypeStr)),
+                                }),
+                            ),
+                            (
+                                "address",
+                                internal::analysed_type_record(vec![
+                                    ("street", AnalysedType::Str(TypeStr)),
+                                    ("city", AnalysedType::Str(TypeStr)),
+                                ]),
+                            ),
+                        ]),
+                    ),
+                ])
+            }
         }
     }
 

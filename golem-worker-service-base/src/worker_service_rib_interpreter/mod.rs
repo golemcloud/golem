@@ -199,34 +199,6 @@ mod tests {
 
     #[async_trait]
     impl<T: WorkerServiceRibInterpreter + Send + Sync> WorkerServiceRibInterpreterTestExt for T {
-        async fn evaluate_pure_expr_with_request_details(
-            &self,
-            expr: &Expr,
-            input: &RequestDetails,
-        ) -> Result<TypeAnnotatedValue, EvaluationError> {
-            let rib_input_json = input.as_json(); // Simply convert to json and try and infer the analysed type
-            let analysed_type = infer_analysed_type(&rib_input_json);
-            let mut type_info = HashMap::new();
-            type_info.insert("request".to_string(), analysed_type);
-
-            let rib_input_value = input
-                .resolve_rib_input_value(&RibInputTypeInfo { types: type_info })
-                .unwrap();
-
-            let mut expr = expr.clone();
-            let _ = expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-
-            let compiled_expr = rib::compile(&expr, &vec![]).unwrap();
-
-            let eval_result = self
-                .evaluate_pure(&compiled_expr.byte_code, &rib_input_value)
-                .await?;
-
-            Ok(eval_result.get_val().ok_or(EvaluationError(
-                "The text is evaluated to unit and doesn't have a value".to_string(),
-            ))?)
-        }
-
         async fn evaluate_with_worker_response_as_rib_result(
             &self,
             expr: &Expr,

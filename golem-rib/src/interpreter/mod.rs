@@ -26,6 +26,7 @@ mod literal;
 mod result;
 mod rib_interpreter;
 mod stack;
+mod comprehensive_test;
 
 pub async fn interpret(
     rib: &RibByteCode,
