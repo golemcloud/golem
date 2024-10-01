@@ -96,7 +96,8 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
         }
 
         for dep_component_name in &component.wasm_rpc_dependencies {
-            if is_up_to_date(
+            // TODO: this should check into the wit deps for the specific stubs or do folder diffs
+            /*if is_up_to_date(
                 config.skip_up_to_date_checks,
                 || [app.stub_wit(dep_component_name)],
                 || [app.component_wit(component_name)],
@@ -106,7 +107,7 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
                     dep_component_name, component_name
                 ));
                 continue;
-            }
+            }*/
 
             log_action(
                 "Adding",
@@ -137,6 +138,22 @@ pub fn post_build(config: Config) -> anyhow::Result<()> {
     for (component_name, component) in &app.components_by_name {
         let input_wasm = app.component_input_wasm(component_name);
         let output_wasm = app.component_output_wasm(component_name);
+
+        if is_up_to_date(
+            config.skip_up_to_date_checks,
+            // We also include the component specification source,
+            // so it triggers build in case deps are changed
+            || [component.source.clone(), input_wasm.clone()],
+            || [output_wasm.clone()],
+        ) {
+            log_skipping_up_to_date(format!(
+                "composing wasm rpc dependencies ({}) into {}, dependencies",
+                component.wasm_rpc_dependencies.iter().join(", "),
+                component_name,
+            ));
+            continue;
+        }
+
         if component.wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Copying",
