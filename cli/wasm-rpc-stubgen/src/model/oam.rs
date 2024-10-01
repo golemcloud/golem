@@ -157,9 +157,7 @@ pub trait TypedComponentProperties: Serialize + DeserializeOwned {
 }
 
 impl Component {
-    pub fn typed_properties<T: TypedComponentProperties>(
-        &self,
-    ) -> Result<T, serde_json::Error> {
+    pub fn typed_properties<T: TypedComponentProperties>(&self) -> Result<T, serde_json::Error> {
         if self.component_type != T::component_type() {
             panic!(
                 "Component type mismatch in clone_properties_as, self: {}, requested: {}",
