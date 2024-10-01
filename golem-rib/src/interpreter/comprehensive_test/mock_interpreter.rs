@@ -10,21 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) fn interpreter() -> Interpreter {
-    let record_input_type = test_utils::analysed_type_record(vec![
-        (
-            "headers",
-            test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
-        ),
-        (
-            "body",
-            test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
-        ),
-        (
-            "path",
-            test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
-        ),
-    ]);
-
     let functions_and_results: Vec<(&str, Option<TypeAnnotatedValue>)> = vec![
         ("function-unit-response", None),
         ("function-no-arg", Some(mock_data::str_data())),
@@ -142,7 +127,29 @@ pub(crate) fn interpreter() -> Interpreter {
             .map(|(name, result)| (FunctionName(name.to_string()), result))
             .collect();
 
-    let interpreter_env_input: HashMap<String, TypeAnnotatedValue> = HashMap::new();
+    let record_input_type = test_utils::analysed_type_record(vec![
+        (
+            "headers",
+            test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
+        ),
+        (
+            "body",
+            test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
+        ),
+        (
+            "path",
+            test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
+        ),
+    ]);
+
+    let record_input_value = test_utils::get_type_annotated_value(
+        &record_input_type,
+        r#" { headers : { name : "foo" }, body : { name : "bar" }, path : { name : "baz" } }"#,
+    );
+
+    let mut interpreter_env_input: HashMap<String, TypeAnnotatedValue> = HashMap::new();
+    interpreter_env_input.insert("request".to_string(), record_input_value);
+
 
     dynamic_test_interpreter(functions_and_result, interpreter_env_input)
 }

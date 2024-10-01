@@ -15,7 +15,7 @@ async fn test_interpreter_complex_rib() {
 
               let str1: str = request.body.name;
               let str2: str = request.headers.name;
-              let str3: str = requuest.path.name;
+              let str3: str = request.path.name;
 
               let unused = function-unit-response(str1);
 

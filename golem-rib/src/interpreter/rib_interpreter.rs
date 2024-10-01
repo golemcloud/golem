@@ -1902,19 +1902,7 @@ mod interpreter_tests {
                 ],
             })
         }
-
-        pub(crate) fn analysed_type_record(fields: Vec<(&str, AnalysedType)>) -> AnalysedType {
-            AnalysedType::Record(TypeRecord {
-                fields: fields
-                    .into_iter()
-                    .map(|(name, typ)| NameTypePair {
-                        name: name.to_string(),
-                        typ,
-                    })
-                    .collect(),
-            })
-        }
-
+        
         pub(crate) fn get_analysed_type_record() -> AnalysedType {
             AnalysedType::Record(TypeRecord {
                 fields: vec![
