@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::commands::log::log_warn_action;
 use crate::stub::StubDefinition;
 use crate::wit::{get_stub_wit, verify_action, StubTypeGen, WitAction};
 use crate::{cargo, wit, WasmRpcOverride};
@@ -101,9 +102,9 @@ pub fn add_stub_dependency(
             let parsed_dep = UnresolvedPackage::parse_dir(&source_dir)?;
 
             if is_package_same_or_stub(&parsed_dest, &parsed_dep) {
-                println!(
-                    "Skipping the copy of cyclic dependencies {}",
-                    parsed_dep.name
+                log_warn_action(
+                    "Skipping",
+                    format!("copying cyclic dependencies {}", parsed_dep.name),
                 );
             } else {
                 let entries = fs::read_dir(&source_dir)?;
@@ -199,9 +200,9 @@ fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyho
     if dep_package_name != dest_package {
         Ok(true)
     } else {
-        println!(
-            "Skipping the copy of cyclic dependencies {}",
-            dep_package_name
+        log_warn_action(
+            "Skipping",
+            format!("copying cyclic dependencies {}", dep_package_name),
         );
         Ok(false)
     }
