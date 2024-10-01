@@ -918,27 +918,23 @@ mod tests {
     use assert2::assert;
 
     #[test]
-    fn oam_app_to_components() {
+    fn load_app_with_warns() {
         let oam_app: oam::ApplicationWithSource = oam_app_one();
-        assert!(oam_app.application.api_version == oam::API_VERSION_V1BETA1);
-        assert!(oam_app.application.kind == oam::KIND_APPLICATION);
-        assert!(oam_app.application.metadata.name == "App name");
-        assert!(oam_app.application.spec.components.len() == 2);
+        let (app, warns, errors) = Application::from_oam_apps(vec![oam_app]).into_product();
 
-        let (components, warns, errors) = Component::from_oam_application(oam_app).into_product();
-
-        assert!(components.is_some());
-        let components = components.unwrap();
+        assert!(app.is_some());
+        let app = app.unwrap();
 
         println!("Warns:\n{}", warns.join("\n"));
         println!("Errors:\n{}", errors.join("\n"));
 
-        assert!(components.len() == 1);
-        assert!(warns.len() == 3);
+        assert!(app.components_by_name.len() == 3);
+        assert!(warns.len() == 2);
         assert!(errors.len() == 0);
 
-        let component = &components[0];
+        let (component_name, component) = app.components_by_name.iter().next().unwrap();
 
+        assert!(component_name == "component-one");
         assert!(component.name == "component-one");
         assert!(component.component_type == ComponentType::Durable);
         assert!(component.wit.to_string_lossy() == "wit");
@@ -946,16 +942,14 @@ mod tests {
         assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
         assert!(component.wasm_rpc_dependencies.len() == 2);
 
-        assert!(component.wasm_rpc_dependencies[0] == "component-two");
-        assert!(component.wasm_rpc_dependencies[1] == "component-three");
+        assert!(component.wasm_rpc_dependencies[0] == "component-three");
+        assert!(component.wasm_rpc_dependencies[1] == "component-two");
     }
 
     #[test]
-    fn oam_app_to_wasm_rpc_app_with_missing_deps() {
-        let application =
-            Component::from_oam_application(oam_app_one()).and_then(Application::from_components);
-
-        let (_app, warns, errors) = application.into_product();
+    fn load_app_with_warns_and_errors() {
+        let oam_app: oam::ApplicationWithSource = oam_app_two();
+        let (_app, warns, errors) = Application::from_oam_apps(vec![oam_app]).into_product();
 
         println!("Warns:\n{}", warns.join("\n"));
         println!("Errors:\n{}", errors.join("\n"));
@@ -963,17 +957,63 @@ mod tests {
         assert!(errors.len() == 2);
 
         assert!(errors[0].contains("component-one"));
-        assert!(errors[0].contains("component-two"));
-        assert!(errors[0].contains("test-oam-app-one.yaml"));
+        assert!(errors[0].contains("component-three"));
+        assert!(errors[0].contains("test-oam-app-two.yaml"));
 
-        assert!(errors[0].contains("component-one"));
-        assert!(errors[1].contains("component-three"));
-        assert!(errors[1].contains("test-oam-app-one.yaml"));
+        assert!(errors[1].contains("component-one"));
+        assert!(errors[1].contains("component-two"));
+        assert!(errors[1].contains("test-oam-app-two.yaml"));
     }
 
     fn oam_app_one() -> oam::ApplicationWithSource {
         oam::ApplicationWithSource::from_yaml_string(
             "test-oam-app-one.yaml".into(),
+            r#"
+apiVersion: core.oam.dev/v1beta1
+metadata:
+  name: "App name"
+kind: Application
+spec:
+  components:
+    - name: component-one
+      type: durable
+      properties:
+        wit: wit
+        inputWasm: out/in.wasm
+        outputWasm: out/out.wasm
+        testUnknownProp: test
+      traits:
+        - type: wasm-rpc
+          properties:
+            componentName: component-two
+        - type: wasm-rpc
+          properties:
+            componentName: component-three
+            testUnknownProp: test
+        - type: unknown-trait
+          properties:
+            testUnknownProp: test
+    - name: component-two
+      type: durable
+      properties:
+        wit: wit
+        inputWasm: out/in.wasm
+        outputWasm: out/out.wasm
+    - name: component-three
+      type: durable
+      properties:
+        wit: wit
+        inputWasm: out/in.wasm
+        outputWasm: out/out.wasm
+"#
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    fn oam_app_two() -> oam::ApplicationWithSource {
+        oam::ApplicationWithSource::from_yaml_string(
+            "test-oam-app-two.yaml".into(),
             r#"
 apiVersion: core.oam.dev/v1beta1
 metadata:
