@@ -281,6 +281,138 @@ pub enum AnalysedType {
     Handle(TypeHandle),
 }
 
+impl AnalysedType {
+    pub fn field(name: &str, typ: AnalysedType) -> NameTypePair {
+        NameTypePair {
+            name: name.to_string(),
+            typ,
+        }
+    }
+
+    pub fn case(name: &str, typ: AnalysedType) -> NameOptionTypePair {
+        NameOptionTypePair {
+            name: name.to_string(),
+            typ: Some(typ),
+        }
+    }
+
+    pub fn unit_case(name: &str) -> NameOptionTypePair {
+        NameOptionTypePair {
+            name: name.to_string(),
+            typ: None,
+        }
+    }
+
+    pub fn bool() -> AnalysedType {
+        AnalysedType::Bool(TypeBool)
+    }
+
+    pub fn s8() -> AnalysedType {
+        AnalysedType::S8(TypeS8)
+    }
+
+    pub fn s16() -> AnalysedType {
+        AnalysedType::S16(TypeS16)
+    }
+
+    pub fn s32() -> AnalysedType {
+        AnalysedType::S32(TypeS32)
+    }
+
+    pub fn s64() -> AnalysedType {
+        AnalysedType::S64(TypeS64)
+    }
+
+    pub fn u8() -> AnalysedType {
+        AnalysedType::U8(TypeU8)
+    }
+
+    pub fn u16() -> AnalysedType {
+        AnalysedType::U16(TypeU16)
+    }
+
+    pub fn u32() -> AnalysedType {
+        AnalysedType::U32(TypeU32)
+    }
+
+    pub fn u64() -> AnalysedType {
+        AnalysedType::U64(TypeU64)
+    }
+
+    pub fn f32() -> AnalysedType {
+        AnalysedType::F32(TypeF32)
+    }
+
+    pub fn f64() -> AnalysedType {
+        AnalysedType::F64(TypeF64)
+    }
+
+    pub fn chr() -> AnalysedType {
+        AnalysedType::Chr(TypeChr)
+    }
+
+    pub fn str() -> AnalysedType {
+        AnalysedType::Str(TypeStr)
+    }
+
+    pub fn list(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::List(TypeList {
+            inner: Box::new(inner),
+        })
+    }
+
+    pub fn option(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Option(TypeOption {
+            inner: Box::new(inner),
+        })
+    }
+
+    pub fn flags(names: &[&str]) -> AnalysedType {
+        AnalysedType::Flags(TypeFlags {
+            names: names.iter().map(|n| n.to_string()).collect(),
+        })
+    }
+
+    pub fn r#enum(cases: &[&str]) -> AnalysedType {
+        AnalysedType::Enum(TypeEnum {
+            cases: cases.iter().map(|n| n.to_string()).collect(),
+        })
+    }
+
+    pub fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
+        AnalysedType::Tuple(TypeTuple { items })
+    }
+
+    pub fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    }
+
+    pub fn result_ok(ok: AnalysedType) -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            ok: Some(Box::new(ok)),
+            err: None,
+        })
+    }
+
+    pub fn result_err(err: AnalysedType) -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            ok: None,
+            err: Some(Box::new(err)),
+        })
+    }
+
+    pub fn record(fields: Vec<NameTypePair>) -> AnalysedType {
+        AnalysedType::Record(TypeRecord { fields })
+    }
+
+    pub fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant { cases })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
