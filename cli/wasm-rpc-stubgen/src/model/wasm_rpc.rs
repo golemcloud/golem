@@ -215,7 +215,7 @@ impl Application {
                 "Unknown component-type".to_string(),
             ))
         });
-        
+
         validation.pop_context();
 
         (components, component_builds, component_stub_builds)
