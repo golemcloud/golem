@@ -103,7 +103,7 @@ impl TestWorkerExecutor {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-    ) -> Vec<WorkerMetadata> {
+    ) -> Vec<(WorkerMetadata, Option<String>)> {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self
@@ -137,7 +137,7 @@ impl TestWorkerExecutor {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> (Option<ScanCursor>, Vec<WorkerMetadata>) {
+    ) -> (Option<ScanCursor>, Vec<(WorkerMetadata, Option<String>)>) {
         let component_id: golem_api_grpc::proto::golem::component::ComponentId =
             component_id.clone().into();
         let response = self

@@ -185,7 +185,7 @@ async fn auto_update_on_running() {
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
         .await
         .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -226,7 +226,7 @@ async fn auto_update_on_idle() {
         .unwrap();
 
     info!("result: {:?}", result);
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
@@ -274,7 +274,7 @@ async fn failing_auto_update_on_idle() {
         .unwrap();
 
     info!("result: {:?}", result);
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -329,7 +329,7 @@ async fn auto_update_on_idle_with_non_diverging_history() {
         .unwrap();
 
     info!("result: {:?}", result);
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the f3 function is not changing between the versions, so we can safely
     // update the component and call f4 which only exists in the new version.
@@ -402,7 +402,7 @@ async fn failing_auto_update_on_running() {
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
         .await
         .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -459,7 +459,7 @@ async fn manual_update_on_idle() {
         .await
         .unwrap();
 
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
@@ -516,7 +516,7 @@ async fn manual_update_on_idle_without_save_snapshot() {
         .await
         .unwrap();
 
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -602,7 +602,7 @@ async fn auto_update_on_running_followed_by_manual() {
         .unwrap();
     info!("result2: {:?}", result2);
 
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
@@ -660,7 +660,7 @@ async fn manual_update_on_idle_with_failing_load() {
         .await
         .unwrap();
 
-    let metadata = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
     drop(executor);
     http_server.abort();
