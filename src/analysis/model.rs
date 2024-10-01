@@ -281,7 +281,9 @@ pub enum AnalysedType {
     Handle(TypeHandle),
 }
 
-impl AnalysedType {
+pub mod analysed_type {
+    use crate::analysis::*;
+
     pub fn field(name: &str, typ: AnalysedType) -> NameTypePair {
         NameTypePair {
             name: name.to_string(),
