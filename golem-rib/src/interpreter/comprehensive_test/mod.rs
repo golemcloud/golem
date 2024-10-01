@@ -102,9 +102,90 @@ async fn test_interpreter_complex_rib() {
                  none => "not found"
               };
 
+              let option_variant_response_processed = match option_variant_response {
+                 some(case-str(_)) => "found",
+                 _ => "not found"
+              };
+
+              let option_enum_response_processed = match option_enum_response {
+                 some(enum-a) => "a",
+                 some(enum-b) => "b",
+                 _ => "not found"
+              };
+
+              let option_tuple_response_processed = match option_tuple_response {
+                    some((text, _, _, _, _, _, _, _, _, _, _, _)) => text,
+                     _ => "not found"
+                };
+
+              let option_record_response_processed = match option_record_response {
+                  some({data-body: {list-of-str : _}}) => "found list",
+                   _ => "not found"
+              };
+
+              let option_list_response_processed = match option_list_response {
+                    some([_]) => "found list",
+                     _ => "not found"
+                };
+
+              let list_number_response_processed = match list_number_response {
+                    [number] => if number > 10u64 then "greater" else "lesser",
+                     _ => "not found"
+                };
+
+              let list_str_response_processed = match list_str_response {
+                [text] => text,
+                _ => "not found"
+              };
 
 
-              str_response
+              let list_option_response_processed = match list_option_response {
+                [some(text)] => text,
+                _ => "not found"
+              };
+
+
+              let list_list_response_processed = match list_list_response {
+                 [[text]] => text,
+                  _ => "not found"
+              };
+
+
+              let list_variant_response_processed = match list_variant_response {
+                 [case-str(text)] => text,
+                  _ => "not found"
+              };
+
+              let list_enum_response_processed = match list_enum_response {
+                [enum-a] => "a",
+                [enum-b] => "b",
+                _ => "not found"
+              };
+
+              let list_tuple_response_processed = match list_tuple_response {
+                [(text, _, _, _, _, _, _, _, _, _, _, _)] => text,
+                _ => "not found"
+              };
+
+
+
+              {
+                 a : option_str_response_processed,
+                 b: option_number_response_processed,
+                 c: option_option_response_processed,
+                 d: option_variant_response_processed,
+                 e: option_enum_response_processed,
+                 f: option_tuple_response_processed,
+                 g: option_record_response_processed,
+                 h: option_list_response_processed,
+                 i: list_number_response_processed,
+                 i: list_str_response_processed,
+                 j: list_option_response_processed,
+                 k: list_list_response_processed,
+                 l: list_variant_response_processed,
+                 m: list_enum_response_processed,
+                 n: list_tuple_response_processed,
+              }
         "#;
 
     let expr = Expr::from_text(expr).unwrap();
