@@ -25,6 +25,10 @@ impl<T> ValidatedResult<T> {
         ValidatedResult::Ok(result).flatten()
     }
 
+    pub fn from_error(error: String) -> Self {
+        ValidatedResult::WarnsAndErrors(vec![], vec![error])
+    }
+
     pub fn as_ok_ref(&self) -> Option<&T> {
         match self {
             ValidatedResult::Ok(value) => Some(value),

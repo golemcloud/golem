@@ -1819,6 +1819,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+
+[[package]]
 name = "golem-wasm-ast"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1876,6 +1882,7 @@ dependencies = [
  "colored",
  "dir-diff",
  "fs_extra",
+ "glob",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "heck 0.5.0",

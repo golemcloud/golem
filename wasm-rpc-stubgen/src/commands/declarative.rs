@@ -1,11 +1,14 @@
 use crate::commands::log::{log_action, log_validated_action_result};
-use crate::model::oam::ApplicationWithSource;
+use crate::model::oam;
 use crate::model::validation::ValidatedResult;
-use crate::model::wasm_rpc::{init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME};
+use crate::model::wasm_rpc::{
+    include_glob_patter_from_yaml_file, init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME,
+};
 use crate::stub::StubDefinition;
 use crate::{commands, WasmRpcOverride};
 use anyhow::{anyhow, Context};
 use colored::Colorize;
+use glob::glob;
 use itertools::Itertools;
 use std::io::Write;
 use std::path::PathBuf;
@@ -154,8 +157,8 @@ fn load_app(mode: ApplicationResolveMode) -> ValidatedResult<Application> {
         sources
             .into_iter()
             .map(|source| {
-                ValidatedResult::from_result(ApplicationWithSource::from_yaml_file(source))
-                    .and_then(ApplicationWithSource::validate)
+                ValidatedResult::from_result(oam::ApplicationWithSource::from_yaml_file(source))
+                    .and_then(oam::ApplicationWithSource::validate)
             })
             .collect::<ValidatedResult<Vec<_>>>()
     });
@@ -180,11 +183,36 @@ fn collect_sources(mode: ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf>
                 std::env::set_current_dir(source.parent().expect("Failed ot get config parent"))
                     .expect("Failed to set current dir for config parent");
 
-                ValidatedResult::Ok(vec![source])
+                match include_glob_patter_from_yaml_file(source.as_path()) {
+                    Some(pattern) => ValidatedResult::from_result(
+                        glob(pattern.as_str())
+                            .map_err(|err| {
+                                format!(
+                                    "Failed to compile glob pattern: {}, source: {}, error: {}",
+                                    pattern,
+                                    source.to_string_lossy(),
+                                    err
+                                )
+                            })
+                            .and_then(|matches| {
+                                matches.collect::<Result<Vec<_>, _>>().map_err(|err| {
+                                    format!(
+                                        "Failed to resolve glob pattern: {}, source: {}, error: {}",
+                                        pattern,
+                                        source.to_string_lossy(),
+                                        err
+                                    )
+                                })
+                            }),
+                    )
+                    .map(|mut sources| {
+                        sources.insert(0, source);
+                        sources
+                    }),
+                    None => ValidatedResult::Ok(vec![source]),
+                }
             }
-            None => {
-                ValidatedResult::WarnsAndErrors(vec![], vec!["No config file found!".to_string()])
-            }
+            None => ValidatedResult::from_error("No config file found!".to_string()),
         },
         ApplicationResolveMode::Explicit(sources) => {
             let non_unique_source_warns: Vec<_> = sources

@@ -6,6 +6,7 @@ use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
@@ -48,6 +49,36 @@ pub fn init_oam_app(component_name: String) -> oam::Application {
     app.spec.components.push(component);
 
     app
+}
+
+// This a lenient non-validating peek for the include build property,
+// as that is used early, during source collection
+pub fn include_glob_patter_from_yaml_file(source: &Path) -> Option<String> {
+    fs::read_to_string(source)
+        .ok()
+        .and_then(|source| oam::Application::from_yaml_str(source.as_str()).ok())
+        .and_then(|mut oam_app| {
+            let mut includes = oam_app
+                .spec
+                .extract_components_by_type(&BTreeSet::from([OAM_COMPONENT_TYPE_COMPONENT_BUILD]))
+                .remove(OAM_COMPONENT_TYPE_COMPONENT_BUILD)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|component| {
+                    component
+                        .typed_properties::<ComponentBuildProperties>()
+                        .ok()
+                        .and_then(|properties| properties.include)
+                });
+
+            match includes.next() {
+                Some(include) => {
+                    // Only return it if it's unique (if not it will cause validation errors later)
+                    includes.next().is_none().then_some(include)
+                }
+                None => None,
+            }
+        })
 }
 
 #[derive(Clone, Debug)]
@@ -199,10 +230,10 @@ impl Application {
 
         let properties = match component.component_type.as_str() {
             OAM_COMPONENT_TYPE_DURABLE => component
-                .get_typed_properties::<DurableComponentProperties>()
+                .typed_properties::<DurableComponentProperties>()
                 .map(|p| p.common),
             OAM_COMPONENT_TYPE_EPHEMERAL => component
-                .get_typed_properties::<EphemeralComponentProperties>()
+                .typed_properties::<EphemeralComponentProperties>()
                 .map(|p| p.common),
             other => panic!("Unexpected component type: {}", other),
         };
@@ -289,7 +320,7 @@ impl Application {
     ) -> Option<ComponentBuild> {
         validation.push_context("component build name", component.name.clone());
 
-        let result = match component.get_typed_properties::<ComponentBuildProperties>() {
+        let result = match component.typed_properties::<ComponentBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
@@ -329,7 +360,7 @@ impl Application {
     ) -> Option<ComponentStubBuild> {
         validation.push_context("component stub build name", component.name.clone());
 
-        let result = match component.get_typed_properties::<ComponentStubBuildProperties>() {
+        let result = match component.typed_properties::<ComponentStubBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
@@ -800,6 +831,7 @@ impl oam::TypedTraitProperties for WasmRpcTraitProperties {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentBuildProperties {
+    include: Option<String>,
     build_dir: Option<String>,
     #[serde(flatten)]
     unknown_properties: UnknownProperties,
