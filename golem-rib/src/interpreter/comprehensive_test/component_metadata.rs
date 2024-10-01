@@ -1,3 +1,4 @@
+#[cfg(test)]
 use golem_wasm_ast::analysis::AnalysedExport;
 use crate::interpreter::comprehensive_test::function_metadata;
 
