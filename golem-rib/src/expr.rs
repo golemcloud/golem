@@ -23,7 +23,6 @@ use crate::{
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
-use golem_api_grpc::proto::golem::rib::arm_pattern::Pattern;
 use golem_api_grpc::proto::golem::rib::RecordFieldArmPattern;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;

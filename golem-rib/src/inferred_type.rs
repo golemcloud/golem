@@ -674,12 +674,10 @@ impl InferredType {
                         } else {
                             Err(vec!["Flags do not match".to_string()])
                         }
+                    } else if a_flags.iter().all(|a| b_flags.contains(a)) {
+                        Ok(InferredType::Flags(b_flags.clone()))
                     } else {
-                        if a_flags.iter().all(|a| b_flags.contains(a)) {
-                            Ok(InferredType::Flags(b_flags.clone()))
-                        } else {
-                            Err(vec!["Flags do not match".to_string()])
-                        }
+                        Err(vec!["Flags do not match".to_string()])
                     }
                 }
                 (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {

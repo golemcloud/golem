@@ -989,8 +989,8 @@ mod compiler_tests {
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
-            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeList,
-            TypeOption, TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
+            TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
 
         #[tokio::test]
