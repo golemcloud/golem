@@ -399,12 +399,6 @@ mod internal {
                 }
             }
 
-            ArmPattern::FlagConstructor(patterns) => {
-                for pattern in patterns {
-                    push_arm_pattern_expr(pattern, queue);
-                }
-            }
-
             ArmPattern::WildCard => {}
         }
     }

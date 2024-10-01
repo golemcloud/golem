@@ -383,19 +383,6 @@ mod internal {
                 writer.write_str(")")
             }
 
-            ArmPattern::FlagConstructor(flags) => {
-                writer.write_str("{")?;
-
-                for (idx, flag_pattern) in flags.iter().enumerate() {
-                    if idx != 0 {
-                        writer.write_str(",")?;
-                    }
-                    write_constructor(flag_pattern, writer)?;
-                }
-
-                writer.write_str("}")
-            }
-
             ArmPattern::ListConstructor(patterns) => {
                 writer.write_str("[")?;
 

@@ -121,14 +121,6 @@ mod internal {
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::FlagConstructor(arm_patterns) => hande_constructor(
-                pred_expr,
-                "flag",
-                arm_patterns,
-                resolution,
-                inferred_type_of_pred,
-            ),
-
             ArmPattern::RecordConstructor(field_arm_pattern_collection) => handle_record(
                 pred_expr,
                 field_arm_pattern_collection,
@@ -414,48 +406,6 @@ mod internal {
                         &new_pred,
                         None,
                         new_pred_type.clone(),
-                    );
-
-                    if let Some(x) = branch {
-                        conditions.push(x.condition);
-                        resolution_body.push(x.body)
-                    }
-                }
-
-                resolution_body.push(resolution.clone());
-
-                let and_cond = Expr::and_combine(conditions);
-
-                and_cond.map(|c| IfThenBranch {
-                    condition: c,
-                    body: Expr::multiple(resolution_body),
-                })
-            }
-
-            InferredType::Flags(_) => {
-                // Resolution body is a list of expressions which grows (may be with some let bindings)
-                // as we recursively iterate over the bind patterns
-                // where bind patterns are x, _, y in the case of `match flag_variable { (x, _, y)) =>`
-                // These will exist prior to the original resolution of a successful tuple match.
-                let mut resolution_body = vec![];
-
-                // The conditions keep growing as we recursively iterate over the bind patterns
-                // and there are multiple conditions (if condition) for each element in the flag
-                let mut conditions = vec![];
-
-                // We assume pred-expr is indexed (i.e, flags is indexed), and we pick each element in the bind pattern
-                // and get the corresponding expr in pred-expr and keep recursively iterating until the flags is completed.
-                // However there is no resolution body for each of this iteration, so we use an empty expression
-                // and finally push the original resolution body once we fully build the conditions.
-                for (index, arm_pattern) in bind_patterns.iter().enumerate() {
-                    let new_pred = Expr::select_index(pred_expr.clone(), index);
-                    let new_pred_type = InferredType::Str;
-
-                    let branch = get_conditions(
-                        &MatchArm::new(arm_pattern.clone(), Expr::empty_expr()),
-                        &new_pred,
-                        None,
-                        new_pred_type,
                     );
 
                     if let Some(x) = branch {

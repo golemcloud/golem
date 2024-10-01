@@ -1153,41 +1153,6 @@ mod compiler_tests {
         }
 
         #[tokio::test]
-        async fn test_flag_type_info() {
-            let request_value_type = AnalysedType::Flags(TypeFlags {
-                names: vec!["1".to_string(), "0".to_string()],
-            });
-
-            let output_analysed_type = AnalysedType::Str(TypeStr);
-
-            let analysed_exports = internal::get_component_metadata(
-                "my-worker-function",
-                vec![request_value_type.clone()],
-                output_analysed_type,
-            );
-
-            // x = request, implies we are expecting a global variable
-            // called request as the input to Rib.
-            // my-worker-function is a function that takes a Flag as input,
-            // implies the type of request is a Result.
-            // This means the rib interpreter env has to have a request variable in it,
-            // with a value that should be of the type Flag
-            let expr = r#"
-               my-worker-function(request);
-               match request {
-                 {"prod", _, _}  => "enabled"
-               }
-            "#;
-
-            let expr = Expr::from_text(expr).unwrap();
-            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-            let expected_type_info =
-                internal::rib_input_type_info(vec![("request", request_value_type)]);
-
-            assert_eq!(compiled.global_input_type_info, expected_type_info);
-        }
-
-        #[tokio::test]
         async fn test_record_global_input() {
             let request_value_type = AnalysedType::Record(TypeRecord {
                 fields: vec![NameTypePair {

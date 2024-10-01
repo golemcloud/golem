@@ -119,12 +119,6 @@ mod internal {
                         go(arm_pattern, global_arm_index, match_identifiers);
                     }
                 }
-
-                ArmPattern::FlagConstructor(arm_patterns) => {
-                    for arm_pattern in arm_patterns {
-                        go(arm_pattern, global_arm_index, match_identifiers);
-                    }
-                }
             }
         }
 

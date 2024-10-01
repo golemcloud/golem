@@ -147,7 +147,6 @@ mod internal {
             attempt(tuple_arm_pattern_constructor()),
             attempt(list_arm_pattern_constructor()),
             attempt(record_arm_pattern_constructor()),
-            attempt(flag_arm_pattern_constructor()),
         ))
     }
 
@@ -217,21 +216,6 @@ mod internal {
             string("]").skip(spaces()),
         )
             .map(|(_, patterns, _)| ArmPattern::ListConstructor(patterns))
-    }
-
-    fn flag_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-    {
-        (
-            string("{").skip(spaces()),
-            sep_by(arm_pattern().skip(spaces()), char_(',').skip(spaces())),
-            string("}").skip(spaces()),
-        )
-            .map(|(_, patterns, _)| ArmPattern::FlagConstructor(patterns))
     }
 
     struct KeyArmPattern {

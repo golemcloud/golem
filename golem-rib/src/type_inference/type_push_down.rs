@@ -297,14 +297,6 @@ mod internal {
                 }
             }
 
-            ArmPattern::FlagConstructor(patterns) => {
-                if let InferredType::Flags(_) = predicate_type {
-                    for pattern in &mut *patterns {
-                        update_arm_pattern_type(pattern, &InferredType::Str)?;
-                    }
-                }
-            }
-
             ArmPattern::RecordConstructor(fields) => {
                 if let InferredType::Record(record_fields) = predicate_type {
                     for (field, pattern) in fields {

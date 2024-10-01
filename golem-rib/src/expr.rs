@@ -23,6 +23,7 @@ use crate::{
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
+use golem_api_grpc::proto::golem::rib::arm_pattern::Pattern;
 use golem_api_grpc::proto::golem::rib::RecordFieldArmPattern;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -682,7 +683,6 @@ pub enum ArmPattern {
     As(String, Box<ArmPattern>),
     Constructor(String, Vec<ArmPattern>), // Can handle enums, variants, option, result etc
     TupleConstructor(Vec<ArmPattern>),
-    FlagConstructor(Vec<ArmPattern>),
     RecordConstructor(Vec<(String, ArmPattern)>),
     ListConstructor(Vec<ArmPattern>),
     Literal(Box<Expr>),
@@ -701,13 +701,6 @@ impl ArmPattern {
                 result
             }
             ArmPattern::TupleConstructor(patterns) => {
-                let mut result = vec![];
-                for pattern in patterns {
-                    result.extend(pattern.get_expr_literals_mut());
-                }
-                result
-            }
-            ArmPattern::FlagConstructor(patterns) => {
                 let mut result = vec![];
                 for pattern in patterns {
                     result.extend(pattern.get_expr_literals_mut());
@@ -744,13 +737,6 @@ impl ArmPattern {
                 result
             }
             ArmPattern::TupleConstructor(patterns) => {
-                let mut result = vec![];
-                for pattern in patterns {
-                    result.extend(pattern.get_expr_literals());
-                }
-                result
-            }
-            ArmPattern::FlagConstructor(patterns) => {
                 let mut result = vec![];
                 for pattern in patterns {
                     result.extend(pattern.get_expr_literals());
@@ -1342,15 +1328,6 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::ArmPattern> for ArmPattern {
                     .collect::<Result<Vec<_>, String>>()?;
                 Ok(ArmPattern::RecordConstructor(fields))
             }
-            golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::FlagConstructor(
-                golem_api_grpc::proto::golem::rib::FlagConstructorArmPattern { patterns },
-            ) => {
-                let patterns = patterns
-                    .into_iter()
-                    .map(ArmPattern::try_from)
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(ArmPattern::FlagConstructor(patterns))
-            }
             golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::ListConstructor(
                 golem_api_grpc::proto::golem::rib::ListConstructorArmPattern { patterns },
             ) => {
@@ -1439,19 +1416,6 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                     ),
                 }
             }
-
-            ArmPattern::FlagConstructor(flags) => golem_api_grpc::proto::golem::rib::ArmPattern {
-                pattern: Some(
-                    golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::FlagConstructor(
-                        golem_api_grpc::proto::golem::rib::FlagConstructorArmPattern {
-                            patterns: flags
-                                .into_iter()
-                                .map(golem_api_grpc::proto::golem::rib::ArmPattern::from)
-                                .collect(),
-                        },
-                    ),
-                ),
-            },
 
             ArmPattern::ListConstructor(patterns) => {
                 golem_api_grpc::proto::golem::rib::ArmPattern {
