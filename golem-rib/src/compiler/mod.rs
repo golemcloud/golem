@@ -51,7 +51,6 @@ pub fn compile_with_limited_globals(
         RibInputTypeInfo::from_expr(&mut expr_cloned).map_err(|e| format!("Error: {}", e))?;
 
     if let Some(allowed_global_variables) = &allowed_global_variables {
-
         let mut un_allowed_variables = vec![];
 
         for (name, _) in global_input_type_info.types.iter() {
@@ -63,10 +62,10 @@ pub fn compile_with_limited_globals(
         if !un_allowed_variables.is_empty() {
             return Err(format!(
                 "Global variables not allowed: {}. Allowed: {}",
-                un_allowed_variables.join(", "), allowed_global_variables.join(", ")
+                un_allowed_variables.join(", "),
+                allowed_global_variables.join(", ")
             ));
         }
-
     }
 
     let byte_code = RibByteCode::from_expr(expr_cloned)?;
