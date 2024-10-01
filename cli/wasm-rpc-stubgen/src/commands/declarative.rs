@@ -1,4 +1,4 @@
-use crate::commands::log::{log_action, log_validated_action_result};
+use crate::commands::log::{log_action, log_skipping_up_to_date, log_validated_action_result};
 use crate::model::oam;
 use crate::model::validation::ValidatedResult;
 use crate::model::wasm_rpc::{
@@ -10,9 +10,12 @@ use anyhow::{anyhow, Context};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
+use std::cmp::Ordering;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tempfile::TempDir;
+use walkdir::WalkDir;
 
 pub struct Config {
     pub app_resolve_mode: ApplicationResolveMode,
@@ -44,6 +47,20 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
     )?;
 
     for component_name in app.all_wasm_rpc_dependencies() {
+        if is_up_to_date(
+            config.skip_up_to_date_checks,
+            || [app.stub_source_wit_root(&component_name)],
+            || {
+                [
+                    app.stub_wasm(&component_name),
+                    app.stub_wit(&component_name),
+                ]
+            },
+        ) {
+            log_skipping_up_to_date(format!("building component stub: {}", component_name));
+            continue;
+        }
+
         log_action("Building", format!("component stub: {}", component_name));
 
         let target_root = TempDir::new()?;
@@ -79,6 +96,18 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
         }
 
         for dep_component_name in &component.wasm_rpc_dependencies {
+            if is_up_to_date(
+                config.skip_up_to_date_checks,
+                || [app.stub_wit(dep_component_name)],
+                || [app.component_wit(component_name)],
+            ) {
+                log_skipping_up_to_date(format!(
+                    "adding {} stub wit dependency to {}",
+                    dep_component_name, component_name
+                ));
+                continue;
+            }
+
             log_action(
                 "Adding",
                 format!(
@@ -90,8 +119,8 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
             commands::dependencies::add_stub_dependency(
                 &app.stub_wit(dep_component_name),
                 &app.component_wit(component_name),
-                true,  // TODO: is overwrite ever not needed?
-                false, // TODO: should update cargo toml be exposed?
+                true,  // NOTE: in declarative mode we always assume overwrite
+                false, // TODO: should update Cargo.toml if exists
             )?
         }
     }
@@ -298,5 +327,73 @@ fn to_anyhow<T>(message: String, result: ValidatedResult<T>) -> anyhow::Result<T
 
             Err(anyhow!(message))
         }
+    }
+}
+
+fn is_up_to_date<S, T, FS, FT>(skip_check: bool, sources: FS, targets: FT) -> bool
+where
+    S: IntoIterator<Item = PathBuf>,
+    T: IntoIterator<Item = PathBuf>,
+    FS: FnOnce() -> S,
+    FT: FnOnce() -> T,
+{
+    if skip_check {
+        return true;
+    }
+
+    fn max_modified(path: &Path) -> Option<SystemTime> {
+        let mut max_modified: Option<SystemTime> = None;
+        let mut update_max_modified = |modified: SystemTime| {
+            if max_modified.map_or(true, |max_mod| max_mod.cmp(&modified) == Ordering::Less) {
+                max_modified = Some(modified)
+            }
+        };
+
+        if let Ok(metadata) = std::fs::metadata(path) {
+            if metadata.is_dir() {
+                WalkDir::new(path)
+                    .into_iter()
+                    .filter_map(|entry| entry.ok().and_then(|entry| entry.metadata().ok()))
+                    .filter(|metadata| !metadata.is_dir())
+                    .filter_map(|metadata| metadata.modified().ok())
+                    .for_each(update_max_modified)
+            } else if let Ok(modified) = metadata.modified() {
+                update_max_modified(modified)
+            }
+        }
+
+        max_modified
+    }
+
+    fn max_modified_short_circuit_on_missing<I: IntoIterator<Item = PathBuf>>(
+        paths: I,
+    ) -> Option<SystemTime> {
+        // Using Result and collect for short-circuit on any missing mod time
+        paths
+            .into_iter()
+            .map(|path| max_modified(path.as_path()).ok_or(()))
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|mod_times| mod_times.into_iter().max().ok_or(()))
+            .ok()
+    }
+
+    let targets = targets();
+
+    let max_target_modified = max_modified_short_circuit_on_missing(targets);
+
+    let max_target_modified = match max_target_modified {
+        Some(modified) => modified,
+        None => return false,
+    };
+
+    let sources = sources();
+
+    let max_source_modified = max_modified_short_circuit_on_missing(sources);
+
+    match max_source_modified {
+        Some(max_source_modified) => {
+            max_source_modified.cmp(&max_target_modified) == Ordering::Less
+        }
+        None => false,
     }
 }

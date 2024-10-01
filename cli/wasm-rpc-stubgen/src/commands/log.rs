@@ -9,6 +9,13 @@ pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
     println!("{} {}", action.yellow(), subject.as_ref())
 }
 
+pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {
+    log_warn_action(
+        "Skipping",
+        format!("{}, already up-to-date", subject.as_ref()),
+    );
+}
+
 pub fn log_validated_action_result<T, F>(action: &str, result: &ValidatedResult<T>, to_log: F)
 where
     F: Fn(&T) -> String,
