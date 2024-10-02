@@ -343,15 +343,14 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
 
 #[cfg(test)]
 mod tests {
-    use golem_wasm_ast::analysis::protobuf::{r#type, PrimitiveType, TypePrimitive};
-    use golem_wasm_ast::analysis::{AnalysedType, TypeU32};
-
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::{TypeAnnotatedValueConstructors, Value};
+    use golem_wasm_ast::analysis::analysed_type::u32;
+    use golem_wasm_ast::analysis::protobuf::{r#type, PrimitiveType, TypePrimitive};
 
     #[test]
     fn test_type_annotated_value_from_analysed_type() {
-        let analysed_type = AnalysedType::U32(TypeU32);
+        let analysed_type = u32();
 
         let result = TypeAnnotatedValue::create(&Value::U32(1), &analysed_type);
 
