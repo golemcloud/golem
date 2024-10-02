@@ -1035,7 +1035,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid resource method call golem:it/api.{cart(user_id).foo}. `foo` doesn't exist in resource `cart`"
+                "Unknown resource method call golem:it/api.{cart(user_id).foo}. `foo` doesn't exist in resource `cart`"
             );
         }
 
@@ -1112,7 +1112,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid argument type in function `foo`. Expected type `str`, but provided argument `1u64` is a `number`"
+                "Invalid type for the argument in function `foo`. Expected type `str`, but provided argument `1u64` is a `number`"
             );
         }
 
@@ -1129,7 +1129,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid arguments type in resource method `golem:it/api.{cart(user_id).add-item}`. Expected type `record`, but provided argument `\"apple\"` is a `str`"
+                "Invalid type for the argument in resource method `golem:it/api.{cart(user_id).add-item}`. Expected type `record`, but provided argument `\"apple\"` is a `str`"
             );
         }
 
@@ -1145,7 +1145,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Invalid argument type in resource constructor `cart`. Expected type `str`, but provided argument `{foo: \"bar\"}` is a `record`"
+                "Invalid type for the argument in resource constructor `cart`. Expected type `str`, but provided argument `{foo: \"bar\"}` is a `record`"
             );
         }
     }

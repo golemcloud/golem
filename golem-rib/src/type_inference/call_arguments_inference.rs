@@ -98,7 +98,7 @@ mod internal {
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                             format!(
-                                "Invalid argument type in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                                "Invalid type for the argument in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
                                 resource_name, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                             )
                         }
@@ -119,7 +119,7 @@ mod internal {
                         inferred_type,
                     ).map_err(|e| match e {
                         ArgTypesInferenceError::UnknownFunction => {
-                            format!("Invalid resource method call {}. `{}` doesn't exist in resource `{}`", parsed_function_static, parsed_function_static.function.resource_method_name().unwrap(), resource_name)
+                            format!("Unknown resource method call {}. `{}` doesn't exist in resource `{}`", parsed_function_static, parsed_function_static.function.resource_method_name().unwrap(), resource_name)
                         }
                         ArgTypesInferenceError::ArgumentSizeMisMatch {
                             expected,
@@ -130,7 +130,7 @@ mod internal {
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                             format!(
-                                "Invalid arguments type in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                                "Invalid type for the argument in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
                                 parsed_function_static, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                             )
                         }
@@ -156,7 +156,7 @@ mod internal {
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                             format!(
-                                "Invalid argument type in function `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                                "Invalid type for the argument in function `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
                                 parsed_function_static.function.function_name(), expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                             )
                         }
@@ -193,7 +193,7 @@ mod internal {
                     ),
                     ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                         format!(
-                            "Invalid argument type in variant `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                            "Invalid type for the argument in variant `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
                             variant_name, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                         )
                     }
