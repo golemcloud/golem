@@ -44,9 +44,9 @@ pub enum Command {
     InitializeWorkspace(InitializeWorkspaceArgs),
     /// TODO
     #[cfg(feature = "unstable-dec-dep")]
-    Declarative {
+    App {
         #[command(subcommand)]
-        subcommand: Declarative,
+        subcommand: App,
     },
 }
 
@@ -180,15 +180,17 @@ pub struct InitializeWorkspaceArgs {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum Declarative {
+pub enum App {
     /// Creates open application model for component
     Init(DeclarativeInitArgs),
     /// Runs the pre-build steps (stub generation and adding wit dependencies) based on declarative component specifications
     PreBuild(DeclarativeBuildArgs),
-    /// Runs the build steps based on declarative component specifications
-    Build(DeclarativeBuildArgs),
+    /// Runs component build steps based on declarative component specifications
+    ComponentBuild(DeclarativeBuildArgs),
     /// Runs the post-build steps (composing stubs) based on declarative component specifications
     PostBuild(DeclarativeBuildArgs),
+    /// Runs all build steps (pre, component, post)
+    Build(DeclarativeBuildArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -267,18 +269,17 @@ pub fn initialize_workspace(
     )
 }
 
-pub async fn run_declarative_command(command: Declarative) -> anyhow::Result<()> {
+pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
     match command {
-        Declarative::Init(args) => commands::declarative::init(args.component_name),
-        Declarative::PreBuild(args) => {
+        App::Init(args) => commands::declarative::init(args.component_name),
+        App::PreBuild(args) => {
             commands::declarative::pre_build(dec_build_args_to_config(args)).await
         }
-        Declarative::Build(args) => {
-            commands::declarative::build(dec_build_args_to_config(args)).await
+        App::ComponentBuild(args) => {
+            commands::declarative::component_build(dec_build_args_to_config(args))
         }
-        Declarative::PostBuild(args) => {
-            commands::declarative::post_build(dec_build_args_to_config(args))
-        }
+        App::PostBuild(args) => commands::declarative::post_build(dec_build_args_to_config(args)),
+        App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
     }
 }
 
