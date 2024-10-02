@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
-pub use function_type_inference::*;
 pub use global_input_inference::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
@@ -29,8 +29,8 @@ pub use type_reset::*;
 pub use type_unification::*;
 pub use variant_resolution::*;
 
+mod call_arguments_inference;
 mod expr_visitor;
-mod function_type_inference;
 mod identifier_inference;
 mod name_binding;
 mod pattern_match_binding;

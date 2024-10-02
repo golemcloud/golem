@@ -29,8 +29,6 @@ use std::collections::{HashMap, HashSet};
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum RegistryKey {
-    VariantName(String),
-    EnumName(String),
     FunctionName(String),
     FunctionNameWithInterface {
         interface_name: String,
@@ -51,9 +49,9 @@ impl RegistryKey {
     pub fn from_invocation_name(invocation_name: &CallType) -> RegistryKey {
         match invocation_name {
             CallType::VariantConstructor(variant_name) => {
-                RegistryKey::VariantName(variant_name.clone())
+                RegistryKey::FunctionName(variant_name.clone())
             }
-            CallType::EnumConstructor(enum_name) => RegistryKey::EnumName(enum_name.clone()),
+            CallType::EnumConstructor(enum_name) => RegistryKey::FunctionName(enum_name.clone()),
             CallType::Function(function_name) => match function_name.site.interface_name() {
                 None => RegistryKey::FunctionName(function_name.function_name()),
                 Some(interface_name) => RegistryKey::FunctionNameWithInterface {
@@ -117,14 +115,14 @@ impl FunctionTypeRegistry {
                             })
                             .collect::<Vec<_>>();
 
-                        let registry_value = RegistryValue::Function {
-                            parameter_types,
-                            return_types,
-                        };
-
                         let registry_key = RegistryKey::FunctionNameWithInterface {
                             interface_name: interface_name.clone(),
                             function_name: function_name.clone(),
+                        };
+
+                        let registry_value = RegistryValue::Function {
+                            parameter_types,
+                            return_types,
                         };
 
                         map.insert(registry_key, registry_value);
@@ -179,7 +177,7 @@ impl FunctionTypeRegistry {
 
 mod internal {
     use crate::{RegistryKey, RegistryValue};
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
     use std::collections::HashMap;
 
     pub(crate) fn update_registry(
@@ -189,7 +187,7 @@ mod internal {
         match ty.clone() {
             AnalysedType::Variant(variant) => {
                 for name_type_pair in variant.cases {
-                    registry.insert(RegistryKey::VariantName(name_type_pair.name.clone()), {
+                    registry.insert(RegistryKey::FunctionName(name_type_pair.name.clone()), {
                         name_type_pair.typ.map_or(
                             RegistryValue::Value(ty.clone()),
                             |variant_parameter_typ| RegistryValue::Function {
@@ -204,7 +202,7 @@ mod internal {
             AnalysedType::Enum(type_enum) => {
                 for name_type_pair in type_enum.cases {
                     registry.insert(
-                        RegistryKey::EnumName(name_type_pair.clone()),
+                        RegistryKey::FunctionName(name_type_pair.clone()),
                         RegistryValue::Value(ty.clone()),
                     );
                 }
@@ -226,7 +224,35 @@ mod internal {
                 }
             }
 
-            _ => {}
+            AnalysedType::Result(TypeResult {ok: Some(ok_type), err: Some(err_type)}) => {
+                update_registry(ok_type.as_ref(), registry);
+                update_registry(err_type.as_ref(), registry);
+            }
+            AnalysedType::Result(TypeResult {ok: None, err: Some(err_type)}) => {
+                update_registry(err_type.as_ref(), registry);
+            }
+            AnalysedType::Result(TypeResult {ok: Some(ok_type), err: None}) => {
+                update_registry(ok_type.as_ref(), registry);
+            }
+            AnalysedType::Option(type_option) => {
+                update_registry(type_option.inner.as_ref(), registry);
+            }
+            AnalysedType::Result(_) => {}
+            AnalysedType::Flags(_) => {}
+            AnalysedType::Str(_) => {}
+            AnalysedType::Chr(_) => {}
+            AnalysedType::F64(_) => {}
+            AnalysedType::F32(_) => {}
+            AnalysedType::U64(_) => {}
+            AnalysedType::S64(_) => {}
+            AnalysedType::U32(_) => {}
+            AnalysedType::S32(_) => {}
+            AnalysedType::U16(_) => {}
+            AnalysedType::S16(_) => {}
+            AnalysedType::U8(_) => {}
+            AnalysedType::S8(_) => {}
+            AnalysedType::Bool(_) => {}
+            AnalysedType::Handle(_) => {}
         }
     }
 }

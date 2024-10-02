@@ -535,6 +535,8 @@ mod internal {
         analysed_type: AnalysedType,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
+        dbg!(variant_name.clone());
+        dbg!(analysed_type.clone());
         match analysed_type {
             AnalysedType::Variant(variants) => {
                 let variant = variants

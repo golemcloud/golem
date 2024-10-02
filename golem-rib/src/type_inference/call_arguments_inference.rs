@@ -16,7 +16,7 @@ use crate::type_registry::FunctionTypeRegistry;
 use crate::Expr;
 use std::collections::VecDeque;
 
-pub fn infer_function_types(
+pub fn infer_call_arguments_type(
     expr: &mut Expr,
     function_type_registry: &FunctionTypeRegistry,
 ) -> Result<(), String> {
@@ -25,7 +25,7 @@ pub fn infer_function_types(
     while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::Call(parsed_fn_name, args, inferred_type) => {
-                internal::resolve_call_expressions(
+                internal::resolve_call_argument_types(
                     parsed_fn_name,
                     function_type_registry,
                     args,
@@ -47,7 +47,7 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
-    pub(crate) fn resolve_call_expressions(
+    pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,
         function_type_registry: &FunctionTypeRegistry,
         args: &mut [Expr],
@@ -112,7 +112,24 @@ mod internal {
                 }
             }
 
-            _ => Ok(()),
+            CallType::EnumConstructor(_) => {
+                if args.is_empty() {
+                    Ok(())
+                } else {
+                    Err("Enum constructor does not take any arguments".to_string())
+                }
+            }
+
+            CallType::VariantConstructor(variant_name) => {
+                let registry_key = RegistryKey::FunctionName(variant_name.clone());
+                infer_types(
+                    &FunctionNameInternal::VariantName(variant_name.clone()),
+                    function_type_registry,
+                    registry_key,
+                    args,
+                    inferred_type,
+                )
+            }
         }
     }
 
@@ -125,7 +142,7 @@ mod internal {
     ) -> Result<(), String> {
         if let Some(value) = function_type_registry.types.get(&key) {
             match value {
-                RegistryValue::Value(_) => {}
+                RegistryValue::Value(_) => Ok(()),
                 RegistryValue::Function {
                     parameter_types,
                     return_types,
@@ -153,26 +170,29 @@ mod internal {
                                     return_types.iter().map(|t| t.clone().into()).collect(),
                                 )
                             }
-                        }
+                        };
+
+                        Ok(())
                     } else {
-                        return Err(format!(
+                        Err(format!(
                             "Function {} expects {} arguments, but {} were provided",
                             function_name,
                             parameter_types.len(),
                             args.len()
-                        ));
+                        ))
                     }
                 }
             }
+        } else {
+            Err(format!("Unknown function/variant call {}", function_name))
         }
-
-        Ok(())
     }
 
     enum FunctionNameInternal {
         ResourceConstructorName(String),
         ResourceMethodName(String),
         Fqn(ParsedFunctionName),
+        VariantName(String),
     }
 
     impl Display for FunctionNameInternal {
@@ -185,6 +205,9 @@ mod internal {
                     write!(f, "{}", name)
                 }
                 FunctionNameInternal::Fqn(name) => {
+                    write!(f, "{}", name)
+                }
+                FunctionNameInternal::VariantName(name) => {
                     write!(f, "{}", name)
                 }
             }
@@ -408,7 +431,8 @@ mod function_parameters_inference_tests {
         let function_type_registry = get_function_type_registry();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_function_types(&function_type_registry).unwrap();
+        expr.infer_call_arguments_type(&function_type_registry)
+            .unwrap();
 
         let let_binding = Expr::let_binding("x", Expr::number(1f64));
 
