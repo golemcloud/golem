@@ -15,6 +15,7 @@
 pub mod cargo;
 pub mod commands;
 pub mod compilation;
+pub mod copy;
 pub mod make;
 pub mod model;
 pub mod rust;
@@ -294,6 +295,6 @@ fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative
                 commands::declarative::ApplicationResolveMode::Explicit(args.component)
             }
         },
-        skip_up_to_date_checks: true,
+        skip_up_to_date_checks: false,
     }
 }
