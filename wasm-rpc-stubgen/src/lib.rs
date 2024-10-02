@@ -183,13 +183,13 @@ pub struct InitializeWorkspaceArgs {
 pub enum App {
     /// Creates open application model for component
     Init(DeclarativeInitArgs),
-    /// Runs the pre-build steps (stub generation and adding wit dependencies)
-    PreBuild(DeclarativeBuildArgs),
+    /// Runs the pre-component-build steps (stub generation and adding wit dependencies)
+    PreComponentBuild(DeclarativeBuildArgs),
     /// Runs component build steps
     ComponentBuild(DeclarativeBuildArgs),
-    /// Runs the post-build steps (composing stubs)
-    PostBuild(DeclarativeBuildArgs),
-    /// Runs all build steps (pre, component, post)
+    /// Runs the post-component-build steps (composing stubs)
+    PostComponentBuild(DeclarativeBuildArgs),
+    /// Runs all build steps (pre-component, component, post-component)
     Build(DeclarativeBuildArgs),
 }
 
@@ -272,14 +272,14 @@ pub fn initialize_workspace(
 pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
     match command {
         App::Init(args) => commands::declarative::init(args.component_name),
-        App::PreBuild(args) => {
-            commands::declarative::pre_build(dec_build_args_to_config(args)).await
+        App::PreComponentBuild(args) => {
+            commands::declarative::pre_component_build(dec_build_args_to_config(args)).await
         }
         App::ComponentBuild(args) => {
             commands::declarative::component_build(dec_build_args_to_config(args))
         }
-        App::PostBuild(args) => {
-            commands::declarative::post_build(dec_build_args_to_config(args)).await
+        App::PostComponentBuild(args) => {
+            commands::declarative::post_component_build(dec_build_args_to_config(args)).await
         }
         App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
     }
