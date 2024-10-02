@@ -13,42 +13,13 @@ pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
 pub const OAM_TRAIT_TYPE_WASM_RPC: &str = "wasm-rpc";
 
-pub const OAM_COMPONENT_TYPE_DURABLE: &str = "durable";
-pub const OAM_COMPONENT_TYPE_EPHEMERAL: &str = "ephemeral";
-pub const OAM_COMPONENT_TYPE_COMPONENT_BUILD: &str = "component-build";
-pub const OAM_COMPONENT_TYPE_COMPONENT_STUB_BUILD: &str = "component-stub-build";
+pub const OAM_COMPONENT_TYPE_WASM: &str = "wasm";
+pub const OAM_COMPONENT_TYPE_WASM_BUILD: &str = "wasm-build";
+pub const OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD: &str = "wasm-rpc-stub-build";
 
-// TODO: let's create samples directly in yaml / yaml templates with comments
-pub fn init_oam_app(component_name: String) -> oam::Application {
-    let component = {
-        let mut component = oam::Component {
-            name: component_name.clone(),
-            component_type: OAM_COMPONENT_TYPE_DURABLE.to_string(),
-            properties: Default::default(),
-            traits: vec![],
-        };
-
-        component.set_typed_properties(DurableComponentProperties {
-            common: CommonComponentProperties {
-                wit: "wit".to_string(),
-                input_wasm: "target/input.wasm".to_string(),
-                output_wasm: "target/output.wasm".to_string(),
-                unknown_properties: Default::default(),
-            },
-        });
-
-        component.add_typed_trait(WasmRpcTraitProperties {
-            component_name: component_name.clone(),
-            unknown_properties: Default::default(),
-        });
-
-        component
-    };
-
-    let mut app = oam::Application::new(component_name);
-    app.spec.components.push(component);
-
-    app
+pub fn init_oam_app(_component_name: String) -> oam::Application {
+    // TODO: let's create samples directly in yaml / yaml templates with comments
+    todo!()
 }
 
 // This a lenient non-validating peek for the include build property,
@@ -60,8 +31,8 @@ pub fn include_glob_patter_from_yaml_file(source: &Path) -> Option<String> {
         .and_then(|mut oam_app| {
             let mut includes = oam_app
                 .spec
-                .extract_components_by_type(&BTreeSet::from([OAM_COMPONENT_TYPE_COMPONENT_BUILD]))
-                .remove(OAM_COMPONENT_TYPE_COMPONENT_BUILD)
+                .extract_components_by_type(&BTreeSet::from([OAM_COMPONENT_TYPE_WASM_BUILD]))
+                .remove(OAM_COMPONENT_TYPE_WASM_BUILD)
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|component| {
@@ -83,129 +54,91 @@ pub fn include_glob_patter_from_yaml_file(source: &Path) -> Option<String> {
 
 #[derive(Clone, Debug)]
 pub struct Application {
-    pub common_component_build: Option<ComponentBuild>,
-    pub common_component_stub_build: Option<ComponentStubBuild>,
-    pub component_stub_builds_by_name: BTreeMap<String, ComponentStubBuild>,
-    pub components_by_name: BTreeMap<String, Component>,
+    pub common_wasm_build: Option<WasmBuild>,
+    pub common_wasm_rpc_stub_build: Option<WasmRpcStubBuild>,
+    pub wasm_rpc_stub_builds_by_name: BTreeMap<String, WasmRpcStubBuild>,
+    pub wasm_components_by_name: BTreeMap<String, WasmComponent>,
 }
 
 impl Application {
     pub fn from_oam_apps(oam_apps: Vec<oam::ApplicationWithSource>) -> ValidatedResult<Self> {
         let mut validation = ValidationBuilder::new();
 
-        let (all_components, all_component_builds, all_component_stub_builds) = {
-            let mut all_components = Vec::<Component>::new();
-            let mut all_component_builds = Vec::<ComponentBuild>::new();
-            let mut all_component_stub_builds = Vec::<ComponentStubBuild>::new();
+        let (all_components, all_wasm_builds, all_wasm_rpc_stub_builds) = {
+            let mut all_components = Vec::<WasmComponent>::new();
+            let mut all_wasm_builds = Vec::<WasmBuild>::new();
+            let mut all_wasm_rpc_stub_builds = Vec::<WasmRpcStubBuild>::new();
 
             for mut oam_app in oam_apps {
-                let (components, component_build, component_stub_build) =
+                let (components, wasm_build, wasm_rpc_stub_build) =
                     Self::extract_and_convert_oam_components(&mut validation, &mut oam_app);
                 all_components.extend(components);
-                all_component_builds.extend(component_build);
-                all_component_stub_builds.extend(component_stub_build);
+                all_wasm_builds.extend(wasm_build);
+                all_wasm_rpc_stub_builds.extend(wasm_rpc_stub_build);
             }
 
-            (
-                all_components,
-                all_component_builds,
-                all_component_stub_builds,
-            )
+            (all_components, all_wasm_builds, all_wasm_rpc_stub_builds)
         };
 
-        let components_by_name = Self::validate_components(&mut validation, all_components);
+        let wasm_components_by_name = Self::validate_components(&mut validation, all_components);
 
-        let (common_component_stub_build, component_stub_builds_by_name) =
-            Self::validate_component_stub_builds(
+        let (common_wasm_rpc_stub_build, wasm_rpc_stub_builds_by_name) =
+            Self::validate_wasm_rpc_stub_builds(
                 &mut validation,
-                &components_by_name,
-                all_component_stub_builds,
+                &wasm_components_by_name,
+                all_wasm_rpc_stub_builds,
             );
 
-        let common_component_build =
-            Self::validate_component_builds(&mut validation, all_component_builds);
+        let common_wasm_build = Self::validate_wasm_builds(&mut validation, all_wasm_builds);
 
         validation.build(Self {
-            common_component_build,
-            common_component_stub_build,
-            component_stub_builds_by_name,
-            components_by_name,
+            common_wasm_build,
+            common_wasm_rpc_stub_build,
+            wasm_rpc_stub_builds_by_name,
+            wasm_components_by_name,
         })
     }
 
     fn extract_and_convert_oam_components(
         validation: &mut ValidationBuilder,
         oam_app: &mut oam::ApplicationWithSource,
-    ) -> (Vec<Component>, Vec<ComponentBuild>, Vec<ComponentStubBuild>) {
+    ) -> (Vec<WasmComponent>, Vec<WasmBuild>, Vec<WasmRpcStubBuild>) {
         validation.push_context("source", oam_app.source_as_string());
 
-        // Extract components and partition by type
         let mut components_by_type =
             oam_app
                 .application
                 .spec
                 .extract_components_by_type(&BTreeSet::from([
-                    OAM_COMPONENT_TYPE_DURABLE,
-                    OAM_COMPONENT_TYPE_EPHEMERAL,
-                    OAM_COMPONENT_TYPE_COMPONENT_BUILD,
-                    OAM_COMPONENT_TYPE_COMPONENT_STUB_BUILD,
+                    OAM_COMPONENT_TYPE_WASM,
+                    OAM_COMPONENT_TYPE_WASM_BUILD,
+                    OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD,
                 ]));
 
-        // Convert durable and ephemeral components
-        let components = {
-            let mut get_oam_components_with_type = |type_str: &str, type_enum: ComponentType| {
-                components_by_type
-                    .remove(type_str)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |c| (type_enum.clone(), c))
-            };
+        let wasm_components = Self::convert_components(
+            &oam_app.source,
+            validation,
+            &mut components_by_type,
+            OAM_COMPONENT_TYPE_WASM,
+            Self::convert_wasm_component,
+        );
 
-            let durable_oam_components =
-                get_oam_components_with_type(OAM_COMPONENT_TYPE_DURABLE, ComponentType::Durable);
-            let ephemeral_oam_components = get_oam_components_with_type(
-                OAM_COMPONENT_TYPE_EPHEMERAL,
-                ComponentType::Ephemeral,
-            );
-            let all_oam_components = durable_oam_components.chain(ephemeral_oam_components);
+        let wasm_builds = Self::convert_components(
+            &oam_app.source,
+            validation,
+            &mut components_by_type,
+            OAM_COMPONENT_TYPE_WASM_BUILD,
+            Self::convert_wasm_build,
+        );
 
-            all_oam_components
-                .into_iter()
-                .filter_map(|(component_type, component)| {
-                    Self::convert_component(&oam_app.source, validation, component_type, component)
-                })
-                .collect::<Vec<_>>()
-        };
+        let wasm_rpc_stub_builds = Self::convert_components(
+            &oam_app.source,
+            validation,
+            &mut components_by_type,
+            OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD,
+            Self::convert_wasm_rpc_stub_build,
+        );
 
-        // Convert builds
-        let component_builds = {
-            let oam_components = components_by_type
-                .remove(OAM_COMPONENT_TYPE_COMPONENT_BUILD)
-                .unwrap_or_default();
-
-            oam_components
-                .into_iter()
-                .filter_map(|component| {
-                    Self::convert_component_build(&oam_app.source, validation, component)
-                })
-                .collect::<Vec<_>>()
-        };
-
-        // Convert stub builds
-        let component_stub_builds = {
-            let oam_components = components_by_type
-                .remove(OAM_COMPONENT_TYPE_COMPONENT_STUB_BUILD)
-                .unwrap_or_default();
-
-            oam_components
-                .into_iter()
-                .filter_map(|component| {
-                    Self::convert_component_stub_build(&oam_app.source, validation, component)
-                })
-                .collect::<Vec<_>>()
-        };
-
-        // Warn on unknown components
         validation.add_warns(&oam_app.application.spec.components, |component| {
             Some((
                 vec![
@@ -218,27 +151,36 @@ impl Application {
 
         validation.pop_context();
 
-        (components, component_builds, component_stub_builds)
+        (wasm_components, wasm_builds, wasm_rpc_stub_builds)
     }
 
-    fn convert_component(
+    fn convert_components<F, C>(
         source: &Path,
         validation: &mut ValidationBuilder,
-        component_type: ComponentType,
+        components_by_type: &mut BTreeMap<&'static str, Vec<oam::Component>>,
+        component_type: &str,
+        convert: F,
+    ) -> Vec<C>
+    where
+        F: Fn(&Path, &mut ValidationBuilder, oam::Component) -> Option<C>,
+    {
+        components_by_type
+            .remove(component_type)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|component| convert(source, validation, component))
+            .collect()
+    }
+
+    fn convert_wasm_component(
+        source: &Path,
+        validation: &mut ValidationBuilder,
         mut component: oam::Component,
-    ) -> Option<Component> {
+    ) -> Option<WasmComponent> {
         validation.push_context("component name", component.name.clone());
         validation.push_context("component type", component.component_type.clone());
 
-        let properties = match component.component_type.as_str() {
-            OAM_COMPONENT_TYPE_DURABLE => component
-                .typed_properties::<DurableComponentProperties>()
-                .map(|p| p.common),
-            OAM_COMPONENT_TYPE_EPHEMERAL => component
-                .typed_properties::<EphemeralComponentProperties>()
-                .map(|p| p.common),
-            other => panic!("Unexpected component type: {}", other),
-        };
+        let properties = component.typed_properties::<WasmComponentProperties>();
 
         if let Some(err) = properties.as_ref().err() {
             validation.add_error(format!("Failed to get component properties: {}", err))
@@ -296,9 +238,8 @@ impl Application {
             (Ok(properties), false) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
-                Some(Component {
+                Some(WasmComponent {
                     name: component.name,
-                    component_type,
                     source: source.to_path_buf(),
                     wit: properties.wit.into(),
                     input_wasm: properties.input_wasm.into(),
@@ -315,24 +256,24 @@ impl Application {
         component
     }
 
-    fn convert_component_build(
+    fn convert_wasm_build(
         source: &Path,
         validation: &mut ValidationBuilder,
         component: oam::Component,
-    ) -> Option<ComponentBuild> {
+    ) -> Option<WasmBuild> {
         validation.push_context("component build name", component.name.clone());
 
         let result = match component.typed_properties::<ComponentBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
-                let component_stub_build = ComponentBuild {
+                let wasm_rpc_stub_build = WasmBuild {
                     source: source.to_path_buf(),
                     name: component.name,
                     build_dir: properties.build_dir.map(|s| s.into()),
                 };
 
-                Some(component_stub_build)
+                Some(wasm_rpc_stub_build)
             }
             Err(err) => {
                 validation.add_error(format!("Failed to get component build properties: {}", err));
@@ -355,18 +296,18 @@ impl Application {
         result
     }
 
-    fn convert_component_stub_build(
+    fn convert_wasm_rpc_stub_build(
         source: &Path,
         validation: &mut ValidationBuilder,
         component: oam::Component,
-    ) -> Option<ComponentStubBuild> {
+    ) -> Option<WasmRpcStubBuild> {
         validation.push_context("component stub build name", component.name.clone());
 
         let result = match component.typed_properties::<ComponentStubBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
-                let component_stub_build = ComponentStubBuild {
+                let wasm_rpc_stub_build = WasmRpcStubBuild {
                     source: source.to_path_buf(),
                     name: component.name,
                     component_name: properties.component_name,
@@ -380,37 +321,36 @@ impl Application {
                     wasm_rpc_version: properties.wasm_rpc_version,
                 };
 
-                if component_stub_build.build_dir.is_some() && component_stub_build.wasm.is_some() {
+                if wasm_rpc_stub_build.build_dir.is_some() && wasm_rpc_stub_build.wasm.is_some() {
                     validation.add_warn(
                         "Both buildDir and wasm fields are defined, wasm takes precedence"
                             .to_string(),
                     );
                 }
 
-                if component_stub_build.build_dir.is_some() && component_stub_build.wit.is_some() {
+                if wasm_rpc_stub_build.build_dir.is_some() && wasm_rpc_stub_build.wit.is_some() {
                     validation.add_warn(
                         "Both buildDir and wit fields are defined, wit takes precedence"
                             .to_string(),
                     );
                 }
 
-                if component_stub_build.component_name.is_some()
-                    && component_stub_build.wasm.is_some()
+                if wasm_rpc_stub_build.component_name.is_some()
+                    && wasm_rpc_stub_build.wasm.is_some()
                 {
                     validation.add_warn(
                         "In common (without component name) component stub builds the wasm field has no effect".to_string(),
                     );
                 }
 
-                if component_stub_build.component_name.is_some()
-                    && component_stub_build.wit.is_some()
+                if wasm_rpc_stub_build.component_name.is_some() && wasm_rpc_stub_build.wit.is_some()
                 {
                     validation.add_warn(
                         "In common (without component name) component stub builds the wit field has no effect".to_string(),
                     );
                 }
 
-                Some(component_stub_build)
+                Some(wasm_rpc_stub_build)
             }
             Err(err) => {
                 validation.add_error(format!(
@@ -438,19 +378,19 @@ impl Application {
 
     pub fn validate_components(
         validation: &mut ValidationBuilder,
-        components: Vec<Component>,
-    ) -> BTreeMap<String, Component> {
-        let (components_by_name, sources) = {
-            let mut components_by_name = BTreeMap::<String, Component>::new();
+        components: Vec<WasmComponent>,
+    ) -> BTreeMap<String, WasmComponent> {
+        let (wasm_components_by_name, sources) = {
+            let mut wasm_components_by_name = BTreeMap::<String, WasmComponent>::new();
             let mut sources = BTreeMap::<String, Vec<String>>::new();
             for component in components {
                 sources
                     .entry(component.name.clone())
                     .and_modify(|sources| sources.push(component.source_as_string()))
                     .or_insert_with(|| vec![component.source_as_string()]);
-                components_by_name.insert(component.name.clone(), component);
+                wasm_components_by_name.insert(component.name.clone(), component);
             }
-            (components_by_name, sources)
+            (wasm_components_by_name, sources)
         };
 
         let non_unique_components = sources.into_iter().filter(|(_, sources)| sources.len() > 1);
@@ -464,11 +404,11 @@ impl Application {
             ))
         });
 
-        for (component_name, component) in &components_by_name {
+        for (component_name, component) in &wasm_components_by_name {
             validation.push_context("source", component.source_as_string());
 
             validation.add_errors(&component.wasm_rpc_dependencies, |dep_component_name| {
-                (!components_by_name.contains_key(dep_component_name)).then(|| {
+                (!wasm_components_by_name.contains_key(dep_component_name)).then(|| {
                     (
                         vec![],
                         format!(
@@ -482,79 +422,76 @@ impl Application {
             validation.pop_context();
         }
 
-        components_by_name
+        wasm_components_by_name
     }
 
-    fn validate_component_builds(
+    fn validate_wasm_builds(
         validation: &mut ValidationBuilder,
-        component_builds: Vec<ComponentBuild>,
-    ) -> Option<ComponentBuild> {
-        if component_builds.len() > 1 {
+        wasm_builds: Vec<WasmBuild>,
+    ) -> Option<WasmBuild> {
+        if wasm_builds.len() > 1 {
             validation.add_error(format!(
                 "Component Build is specified multiple times in sources: {}",
-                component_builds
+                wasm_builds
                     .iter()
                     .map(|c| format!("{} in {}", c.name, c.source.to_string_lossy()))
                     .join(", ")
             ));
         }
 
-        component_builds.into_iter().next()
+        wasm_builds.into_iter().next()
     }
 
-    fn validate_component_stub_builds(
+    fn validate_wasm_rpc_stub_builds(
         validation: &mut ValidationBuilder,
-        components_by_name: &BTreeMap<String, Component>,
-        component_stub_builds: Vec<ComponentStubBuild>,
-    ) -> (
-        Option<ComponentStubBuild>,
-        BTreeMap<String, ComponentStubBuild>,
-    ) {
+        wasm_components_by_name: &BTreeMap<String, WasmComponent>,
+        wasm_rpc_stub_builds: Vec<WasmRpcStubBuild>,
+    ) -> (Option<WasmRpcStubBuild>, BTreeMap<String, WasmRpcStubBuild>) {
         let (
-            common_component_stub_builds,
-            component_stub_builds_by_component_name,
+            common_wasm_rpc_stub_builds,
+            wasm_rpc_stub_builds_by_component_name,
             common_sources,
             sources,
         ) = {
-            let mut common_component_stub_builds = Vec::<ComponentStubBuild>::new();
-            let mut component_stub_builds_by_component_name =
-                BTreeMap::<String, ComponentStubBuild>::new();
+            let mut common_wasm_rpc_stub_builds = Vec::<WasmRpcStubBuild>::new();
+            let mut wasm_rpc_stub_builds_by_component_name =
+                BTreeMap::<String, WasmRpcStubBuild>::new();
 
             let mut common_sources = Vec::<String>::new();
             let mut by_name_sources = BTreeMap::<String, Vec<String>>::new();
 
-            for component_stub_build in component_stub_builds {
-                match &component_stub_build.component_name {
+            for wasm_rpc_stub_build in wasm_rpc_stub_builds {
+                match &wasm_rpc_stub_build.component_name {
                     Some(component_name) => {
                         by_name_sources
                             .entry(component_name.clone())
                             .and_modify(|sources| {
-                                sources.push(component_stub_build.source_as_string())
+                                sources.push(wasm_rpc_stub_build.source_as_string())
                             })
-                            .or_insert_with(|| vec![component_stub_build.source_as_string()]);
-                        component_stub_builds_by_component_name
-                            .insert(component_name.clone(), component_stub_build);
+                            .or_insert_with(|| vec![wasm_rpc_stub_build.source_as_string()]);
+                        wasm_rpc_stub_builds_by_component_name
+                            .insert(component_name.clone(), wasm_rpc_stub_build);
                     }
                     None => {
-                        common_sources.push(component_stub_build.source_as_string());
-                        common_component_stub_builds.push(component_stub_build)
+                        common_sources.push(wasm_rpc_stub_build.source_as_string());
+                        common_wasm_rpc_stub_builds.push(wasm_rpc_stub_build)
                     }
                 }
             }
 
             (
-                common_component_stub_builds,
-                component_stub_builds_by_component_name,
+                common_wasm_rpc_stub_builds,
+                wasm_rpc_stub_builds_by_component_name,
                 common_sources,
                 by_name_sources,
             )
         };
 
-        let non_unique_component_stub_builds =
+        let non_unique_wasm_rpc_stub_builds =
             sources.into_iter().filter(|(_, sources)| sources.len() > 1);
 
         validation.add_errors(
-            non_unique_component_stub_builds,
+            non_unique_wasm_rpc_stub_builds,
             |(component_name, sources)| {
                 Some((
                     vec![("component name", component_name)],
@@ -576,14 +513,14 @@ impl Application {
         }
 
         validation.add_errors(
-            &component_stub_builds_by_component_name,
-            |(component_name, component_stub_build)| {
-                (!components_by_name.contains_key(component_name)).then(|| {
+            &wasm_rpc_stub_builds_by_component_name,
+            |(component_name, wasm_rpc_stub_build)| {
+                (!wasm_components_by_name.contains_key(component_name)).then(|| {
                     (
-                        vec![("source", component_stub_build.source_as_string())],
+                        vec![("source", wasm_rpc_stub_build.source_as_string())],
                         format!(
                             "Component Stub Build {} references unknown component {}",
-                            component_stub_build.name, component_name
+                            wasm_rpc_stub_build.name, component_name
                         ),
                     )
                 })
@@ -591,13 +528,13 @@ impl Application {
         );
 
         (
-            common_component_stub_builds.into_iter().next(),
-            component_stub_builds_by_component_name,
+            common_wasm_rpc_stub_builds.into_iter().next(),
+            wasm_rpc_stub_builds_by_component_name,
         )
     }
 
     pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<String> {
-        self.components_by_name
+        self.wasm_components_by_name
             .iter()
             .flat_map(|(_, component)| {
                 component
@@ -609,14 +546,14 @@ impl Application {
     }
 
     pub fn build_dir(&self) -> PathBuf {
-        self.common_component_build
+        self.common_wasm_build
             .as_ref()
             .and_then(|build| build.build_dir.clone())
             .unwrap_or_else(|| PathBuf::from("build"))
     }
 
-    pub fn component(&self, component_name: &str) -> &Component {
-        self.components_by_name
+    pub fn component(&self, component_name: &str) -> &WasmComponent {
+        self.wasm_components_by_name
             .get(component_name)
             .unwrap_or_else(|| panic!("Component not found: {}", component_name))
     }
@@ -681,7 +618,7 @@ impl Application {
     }
 
     pub fn stub_wasm(&self, component_name: &str) -> PathBuf {
-        self.component_stub_builds_by_name
+        self.wasm_rpc_stub_builds_by_name
             .get(component_name)
             .and_then(|build| {
                 build
@@ -697,7 +634,7 @@ impl Application {
     }
 
     pub fn stub_wit(&self, component_name: &str) -> PathBuf {
-        self.component_stub_builds_by_name
+        self.wasm_rpc_stub_builds_by_name
             .get(component_name)
             .and_then(|build| build.wit.as_ref().map(|wit| build.source_dir().join(wit)))
             .unwrap_or_else(|| {
@@ -709,19 +646,18 @@ impl Application {
 
     fn stub_gen_property<T, F>(&self, component_name: &str, get_property: F) -> Option<T>
     where
-        F: Fn(&ComponentStubBuild) -> T,
+        F: Fn(&WasmRpcStubBuild) -> T,
     {
-        self.component_stub_builds_by_name
+        self.wasm_rpc_stub_builds_by_name
             .get(component_name)
             .map(&get_property)
-            .or_else(|| self.common_component_stub_build.as_ref().map(get_property))
+            .or_else(|| self.common_wasm_rpc_stub_build.as_ref().map(get_property))
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Component {
+pub struct WasmComponent {
     pub name: String,
-    pub component_type: ComponentType,
     pub source: PathBuf,
     pub wit: PathBuf,
     pub input_wasm: PathBuf,
@@ -729,7 +665,7 @@ pub struct Component {
     pub wasm_rpc_dependencies: Vec<String>,
 }
 
-impl Component {
+impl WasmComponent {
     pub fn source_as_string(&self) -> String {
         self.source.to_string_lossy().to_string()
     }
@@ -741,26 +677,8 @@ impl Component {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ComponentType {
-    Durable,
-    Ephemeral,
-}
-
-impl TryFrom<&str> for ComponentType {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            OAM_COMPONENT_TYPE_DURABLE => Ok(ComponentType::Durable),
-            OAM_COMPONENT_TYPE_EPHEMERAL => Ok(ComponentType::Ephemeral),
-            other => Err(format!("Unknown component type: {}", other)),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CommonComponentProperties {
+pub struct WasmComponentProperties {
     pub wit: String,
     #[serde(rename = "inputWasm")]
     pub input_wasm: String,
@@ -770,33 +688,15 @@ pub struct CommonComponentProperties {
     pub unknown_properties: UnknownProperties,
 }
 
-impl HasUnknownProperties for CommonComponentProperties {
+impl HasUnknownProperties for WasmComponentProperties {
     fn unknown_properties(&self) -> &UnknownProperties {
         &self.unknown_properties
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DurableComponentProperties {
-    #[serde(flatten)]
-    pub common: CommonComponentProperties,
-}
-
-impl oam::TypedComponentProperties for DurableComponentProperties {
+impl oam::TypedComponentProperties for WasmComponentProperties {
     fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_DURABLE
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EphemeralComponentProperties {
-    #[serde(flatten)]
-    pub common: CommonComponentProperties,
-}
-
-impl oam::TypedComponentProperties for EphemeralComponentProperties {
-    fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_EPHEMERAL
+        OAM_COMPONENT_TYPE_WASM
     }
 }
 
@@ -831,7 +731,7 @@ pub struct ComponentBuildProperties {
 
 impl oam::TypedComponentProperties for ComponentBuildProperties {
     fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_COMPONENT_BUILD
+        OAM_COMPONENT_TYPE_WASM_BUILD
     }
 }
 
@@ -842,7 +742,7 @@ impl HasUnknownProperties for ComponentBuildProperties {
 }
 
 #[derive(Clone, Debug)]
-pub struct ComponentBuild {
+pub struct WasmBuild {
     source: PathBuf,
     name: String,
     build_dir: Option<PathBuf>,
@@ -866,7 +766,7 @@ pub struct ComponentStubBuildProperties {
 
 impl oam::TypedComponentProperties for ComponentStubBuildProperties {
     fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_COMPONENT_STUB_BUILD
+        OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD
     }
 }
 
@@ -877,7 +777,7 @@ impl HasUnknownProperties for ComponentStubBuildProperties {
 }
 
 #[derive(Clone, Debug)]
-pub struct ComponentStubBuild {
+pub struct WasmRpcStubBuild {
     source: PathBuf,
     name: String,
     component_name: Option<String>,
@@ -891,7 +791,7 @@ pub struct ComponentStubBuild {
     wasm_rpc_version: Option<String>,
 }
 
-impl ComponentStubBuild {
+impl WasmRpcStubBuild {
     pub fn source_as_string(&self) -> String {
         self.source.to_string_lossy().to_string()
     }
@@ -920,15 +820,14 @@ mod tests {
         println!("Warns:\n{}", warns.join("\n"));
         println!("Errors:\n{}", errors.join("\n"));
 
-        assert!(app.components_by_name.len() == 3);
+        assert!(app.wasm_components_by_name.len() == 3);
         assert!(warns.len() == 2);
         assert!(errors.len() == 0);
 
-        let (component_name, component) = app.components_by_name.iter().next().unwrap();
+        let (component_name, component) = app.wasm_components_by_name.iter().next().unwrap();
 
         assert!(component_name == "component-one");
         assert!(component.name == "component-one");
-        assert!(component.component_type == ComponentType::Durable);
         assert!(component.wit.to_string_lossy() == "wit");
         assert!(component.input_wasm.to_string_lossy() == "out/in.wasm");
         assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
@@ -968,7 +867,7 @@ kind: Application
 spec:
   components:
     - name: component-one
-      type: durable
+      type: wasm
       properties:
         wit: wit
         inputWasm: out/in.wasm
@@ -986,13 +885,13 @@ spec:
           properties:
             testUnknownProp: test
     - name: component-two
-      type: durable
+      type: wasm
       properties:
         wit: wit
         inputWasm: out/in.wasm
         outputWasm: out/out.wasm
     - name: component-three
-      type: durable
+      type: wasm
       properties:
         wit: wit
         inputWasm: out/in.wasm
@@ -1014,7 +913,7 @@ kind: Application
 spec:
   components:
     - name: component-one
-      type: durable
+      type: wasm
       properties:
         wit: wit
         inputWasm: out/in.wasm
