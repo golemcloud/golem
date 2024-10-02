@@ -46,6 +46,7 @@ mod enum_resolution;
 mod global_input_inference;
 mod inference_fix_point;
 mod type_binding;
+pub(crate) mod kind;
 
 #[cfg(test)]
 mod type_inference_tests {

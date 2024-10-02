@@ -1102,8 +1102,7 @@ mod compiler_tests {
                 internal::get_component_metadata("foo", vec![AnalysedType::Str(TypeStr)], AnalysedType::Str(TypeStr));
 
             let expr = r#"
-               let user_id = 1u64;
-               let result = foo(user_id);
+               let result = foo(1u64);
                result
             "#;
 

@@ -46,6 +46,7 @@ mod internal {
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::{Display};
+    use crate::type_inference::kind::{GetTypeKind, TypeKind};
 
     pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,
@@ -209,15 +210,15 @@ mod internal {
         },
         TypeMisMatchError {
             expected: AnalysedType,
-            provided: String // If only partial information about type is available
+            provided: TypeKind
         },
     }
 
     impl ArgTypesInferenceError {
-        fn type_mismatch(expected: AnalysedType, provided: &'static str) -> ArgTypesInferenceError {
+        fn type_mismatch(expected: AnalysedType, provided: TypeKind) -> ArgTypesInferenceError {
             ArgTypesInferenceError::TypeMisMatchError {
                 expected,
-                provided: provided.to_string(),
+                provided
             }
         }
     }
@@ -319,47 +320,18 @@ mod internal {
     // A preliminary check of the arguments passed before  typ inference
     fn check_function_arguments(
         expected: &AnalysedType,
-        passed: &Expr,
+        provided: &Expr,
     ) -> Result<(), ArgTypesInferenceError> {
-        // Valid expressions, whose evaluation/inference may give the right expected type
-        // We will leave it to the rest of the type inference process to check the validity of the expression
-        let valid_possibilities = passed.is_identifier()
-            || passed.is_select_field()
-            || passed.is_select_index()
-            || passed.is_select_field()
-            || passed.is_match_expr()
-            || passed.is_if_else()
-            || passed.is_function_call();
-
-        let is_valid = match expected {
-            AnalysedType::U32(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::U64(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::Variant(_) => valid_possibilities,
-            AnalysedType::Result(_) => valid_possibilities || passed.is_result(),
-            AnalysedType::Option(_) => valid_possibilities || passed.is_option(),
-            AnalysedType::Enum(_) => valid_possibilities,
-            AnalysedType::Flags(_) => valid_possibilities || passed.is_flags(),
-            AnalysedType::Record(_) => valid_possibilities || passed.is_record(),
-            AnalysedType::Tuple(_) => valid_possibilities || passed.is_tuple(),
-            AnalysedType::List(_) => valid_possibilities || passed.is_list(),
-            AnalysedType::Str(_) => valid_possibilities || passed.is_concat() || passed.is_literal(),
-            AnalysedType::Chr(_) =>  valid_possibilities || passed.is_literal(),
-            AnalysedType::F64(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::F32(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::S64(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::S32(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::U16(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::S16(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::U8(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::S8(_) => valid_possibilities || passed.is_number(),
-            AnalysedType::Bool(_) => valid_possibilities || passed.is_boolean() || passed.is_comparison(),
-            AnalysedType::Handle(_) => valid_possibilities
+        let is_valid = if provided.inferred_type().is_unknown() {
+            true
+        } else {
+            provided.inferred_type().get_kind() == expected.get_kind()
         };
 
         if is_valid {
             Ok(())
         } else {
-            Err(ArgTypesInferenceError::type_mismatch(expected.clone(), passed.expr_kind()))
+            Err(ArgTypesInferenceError::type_mismatch(expected.clone(), provided.inferred_type().get_kind()))
         }
     }
 
