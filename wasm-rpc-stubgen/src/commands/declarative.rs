@@ -58,7 +58,7 @@ async fn pre_build_app(config: &Config, app: &Application) -> anyhow::Result<()>
         for component_name in app.all_wasm_rpc_dependencies() {
             if is_up_to_date(
                 config.skip_up_to_date_checks,
-                || [app.stub_source_wit_root(&component_name)],
+                || [app.component_wit(&component_name)],
                 || {
                     [
                         app.stub_wasm(&component_name),
@@ -76,7 +76,7 @@ async fn pre_build_app(config: &Config, app: &Application) -> anyhow::Result<()>
             let canonical_target_root = target_root.path().canonicalize()?;
 
             let stub_def = StubDefinition::new(
-                &app.stub_source_wit_root(&component_name),
+                &app.component_wit(&component_name),
                 &canonical_target_root,
                 &app.stub_world(&component_name),
                 &app.stub_crate_version(&component_name),
@@ -210,7 +210,7 @@ pub fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> 
             || [output_wasm.clone()],
         ) {
             log_skipping_up_to_date(format!(
-                "composing wasm rpc dependencies ({}) into {}, dependencies",
+                "composing wasm rpc dependencies ({}) into {}",
                 component.wasm_rpc_dependencies.iter().join(", "),
                 component_name,
             ));

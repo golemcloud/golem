@@ -575,11 +575,6 @@ impl Application {
         component.source_dir().join(component.output_wasm.clone())
     }
 
-    pub fn stub_source_wit_root(&self, component_name: &str) -> PathBuf {
-        let component = self.component(component_name);
-        component.source_dir().join(component.wit.clone())
-    }
-
     pub fn stub_world(&self, component_name: &str) -> Option<String> {
         self.stub_gen_property(component_name, |build| build.world.clone())
             .flatten()
