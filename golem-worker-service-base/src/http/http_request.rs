@@ -249,9 +249,9 @@ mod tests {
     }
 
     fn get_test_evaluator() -> Arc<dyn WorkerServiceRibInterpreter + Sync + Send> {
-        Arc::new(DefaultRibInterpreter::from_worker_request_executor(Arc::new(
-            TestWorkerRequestExecutor {},
-        )))
+        Arc::new(DefaultRibInterpreter::from_worker_request_executor(
+            Arc::new(TestWorkerRequestExecutor {}),
+        ))
     }
 
     #[derive(Debug)]

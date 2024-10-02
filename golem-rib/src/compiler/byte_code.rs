@@ -986,9 +986,9 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod invalid_function_invoke_tests {
-        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
-        use crate::{compiler, Expr};
         use crate::compiler::byte_code::compiler_tests::internal;
+        use crate::{compiler, Expr};
+        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 
         #[test]
         fn test_unknown_function() {
@@ -1000,10 +1000,7 @@ mod compiler_tests {
             let expr = Expr::from_text(expr).unwrap();
             let compiler_error = compiler::compile(&expr, &vec![]).unwrap_err();
 
-            assert_eq!(
-                compiler_error,
-                "Unknown function call: `foo`"
-            );
+            assert_eq!(compiler_error, "Unknown function call: `foo`");
         }
 
         #[test]
@@ -1044,9 +1041,11 @@ mod compiler_tests {
 
         #[test]
         fn test_invalid_arg_size_function() {
-
-            let metadata =
-                internal::get_component_metadata("foo", vec![AnalysedType::Str(TypeStr)], AnalysedType::Str(TypeStr));
+            let metadata = internal::get_component_metadata(
+                "foo",
+                vec![AnalysedType::Str(TypeStr)],
+                AnalysedType::Str(TypeStr),
+            );
 
             let expr = r#"
                let user_id = "user";
@@ -1098,8 +1097,11 @@ mod compiler_tests {
 
         #[test]
         fn test_invalid_arg_types_function() {
-            let metadata =
-                internal::get_component_metadata("foo", vec![AnalysedType::Str(TypeStr)], AnalysedType::Str(TypeStr));
+            let metadata = internal::get_component_metadata(
+                "foo",
+                vec![AnalysedType::Str(TypeStr)],
+                AnalysedType::Str(TypeStr),
+            );
 
             let expr = r#"
                let result = foo(1u64);
@@ -1110,7 +1112,40 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Incorrect number of arguments for function `foo`. Expected 1, but provided 2"
+                "Invalid argument type in function `foo`. Expected type `str`, but provided argument `1u64` is a `number`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_resource_method() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid arguments type in resource method `golem:it/api.{cart(user_id).add-item}`. Expected type `record`, but provided argument `\"apple\"` is a `str`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_resource_constructor() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               golem:it/api.{cart({foo : "bar"}).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid argument type in resource constructor `cart`. Expected type `str`, but provided argument `{foo: \"bar\"}` is a `record`"
             );
         }
     }
@@ -1505,17 +1540,15 @@ mod compiler_tests {
                             AnalysedFunctionParameter {
                                 name: "item".to_string(),
                                 typ: AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair {
-                                            name: "name".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                    ],
+                                    fields: vec![NameTypePair {
+                                        name: "name".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
                                 }),
                             },
                         ],
                         results: vec![],
-                    }
+                    },
                 ],
             });
 

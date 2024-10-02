@@ -1,10 +1,9 @@
-use std::fmt::Display;
+use crate::InferredType;
 use golem_wasm_ast::analysis::AnalysedType;
-use crate::{Expr, InferredType};
+use std::fmt::Display;
 
 pub trait GetTypeKind {
-    fn get_kind(&self) -> TypeKind;
-
+    fn get_type_kind(&self) -> TypeKind;
 }
 
 #[derive(PartialEq)]
@@ -16,7 +15,6 @@ pub enum TypeKind {
     Number,
     List,
     Boolean,
-    FunctionCall,
     Option,
     Enum,
     Char,
@@ -29,27 +27,26 @@ pub enum TypeKind {
 impl Display for TypeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypeKind::Record => write!(f, "Record"),
-            TypeKind::Tuple => write!(f, "Tuple"),
-            TypeKind::Flag => write!(f, "Flag"),
-            TypeKind::Str => write!(f, "Str"),
-            TypeKind::Number => write!(f, "Number"),
-            TypeKind::List => write!(f, "List"),
-            TypeKind::Boolean => write!(f, "Boolean"),
-            TypeKind::FunctionCall => write!(f, "FunctionCall"),
-            TypeKind::Option => write!(f, "Option"),
-            TypeKind::Enum => write!(f, "Enum"),
-            TypeKind::Char => write!(f, "Char"),
-            TypeKind::Result => write!(f, "Result"),
-            TypeKind::Resource => write!(f, "Resource"),
-            TypeKind::Variant => write!(f, "Variant"),
-            TypeKind::Unknown => write!(f, "Unknown"),
+            TypeKind::Record => write!(f, "record"),
+            TypeKind::Tuple => write!(f, "tuple"),
+            TypeKind::Flag => write!(f, "flag"),
+            TypeKind::Str => write!(f, "str"),
+            TypeKind::Number => write!(f, "number"),
+            TypeKind::List => write!(f, "list"),
+            TypeKind::Boolean => write!(f, "boolean"),
+            TypeKind::Option => write!(f, "option"),
+            TypeKind::Enum => write!(f, "enum"),
+            TypeKind::Char => write!(f, "chr"),
+            TypeKind::Result => write!(f, "result"),
+            TypeKind::Resource => write!(f, "resource"),
+            TypeKind::Variant => write!(f, "variant"),
+            TypeKind::Unknown => write!(f, "unknown"),
         }
     }
 }
 
 impl GetTypeKind for AnalysedType {
-    fn get_kind(&self) -> TypeKind {
+    fn get_type_kind(&self) -> TypeKind {
         match self {
             AnalysedType::Record(_) => TypeKind::Record,
             AnalysedType::Tuple(_) => TypeKind::Tuple,
@@ -78,7 +75,7 @@ impl GetTypeKind for AnalysedType {
 }
 
 impl GetTypeKind for InferredType {
-    fn get_kind(&self) -> TypeKind {
+    fn get_type_kind(&self) -> TypeKind {
         match self {
             InferredType::Bool => TypeKind::Boolean,
             InferredType::S8 => TypeKind::Number,
@@ -102,32 +99,28 @@ impl GetTypeKind for InferredType {
             InferredType::Result { .. } => TypeKind::Result,
             InferredType::Variant(_) => TypeKind::Variant,
             InferredType::Resource { .. } => TypeKind::Resource,
-            InferredType::OneOf(possibilities) => {
-                if let Some(first) = possibilities.first() {
-                    let first = first.get_kind();
-                    if possibilities.iter().all(|p| p.get_kind() == first) {
-                        first
-                    } else {
-                        TypeKind::Unknown
-                    }
-                } else {
-                    TypeKind::Unknown
-                }
-            }
-            InferredType::AllOf(possibilities) => {
-                if let Some(first) = possibilities.first() {
-                    let first = first.get_kind();
-                    if possibilities.iter().all(|p| p.get_kind() == first) {
-                        first
-                    } else {
-                        TypeKind::Unknown
-                    }
-                } else {
-                    TypeKind::Unknown
-                }
-            }
+            InferredType::OneOf(possibilities) => internal::get_type_kind(possibilities),
+            InferredType::AllOf(possibilities) => internal::get_type_kind(possibilities),
             InferredType::Unknown => TypeKind::Unknown,
-            InferredType::Sequence(_) => TypeKind::Unknown
+            InferredType::Sequence(_) => TypeKind::Unknown,
+        }
+    }
+}
+
+mod internal {
+    use crate::type_inference::kind::{GetTypeKind, TypeKind};
+    use crate::InferredType;
+
+    pub(crate) fn get_type_kind(possibilities: &[InferredType]) -> TypeKind {
+        if let Some(first) = possibilities.first() {
+            let first = first.get_type_kind();
+            if possibilities.iter().all(|p| p.get_type_kind() == first) {
+                first
+            } else {
+                TypeKind::Unknown
+            }
+        } else {
+            TypeKind::Unknown
         }
     }
 }

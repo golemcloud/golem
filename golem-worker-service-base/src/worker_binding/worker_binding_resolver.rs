@@ -2,8 +2,8 @@ use crate::api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
+use crate::worker_service_rib_interpreter::EvaluationError;
 use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
-use crate::worker_service_rib_interpreter::{EvaluationError};
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
@@ -172,24 +172,24 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         // To evaluate worker-name, most probably
         let worker_name: String = rib::interpret_pure(
             &binding.worker_name_compiled.compiled_worker_name,
-            &resolve_rib_input.value
+            &resolve_rib_input.value,
         )
-            .await
-            .map_err(|err| format!("Failed to evaluate worker name expression. {}", err))?
-            .get_literal()
-            .ok_or("Worker name is not a String".to_string())?
-            .as_string();
+        .await
+        .map_err(|err| format!("Failed to evaluate worker name expression. {}", err))?
+        .get_literal()
+        .ok_or("Worker name is not a String".to_string())?
+        .as_string();
 
         let component_id = &binding.component_id;
 
         let idempotency_key =
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
-                let idempotency_key_value =  rib::interpret_pure(
-                        &idempotency_key_compiled.compiled_idempotency_key,
-                        &resolve_rib_input.value,
-                    )
-                    .await
-                    .map_err(|err| err.to_string())?;
+                let idempotency_key_value = rib::interpret_pure(
+                    &idempotency_key_compiled.compiled_idempotency_key,
+                    &resolve_rib_input.value,
+                )
+                .await
+                .map_err(|err| err.to_string())?;
 
                 let idempotency_key = idempotency_key_value
                     .get_literal()

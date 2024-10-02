@@ -10,13 +10,12 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use crate::worker_binding::RibInputValue;
 use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterResult};
 
-use crate::worker_bridge_execution::{ WorkerRequest, WorkerRequestExecutor};
+use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
 
 // A wrapper service over original RibInterpreter concerning
 // the details of the worker service.
 #[async_trait]
 pub trait WorkerServiceRibInterpreter {
-
     // Evaluate a Rib byte against a specific worker.
     // RibByteCode may have actual function calls in a worker.
     async fn evaluate(
@@ -105,4 +104,3 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
             .map_err(EvaluationError)
     }
 }
-

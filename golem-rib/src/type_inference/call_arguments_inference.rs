@@ -41,12 +41,12 @@ pub fn infer_call_arguments_type(
 
 mod internal {
     use crate::call_type::CallType;
+    use crate::type_inference::kind::GetTypeKind;
     use crate::{
         Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, RegistryKey, RegistryValue,
     };
     use golem_wasm_ast::analysis::AnalysedType;
-    use std::fmt::{Display};
-    use crate::type_inference::kind::{GetTypeKind, TypeKind};
+    use std::fmt::Display;
 
     pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,
@@ -59,11 +59,10 @@ mod internal {
                 let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
                 let function = parsed_function_static.clone().function;
                 if function.resource_name().is_some() {
-                    let resource_name =  function.resource_name().ok_or("Resource name not found")?;
+                    let resource_name =
+                        function.resource_name().ok_or("Resource name not found")?;
 
-                    let constructor_name = {
-                        format!["[constructor]{}", resource_name]
-                    };
+                    let constructor_name = { format!["[constructor]{}", resource_name] };
 
                     let mut constructor_params: &mut Vec<Expr> = &mut vec![];
 
@@ -99,8 +98,8 @@ mod internal {
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                             format!(
-                                "Invalid arguments for resource constructor {}. Expected type {:?}, but provided {}",
-                                resource_name, expected, provided
+                                "Invalid argument type in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                                resource_name, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                             )
                         }
                     })?;
@@ -131,8 +130,8 @@ mod internal {
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                             format!(
-                                "Invalid arguments to resource method {}. Expected type {:?}, but provided {}",
-                                parsed_function_static, expected, provided
+                                "Invalid arguments type in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                                parsed_function_static, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                             )
                         }
                     })
@@ -157,8 +156,8 @@ mod internal {
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                             format!(
-                                "Invalid argument types in function {}. Expected type {:?}, but provided {}",
-                                parsed_function_static.function.function_name(), expected, provided
+                                "Invalid argument type in function `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                                parsed_function_static.function.function_name(), expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                             )
                         }
                     })
@@ -194,8 +193,8 @@ mod internal {
                     ),
                     ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
                         format!(
-                            "Invalid type for {} construction arguments. Expected type {:?}, but provided {}",
-                            variant_name, expected, provided
+                            "Invalid argument type in variant `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
+                            variant_name, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
                         )
                     }
                 })
@@ -210,16 +209,13 @@ mod internal {
         },
         TypeMisMatchError {
             expected: AnalysedType,
-            provided: TypeKind
+            provided: Expr,
         },
     }
 
     impl ArgTypesInferenceError {
-        fn type_mismatch(expected: AnalysedType, provided: TypeKind) -> ArgTypesInferenceError {
-            ArgTypesInferenceError::TypeMisMatchError {
-                expected,
-                provided
-            }
+        fn type_mismatch(expected: AnalysedType, provided: Expr) -> ArgTypesInferenceError {
+            ArgTypesInferenceError::TypeMisMatchError { expected, provided }
         }
     }
 
@@ -325,13 +321,16 @@ mod internal {
         let is_valid = if provided.inferred_type().is_unknown() {
             true
         } else {
-            provided.inferred_type().get_kind() == expected.get_kind()
+            provided.inferred_type().get_type_kind() == expected.get_type_kind()
         };
 
         if is_valid {
             Ok(())
         } else {
-            Err(ArgTypesInferenceError::type_mismatch(expected.clone(), provided.inferred_type().get_kind()))
+            Err(ArgTypesInferenceError::type_mismatch(
+                expected.clone(),
+                provided.clone(),
+            ))
         }
     }
 

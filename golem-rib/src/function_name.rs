@@ -497,31 +497,15 @@ impl ParsedFunctionReference {
 
     pub fn resource_method_name(&self) -> Option<String> {
         match self {
-            Self::Function {  .. } => None,
-            Self::RawResourceConstructor { .. } =>  None,
+            Self::Function { .. } => None,
+            Self::RawResourceConstructor { .. } => None,
             Self::RawResourceDrop { .. } => None,
-            Self::IndexedResourceConstructor {  .. } => {
-                None
-            }
-            Self::IndexedResourceDrop { .. } => {
-                None
-            }
-            Self::IndexedResourceMethod {
-                method, ..
-            } => {
-                Some(method.clone())
-            }
-            Self::IndexedResourceStaticMethod {
-                method, ..
-            } => {
-                Some(method.clone())
-            }
-            Self::RawResourceMethod {
-                method, ..
-            } => Some(method.clone()),
-            Self::RawResourceStaticMethod {
-                method, ..
-            } => Some(method.clone()),
+            Self::IndexedResourceConstructor { .. } => None,
+            Self::IndexedResourceDrop { .. } => None,
+            Self::IndexedResourceMethod { method, .. } => Some(method.clone()),
+            Self::IndexedResourceStaticMethod { method, .. } => Some(method.clone()),
+            Self::RawResourceMethod { method, .. } => Some(method.clone()),
+            Self::RawResourceStaticMethod { method, .. } => Some(method.clone()),
         }
     }
 
