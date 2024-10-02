@@ -45,7 +45,7 @@ mod internal {
         Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, RegistryKey, RegistryValue,
     };
     use golem_wasm_ast::analysis::AnalysedType;
-    use std::fmt::{Display, format};
+    use std::fmt::{Display};
 
     pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,
@@ -57,11 +57,11 @@ mod internal {
             CallType::Function(dynamic_parsed_function_name) => {
                 let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
                 let function = parsed_function_static.clone().function;
-                let resource_name =  function.resource_name().ok_or("Resource name not found")?;
                 if function.resource_name().is_some() {
+                    let resource_name =  function.resource_name().ok_or("Resource name not found")?;
+
                     let constructor_name = {
-                        let raw_str = function.resource_name().ok_or("Resource name not found")?;
-                        format!["[constructor]{}", raw_str]
+                        format!["[constructor]{}", resource_name]
                     };
 
                     let mut constructor_params: &mut Vec<Expr> = &mut vec![];
@@ -86,14 +86,14 @@ mod internal {
                         constructor_params,
                         inferred_type,
                     ).map_err(|e| match e {
-                        ArgTypesInferenceError::InvalidFunctionCall => {
-                            format!("Invalid resource constructor call: {}", resource_name)
+                        ArgTypesInferenceError::UnknownFunction => {
+                            format!("Unknown resource constructor call: `{}`. Resource `{}` doesn't exist" , parsed_function_static, resource_name)
                         }
                         ArgTypesInferenceError::ArgumentSizeMisMatch {
                             expected,
                             provided,
                         } => format!(
-                            "Invalid resource constructor call. {} expects {} arguments, but provided {}",
+                            "Incorrect number of arguments for resource constructor `{}`. Expected {}, but provided {}",
                             resource_name, expected, provided
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
@@ -118,14 +118,14 @@ mod internal {
                         args,
                         inferred_type,
                     ).map_err(|e| match e {
-                        ArgTypesInferenceError::InvalidFunctionCall => {
+                        ArgTypesInferenceError::UnknownFunction => {
                             format!("Invalid resource method call {}. `{}` doesn't exist in resource `{}`", parsed_function_static, parsed_function_static.function.resource_method_name().unwrap(), resource_name)
                         }
                         ArgTypesInferenceError::ArgumentSizeMisMatch {
                             expected,
                             provided,
                         } => format!(
-                            "Invalid call: {}. Expected {} arguments, but provided {}",
+                            "Incorrect number of arguments in resource method `{}`. Expected {}, but provided {}",
                             parsed_function_static, expected, provided
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
@@ -144,14 +144,14 @@ mod internal {
                         args,
                         inferred_type,
                     ).map_err(|e| match e {
-                        ArgTypesInferenceError::InvalidFunctionCall => {
-                            format!("Invalid function call: {}", parsed_function_static.function.function_name())
+                        ArgTypesInferenceError::UnknownFunction => {
+                            format!("Unknown function call: `{}`", parsed_function_static.function.function_name())
                         }
                         ArgTypesInferenceError::ArgumentSizeMisMatch {
                             expected,
                             provided,
                         } => format!(
-                            "Invalid function call: {}. Expected {} arguments, but provided {}",
+                            "Incorrect number of arguments for function `{}`. Expected {}, but provided {}",
                             parsed_function_static, expected, provided
                         ),
                         ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
@@ -181,7 +181,7 @@ mod internal {
                     args,
                     inferred_type,
                 ).map_err(|e| match e {
-                    ArgTypesInferenceError::InvalidFunctionCall => {
+                    ArgTypesInferenceError::UnknownFunction => {
                         format!("Invalid variant constructor call: {}", variant_name)
                     }
                     ArgTypesInferenceError::ArgumentSizeMisMatch {
@@ -202,7 +202,7 @@ mod internal {
         }
     }
     enum ArgTypesInferenceError {
-        InvalidFunctionCall,
+        UnknownFunction,
         ArgumentSizeMisMatch {
             expected: usize,
             provided: usize,
@@ -285,7 +285,7 @@ mod internal {
                 }
             }
         } else {
-            Err(ArgTypesInferenceError::InvalidFunctionCall)
+            Err(ArgTypesInferenceError::UnknownFunction)
         }
     }
 

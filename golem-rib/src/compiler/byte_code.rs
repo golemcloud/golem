@@ -496,8 +496,8 @@ mod internal {
 #[cfg(test)]
 mod compiler_tests {
     use super::*;
-    use crate::{compiler, ArmPattern, InferredType, MatchArm, Number, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
+    use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[test]
@@ -986,11 +986,12 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod invalid_function_invoke_tests {
+        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
         use crate::{compiler, Expr};
         use crate::compiler::byte_code::compiler_tests::internal;
 
         #[test]
-        fn test_invalid_function_call() {
+        fn test_unknown_function() {
             let expr = r#"
                foo(request);
                "success"
@@ -1001,12 +1002,30 @@ mod compiler_tests {
 
             assert_eq!(
                 compiler_error,
-                "Unknown function call foo"
+                "Unknown function call: `foo`"
             );
         }
 
         #[test]
-        fn test_invalid_resource_method_call() {
+        fn test_unknown_resource_constructor() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple");
+               golem:it/api.{cart0(user_id).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Unknown resource constructor call: `golem:it/api.{cart0(user_id).add-item}`. Resource `cart0` doesn't exist"
+            );
+        }
+
+        #[test]
+        fn test_unknown_resource_method() {
             let metadata = internal::metadata_with_resource_methods();
             let expr = r#"
                let user_id = "user";
@@ -1021,7 +1040,79 @@ mod compiler_tests {
                 compiler_error,
                 "Invalid resource method call golem:it/api.{cart(user_id).foo}. `foo` doesn't exist in resource `cart`"
             );
+        }
 
+        #[test]
+        fn test_invalid_arg_size_function() {
+
+            let metadata =
+                internal::get_component_metadata("foo", vec![AnalysedType::Str(TypeStr)], AnalysedType::Str(TypeStr));
+
+            let expr = r#"
+               let user_id = "user";
+               let result = foo(user_id, user_id);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments for function `foo`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_size_resource_constructor() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id, user_id).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments for resource constructor `cart`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_size_resource_method() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple", "samsung");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments in resource method `golem:it/api.{cart(user_id).add-item}`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_function() {
+            let metadata =
+                internal::get_component_metadata("foo", vec![AnalysedType::Str(TypeStr)], AnalysedType::Str(TypeStr));
+
+            let expr = r#"
+               let user_id = 1u64;
+               let result = foo(user_id);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments for function `foo`. Expected 1, but provided 2"
+            );
         }
     }
 
@@ -1381,7 +1472,7 @@ mod compiler_tests {
 
     mod internal {
         use crate::RibInputTypeInfo;
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeStr, TypeU32, TypeVariant};
+        use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
 
         pub(crate) fn metadata_with_resource_methods() -> Vec<AnalysedExport> {
