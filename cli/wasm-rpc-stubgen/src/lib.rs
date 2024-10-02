@@ -183,11 +183,11 @@ pub struct InitializeWorkspaceArgs {
 pub enum App {
     /// Creates open application model for component
     Init(DeclarativeInitArgs),
-    /// Runs the pre-build steps (stub generation and adding wit dependencies) based on declarative component specifications
+    /// Runs the pre-build steps (stub generation and adding wit dependencies)
     PreBuild(DeclarativeBuildArgs),
-    /// Runs component build steps based on declarative component specifications
+    /// Runs component build steps
     ComponentBuild(DeclarativeBuildArgs),
-    /// Runs the post-build steps (composing stubs) based on declarative component specifications
+    /// Runs the post-build steps (composing stubs)
     PostBuild(DeclarativeBuildArgs),
     /// Runs all build steps (pre, component, post)
     Build(DeclarativeBuildArgs),
