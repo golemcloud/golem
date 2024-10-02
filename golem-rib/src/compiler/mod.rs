@@ -30,27 +30,56 @@ pub fn compile(
     expr: &Expr,
     export_metadata: &Vec<AnalysedExport>,
 ) -> Result<CompilerOutput, String> {
+    compile_with_limited_globals(expr, export_metadata, None)
+}
+
+// Rib allows global input variables, however, we can choose to fail compilation
+// if they don't fall under a pre-defined set of global variables.
+// There is no restriction imposed to the type of this variable.
+pub fn compile_with_limited_globals(
+    expr: &Expr,
+    export_metadata: &Vec<AnalysedExport>,
+    allowed_global_variables: Option<Vec<String>>,
+) -> Result<CompilerOutput, String> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let mut expr_cloned = expr.clone();
     expr_cloned
         .infer_types(&type_registry)
         .map_err(|e| e.join("\n"))?;
 
-    let rib_input =
+    let global_input_type_info =
         RibInputTypeInfo::from_expr(&mut expr_cloned).map_err(|e| format!("Error: {}", e))?;
 
-    let rib_byte_code = RibByteCode::from_expr(expr_cloned)?;
+    if let Some(allowed_global_variables) = &allowed_global_variables {
+        let mut un_allowed_variables = vec![];
+
+        for (name, _) in global_input_type_info.types.iter() {
+            if !allowed_global_variables.contains(name) {
+                un_allowed_variables.push(name.clone());
+            }
+        }
+
+        if !un_allowed_variables.is_empty() {
+            return Err(format!(
+                "Global variables not allowed: {}. Allowed: {}",
+                un_allowed_variables.join(", "),
+                allowed_global_variables.join(", ")
+            ));
+        }
+    }
+
+    let byte_code = RibByteCode::from_expr(expr_cloned)?;
 
     Ok(CompilerOutput {
-        byte_code: rib_byte_code,
-        rib_input,
+        byte_code,
+        global_input_type_info,
     })
 }
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
     pub byte_code: RibByteCode,
-    pub rib_input: RibInputTypeInfo,
+    pub global_input_type_info: RibInputTypeInfo,
 }
 
 impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
@@ -64,7 +93,7 @@ impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
 
         Ok(CompilerOutput {
             byte_code,
-            rib_input,
+            global_input_type_info: rib_input,
         })
     }
 }
@@ -76,7 +105,7 @@ impl From<CompilerOutput> for ProtoCompilerOutput {
                 value.byte_code,
             )),
             rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
-                value.rib_input,
+                value.global_input_type_info,
             )),
         }
     }

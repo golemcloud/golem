@@ -382,6 +382,35 @@ mod internal {
 
                 writer.write_str(")")
             }
+
+            ArmPattern::ListConstructor(patterns) => {
+                writer.write_str("[")?;
+
+                for (idx, pattern) in patterns.iter().enumerate() {
+                    if idx != 0 {
+                        writer.write_str(",")?;
+                    }
+                    write_constructor(pattern, writer)?;
+                }
+
+                writer.write_str("]")
+            }
+
+            ArmPattern::RecordConstructor(fields) => {
+                writer.write_str("{")?;
+
+                for (idx, (key, value)) in fields.iter().enumerate() {
+                    if idx != 0 {
+                        writer.write_str(",")?;
+                    }
+                    writer.write_str(key)?;
+                    writer.write_str(":")?;
+                    write_constructor(value, writer)?;
+                }
+
+                writer.write_str("}")
+            }
+
             ArmPattern::Literal(expr) => match *expr.clone() {
                 Expr::Identifier(s, _) => writer.write_str(s.name()),
                 any_expr => writer.write_expr(&any_expr),

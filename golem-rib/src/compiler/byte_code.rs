@@ -496,8 +496,8 @@ mod internal {
 #[cfg(test)]
 mod compiler_tests {
     use super::*;
-    use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
+    use crate::{compiler, ArmPattern, InferredType, MatchArm, Number, VariableId};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[test]
@@ -982,5 +982,400 @@ mod compiler_tests {
         };
 
         assert_eq!(instructions, expected_instructions);
+    }
+
+    #[cfg(test)]
+    mod global_input_tests {
+        use crate::compiler::byte_code::compiler_tests::internal;
+        use crate::{compiler, Expr};
+        use golem_wasm_ast::analysis::{
+            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
+            TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+        };
+
+        #[tokio::test]
+        async fn test_variant_type_info() {
+            let request_value_type = AnalysedType::Variant(TypeVariant {
+                cases: vec![
+                    NameOptionTypePair {
+                        name: "register-user".to_string(),
+                        typ: Some(AnalysedType::U64(TypeU64)),
+                    },
+                    NameOptionTypePair {
+                        name: "process-user".to_string(),
+                        typ: Some(AnalysedType::Str(TypeStr)),
+                    },
+                    NameOptionTypePair {
+                        name: "validate".to_string(),
+                        typ: None,
+                    },
+                ],
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Variant as input,
+            // implies the type of request is a Variant.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Variant
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 process-user(user) => user,
+                 _ => "default"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_result_type_info() {
+            let request_value_type = AnalysedType::Result(TypeResult {
+                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
+                err: Some(Box::new(AnalysedType::Str(TypeStr))),
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Result as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Result
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 ok(x) => "${x}",
+                 err(msg) => msg
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_option_type_info() {
+            let request_value_type = AnalysedType::Option(TypeOption {
+                inner: Box::new(AnalysedType::Str(TypeStr)),
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the input to Rib.
+            // my-worker-function is a function that takes a Option as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Option
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 some(x) => x,
+                 none => "error"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_enum_type_info() {
+            let request_value_type = AnalysedType::Enum(TypeEnum {
+                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the input to Rib.
+            // my-worker-function is a function that takes a Option as input,
+            // implies the type of request is a Result.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Option
+            let expr = r#"
+               my-worker-function(request);
+               match request {
+                 prod  => "p",
+                 dev => "d",
+                 test => "t"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_record_global_input() {
+            let request_value_type = AnalysedType::Record(TypeRecord {
+                fields: vec![NameTypePair {
+                    name: "path".to_string(),
+                    typ: AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "user".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    }),
+                }],
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Record of path -> user -> str as input
+            // implies the type of request is a Record.
+            // This means the rib interpreter env has to have a request variable in it,
+            // with a value that should be of the type Record
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+
+               let name = x.path.user;
+
+               match x {
+                 { path : { user : some_name } } => some_name,
+                 _ => name
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_tuple_global_input() {
+            let request_value_type = AnalysedType::Tuple(TypeTuple {
+                items: vec![
+                    AnalysedType::Str(TypeStr),
+                    AnalysedType::U32(TypeU32),
+                    AnalysedType::Record(TypeRecord {
+                        fields: vec![NameTypePair {
+                            name: "user".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                    }),
+                ],
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a Tuple,
+            // implies the type of request is a Tuple.
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                (_, _, record) =>  record.user,
+                 _ => "fallback"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_list_global_input() {
+            let request_value_type = AnalysedType::List(TypeList {
+                inner: Box::new(AnalysedType::Str(TypeStr)),
+            });
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            // x = request, implies we are expecting a global variable
+            // called request as the  input to Rib.
+            // my-worker-function is a function that takes a List,
+            // implies the type of request should be a List
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+               [a, b, c]  => a,
+                 _ => "fallback"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_str_global_input() {
+        let request_value_type = AnalysedType::Str(TypeStr);
+
+        let output_analysed_type = AnalysedType::Str(TypeStr);
+
+        let analysed_exports = internal::get_component_metadata(
+            "my-worker-function",
+            vec![request_value_type.clone()],
+            output_analysed_type,
+        );
+
+        let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                "foo"  => "success",
+                 _ => "fallback"
+               }
+            "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let expected_type_info =
+            internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+        assert_eq!(compiled.global_input_type_info, expected_type_info);
+    }
+
+    #[tokio::test]
+    async fn test_number_global_input() {
+        let request_value_type = AnalysedType::U32(TypeU32);
+
+        let output_analysed_type = AnalysedType::Str(TypeStr);
+
+        let analysed_exports = internal::get_component_metadata(
+            "my-worker-function",
+            vec![request_value_type.clone()],
+            output_analysed_type,
+        );
+
+        let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                1  => "success",
+                0 => "failure"
+               }
+            "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+        let expected_type_info =
+            internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+        assert_eq!(compiled.global_input_type_info, expected_type_info);
+    }
+
+    mod internal {
+        use crate::RibInputTypeInfo;
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedType,
+        };
+        use std::collections::HashMap;
+
+        pub(crate) fn get_component_metadata(
+            function_name: &str,
+            input_types: Vec<AnalysedType>,
+            output: AnalysedType,
+        ) -> Vec<AnalysedExport> {
+            let analysed_function_parameters = input_types
+                .into_iter()
+                .enumerate()
+                .map(|(index, typ)| AnalysedFunctionParameter {
+                    name: format!("param{}", index),
+                    typ,
+                })
+                .collect();
+
+            vec![AnalysedExport::Function(AnalysedFunction {
+                name: function_name.to_string(),
+                parameters: analysed_function_parameters,
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }],
+            })]
+        }
+
+        pub(crate) fn rib_input_type_info(types: Vec<(&str, AnalysedType)>) -> RibInputTypeInfo {
+            let mut type_info = HashMap::new();
+            for (name, typ) in types {
+                type_info.insert(name.to_string(), typ);
+            }
+            RibInputTypeInfo { types: type_info }
+        }
     }
 }

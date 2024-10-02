@@ -148,6 +148,16 @@ mod internal {
                     collect_all_identifiers(pattern, state)
                 }
             }
+            ArmPattern::ListConstructor(patterns) => {
+                for pattern in patterns {
+                    collect_all_identifiers(pattern, state)
+                }
+            }
+            ArmPattern::RecordConstructor(fields) => {
+                for (_, pattern) in fields {
+                    collect_all_identifiers(pattern, state)
+                }
+            }
             ArmPattern::Literal(expr) => accumulate_types_of_identifiers(&mut *expr, state),
         }
     }

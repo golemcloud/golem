@@ -107,6 +107,18 @@ mod internal {
                         go(arm_pattern, global_arm_index, match_identifiers);
                     }
                 }
+
+                ArmPattern::ListConstructor(arm_patterns) => {
+                    for arm_pattern in arm_patterns {
+                        go(arm_pattern, global_arm_index, match_identifiers);
+                    }
+                }
+
+                ArmPattern::RecordConstructor(fields) => {
+                    for (_, arm_pattern) in fields {
+                        go(arm_pattern, global_arm_index, match_identifiers);
+                    }
+                }
             }
         }
 

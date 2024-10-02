@@ -1,4 +1,4 @@
-use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+use crate::worker_binding::{compile_rib, GolemWorkerBinding, ResponseMapping};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
@@ -54,12 +54,12 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let worker_name_compiled = rib::compile(worker_name, exports)?;
+        let worker_name_compiled = compile_rib(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
             compiled_worker_name: worker_name_compiled.byte_code,
-            rib_input: worker_name_compiled.rib_input,
+            rib_input: worker_name_compiled.global_input_type_info,
         })
     }
 }
@@ -76,12 +76,12 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let idempotency_key_compiled = rib::compile(idempotency_key, exports)?;
+        let idempotency_key_compiled = compile_rib(idempotency_key, exports)?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
             compiled_idempotency_key: idempotency_key_compiled.byte_code,
-            rib_input: idempotency_key_compiled.rib_input,
+            rib_input: idempotency_key_compiled.global_input_type_info,
         })
     }
 }
@@ -98,12 +98,12 @@ impl ResponseMappingCompiled {
         response_mapping: &ResponseMapping,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let response_compiled = rib::compile(&response_mapping.0, exports)?;
+        let response_compiled = compile_rib(&response_mapping.0, exports)?;
 
         Ok(ResponseMappingCompiled {
             response_rib_expr: response_mapping.0.clone(),
             compiled_response: response_compiled.byte_code,
-            rib_input: response_compiled.rib_input,
+            rib_input: response_compiled.global_input_type_info,
         })
     }
 }

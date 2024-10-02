@@ -235,6 +235,19 @@ mod internal {
                     pull_up_types_of_arm_pattern(arm_pattern)?;
                 }
             }
+
+            ArmPattern::ListConstructor(arm_patterns) => {
+                for arm_pattern in arm_patterns {
+                    pull_up_types_of_arm_pattern(arm_pattern)?;
+                }
+            }
+
+            ArmPattern::RecordConstructor(fields) => {
+                for (_, arm_pattern) in fields {
+                    pull_up_types_of_arm_pattern(arm_pattern)?;
+                }
+            }
+
             ArmPattern::Literal(expr) => {
                 expr.pull_types_up()?;
             }
