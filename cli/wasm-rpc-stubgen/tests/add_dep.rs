@@ -16,7 +16,7 @@
 
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
-use golem_wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
+use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{get_unresolved_packages, StubDefinition};
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
@@ -32,7 +32,7 @@ fn all_wit_types_no_collision() {
     let stub_wit_root = stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, false).unwrap();
+    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, UpdateCargoToml::NoUpdate).unwrap();
 
     assert_valid_wit_root(&dest_wit_root);
 
@@ -57,8 +57,8 @@ fn all_wit_types_overwrite_protection() {
     let alternative_stub_wit_root = alternative_stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, false).unwrap();
-    add_stub_dependency(&alternative_stub_wit_root, &dest_wit_root, false, false).unwrap();
+    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&alternative_stub_wit_root, &dest_wit_root, false, UpdateCargoToml::NoUpdate).unwrap();
 
     assert_valid_wit_root(&dest_wit_root);
 
@@ -83,8 +83,8 @@ fn all_wit_types_overwrite_protection_disabled() {
     let alternative_stub_wit_root = alternative_stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, false).unwrap();
-    add_stub_dependency(&alternative_stub_wit_root, &dest_wit_root, true, false).unwrap();
+    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&alternative_stub_wit_root, &dest_wit_root, true, UpdateCargoToml::NoUpdate).unwrap();
 
     assert_valid_wit_root(&dest_wit_root);
 
@@ -108,7 +108,7 @@ fn many_ways_to_export_no_collision() {
     let stub_wit_root = stub_dir.path().join("wit");
     let dest_wit_root = dest_dir.path().join("wit");
 
-    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, false).unwrap();
+    add_stub_dependency(&stub_wit_root, &dest_wit_root, false, UpdateCargoToml::NoUpdate).unwrap();
 
     assert_valid_wit_root(&dest_wit_root);
 
@@ -138,8 +138,8 @@ fn direct_circular() {
     let dest_a = init_caller("direct-circular-a");
     let dest_b = init_caller("direct-circular-b");
 
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, UpdateCargoToml::NoUpdate).unwrap();
 
     // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
     uncomment_imports(&dest_a.path().join("a.wit"));
@@ -177,8 +177,8 @@ fn direct_circular_readd() {
     let dest_a = init_caller("direct-circular-a");
     let dest_b = init_caller("direct-circular-b");
 
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, UpdateCargoToml::NoUpdate).unwrap();
 
     // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
     uncomment_imports(&dest_a.path().join("a.wit"));
@@ -194,8 +194,8 @@ fn direct_circular_readd() {
     regenerate_stub(stub_b_dir.path(), dest_b.path());
 
     println!("Second round of add_stub_dependency calls");
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), true, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), true, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), true, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), true, UpdateCargoToml::NoUpdate).unwrap();
 
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
@@ -229,8 +229,8 @@ fn direct_circular_same_world_name() {
     let dest_a = init_caller("direct-circular-a-same-world-name");
     let dest_b = init_caller("direct-circular-b-same-world-name");
 
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_b.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, UpdateCargoToml::NoUpdate).unwrap();
 
     // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
     uncomment_imports(&dest_a.path().join("a.wit"));
@@ -274,9 +274,9 @@ fn indirect_circular() {
     let dest_b = init_caller("indirect-circular-b");
     let dest_c = init_caller("indirect-circular-c");
 
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), false, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
-    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), false, UpdateCargoToml::NoUpdate).unwrap();
 
     // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
     uncomment_imports(&dest_a.path().join("a.wit"));
@@ -331,9 +331,9 @@ fn indirect_circular_readd() {
     println!("dest_b: {:?}", dest_b.path());
     println!("dest_c: {:?}", dest_c.path());
 
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), false, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
-    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), false, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), false, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), false, UpdateCargoToml::NoUpdate).unwrap();
 
     // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
     uncomment_imports(&dest_a.path().join("a.wit"));
@@ -352,9 +352,9 @@ fn indirect_circular_readd() {
     regenerate_stub(stub_c_dir.path(), dest_c.path());
 
     println!("Second round of add_stub_dependency calls");
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), true, false).unwrap();
-    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), true, false).unwrap();
-    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), true, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_c.path(), true, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_b_dir.path().join("wit"), dest_a.path(), true, UpdateCargoToml::NoUpdate).unwrap();
+    add_stub_dependency(&stub_c_dir.path().join("wit"), dest_b.path(), true, UpdateCargoToml::NoUpdate).unwrap();
 
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
@@ -397,7 +397,7 @@ fn self_circular() {
 
     let dest_a = init_caller("self-circular");
 
-    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_a.path(), false, false).unwrap();
+    add_stub_dependency(&stub_a_dir.path().join("wit"), dest_a.path(), false, UpdateCargoToml::NoUpdate).unwrap();
 
     // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
     uncomment_imports(&dest_a.path().join("a.wit"));
