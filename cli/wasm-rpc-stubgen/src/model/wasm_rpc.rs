@@ -255,6 +255,7 @@ impl Application {
                 Some(WasmComponent {
                     name: component.name,
                     source: source.to_path_buf(),
+                    build_steps: properties.build,
                     wit: properties.wit.into(),
                     input_wasm: properties.input_wasm.into(),
                     output_wasm: properties.output_wasm.into(),
@@ -660,6 +661,7 @@ impl Application {
 pub struct WasmComponent {
     pub name: String,
     pub source: PathBuf,
+    pub build_steps: Vec<BuildStep>,
     pub wit: PathBuf,
     pub input_wasm: PathBuf,
     pub output_wasm: PathBuf,
@@ -678,9 +680,23 @@ impl WasmComponent {
     }
 }
 
+// TODO: unknown props
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuildStep {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WasmComponentProperties {
     pub wit: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build: Vec<BuildStep>,
     #[serde(rename = "inputWasm")]
     pub input_wasm: String,
     #[serde(rename = "outputWasm")]

@@ -16,6 +16,7 @@ use itertools::Itertools;
 use std::cmp::Ordering;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::SystemTime;
 use tempfile::TempDir;
 use walkdir::WalkDir;
@@ -68,7 +69,7 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
                 continue;
             }
 
-            log_action("  Building", format!("wasm rpc stub: {}", component_name));
+            log_action("Building", format!("wasm rpc stub: {}", component_name));
 
             let target_root = TempDir::new()?;
             let canonical_target_root = target_root.path().canonicalize()?;
@@ -118,7 +119,7 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
             }*/
 
             log_action(
-                "  Adding",
+                "Adding",
                 format!(
                     "{} stub wit dependency to {}",
                     dep_component_name, component_name
@@ -131,6 +132,59 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
                 true, // NOTE: in declarative mode we always use overwrite
                 UpdateCargoToml::UpdateIfExists,
             )?
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn build(config: Config) -> anyhow::Result<()> {
+    let app = to_anyhow(
+        "Failed to load application manifest(s), see problems above".to_string(),
+        load_app(config.app_resolve_mode),
+    )?;
+
+    let components_with_build_steps = app
+        .wasm_components_by_name
+        .values()
+        .filter(|component| !component.build_steps.is_empty())
+        .collect::<Vec<_>>();
+
+    if components_with_build_steps.is_empty() {
+        log_warn_action(
+            "Skipping",
+            "building components, no components with build steps found",
+        );
+        return Ok(());
+    }
+
+    log_action("Building", "components");
+
+    for component in components_with_build_steps {
+        log_action("Building", format!("component: {}", component.name));
+        for build_step in &component.build_steps {
+            // TODO: handle up-to-date checks optionally based on step.input and step.output
+            log_action("Executing", format!("command: {}", build_step.command));
+
+            let command_tokens = build_step.command.split(' ').collect::<Vec<_>>();
+            if command_tokens.is_empty() {
+                return Err(anyhow!("Empty command!"));
+            }
+
+            let result = Command::new(command_tokens[0])
+                .args(command_tokens.iter().skip(1))
+                .current_dir(
+                    build_step
+                        .dir
+                        .as_ref()
+                        .map(|dir| component.source_dir().join(dir))
+                        .unwrap_or_else(|| component.source_dir().to_path_buf()),
+                )
+                .status();
+
+            if let Some(err) = result.err() {
+                return Err(anyhow!("Command failed: {}", err));
+            }
         }
     }
 

@@ -185,6 +185,8 @@ pub enum Declarative {
     Init(DeclarativeInitArgs),
     /// Runs the pre-build steps (stub generation and adding wit dependencies) based on declarative component specifications
     PreBuild(DeclarativeBuildArgs),
+    /// Runs the build steps based on declarative component specifications
+    Build(DeclarativeBuildArgs),
     /// Runs the post-build steps (composing stubs) based on declarative component specifications
     PostBuild(DeclarativeBuildArgs),
 }
@@ -270,6 +272,9 @@ pub async fn run_declarative_command(command: Declarative) -> anyhow::Result<()>
         Declarative::Init(args) => commands::declarative::init(args.component_name),
         Declarative::PreBuild(args) => {
             commands::declarative::pre_build(dec_build_args_to_config(args)).await
+        }
+        Declarative::Build(args) => {
+            commands::declarative::build(dec_build_args_to_config(args)).await
         }
         Declarative::PostBuild(args) => {
             commands::declarative::post_build(dec_build_args_to_config(args))
