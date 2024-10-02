@@ -43,7 +43,7 @@ pub enum Command {
     /// Initializes a Golem-specific cargo-make configuration in a Cargo workspace for automatically
     /// generating stubs and composing results.
     InitializeWorkspace(InitializeWorkspaceArgs),
-    /// TODO
+    /// Build components and stubs with application manifests
     #[cfg(feature = "unstable-dec-dep")]
     App {
         #[command(subcommand)]
@@ -182,7 +182,7 @@ pub struct InitializeWorkspaceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum App {
-    /// Creates open application model for component
+    /// Creates application manifest for component
     Init(DeclarativeInitArgs),
     /// Runs the pre-component-build steps (stub generation and adding wit dependencies)
     PreComponentBuild(DeclarativeBuildArgs),
@@ -204,9 +204,9 @@ pub struct DeclarativeInitArgs {
 #[derive(clap::Args, Debug)]
 #[command(version, about, long_about = None)]
 pub struct DeclarativeBuildArgs {
-    /// List of Open Application Model specifications for component dependencies, can be defined multiple times
+    /// List of application manifests, can be defined multiple times
     #[clap(long, short)]
-    pub component: Vec<PathBuf>,
+    pub app: Vec<PathBuf>,
 }
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
@@ -289,10 +289,10 @@ pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
 fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative::Config {
     commands::declarative::Config {
         app_resolve_mode: {
-            if args.component.is_empty() {
+            if args.app.is_empty() {
                 commands::declarative::ApplicationResolveMode::Automatic
             } else {
-                commands::declarative::ApplicationResolveMode::Explicit(args.component)
+                commands::declarative::ApplicationResolveMode::Explicit(args.app)
             }
         },
         skip_up_to_date_checks: false,
