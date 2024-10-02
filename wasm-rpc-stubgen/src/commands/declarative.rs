@@ -26,6 +26,7 @@ pub struct Config {
     pub skip_up_to_date_checks: bool,
 }
 
+#[derive(Debug, Clone)]
 pub enum ApplicationResolveMode {
     Automatic,
     Explicit(Vec<PathBuf>),
@@ -45,11 +46,11 @@ pub fn init(component_name: String) -> anyhow::Result<()> {
 }
 
 pub async fn pre_build(config: Config) -> anyhow::Result<()> {
-    let app = to_anyhow(
-        "Failed to load application manifest(s), see problems above".to_string(),
-        load_app(config.app_resolve_mode),
-    )?;
+    let app = load_app(&config)?;
+    pre_build_app(&config, &app).await
+}
 
+async fn pre_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
     if app.all_wasm_rpc_dependencies().is_empty() {
         log_warn_action("Skipping", "building wasm rpc stubs, no dependency found");
     } else {
@@ -138,12 +139,12 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn build(config: Config) -> anyhow::Result<()> {
-    let app = to_anyhow(
-        "Failed to load application manifest(s), see problems above".to_string(),
-        load_app(config.app_resolve_mode),
-    )?;
+pub fn component_build(config: Config) -> anyhow::Result<()> {
+    let app = load_app(&config)?;
+    component_build_app(&config, &app)
+}
 
+pub fn component_build_app(_config: &Config, app: &Application) -> anyhow::Result<()> {
     let components_with_build_steps = app
         .wasm_components_by_name
         .values()
@@ -192,11 +193,11 @@ pub async fn build(config: Config) -> anyhow::Result<()> {
 }
 
 pub fn post_build(config: Config) -> anyhow::Result<()> {
-    let app = to_anyhow(
-        "Failed to load application manifest(s), see problems above".to_string(),
-        load_app(config.app_resolve_mode),
-    )?;
+    let app = load_app(&config)?;
+    post_build_app(&config, &app)
+}
 
+pub fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
     for (component_name, component) in &app.wasm_components_by_name {
         let input_wasm = app.component_input_wasm(component_name);
         let output_wasm = app.component_output_wasm(component_name);
@@ -259,8 +260,25 @@ pub fn post_build(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_app(mode: ApplicationResolveMode) -> ValidatedResult<Application> {
-    let sources = collect_sources(mode);
+pub async fn build(config: Config) -> anyhow::Result<()> {
+    let app = load_app(&config)?;
+
+    pre_build_app(&config, &app).await?;
+    component_build_app(&config, &app)?;
+    post_build_app(&config, &app)?;
+
+    Ok(())
+}
+
+fn load_app(config: &Config) -> anyhow::Result<Application> {
+    to_anyhow(
+        "Failed to load application manifest(s), see problems above".to_string(),
+        load_app_validated(&config),
+    )
+}
+
+fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
+    let sources = collect_sources(&config.app_resolve_mode);
     let oam_apps = sources.and_then(|sources| {
         sources
             .into_iter()
@@ -289,7 +307,7 @@ fn load_app(mode: ApplicationResolveMode) -> ValidatedResult<Application> {
     app
 }
 
-fn collect_sources(mode: ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf>> {
+fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf>> {
     log_action("Collecting", "sources");
 
     let sources = match mode {
@@ -344,10 +362,7 @@ fn collect_sources(mode: ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf>
                 })
                 .collect();
 
-            ValidatedResult::from_value_and_warns(
-                sources.into_iter().unique().collect::<Vec<_>>(),
-                non_unique_source_warns,
-            )
+            ValidatedResult::from_value_and_warns(sources.clone(), non_unique_source_warns)
         }
     };
 
