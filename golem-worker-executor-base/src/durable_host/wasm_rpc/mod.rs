@@ -32,6 +32,7 @@ use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, WasmRpcEntry, WitValue};
 use std::any::Any;
 use std::str::FromStr;
@@ -113,7 +114,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let result = Durability::<Ctx, WitValue, SerializableError>::wrap(
+        // TODO: Now writing TypeAnnotatedValue but must support old WitValue values during recovery
+        let result = Durability::<Ctx, TypeAnnotatedValue, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem::rpc::wasm-rpc::invoke-and-await",
@@ -136,7 +138,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await;
 
         match result {
-            Ok(result) => Ok(Ok(result)),
+            Ok(result) => {
+                let wit_value: WitValue = result.try_into().map_err(|s: String| anyhow!(s))?;
+                Ok(Ok(wit_value))
+            }
             Err(err) => {
                 error!("RPC error: {err}");
                 Ok(Err(err.into()))
@@ -340,10 +345,10 @@ impl From<RpcError> for golem_wasm_rpc::RpcError {
 #[allow(clippy::large_enum_variant)]
 enum FutureInvokeResultState {
     Pending {
-        handle: AbortOnDropJoinHandle<Result<Result<WitValue, RpcError>, anyhow::Error>>,
+        handle: AbortOnDropJoinHandle<Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>>,
     },
     Completed {
-        result: Result<Result<WitValue, RpcError>, anyhow::Error>,
+        result: Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>,
     },
     Deferred {
         remote_worker_id: OwnedWorkerId,
@@ -506,7 +511,15 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
-            result
+            match result {
+                Ok(Some(Ok(tav))) => {
+                    let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                    Ok(Some(Ok(wit_value)))
+                }
+                Ok(Some(Err(error))) => Ok(Some(Err(error))),
+                Ok(None) => Ok(None),
+                Err(err) => Err(err),
+            }
         } else {
             let (_, oplog_entry) =
                 get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
@@ -515,6 +528,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
                 )
                     })?;
+
+            // TODO: must support SerializableInvokeResultV1 as well
 
             let serialized_invoke_result = self
                 .state
@@ -545,9 +560,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
             match serialized_invoke_result {
                 SerializableInvokeResult::Pending => Ok(None),
-                SerializableInvokeResult::Completed(result) => {
-                    Ok(Some(result.map_err(|err| err.into())))
-                }
+                SerializableInvokeResult::Completed(result) => match result {
+                    Ok(tav) => {
+                        let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                        Ok(Some(Ok(wit_value)))
+                    }
+                    Err(error) => Ok(Some(Err(error.into()))),
+                },
                 SerializableInvokeResult::Failed(error) => Err(error.into()),
             }
         }

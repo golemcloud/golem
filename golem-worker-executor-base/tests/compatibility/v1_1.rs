@@ -8,3 +8,7 @@ pub fn golem_error() {
     let mut mint = Mint::new("tests/goldenfiles");
     crate::compatibility::v1::backward_compatible("golem_error_sharding_not_ready", &mut mint, g1);
 }
+
+// TODO: add new oplog entries
+// TODO: add new SerializableInvokeResult
+

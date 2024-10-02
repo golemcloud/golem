@@ -35,11 +35,9 @@ use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize;
-use golem_wasm_ast::analysis::{
-    AnalysedType, NameOptionTypePair, TypeBool, TypeList, TypeOption, TypeResult, TypeStr,
-    TypeTuple, TypeU32, TypeU64, TypeU8, TypeVariant,
-};
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType, WitValue};
+use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeVariant};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -69,6 +67,7 @@ pub enum PublicOplogEntry {
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
+        // TODO: add request: ValueAndType
         response: ValueAndType,
         wrapped_function_type: WrappedFunctionType,
     },
@@ -211,6 +210,22 @@ impl PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
             }),
+            OplogEntry::ImportedFunctionInvokedV1 {
+                timestamp,
+                function_name,
+                response,
+                wrapped_function_type,
+            } => {
+                let payload_bytes = oplog.download_payload(&response).await?;
+                let value =
+                    Self::encode_host_function_response_as_value(&function_name, &payload_bytes)?;
+                Ok(PublicOplogEntry::ImportedFunctionInvoked {
+                    timestamp,
+                    function_name,
+                    response: value,
+                    wrapped_function_type,
+                })
+            }
             OplogEntry::ImportedFunctionInvoked {
                 timestamp,
                 function_name,
@@ -386,7 +401,8 @@ impl PublicOplogEntry {
         match function_name {
             "golem::rpc::future-invoke-result::get" => {
                 let payload: SerializableInvokeResult = Self::try_deserialize(bytes)?;
-                Ok(payload.into_value_and_type())
+                // TODO: special case because completed value is dynamic
+                todo!()
             }
             "http::types::future_incoming_response::get" => {
                 let payload: SerializableResponse = Self::try_deserialize(bytes)?;
@@ -585,8 +601,9 @@ impl PublicOplogEntry {
                 Ok(payload.into_value_and_type())
             }
             "golem::rpc::wasm-rpc::invoke-and-await" => {
-                let payload: Result<WitValue, SerializableError> = Self::try_deserialize(bytes)?;
-                // TODO: need type info which we can get if we know the target component id and version
+                let payload: Result<TypeAnnotatedValue, SerializableError> =
+                    Self::try_deserialize(bytes)?;
+                // TODO: must prepare for that it's not TypeAnnotatedValue but WitValue (old versions)
                 todo!()
             }
             "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => {
@@ -642,44 +659,6 @@ impl PublicOplogEntry {
             }
             _ => Err(format!("Unsupported host function name: {}", function_name)),
         }
-    }
-}
-
-impl IntoValue for SerializableInvokeResult {
-    fn into_value(self) -> Value {
-        match self {
-            SerializableInvokeResult::Failed(serializable_error) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(serializable_error.into_value())),
-            },
-            SerializableInvokeResult::Pending => Value::Variant {
-                case_idx: 1,
-                case_value: None,
-            },
-            SerializableInvokeResult::Completed(result) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(result.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "Failed".to_string(),
-                    typ: Some(SerializableError::get_type()),
-                },
-                NameOptionTypePair {
-                    name: "Pending".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "Completed".to_string(),
-                    typ: Some(Result::<WitValue, RpcError>::get_type()),
-                },
-            ],
-        })
     }
 }
 
@@ -882,26 +861,6 @@ impl IntoValue for SerializableIpAddresses {
 }
 
 impl IntoValue for SerializableFileTimes {
-    fn into_value(self) -> Value {
-        todo!()
-    }
-
-    fn get_type() -> AnalysedType {
-        todo!()
-    }
-}
-
-impl IntoValue for WorkerId {
-    fn into_value(self) -> Value {
-        todo!()
-    }
-
-    fn get_type() -> AnalysedType {
-        todo!()
-    }
-}
-
-impl IntoValue for Uuid {
     fn into_value(self) -> Value {
         todo!()
     }

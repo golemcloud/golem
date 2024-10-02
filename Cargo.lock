@@ -265,9 +265,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
+checksum = "7e614738943d3f68c628ae3dbce7c3daffb196665f82f8c8ea6b65de73c79429"
 dependencies = [
  "flate2",
  "futures-core",
@@ -3857,7 +3857,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#30621049e83609ceb5bc039caa61e2490ae4f301"
+source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#0c844d9aad13c8ea054857250063bb8180ea6bc0"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3871,6 +3871,7 @@ dependencies = [
  "prost-build",
  "serde 1.0.210",
  "serde_json",
+ "uuid",
  "wasm-wave",
  "wasmtime",
  "wasmtime-wasi",

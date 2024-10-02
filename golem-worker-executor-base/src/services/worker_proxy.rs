@@ -18,13 +18,14 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    invoke_and_await_response, invoke_response, update_worker_response, worker_error,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
+    invoke_and_await_typed_response, invoke_response, update_worker_response, worker_error,
+    InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse,
     UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeParameters, UpdateMode};
 use golem_common::client::GrpcClient;
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{Value, WitValue};
 use http::Uri;
 use std::collections::HashMap;
@@ -45,7 +46,7 @@ pub trait WorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
-    ) -> Result<WitValue, WorkerProxyError>;
+    ) -> Result<TypeAnnotatedValue, WorkerProxyError>;
 
     async fn invoke(
         &self,
@@ -169,7 +170,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_worker_id: WorkerId,
         caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
-    ) -> Result<WitValue, WorkerProxyError> {
+    ) -> Result<TypeAnnotatedValue, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
         );
@@ -185,10 +186,10 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let response: InvokeAndAwaitResponse = self
+        let response: InvokeAndAwaitTypedResponse = self
             .client
             .call(move |client| {
-                Box::pin(client.invoke_and_await(authorised_grpc_request(
+                Box::pin(client.invoke_and_await_typed(authorised_grpc_request(
                     InvokeAndAwaitRequest {
                         worker_id: Some(owned_worker_id.worker_id().into_target_worker_id().into()),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
@@ -207,20 +208,21 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(invoke_and_await_response::Result::Success(result)) => {
-                let mut result_values = Vec::new();
-                for proto_value in result.result {
-                    let value: Value = proto_value.try_into().map_err(|err| {
-                        WorkerProxyError::InternalError(GolemError::unknown(format!(
-                            "Could not decode result: {err}"
-                        )))
-                    })?;
-                    result_values.push(value);
-                }
-                let result: WitValue = Value::Tuple(result_values).into();
+            Some(invoke_and_await_typed_response::Result::Success(result)) => {
+                let result =
+                    result
+                        .result
+                        .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
+                            "Missing result value in the worker API response".to_string(),
+                        )))?;
+                let result = result
+                    .type_annotated_value
+                    .ok_or(WorkerProxyError::InternalError(GolemError::unknown(
+                        "Missing type_annotated_value in the worker API response".to_string(),
+                    )))?;
                 Ok(result)
             }
-            Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
+            Some(invoke_and_await_typed_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(GolemError::unknown(
                 "Empty response through the worker API".to_string(),
             ))),

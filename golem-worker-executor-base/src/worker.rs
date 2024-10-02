@@ -1945,6 +1945,9 @@ fn calculate_latest_worker_status(
             OplogEntry::Create { .. } => {
                 result = WorkerStatus::Idle;
             }
+            OplogEntry::ImportedFunctionInvokedV1 { .. } => {
+                result = WorkerStatus::Running;
+            }
             OplogEntry::ImportedFunctionInvoked { .. } => {
                 result = WorkerStatus::Running;
             }

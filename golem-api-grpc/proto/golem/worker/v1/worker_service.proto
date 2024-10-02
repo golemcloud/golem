@@ -28,6 +28,7 @@ service WorkerService {
   rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
   rpc InvokeAndAwaitJson (InvokeAndAwaitJsonRequest) returns (InvokeAndAwaitJsonResponse);
+  rpc InvokeAndAwaitTyped (InvokeAndAwaitRequest) returns (InvokeAndAwaitTypedResponse);
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
   rpc InvokeJson (InvokeJsonRequest) returns (InvokeResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
@@ -113,6 +114,13 @@ message InvokeAndAwaitRequest {
 message InvokeAndAwaitResponse {
   oneof result {
     golem.worker.InvokeResult success = 1;
+    golem.worker.v1.WorkerError error = 2;
+  }
+}
+
+message InvokeAndAwaitTypedResponse {
+  oneof result {
+    golem.worker.InvokeResultTyped success = 1;
     golem.worker.v1.WorkerError error = 2;
   }
 }

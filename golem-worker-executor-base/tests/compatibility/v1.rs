@@ -50,7 +50,7 @@ use golem_worker_executor_base::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
 };
-use golem_worker_executor_base::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
+use golem_worker_executor_base::durable_host::wasm_rpc::serialized::{SerializableInvokeResult, SerializableInvokeResultV1};
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::InterruptKind;
 use golem_worker_executor_base::services::blob_store;
@@ -702,7 +702,7 @@ pub fn oplog_entry() {
         initial_total_linear_memory_size: 100_000_000,
     };
 
-    let oe2 = OplogEntry::ImportedFunctionInvoked {
+    let oe2 = OplogEntry::ImportedFunctionInvokedV1 {
         timestamp: Timestamp::from(1724701938466),
         function_name: "test:pkg/iface.{fn}".to_string(),
         response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
@@ -1554,12 +1554,12 @@ pub fn serializable_response() {
 
 #[test]
 pub fn serializable_invoke_result() {
-    let sir1 = SerializableInvokeResult::Pending;
-    let sir2 = SerializableInvokeResult::Failed(SerializableError::Generic {
+    let sir1 = SerializableInvokeResultV1::Pending;
+    let sir2 = SerializableInvokeResultV1::Failed(SerializableError::Generic {
         message: "hello world".to_string(),
     });
-    let sir3 = SerializableInvokeResult::Completed(Ok(Value::Bool(true).into()));
-    let sir4 = SerializableInvokeResult::Completed(Err(RpcError::Denied {
+    let sir3 = SerializableInvokeResultV1::Completed(Ok(Value::Bool(true).into()));
+    let sir4 = SerializableInvokeResultV1::Completed(Err(RpcError::Denied {
         details: "not now".to_string(),
     }));
 

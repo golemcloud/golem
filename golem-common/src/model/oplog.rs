@@ -239,8 +239,8 @@ pub enum OplogEntry {
         component_size: u64,
         initial_total_linear_memory_size: u64,
     },
-    /// The worker invoked a host function
-    ImportedFunctionInvoked {
+    /// The worker invoked a host function (original 1.0 version)
+    ImportedFunctionInvokedV1 {
         timestamp: Timestamp,
         function_name: String,
         response: OplogPayload,
@@ -355,6 +355,13 @@ pub enum OplogEntry {
     },
     /// Marks the point where the worker was restarted from clean initial state
     Restart { timestamp: Timestamp },
+    /// The worker invoked a host function
+    ImportedFunctionInvoked {
+        timestamp: Timestamp,
+        function_name: String,
+        response: OplogPayload,
+        wrapped_function_type: WrappedFunctionType,
+    },
 }
 
 impl OplogEntry {
@@ -587,7 +594,7 @@ impl OplogEntry {
     pub fn timestamp(&self) -> Timestamp {
         match self {
             OplogEntry::Create { timestamp, .. }
-            | OplogEntry::ImportedFunctionInvoked { timestamp, .. }
+            | OplogEntry::ImportedFunctionInvokedV1 { timestamp, .. }
             | OplogEntry::ExportedFunctionInvoked { timestamp, .. }
             | OplogEntry::ExportedFunctionCompleted { timestamp, .. }
             | OplogEntry::Suspend { timestamp }
@@ -610,7 +617,8 @@ impl OplogEntry {
             | OplogEntry::DropResource { timestamp, .. }
             | OplogEntry::DescribeResource { timestamp, .. }
             | OplogEntry::Log { timestamp, .. }
-            | OplogEntry::Restart { timestamp } => *timestamp,
+            | OplogEntry::Restart { timestamp }
+            | OplogEntry::ImportedFunctionInvoked { timestamp, .. } => *timestamp,
         }
     }
 }

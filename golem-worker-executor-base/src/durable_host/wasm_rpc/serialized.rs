@@ -15,27 +15,19 @@
 use crate::durable_host::serialized::SerializableError;
 use crate::services::rpc::RpcError;
 use bincode::{Decode, Encode};
-use golem_wasm_rpc::{Value, WitValue};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::WitValue;
 
-#[derive(Debug, Clone, Encode, Decode)]
-pub enum SerializableInvokeResult {
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum SerializableInvokeResultV1 {
     Failed(SerializableError),
     Pending,
     Completed(Result<WitValue, RpcError>),
 }
 
-impl PartialEq for SerializableInvokeResult {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Failed(e1), Self::Failed(e2)) => e1 == e2,
-            (Self::Pending, Self::Pending) => true,
-            (Self::Completed(Ok(r1)), Self::Completed(Ok(r2))) => {
-                let v1: Value = r1.clone().into();
-                let v2: Value = r2.clone().into();
-                v1 == v2
-            }
-            (Self::Completed(Err(e1)), Self::Completed(Err(e2))) => e1 == e2,
-            _ => false,
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum SerializableInvokeResult {
+    Failed(SerializableError),
+    Pending,
+    Completed(Result<TypeAnnotatedValue, RpcError>),
 }

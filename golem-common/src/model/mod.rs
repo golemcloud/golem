@@ -33,6 +33,9 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
+use golem_wasm_ast::analysis::analysed_type::{field, record};
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::IntoValue;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::Cursor;
 use poem::http::Uri;
@@ -306,6 +309,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
             component_id: value.component_id.unwrap().try_into()?,
             worker_name: value.name,
         })
+    }
+}
+
+impl IntoValue for WorkerId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::Record(
+            vec![
+                self.component_id.into_value(),
+                self.worker_name.into_value()
+            ]
+        )
+    }
+
+    fn get_type() -> AnalysedType {
+        record(
+            vec![
+                field("component_id", ComponentId::get_type()),
+                field("worker_name", std::string::String::get_type()),
+            ]
+        )
     }
 }
 
