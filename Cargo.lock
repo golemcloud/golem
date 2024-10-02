@@ -3857,7 +3857,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#1ef96a5c1c476dd64a6827d231747e1e56f8ec6f"
+source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#30621049e83609ceb5bc039caa61e2490ae4f301"
 dependencies = [
  "arbitrary",
  "async-recursion",

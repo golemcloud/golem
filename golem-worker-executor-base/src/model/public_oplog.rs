@@ -39,7 +39,7 @@ use golem_wasm_ast::analysis::{
     AnalysedType, NameOptionTypePair, TypeBool, TypeList, TypeOption, TypeResult, TypeStr,
     TypeTuple, TypeU32, TypeU64, TypeU8, TypeVariant,
 };
-use golem_wasm_rpc::{Value, WitValue};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType, WitValue};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -645,189 +645,6 @@ impl PublicOplogEntry {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ValueAndType {
-    pub value: Value,
-    pub typ: AnalysedType,
-}
-
-impl ValueAndType {
-    pub fn new(value: Value, typ: AnalysedType) -> Self {
-        Self { value, typ }
-    }
-}
-
-/// Specific trait to convert a type into a `Value` type.
-///
-/// The reason for not using Into<Value> instead is to limit the scope of these conversions
-/// into this module.
-trait IntoValue {
-    fn into_value(self) -> Value;
-    fn get_type() -> AnalysedType;
-
-    fn into_value_and_type(self) -> ValueAndType
-    where
-        Self: Sized,
-    {
-        ValueAndType::new(self.into_value(), Self::get_type())
-    }
-}
-
-impl IntoValue for u8 {
-    fn into_value(self) -> Value {
-        Value::U8(self)
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::U8(TypeU8)
-    }
-}
-
-impl IntoValue for u32 {
-    fn into_value(self) -> Value {
-        Value::U32(self)
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::U32(TypeU32)
-    }
-}
-
-impl IntoValue for u64 {
-    fn into_value(self) -> Value {
-        Value::U64(self)
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::U64(TypeU64)
-    }
-}
-
-impl IntoValue for bool {
-    fn into_value(self) -> Value {
-        Value::Bool(self)
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Bool(TypeBool)
-    }
-}
-
-impl IntoValue for String {
-    fn into_value(self) -> Value {
-        Value::String(self)
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Str(TypeStr)
-    }
-}
-
-impl<S: IntoValue, E: IntoValue> IntoValue for Result<S, E> {
-    fn into_value(self) -> Value {
-        match self {
-            Ok(s) => Value::Result(Ok(Some(Box::new(s.into_value())))),
-            Err(e) => Value::Result(Err(Some(Box::new(e.into_value())))),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(S::get_type())),
-            err: Some(Box::new(E::get_type())),
-        })
-    }
-}
-
-impl<E: IntoValue> IntoValue for Result<(), E> {
-    fn into_value(self) -> Value {
-        match self {
-            Ok(_) => Value::Result(Ok(None)),
-            Err(e) => Value::Result(Err(Some(Box::new(e.into_value())))),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: None,
-            err: Some(Box::new(E::get_type())),
-        })
-    }
-}
-
-impl<S: IntoValue> IntoValue for Result<S, ()> {
-    fn into_value(self) -> Value {
-        match self {
-            Ok(s) => Value::Result(Ok(Some(Box::new(s.into_value())))),
-            Err(_) => Value::Result(Err(None)),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(S::get_type())),
-            err: None,
-        })
-    }
-}
-
-impl<T: IntoValue> IntoValue for Option<T> {
-    fn into_value(self) -> Value {
-        match self {
-            Some(t) => Value::Option(Some(Box::new(t.into_value()))),
-            None => Value::Option(None),
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(T::get_type()),
-        })
-    }
-}
-
-impl<T: IntoValue> IntoValue for Vec<T> {
-    fn into_value(self) -> Value {
-        Value::List(self.into_iter().map(IntoValue::into_value).collect())
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(T::get_type()),
-        })
-    }
-}
-
-impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![self.0.into_value(), self.1.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Tuple(TypeTuple {
-            items: vec![A::get_type(), B::get_type()],
-        })
-    }
-}
-
-impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
-    fn into_value(self) -> Value {
-        Value::List(
-            self.into_iter()
-                .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
-                .collect(),
-        )
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::Tuple(TypeTuple {
-                items: vec![K::get_type(), V::get_type()],
-            })),
-        })
-    }
-}
-
 impl IntoValue for SerializableInvokeResult {
     fn into_value(self) -> Value {
         match self {
@@ -931,16 +748,6 @@ impl IntoValue for SerializableError {
 impl IntoValue for SerializableStreamError {
     fn into_value(self) -> Value {
         todo!()
-    }
-
-    fn get_type() -> AnalysedType {
-        todo!()
-    }
-}
-
-impl IntoValue for WitValue {
-    fn into_value(self) -> Value {
-        self.into()
     }
 
     fn get_type() -> AnalysedType {
