@@ -170,7 +170,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            "golem::rpc::wasm-rpc::invoke idempotency key",
             |_ctx| {
                 Box::pin(async move {
                     let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
@@ -247,7 +247,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key",
             |_ctx| {
                 Box::pin(async move {
                     let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);

@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let now = Durability::<Ctx, Instant, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "monotonic_clock::now",
+            "monotonic_clock::subscribe_duration",
             |ctx| Box::pin(async { Host::now(&mut ctx.as_wasi_view()).await }),
         )
         .await?;
