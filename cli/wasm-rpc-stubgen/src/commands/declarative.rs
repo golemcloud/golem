@@ -88,7 +88,7 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
         .await?
     }
 
-    for (component_name, component) in &app.components_by_name {
+    for (component_name, component) in &app.wasm_components_by_name {
         if !component.wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Adding",
@@ -136,7 +136,7 @@ pub fn post_build(config: Config) -> anyhow::Result<()> {
         load_app(config.app_resolve_mode),
     )?;
 
-    for (component_name, component) in &app.components_by_name {
+    for (component_name, component) in &app.wasm_components_by_name {
         let input_wasm = app.component_input_wasm(component_name);
         let output_wasm = app.component_output_wasm(component_name);
 
@@ -215,7 +215,7 @@ fn load_app(mode: ApplicationResolveMode) -> ValidatedResult<Application> {
     let app = oam_apps.and_then(Application::from_oam_apps);
 
     log_validated_action_result("Found", &app, |app| {
-        format!("components: {}", app.components_by_name.keys().join(", "))
+        format!("components: {}", app.wasm_components_by_name.keys().join(", "))
     });
 
     app
