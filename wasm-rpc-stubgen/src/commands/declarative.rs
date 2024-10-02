@@ -192,12 +192,12 @@ pub fn component_build_app(_config: &Config, app: &Application) -> anyhow::Resul
     Ok(())
 }
 
-pub fn post_build(config: Config) -> anyhow::Result<()> {
+pub async fn post_build(config: Config) -> anyhow::Result<()> {
     let app = load_app(&config)?;
-    post_build_app(&config, &app)
+    post_build_app(&config, &app).await
 }
 
-pub fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
+pub async fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
     for (component_name, component) in &app.wasm_components_by_name {
         let input_wasm = app.component_input_wasm(component_name);
         let output_wasm = app.component_output_wasm(component_name);
@@ -242,7 +242,6 @@ pub fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> 
                 ),
             );
 
-            // TODO: "no dependencies of component were found" in not handled yet
             let stub_wasms = component
                 .wasm_rpc_dependencies
                 .iter()
@@ -253,7 +252,8 @@ pub fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> 
                 app.component_input_wasm(component_name).as_path(),
                 &stub_wasms,
                 app.component_output_wasm(component_name).as_path(),
-            )?;
+            )
+            .await?;
         }
     }
 
@@ -265,7 +265,7 @@ pub async fn build(config: Config) -> anyhow::Result<()> {
 
     pre_build_app(&config, &app).await?;
     component_build_app(&config, &app)?;
-    post_build_app(&config, &app)?;
+    post_build_app(&config, &app).await?;
 
     Ok(())
 }
@@ -273,7 +273,7 @@ pub async fn build(config: Config) -> anyhow::Result<()> {
 fn load_app(config: &Config) -> anyhow::Result<Application> {
     to_anyhow(
         "Failed to load application manifest(s), see problems above".to_string(),
-        load_app_validated(&config),
+        load_app_validated(config),
     )
 }
 
@@ -443,7 +443,7 @@ where
     FT: FnOnce() -> T,
 {
     if skip_check {
-        return true;
+        return false;
     }
 
     fn max_modified(path: &Path) -> Option<SystemTime> {

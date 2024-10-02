@@ -251,8 +251,8 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     )
 }
 
-pub fn compose(args: ComposeArgs) -> anyhow::Result<()> {
-    commands::composition::compose(&args.source_wasm, &args.stub_wasm, &args.dest_wasm)
+pub async fn compose(args: ComposeArgs) -> anyhow::Result<()> {
+    commands::composition::compose(&args.source_wasm, &args.stub_wasm, &args.dest_wasm).await
 }
 
 pub fn initialize_workspace(
@@ -278,7 +278,9 @@ pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
         App::ComponentBuild(args) => {
             commands::declarative::component_build(dec_build_args_to_config(args))
         }
-        App::PostBuild(args) => commands::declarative::post_build(dec_build_args_to_config(args)),
+        App::PostBuild(args) => {
+            commands::declarative::post_build(dec_build_args_to_config(args)).await
+        }
         App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
     }
 }
@@ -292,6 +294,6 @@ fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative
                 commands::declarative::ApplicationResolveMode::Explicit(args.component)
             }
         },
-        skip_up_to_date_checks: false,
+        skip_up_to_date_checks: true,
     }
 }

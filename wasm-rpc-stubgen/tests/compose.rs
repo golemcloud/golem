@@ -58,14 +58,14 @@ async fn compose_with_single_stub() {
     assert_is_component(&component_wasm);
 
     let dest_wasm = caller_dir.path().join("target/result.wasm");
-    compose(&component_wasm, &[stub_wasm], &dest_wasm).unwrap();
+    compose(&component_wasm, &[stub_wasm], &dest_wasm)
+        .await
+        .unwrap();
 
     assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }
 
-// TODO
 #[tokio::test]
-#[ignore] // NOTE: this is not working yet - produces an error
 async fn compose_with_single_stub_not_importing_stub() {
     let (stub_dir, stub_wasm) = init_stub("all-wit-types").await;
     let caller_dir = init_caller("caller-no-dep");
@@ -91,7 +91,9 @@ async fn compose_with_single_stub_not_importing_stub() {
     assert_is_component(&component_wasm);
 
     let dest_wasm = caller_dir.path().join("target/result.wasm");
-    compose(&component_wasm, &[stub_wasm], &dest_wasm).unwrap();
+    compose(&component_wasm, &[stub_wasm], &dest_wasm)
+        .await
+        .unwrap();
 
     assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }

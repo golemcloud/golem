@@ -27,7 +27,7 @@ async fn main() -> ExitCode {
         Command::AddStubDependency(add_stub_dependency_args) => {
             add_stub_dependency(add_stub_dependency_args)
         }
-        Command::Compose(compose_args) => compose(compose_args),
+        Command::Compose(compose_args) => compose(compose_args).await,
         Command::InitializeWorkspace(init_workspace_args) => {
             initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
