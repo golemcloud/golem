@@ -182,6 +182,14 @@ impl From<Value> for WitValue {
     }
 }
 
+impl PartialEq for WitValue {
+    fn eq(&self, other: &Self) -> bool {
+        let a: Value = self.clone().into();
+        let b: Value = other.clone().into();
+        a == b
+    }
+}
+
 fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     match value {
         Value::Bool(value) => builder.add_bool(value),
