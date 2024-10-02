@@ -45,12 +45,12 @@ pub fn init(component_name: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn pre_build(config: Config) -> anyhow::Result<()> {
+pub async fn pre_component_build(config: Config) -> anyhow::Result<()> {
     let app = load_app(&config)?;
-    pre_build_app(&config, &app).await
+    pre_component_build_app(&config, &app).await
 }
 
-async fn pre_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
+async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
     if app.all_wasm_rpc_dependencies().is_empty() {
         log_warn_action("Skipping", "building wasm rpc stubs, no dependency found");
     } else {
@@ -192,12 +192,12 @@ pub fn component_build_app(_config: &Config, app: &Application) -> anyhow::Resul
     Ok(())
 }
 
-pub async fn post_build(config: Config) -> anyhow::Result<()> {
+pub async fn post_component_build(config: Config) -> anyhow::Result<()> {
     let app = load_app(&config)?;
-    post_build_app(&config, &app).await
+    post_component_build_app(&config, &app).await
 }
 
-pub async fn post_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
+pub async fn post_component_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
     for (component_name, component) in &app.wasm_components_by_name {
         let input_wasm = app.component_input_wasm(component_name);
         let output_wasm = app.component_output_wasm(component_name);
@@ -221,7 +221,7 @@ pub async fn post_build_app(config: &Config, app: &Application) -> anyhow::Resul
             log_action(
                 "Copying",
                 format!(
-                    "{} to {} (no wasm rpc dependencies found)",
+                    "{} to {}, no wasm rpc dependencies defined",
                     input_wasm.to_string_lossy(),
                     output_wasm.to_string_lossy()
                 ),
@@ -263,9 +263,9 @@ pub async fn post_build_app(config: &Config, app: &Application) -> anyhow::Resul
 pub async fn build(config: Config) -> anyhow::Result<()> {
     let app = load_app(&config)?;
 
-    pre_build_app(&config, &app).await?;
+    pre_component_build_app(&config, &app).await?;
     component_build_app(&config, &app)?;
-    post_build_app(&config, &app).await?;
+    post_component_build_app(&config, &app).await?;
 
     Ok(())
 }
