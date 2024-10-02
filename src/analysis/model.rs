@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::analysis::analysed_type::{
+    bool, chr, f32, f64, s16, s32, s64, s8, str, u16, u32, u64, u8,
+};
 use crate::analysis::AnalysisResult;
 use crate::component::{ComponentExternalKind, PrimitiveValueType};
 
@@ -413,6 +416,10 @@ pub mod analysed_type {
     pub fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
         AnalysedType::Variant(TypeVariant { cases })
     }
+
+    pub fn handle(resource_id: AnalysedResourceId, mode: AnalysedResourceMode) -> AnalysedType {
+        AnalysedType::Handle(TypeHandle { resource_id, mode })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
@@ -433,19 +440,19 @@ pub struct AnalysedResourceId(pub u64);
 impl From<&PrimitiveValueType> for AnalysedType {
     fn from(value: &PrimitiveValueType) -> Self {
         match value {
-            PrimitiveValueType::Bool => AnalysedType::Bool(TypeBool),
-            PrimitiveValueType::S8 => AnalysedType::S8(TypeS8),
-            PrimitiveValueType::U8 => AnalysedType::U8(TypeU8),
-            PrimitiveValueType::S16 => AnalysedType::S16(TypeS16),
-            PrimitiveValueType::U16 => AnalysedType::U16(TypeU16),
-            PrimitiveValueType::S32 => AnalysedType::S32(TypeS32),
-            PrimitiveValueType::U32 => AnalysedType::U32(TypeU32),
-            PrimitiveValueType::S64 => AnalysedType::S64(TypeS64),
-            PrimitiveValueType::U64 => AnalysedType::U64(TypeU64),
-            PrimitiveValueType::F32 => AnalysedType::F32(TypeF32),
-            PrimitiveValueType::F64 => AnalysedType::F64(TypeF64),
-            PrimitiveValueType::Chr => AnalysedType::Chr(TypeChr),
-            PrimitiveValueType::Str => AnalysedType::Str(TypeStr),
+            PrimitiveValueType::Bool => bool(),
+            PrimitiveValueType::S8 => s8(),
+            PrimitiveValueType::U8 => u8(),
+            PrimitiveValueType::S16 => s16(),
+            PrimitiveValueType::U16 => u16(),
+            PrimitiveValueType::S32 => s32(),
+            PrimitiveValueType::U32 => u32(),
+            PrimitiveValueType::S64 => s64(),
+            PrimitiveValueType::U64 => u64(),
+            PrimitiveValueType::F32 => f32(),
+            PrimitiveValueType::F64 => f64(),
+            PrimitiveValueType::Chr => chr(),
+            PrimitiveValueType::Str => str(),
         }
     }
 }

@@ -691,10 +691,10 @@ impl<Ast: AstCustomization + 'static> AnalysisContext<Ast> {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::analysed_type::{f32, field, handle, record, result, str, u32, u64};
     use crate::analysis::{
         AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
-        AnalysedResourceMode, AnalysedType, NameTypePair, TypeF32, TypeHandle, TypeRecord,
-        TypeResult, TypeStr, TypeU32, TypeU64,
+        AnalysedResourceMode,
     };
 
     #[test]
@@ -703,14 +703,11 @@ mod tests {
             name: "[constructor]cart".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
-                typ: AnalysedType::Str(TypeStr),
+                typ: str(),
             }],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Handle(TypeHandle {
-                    resource_id: AnalysedResourceId(0),
-                    mode: AnalysedResourceMode::Owned,
-                }),
+                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
             }],
         };
         let method = AnalysedFunction {
@@ -718,33 +715,16 @@ mod tests {
             parameters: vec![
                 AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 },
                 AnalysedFunctionParameter {
                     name: "item".to_string(),
-                    typ: AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            NameTypePair {
-                                name: "product-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            NameTypePair {
-                                name: "name".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            NameTypePair {
-                                name: "price".to_string(),
-                                typ: AnalysedType::F32(TypeF32),
-                            },
-                            NameTypePair {
-                                name: "quantity".to_string(),
-                                typ: AnalysedType::U32(TypeU32),
-                            },
-                        ],
-                    }),
+                    typ: record(vec![
+                        field("product-id", str()),
+                        field("name", str()),
+                        field("price", f32()),
+                        field("quantity", u32()),
+                    ]),
                 },
             ],
             results: vec![],
@@ -754,50 +734,30 @@ mod tests {
             parameters: vec![
                 AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 },
                 AnalysedFunctionParameter {
                     name: "that".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 },
             ],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Handle(TypeHandle {
-                    resource_id: AnalysedResourceId(0),
-                    mode: AnalysedResourceMode::Owned,
-                }),
+                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
             }],
         };
         let fun = AnalysedFunction {
             name: "hash".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "path".to_string(),
-                typ: AnalysedType::Str(TypeStr),
+                typ: str(),
             }],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Result(TypeResult {
-                    ok: Some(Box::new(AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            NameTypePair {
-                                name: "lower".to_string(),
-                                typ: AnalysedType::U64(TypeU64),
-                            },
-                            NameTypePair {
-                                name: "upper".to_string(),
-                                typ: AnalysedType::U64(TypeU64),
-                            },
-                        ],
-                    }))),
-                    err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                }),
+                typ: result(
+                    record(vec![field("lower", u64()), field("upper", u64())]),
+                    str(),
+                ),
             }],
         };
 
