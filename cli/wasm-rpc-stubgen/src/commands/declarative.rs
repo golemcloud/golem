@@ -215,7 +215,14 @@ fn load_app(mode: ApplicationResolveMode) -> ValidatedResult<Application> {
     let app = oam_apps.and_then(Application::from_oam_apps);
 
     log_validated_action_result("Found", &app, |app| {
-        format!("components: {}", app.wasm_components_by_name.keys().join(", "))
+        if app.wasm_components_by_name.is_empty() {
+            "no components".to_string()
+        } else {
+            format!(
+                "components: {}",
+                app.wasm_components_by_name.keys().join(", ")
+            )
+        }
     });
 
     app
@@ -284,13 +291,17 @@ fn collect_sources(mode: ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf>
     };
 
     log_validated_action_result("Found", &sources, |sources| {
-        format!(
-            "sources: {}",
-            sources
-                .iter()
-                .map(|source| source.to_string_lossy())
-                .join(", ")
-        )
+        if sources.is_empty() {
+            "no sources".to_string()
+        } else {
+            format!(
+                "sources: {}",
+                sources
+                    .iter()
+                    .map(|source| source.to_string_lossy())
+                    .join(", ")
+            )
+        }
     });
 
     sources
