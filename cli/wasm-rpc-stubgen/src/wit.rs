@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_warn_action};
+use crate::copy::copy;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
@@ -568,8 +569,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                     "  Copying",
                     format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
                 );
-                fs::create_dir_all(dest.parent().unwrap())?;
-                fs::copy(source, &dest)?;
+                copy(source, &dest)?;
             }
         } else {
             log_warn_action(
@@ -793,10 +793,7 @@ impl WitAction {
                 dir_name,
             } => {
                 let target_dir = target_wit_root.join("deps").join(dir_name);
-                if !target_dir.exists() {
-                    fs::create_dir_all(&target_dir).context("Create target directory")?;
-                }
-                fs::copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
+                copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
                     .context("Copy the WIT file")?;
             }
         }

@@ -2,6 +2,7 @@ use crate::commands::dependencies::UpdateCargoToml;
 use crate::commands::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
 };
+use crate::copy::copy;
 use crate::model::oam;
 use crate::model::validation::ValidatedResult;
 use crate::model::wasm_rpc::{
@@ -226,12 +227,7 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
                     output_wasm.to_string_lossy()
                 ),
             );
-            std::fs::create_dir_all(
-                output_wasm
-                    .parent()
-                    .expect("Failed to get parent dir of output wasm"),
-            )?;
-            std::fs::copy(&input_wasm, &output_wasm)?;
+            copy(&input_wasm, &output_wasm)?;
         } else {
             log_action(
                 "Composing",
