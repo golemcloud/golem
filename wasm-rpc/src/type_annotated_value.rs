@@ -1,11 +1,3 @@
-use golem_wasm_ast::analysis::analysed_type::{
-    bool, chr, f32, f64, list, option, result, result_err, result_ok, s16, s32, s64, s8, str,
-    tuple, u16, u32, u64, u8,
-};
-use golem_wasm_ast::analysis::protobuf::Type;
-use golem_wasm_ast::analysis::AnalysedType;
-use std::collections::HashMap;
-
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::protobuf::typed_result::ResultValue;
 use crate::protobuf::{NameValuePair, TypedOption};
@@ -14,6 +6,14 @@ use crate::protobuf::{
     TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
 };
 use crate::Value;
+use golem_wasm_ast::analysis::analysed_type::{
+    bool, chr, f32, f64, list, option, result, result_err, result_ok, s16, s32, s64, s8, str,
+    tuple, u16, u32, u64, u8,
+};
+use golem_wasm_ast::analysis::protobuf::Type;
+use golem_wasm_ast::analysis::AnalysedType;
+use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct ValueAndType {
@@ -297,6 +297,16 @@ impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
 
     fn get_type() -> AnalysedType {
         list(tuple(vec![K::get_type(), V::get_type()]))
+    }
+}
+
+impl IntoValue for Uuid {
+    fn into_value(self) -> Value {
+        todo!()
+    }
+
+    fn get_type() -> AnalysedType {
+        todo!()
     }
 }
 

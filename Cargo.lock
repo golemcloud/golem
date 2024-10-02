@@ -1804,6 +1804,7 @@ dependencies = [
  "prost-build",
  "serde 1.0.210",
  "serde_json",
+ "uuid",
  "wasm-wave",
  "wasmtime",
  "wasmtime-wasi",
