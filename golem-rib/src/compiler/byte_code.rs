@@ -985,6 +985,47 @@ mod compiler_tests {
     }
 
     #[cfg(test)]
+    mod invalid_function_invoke_tests {
+        use crate::{compiler, Expr};
+        use crate::compiler::byte_code::compiler_tests::internal;
+
+        #[test]
+        fn test_invalid_function_call() {
+            let expr = r#"
+               foo(request);
+               "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &vec![]).unwrap_err();
+
+            assert_eq!(
+                compiler_error,
+                "Unknown function call foo"
+            );
+        }
+
+        #[test]
+        fn test_invalid_resource_method_call() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple");
+               golem:it/api.{cart(user_id).foo}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid resource method call golem:it/api.{cart(user_id).foo}. `foo` doesn't exist in resource `cart`"
+            );
+
+        }
+    }
+
+    #[cfg(test)]
     mod global_input_tests {
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
@@ -992,6 +1033,64 @@ mod compiler_tests {
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
+
+        #[tokio::test]
+        async fn test_str_global_input() {
+            let request_value_type = AnalysedType::Str(TypeStr);
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                "foo"  => "success",
+                 _ => "fallback"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_number_global_input() {
+            let request_value_type = AnalysedType::U32(TypeU32);
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                1  => "success",
+                0 => "failure"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
 
         #[tokio::test]
         async fn test_variant_type_info() {
@@ -1280,72 +1379,58 @@ mod compiler_tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_str_global_input() {
-        let request_value_type = AnalysedType::Str(TypeStr);
-
-        let output_analysed_type = AnalysedType::Str(TypeStr);
-
-        let analysed_exports = internal::get_component_metadata(
-            "my-worker-function",
-            vec![request_value_type.clone()],
-            output_analysed_type,
-        );
-
-        let expr = r#"
-               let x = request;
-               my-worker-function(x);
-               match x {
-                "foo"  => "success",
-                 _ => "fallback"
-               }
-            "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let expected_type_info =
-            internal::rib_input_type_info(vec![("request", request_value_type)]);
-
-        assert_eq!(compiled.global_input_type_info, expected_type_info);
-    }
-
-    #[tokio::test]
-    async fn test_number_global_input() {
-        let request_value_type = AnalysedType::U32(TypeU32);
-
-        let output_analysed_type = AnalysedType::Str(TypeStr);
-
-        let analysed_exports = internal::get_component_metadata(
-            "my-worker-function",
-            vec![request_value_type.clone()],
-            output_analysed_type,
-        );
-
-        let expr = r#"
-               let x = request;
-               my-worker-function(x);
-               match x {
-                1  => "success",
-                0 => "failure"
-               }
-            "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let expected_type_info =
-            internal::rib_input_type_info(vec![("request", request_value_type)]);
-
-        assert_eq!(compiled.global_input_type_info, expected_type_info);
-    }
-
     mod internal {
         use crate::RibInputTypeInfo;
-        use golem_wasm_ast::analysis::{
-            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedType,
-        };
+        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeStr, TypeU32, TypeVariant};
         use std::collections::HashMap;
 
+        pub(crate) fn metadata_with_resource_methods() -> Vec<AnalysedExport> {
+            let instance = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![
+                    AnalysedFunction {
+                        name: "[constructor]cart".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "param1".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                        results: vec![AnalysedFunctionResult {
+                            name: None,
+                            typ: AnalysedType::Handle(TypeHandle {
+                                resource_id: AnalysedResourceId(0),
+                                mode: AnalysedResourceMode::Owned,
+                            }),
+                        }],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.add-item".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "self".to_string(),
+                                typ: AnalysedType::Handle(TypeHandle {
+                                    resource_id: AnalysedResourceId(0),
+                                    mode: AnalysedResourceMode::Borrowed,
+                                }),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "item".to_string(),
+                                typ: AnalysedType::Record(TypeRecord {
+                                    fields: vec![
+                                        NameTypePair {
+                                            name: "name".to_string(),
+                                            typ: AnalysedType::Str(TypeStr),
+                                        },
+                                    ],
+                                }),
+                            },
+                        ],
+                        results: vec![],
+                    }
+                ],
+            });
+
+            vec![instance]
+        }
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,

@@ -132,6 +132,10 @@ impl Expr {
         matches!(self, Expr::Cond(_, _, _, _))
     }
 
+    pub fn is_function_call(&self) -> bool {
+        matches!(self, Expr::Call(_, _, _))
+    }
+
     pub fn is_match_expr(&self) -> bool {
         matches!(self, Expr::PatternMatch(_, _, _))
     }
@@ -377,6 +381,46 @@ impl Expr {
         ));
 
         Expr::Sequence(expressions, inferred_type)
+    }
+
+    // Useful in various scenarios such as error messages, where we need to specify the
+    // kind of expression even before identifying the types fully
+    pub fn expr_kind(&self) -> &'static str {
+        match self  {
+            Expr::Let(_, _, _, _) => "let binding",
+            Expr::SelectField(_, _, _) => "select field",
+            Expr::SelectIndex(_, _, _) => "select index",
+            Expr::Sequence(_, _) => "list",
+            Expr::Record(_, _) => "record",
+            Expr::Tuple(_, _) => "tuple",
+            Expr::Literal(_, _) => "literal",
+            Expr::Number(_, _, _) => "number",
+            Expr::Flags(_, _) => "flags",
+            Expr::Identifier(_, _) => "identifer",
+            Expr::Boolean(_, _) => "boolean",
+            Expr::Concat(_, _) => "string",
+            Expr::Multiple(_, _) => "multline code block",
+            Expr::Not(_, _) => "not",
+            Expr::GreaterThan(_, _, _) => "boolean",
+            Expr::And(_, _, _) => "boolean",
+            Expr::GreaterThanOrEqualTo(_, _, _) => "boolean",
+            Expr::LessThanOrEqualTo(_, _, _) => "boolean",
+            Expr::EqualTo(_, _, _) => "boolean",
+            Expr::LessThan(_, _, _) => "boolean",
+            Expr::Cond(_, _, _, _) => "if else",
+            Expr::PatternMatch(_, _, _) => "pattern match",
+            Expr::Option(_, _) => "option",
+            Expr::Result(expr, _) =>  {
+               match expr {
+                    Ok(_) => "result::ok",
+                    Err(_) => "result::err",
+                }
+            },
+            Expr::Call(_, _, _) => "function call",
+            Expr::Unwrap(_, _) => "unwrap",
+            Expr::Throw(_, _) => "throw",
+            Expr::GetTag(_, _) => "get tag"
+        }
     }
 
     pub fn inferred_type(&self) -> InferredType {

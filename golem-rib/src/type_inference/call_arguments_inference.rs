@@ -45,7 +45,7 @@ mod internal {
         Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, RegistryKey, RegistryValue,
     };
     use golem_wasm_ast::analysis::AnalysedType;
-    use std::fmt::Display;
+    use std::fmt::{Display, format};
 
     pub(crate) fn resolve_call_argument_types(
         call_type: &mut CallType,
@@ -57,6 +57,7 @@ mod internal {
             CallType::Function(dynamic_parsed_function_name) => {
                 let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
                 let function = parsed_function_static.clone().function;
+                let resource_name =  function.resource_name().ok_or("Resource name not found")?;
                 if function.resource_name().is_some() {
                     let constructor_name = {
                         let raw_str = function.resource_name().ok_or("Resource name not found")?;
@@ -84,7 +85,24 @@ mod internal {
                         registry_key,
                         constructor_params,
                         inferred_type,
-                    )?;
+                    ).map_err(|e| match e {
+                        ArgTypesInferenceError::InvalidFunctionCall => {
+                            format!("Invalid resource constructor call: {}", resource_name)
+                        }
+                        ArgTypesInferenceError::ArgumentSizeMisMatch {
+                            expected,
+                            provided,
+                        } => format!(
+                            "Invalid resource constructor call. {} expects {} arguments, but provided {}",
+                            resource_name, expected, provided
+                        ),
+                        ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
+                            format!(
+                                "Invalid arguments for resource constructor {}. Expected type {:?}, but provided {}",
+                                resource_name, expected, provided
+                            )
+                        }
+                    })?;
 
                     // Infer the types of resource method parameters
                     let resource_method_name = function.function_name();
@@ -99,16 +117,50 @@ mod internal {
                         registry_key,
                         args,
                         inferred_type,
-                    )
+                    ).map_err(|e| match e {
+                        ArgTypesInferenceError::InvalidFunctionCall => {
+                            format!("Invalid resource method call {}. `{}` doesn't exist in resource `{}`", parsed_function_static, parsed_function_static.function.resource_method_name().unwrap(), resource_name)
+                        }
+                        ArgTypesInferenceError::ArgumentSizeMisMatch {
+                            expected,
+                            provided,
+                        } => format!(
+                            "Invalid call: {}. Expected {} arguments, but provided {}",
+                            parsed_function_static, expected, provided
+                        ),
+                        ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
+                            format!(
+                                "Invalid arguments to resource method {}. Expected type {:?}, but provided {}",
+                                parsed_function_static, expected, provided
+                            )
+                        }
+                    })
                 } else {
                     let registry_key = RegistryKey::from_invocation_name(call_type);
                     infer_types(
-                        &FunctionNameInternal::Fqn(parsed_function_static),
+                        &FunctionNameInternal::Fqn(parsed_function_static.clone()),
                         function_type_registry,
                         registry_key,
                         args,
                         inferred_type,
-                    )
+                    ).map_err(|e| match e {
+                        ArgTypesInferenceError::InvalidFunctionCall => {
+                            format!("Invalid function call: {}", parsed_function_static.function.function_name())
+                        }
+                        ArgTypesInferenceError::ArgumentSizeMisMatch {
+                            expected,
+                            provided,
+                        } => format!(
+                            "Invalid function call: {}. Expected {} arguments, but provided {}",
+                            parsed_function_static, expected, provided
+                        ),
+                        ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
+                            format!(
+                                "Invalid argument types in function {}. Expected type {:?}, but provided {}",
+                                parsed_function_static.function.function_name(), expected, provided
+                            )
+                        }
+                    })
                 }
             }
 
@@ -128,7 +180,44 @@ mod internal {
                     registry_key,
                     args,
                     inferred_type,
-                )
+                ).map_err(|e| match e {
+                    ArgTypesInferenceError::InvalidFunctionCall => {
+                        format!("Invalid variant constructor call: {}", variant_name)
+                    }
+                    ArgTypesInferenceError::ArgumentSizeMisMatch {
+                        expected,
+                        provided,
+                    } => format!(
+                        "Invalid variant construction: {}. Expected {} arguments, but provided {}",
+                        variant_name, expected, provided
+                    ),
+                    ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
+                        format!(
+                            "Invalid type for {} construction arguments. Expected type {:?}, but provided {}",
+                            variant_name, expected, provided
+                        )
+                    }
+                })
+            }
+        }
+    }
+    enum ArgTypesInferenceError {
+        InvalidFunctionCall,
+        ArgumentSizeMisMatch {
+            expected: usize,
+            provided: usize,
+        },
+        TypeMisMatchError {
+            expected: AnalysedType,
+            provided: String // If only partial information about type is available
+        },
+    }
+
+    impl ArgTypesInferenceError {
+        fn type_mismatch(expected: AnalysedType, provided: &'static str) -> ArgTypesInferenceError {
+            ArgTypesInferenceError::TypeMisMatchError {
+                expected,
+                provided: provided.to_string(),
             }
         }
     }
@@ -139,7 +228,7 @@ mod internal {
         key: RegistryKey,
         args: &mut [Expr],
         inferred_type: &mut InferredType,
-    ) -> Result<(), String> {
+    ) -> Result<(), ArgTypesInferenceError> {
         if let Some(value) = function_type_registry.types.get(&key) {
             match value {
                 RegistryValue::Value(_) => Ok(()),
@@ -155,12 +244,10 @@ mod internal {
 
                         Ok(())
                     } else {
-                        Err(format!(
-                            "Variant {} expects {} arguments, but {} were provided",
-                            function_name,
-                            parameter_types.len(),
-                            args.len()
-                        ))
+                        Err(ArgTypesInferenceError::ArgumentSizeMisMatch {
+                            expected: parameter_types.len(),
+                            provided: args.len(),
+                        })
                     }
                 }
                 RegistryValue::Function {
@@ -190,20 +277,19 @@ mod internal {
 
                         Ok(())
                     } else {
-                        Err(format!(
-                            "Function {} expects {} arguments, but {} were provided",
-                            function_name,
-                            parameter_types.len(),
-                            args.len()
-                        ))
+                        Err(ArgTypesInferenceError::ArgumentSizeMisMatch {
+                            expected: parameter_types.len(),
+                            provided: args.len(),
+                        })
                     }
                 }
             }
         } else {
-            Err(format!("Unknown function/variant call {}", function_name))
+            Err(ArgTypesInferenceError::InvalidFunctionCall)
         }
     }
 
+    #[derive(Clone)]
     enum FunctionNameInternal {
         ResourceConstructorName(String),
         ResourceMethodName(String),
@@ -231,183 +317,56 @@ mod internal {
     }
 
     // A preliminary check of the arguments passed before  typ inference
-    pub(crate) fn check_function_arguments(
+    fn check_function_arguments(
         expected: &AnalysedType,
         passed: &Expr,
-    ) -> Result<(), String> {
+    ) -> Result<(), ArgTypesInferenceError> {
+        // Valid expressions, whose evaluation/inference may give the right expected type
+        // We will leave it to the rest of the type inference process to check the validity of the expression
         let valid_possibilities = passed.is_identifier()
             || passed.is_select_field()
             || passed.is_select_index()
             || passed.is_select_field()
             || passed.is_match_expr()
-            || passed.is_if_else();
+            || passed.is_if_else()
+            || passed.is_function_call();
 
-        match expected {
-            AnalysedType::U32(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected U32, but found {:?}", passed))
-                }
-            }
+        let is_valid = match expected {
+            AnalysedType::U32(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::U64(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::Variant(_) => valid_possibilities,
+            AnalysedType::Result(_) => valid_possibilities || passed.is_result(),
+            AnalysedType::Option(_) => valid_possibilities || passed.is_option(),
+            AnalysedType::Enum(_) => valid_possibilities,
+            AnalysedType::Flags(_) => valid_possibilities || passed.is_flags(),
+            AnalysedType::Record(_) => valid_possibilities || passed.is_record(),
+            AnalysedType::Tuple(_) => valid_possibilities || passed.is_tuple(),
+            AnalysedType::List(_) => valid_possibilities || passed.is_list(),
+            AnalysedType::Str(_) => valid_possibilities || passed.is_concat() || passed.is_literal(),
+            AnalysedType::Chr(_) =>  valid_possibilities || passed.is_literal(),
+            AnalysedType::F64(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::F32(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::S64(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::S32(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::U16(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::S16(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::U8(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::S8(_) => valid_possibilities || passed.is_number(),
+            AnalysedType::Bool(_) => valid_possibilities || passed.is_boolean() || passed.is_comparison(),
+            AnalysedType::Handle(_) => valid_possibilities
+        };
 
-            AnalysedType::U64(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected U64, but found {:?}", passed))
-                }
-            }
-
-            AnalysedType::Variant(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Variant, but found {:?}", passed))
-                }
-            }
-
-            AnalysedType::Result(_) => {
-                if valid_possibilities || passed.is_result() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Result, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Option(_) => {
-                if valid_possibilities || passed.is_option() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Option, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Enum(_) => {
-                if valid_possibilities {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Enum, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Flags(_) => {
-                if valid_possibilities || passed.is_flags() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Flags, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Record(_) => {
-                if valid_possibilities || passed.is_record() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Record, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Tuple(_) => {
-                if valid_possibilities || passed.is_tuple() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Tuple, but found {:?}", passed))
-                }
-            }
-            AnalysedType::List(_) => {
-                if valid_possibilities || passed.is_list() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected List, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Str(_) => {
-                if valid_possibilities || passed.is_concat() || passed.is_literal() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Str, but found {:?}", passed))
-                }
-            }
-            // TODO?
-            AnalysedType::Chr(_) => {
-                if valid_possibilities || passed.is_literal() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Chr, but found {:?}", passed))
-                }
-            }
-            AnalysedType::F64(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected F64, but found {:?}", passed))
-                }
-            }
-            AnalysedType::F32(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected F32, but found {:?}", passed))
-                }
-            }
-            AnalysedType::S64(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected S64, but found {:?}", passed))
-                }
-            }
-            AnalysedType::S32(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected S32, but found {:?}", passed))
-                }
-            }
-            AnalysedType::U16(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected U16, but found {:?}", passed))
-                }
-            }
-            AnalysedType::S16(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected S16, but found {:?}", passed))
-                }
-            }
-            AnalysedType::U8(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected U8, but found {:?}", passed))
-                }
-            }
-            AnalysedType::S8(_) => {
-                if valid_possibilities || passed.is_number() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected S8, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Bool(_) => {
-                if valid_possibilities || passed.is_boolean() || passed.is_comparison() {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Bool, but found {:?}", passed))
-                }
-            }
-            AnalysedType::Handle(_) => {
-                if valid_possibilities {
-                    Ok(())
-                } else {
-                    Err(format!("Expected Handle, but found {:?}", passed))
-                }
-            }
+        if is_valid {
+            Ok(())
+        } else {
+            Err(ArgTypesInferenceError::type_mismatch(expected.clone(), passed.expr_kind()))
         }
     }
 
     fn tag_argument_types(
         args: &mut [Expr],
         parameter_types: &[AnalysedType],
-    ) -> Result<(), String> {
+    ) -> Result<(), ArgTypesInferenceError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
             check_function_arguments(param_type, arg)?;
             arg.add_infer_type_mut(param_type.clone().into());
