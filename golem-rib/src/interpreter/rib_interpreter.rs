@@ -50,7 +50,9 @@ impl Interpreter {
         }
     }
 
-    pub fn from_input(env: HashMap<String, TypeAnnotatedValue>) -> Self {
+    // Interpreter that's not expected to call a side-effecting function call.
+    // All it needs is environment with the required variables to evaluate the Rib script
+    pub fn pure(env: HashMap<String, TypeAnnotatedValue>) -> Self {
         Interpreter {
             stack: InterpreterStack::new(),
             env: InterpreterEnv::from_input(env),

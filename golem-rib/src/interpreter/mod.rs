@@ -35,3 +35,11 @@ pub async fn interpret(
     let mut interpreter = Interpreter::new(rib_input, function_invoke);
     interpreter.run(rib.clone()).await
 }
+
+pub async fn interpret_pure(
+    rib: &RibByteCode,
+    rib_input: &HashMap<String, TypeAnnotatedValue>,
+) -> Result<RibInterpreterResult, String> {
+    let mut interpreter = Interpreter::pure(rib_input.clone());
+    interpreter.run(rib.clone()).await
+}

@@ -14,6 +14,7 @@ pub mod service;
 mod worker_binding;
 pub mod worker_bridge_execution;
 pub mod worker_service_rib_interpreter;
+mod worker_service_rib_compiler;
 
 const VERSION: &str = golem_version!();
 

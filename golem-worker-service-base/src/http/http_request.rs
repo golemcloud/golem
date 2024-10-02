@@ -133,7 +133,7 @@ mod tests {
         WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
     };
     use crate::worker_service_rib_interpreter::{
-        DefaultEvaluator, EvaluationError, WorkerServiceRibInterpreter,
+        DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
 
     struct TestWorkerRequestExecutor {}
@@ -249,7 +249,7 @@ mod tests {
     }
 
     fn get_test_evaluator() -> Arc<dyn WorkerServiceRibInterpreter + Sync + Send> {
-        Arc::new(DefaultEvaluator::from_worker_request_executor(Arc::new(
+        Arc::new(DefaultRibInterpreter::from_worker_request_executor(Arc::new(
             TestWorkerRequestExecutor {},
         )))
     }

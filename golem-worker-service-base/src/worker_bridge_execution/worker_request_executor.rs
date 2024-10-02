@@ -38,17 +38,3 @@ impl<T: AsRef<str>> From<T> for WorkerRequestExecutorError {
         WorkerRequestExecutorError(err.as_ref().to_string())
     }
 }
-
-pub struct NoopWorkerRequestExecutor;
-
-#[async_trait]
-impl WorkerRequestExecutor for NoopWorkerRequestExecutor {
-    async fn execute(
-        &self,
-        _worker_request_params: WorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        Err(WorkerRequestExecutorError(
-            "NoopWorkerRequestExecutor".to_string(),
-        ))
-    }
-}

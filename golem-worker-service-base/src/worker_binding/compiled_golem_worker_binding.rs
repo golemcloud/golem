@@ -1,8 +1,9 @@
-use crate::worker_binding::{compile_rib, GolemWorkerBinding, ResponseMapping};
+use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
+use crate::worker_service_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct CompiledGolemWorkerBinding {
@@ -54,7 +55,7 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let worker_name_compiled = compile_rib(worker_name, exports)?;
+        let worker_name_compiled = DefaultRibCompiler::compile(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
@@ -76,7 +77,7 @@ impl IdempotencyKeyCompiled {
         idempotency_key: &Expr,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let idempotency_key_compiled = compile_rib(idempotency_key, exports)?;
+        let idempotency_key_compiled = DefaultRibCompiler::compile(idempotency_key, exports)?;
 
         Ok(IdempotencyKeyCompiled {
             idempotency_key: idempotency_key.clone(),
@@ -98,7 +99,7 @@ impl ResponseMappingCompiled {
         response_mapping: &ResponseMapping,
         exports: &Vec<AnalysedExport>,
     ) -> Result<Self, String> {
-        let response_compiled = compile_rib(&response_mapping.0, exports)?;
+        let response_compiled = DefaultRibCompiler::compile(&response_mapping.0, exports)?;
 
         Ok(ResponseMappingCompiled {
             response_rib_expr: response_mapping.0.clone(),

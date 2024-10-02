@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::CompiledHttpApiDefinition;
-use crate::worker_service_rib_interpreter::{DefaultEvaluator, WorkerServiceRibInterpreter};
+use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -31,7 +31,7 @@ impl CustomHttpRequestApi {
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
-        let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
+        let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
         ));
 
