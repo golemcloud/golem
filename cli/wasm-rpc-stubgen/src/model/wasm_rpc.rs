@@ -168,7 +168,14 @@ impl Application {
             .remove(component_type)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|component| convert(source, validation, component))
+            .filter_map(|component| {
+                validation.push_context("component name", component.name.clone());
+                validation.push_context("component type", component.component_type.clone());
+                let result = convert(source, validation, component);
+                validation.pop_context();
+                validation.pop_context();
+                result
+            })
             .collect()
     }
 
@@ -177,9 +184,6 @@ impl Application {
         validation: &mut ValidationBuilder,
         mut component: oam::Component,
     ) -> Option<WasmComponent> {
-        validation.push_context("component name", component.name.clone());
-        validation.push_context("component type", component.component_type.clone());
-
         let properties = component.typed_properties::<WasmComponentProperties>();
 
         if let Some(err) = properties.as_ref().err() {
@@ -228,13 +232,23 @@ impl Application {
             },
         );
 
+        validation.add_warns(component.traits, |component_trait| {
+            Some((
+                vec![],
+                format!(
+                    "Unknown trait for wasm component, trait type: {}",
+                    component_trait.trait_type
+                ),
+            ))
+        });
+
         let wasm_rpc_dependencies = wasm_rpc_dependencies
             .into_iter()
             .unique()
             .sorted()
             .collect::<Vec<_>>();
 
-        let component = match (properties, validation.has_any_errors()) {
+        match (properties, validation.has_any_errors()) {
             (Ok(properties), false) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
@@ -248,12 +262,7 @@ impl Application {
                 })
             }
             _ => None,
-        };
-
-        validation.pop_context();
-        validation.pop_context();
-
-        component
+        }
     }
 
     fn convert_wasm_build(
@@ -261,8 +270,6 @@ impl Application {
         validation: &mut ValidationBuilder,
         component: oam::Component,
     ) -> Option<WasmBuild> {
-        validation.push_context("component build name", component.name.clone());
-
         let result = match component.typed_properties::<ComponentBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
@@ -276,7 +283,7 @@ impl Application {
                 Some(wasm_rpc_stub_build)
             }
             Err(err) => {
-                validation.add_error(format!("Failed to get component build properties: {}", err));
+                validation.add_error(format!("Failed to get wasm build properties: {}", err));
                 None
             }
         };
@@ -285,13 +292,11 @@ impl Application {
             Some((
                 vec![],
                 format!(
-                    "Unknown trait for component build, trait type: {}",
+                    "Unknown trait for wasm build, trait type: {}",
                     component_trait.trait_type
                 ),
             ))
         });
-
-        validation.pop_context();
 
         result
     }
@@ -301,8 +306,6 @@ impl Application {
         validation: &mut ValidationBuilder,
         component: oam::Component,
     ) -> Option<WasmRpcStubBuild> {
-        validation.push_context("component stub build name", component.name.clone());
-
         let result = match component.typed_properties::<ComponentStubBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
@@ -370,8 +373,6 @@ impl Application {
                 ),
             ))
         });
-
-        validation.pop_context();
 
         result
     }

@@ -1,5 +1,7 @@
 use crate::commands::dependencies::UpdateCargoToml;
-use crate::commands::log::{log_action, log_skipping_up_to_date, log_validated_action_result};
+use crate::commands::log::{
+    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
+};
 use crate::model::oam;
 use crate::model::validation::ValidatedResult;
 use crate::model::wasm_rpc::{
@@ -47,45 +49,50 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
         load_app(config.app_resolve_mode),
     )?;
 
-    for component_name in app.all_wasm_rpc_dependencies() {
-        if is_up_to_date(
-            config.skip_up_to_date_checks,
-            || [app.stub_source_wit_root(&component_name)],
-            || {
-                [
-                    app.stub_wasm(&component_name),
-                    app.stub_wit(&component_name),
-                ]
-            },
-        ) {
-            log_skipping_up_to_date(format!("building component stub: {}", component_name));
-            continue;
+    if app.all_wasm_rpc_dependencies().is_empty() {
+        log_warn_action("Skipping", "building wasm rpc stubs, no dependency found");
+    } else {
+        log_action("Building", "wasm rpc stubs");
+        for component_name in app.all_wasm_rpc_dependencies() {
+            if is_up_to_date(
+                config.skip_up_to_date_checks,
+                || [app.stub_source_wit_root(&component_name)],
+                || {
+                    [
+                        app.stub_wasm(&component_name),
+                        app.stub_wit(&component_name),
+                    ]
+                },
+            ) {
+                log_skipping_up_to_date(format!("building component stub: {}", component_name));
+                continue;
+            }
+
+            log_action("  Building", format!("wasm rpc stub: {}", component_name));
+
+            let target_root = TempDir::new()?;
+            let canonical_target_root = target_root.path().canonicalize()?;
+
+            let stub_def = StubDefinition::new(
+                &app.stub_source_wit_root(&component_name),
+                &canonical_target_root,
+                &app.stub_world(&component_name),
+                &app.stub_crate_version(&component_name),
+                &WasmRpcOverride {
+                    wasm_rpc_path_override: app.stub_wasm_rpc_path(&component_name),
+                    wasm_rpc_version_override: app.stub_wasm_rpc_version(&component_name),
+                },
+                app.stub_always_inline_types(&component_name),
+            )
+            .context("Failed to gather information for the stub generator")?;
+
+            commands::generate::build(
+                &stub_def,
+                &app.stub_wasm(&component_name),
+                &app.stub_wit(&component_name),
+            )
+            .await?
         }
-
-        log_action("Building", format!("component stub: {}", component_name));
-
-        let target_root = TempDir::new()?;
-        let canonical_target_root = target_root.path().canonicalize()?;
-
-        let stub_def = StubDefinition::new(
-            &app.stub_source_wit_root(&component_name),
-            &canonical_target_root,
-            &app.stub_world(&component_name),
-            &app.stub_crate_version(&component_name),
-            &WasmRpcOverride {
-                wasm_rpc_path_override: app.stub_wasm_rpc_path(&component_name),
-                wasm_rpc_version_override: app.stub_wasm_rpc_version(&component_name),
-            },
-            app.stub_always_inline_types(&component_name),
-        )
-        .context("Failed to gather information for the stub generator")?;
-
-        commands::generate::build(
-            &stub_def,
-            &app.stub_wasm(&component_name),
-            &app.stub_wit(&component_name),
-        )
-        .await?
     }
 
     for (component_name, component) in &app.wasm_components_by_name {
@@ -111,7 +118,7 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
             }*/
 
             log_action(
-                "Adding",
+                "  Adding",
                 format!(
                     "{} stub wit dependency to {}",
                     dep_component_name, component_name
