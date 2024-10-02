@@ -101,11 +101,10 @@ mod internal {
 
                 Expr::Call(CallType::Function(parsed_function_name), exprs, inferred_type) => {
                     let key = RegistryKey::FunctionName(parsed_function_name.to_string());
-                    if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
+                    if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)
                     {
-                        let variant_inferred_type =
-                            InferredType::from_variant_cases(type_variant);
+                        let variant_inferred_type = InferredType::from_variant_cases(variant_type);
                         *inferred_type = inferred_type.merge(variant_inferred_type);
 
                         variant_with_args.push(parsed_function_name.to_string());

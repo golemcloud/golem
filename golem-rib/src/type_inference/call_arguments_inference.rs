@@ -143,6 +143,26 @@ mod internal {
         if let Some(value) = function_type_registry.types.get(&key) {
             match value {
                 RegistryValue::Value(_) => Ok(()),
+                RegistryValue::Variant {
+                    parameter_types,
+                    variant_type,
+                } => {
+                    let parameter_types = parameter_types.clone();
+
+                    if parameter_types.len() == args.len() {
+                        tag_argument_types(args, &parameter_types)?;
+                        *inferred_type = InferredType::from_variant_cases(variant_type);
+
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Variant {} expects {} arguments, but {} were provided",
+                            function_name,
+                            parameter_types.len(),
+                            args.len()
+                        ))
+                    }
+                }
                 RegistryValue::Function {
                     parameter_types,
                     return_types,
@@ -156,11 +176,7 @@ mod internal {
                     }
 
                     if parameter_types.len() == args.len() {
-                        for (arg, param_type) in args.iter_mut().zip(parameter_types) {
-                            check_function_arguments(&param_type, arg)?;
-                            arg.add_infer_type_mut(param_type.clone().into());
-                            arg.push_types_down()?
-                        }
+                        tag_argument_types(args, &parameter_types)?;
 
                         *inferred_type = {
                             if return_types.len() == 1 {
@@ -386,6 +402,18 @@ mod internal {
                 }
             }
         }
+    }
+
+    fn tag_argument_types(
+        args: &mut [Expr],
+        parameter_types: &[AnalysedType],
+    ) -> Result<(), String> {
+        for (arg, param_type) in args.iter_mut().zip(parameter_types) {
+            check_function_arguments(param_type, arg)?;
+            arg.add_infer_type_mut(param_type.clone().into());
+        }
+
+        Ok(())
     }
 }
 

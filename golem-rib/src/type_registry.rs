@@ -14,8 +14,8 @@
 
 use crate::call_type::CallType;
 use crate::ParsedFunctionSite;
-use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
@@ -66,6 +66,10 @@ impl RegistryKey {
 #[derive(PartialEq, Clone, Debug)]
 pub enum RegistryValue {
     Value(AnalysedType),
+    Variant {
+        parameter_types: Vec<AnalysedType>,
+        variant_type: TypeVariant,
+    },
     Function {
         parameter_types: Vec<AnalysedType>,
         return_types: Vec<AnalysedType>,
@@ -186,13 +190,14 @@ mod internal {
     ) {
         match ty.clone() {
             AnalysedType::Variant(variant) => {
-                for name_type_pair in variant.cases {
+                let type_variant = variant.clone();
+                for name_type_pair in &type_variant.cases {
                     registry.insert(RegistryKey::FunctionName(name_type_pair.name.clone()), {
-                        name_type_pair.typ.map_or(
+                        name_type_pair.typ.clone().map_or(
                             RegistryValue::Value(ty.clone()),
-                            |variant_parameter_typ| RegistryValue::Function {
+                            |variant_parameter_typ| RegistryValue::Variant {
                                 parameter_types: vec![variant_parameter_typ],
-                                return_types: vec![ty.clone()],
+                                variant_type: type_variant.clone(),
                             },
                         )
                     });
@@ -224,14 +229,23 @@ mod internal {
                 }
             }
 
-            AnalysedType::Result(TypeResult {ok: Some(ok_type), err: Some(err_type)}) => {
+            AnalysedType::Result(TypeResult {
+                ok: Some(ok_type),
+                err: Some(err_type),
+            }) => {
                 update_registry(ok_type.as_ref(), registry);
                 update_registry(err_type.as_ref(), registry);
             }
-            AnalysedType::Result(TypeResult {ok: None, err: Some(err_type)}) => {
+            AnalysedType::Result(TypeResult {
+                ok: None,
+                err: Some(err_type),
+            }) => {
                 update_registry(err_type.as_ref(), registry);
             }
-            AnalysedType::Result(TypeResult {ok: Some(ok_type), err: None}) => {
+            AnalysedType::Result(TypeResult {
+                ok: Some(ok_type),
+                err: None,
+            }) => {
                 update_registry(ok_type.as_ref(), registry);
             }
             AnalysedType::Option(type_option) => {
