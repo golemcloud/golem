@@ -105,7 +105,7 @@ mod internal {
     use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{TypedEnum, TypedVariant};
+    use golem_wasm_rpc::protobuf::{TypedEnum, TypedFlags, TypedVariant};
 
     pub(crate) fn compare_typed_value<F>(
         left: &TypeAnnotatedValue,
@@ -125,8 +125,20 @@ mod internal {
             (left, right)
         {
             compare_enums(left, right)
+        } else if let (TypeAnnotatedValue::Flags(left), TypeAnnotatedValue::Flags(right)) =
+            (left, right)
+        {
+            compare_flags(left, right)
         } else {
             Err(unsupported_type_error(left, right))
+        }
+    }
+
+    fn compare_flags(left: &TypedFlags, right: &TypedFlags) -> Result<TypeAnnotatedValue, String> {
+        if left.values == right.values {
+            Ok(TypeAnnotatedValue::Bool(true))
+        } else {
+            Ok(TypeAnnotatedValue::Bool(false))
         }
     }
 

@@ -668,10 +668,17 @@ impl InferredType {
                     Box::new(a_type.unify_with_required(b_type)?),
                 )),
                 (InferredType::Flags(a_flags), InferredType::Flags(b_flags)) => {
-                    if a_flags != b_flags {
-                        return Err(vec!["Flags do not match".to_string()]);
+                    if a_flags.len() >= b_flags.len() {
+                        if b_flags.iter().all(|b| a_flags.contains(b)) {
+                            Ok(InferredType::Flags(a_flags.clone()))
+                        } else {
+                            Err(vec!["Flags do not match".to_string()])
+                        }
+                    } else if a_flags.iter().all(|a| b_flags.contains(a)) {
+                        Ok(InferredType::Flags(b_flags.clone()))
+                    } else {
+                        Err(vec!["Flags do not match".to_string()])
                     }
-                    Ok(InferredType::Flags(a_flags.clone()))
                 }
                 (InferredType::Enum(a_variants), InferredType::Enum(b_variants)) => {
                     if a_variants != b_variants {

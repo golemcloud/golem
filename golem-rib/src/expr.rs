@@ -23,6 +23,7 @@ use crate::{
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
+use golem_api_grpc::proto::golem::rib::RecordFieldArmPattern;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize, Serializer};
@@ -679,8 +680,10 @@ impl MatchArm {
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),
-    Constructor(String, Vec<ArmPattern>),
-    TupleConstructor(Vec<ArmPattern>), // Just because tuple doesn't have a name to fall into Constructor
+    Constructor(String, Vec<ArmPattern>), // Can handle enums, variants, option, result etc
+    TupleConstructor(Vec<ArmPattern>),
+    RecordConstructor(Vec<(String, ArmPattern)>),
+    ListConstructor(Vec<ArmPattern>),
     Literal(Box<Expr>),
 }
 
@@ -703,6 +706,20 @@ impl ArmPattern {
                 }
                 result
             }
+            ArmPattern::RecordConstructor(patterns) => {
+                let mut result = vec![];
+                for (_, pattern) in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
+            ArmPattern::ListConstructor(patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals_mut());
+                }
+                result
+            }
             ArmPattern::WildCard => vec![],
         }
     }
@@ -719,6 +736,20 @@ impl ArmPattern {
                 result
             }
             ArmPattern::TupleConstructor(patterns) => {
+                let mut result = vec![];
+                for pattern in patterns {
+                    result.extend(pattern.get_expr_literals());
+                }
+                result
+            }
+            ArmPattern::RecordConstructor(patterns) => {
+                let mut result = vec![];
+                for (_, pattern) in patterns {
+                    result.extend(pattern.get_expr_literals());
+                }
+                result
+            }
+            ArmPattern::ListConstructor(patterns) => {
                 let mut result = vec![];
                 for pattern in patterns {
                     result.extend(pattern.get_expr_literals());
@@ -1282,6 +1313,29 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::ArmPattern> for ArmPattern {
                 let inner = expr.ok_or("Missing expr")?;
                 Ok(ArmPattern::Literal(Box::new(inner.try_into()?)))
             }
+            golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::RecordConstructor(
+                golem_api_grpc::proto::golem::rib::RecordConstructorArmPattern { fields },
+            ) => {
+                let fields = fields
+                    .into_iter()
+                    .map(|field| {
+                        let name = field.name;
+                        let proto_pattern = field.pattern.ok_or("Missing pattern")?;
+                        let arm_pattern = ArmPattern::try_from(proto_pattern)?;
+                        Ok((name, arm_pattern))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(ArmPattern::RecordConstructor(fields))
+            }
+            golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::ListConstructor(
+                golem_api_grpc::proto::golem::rib::ListConstructorArmPattern { patterns },
+            ) => {
+                let patterns = patterns
+                    .into_iter()
+                    .map(ArmPattern::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ArmPattern::ListConstructor(patterns))
+            }
         }
     }
 }
@@ -1334,6 +1388,39 @@ impl From<ArmPattern> for golem_api_grpc::proto::golem::rib::ArmPattern {
                     pattern: Some(
                         golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::TupleConstructor(
                             golem_api_grpc::proto::golem::rib::TupleConstructorArmPattern {
+                                patterns: patterns
+                                    .into_iter()
+                                    .map(golem_api_grpc::proto::golem::rib::ArmPattern::from)
+                                    .collect(),
+                            },
+                        ),
+                    ),
+                }
+            }
+
+            ArmPattern::RecordConstructor(fields) => {
+                golem_api_grpc::proto::golem::rib::ArmPattern {
+                    pattern: Some(
+                        golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::RecordConstructor(
+                            golem_api_grpc::proto::golem::rib::RecordConstructorArmPattern {
+                                fields: fields
+                                    .into_iter()
+                                    .map(|(name, pattern)| RecordFieldArmPattern {
+                                        name,
+                                        pattern: Some(pattern.into()),
+                                    })
+                                    .collect(),
+                            },
+                        ),
+                    ),
+                }
+            }
+
+            ArmPattern::ListConstructor(patterns) => {
+                golem_api_grpc::proto::golem::rib::ArmPattern {
+                    pattern: Some(
+                        golem_api_grpc::proto::golem::rib::arm_pattern::Pattern::ListConstructor(
+                            golem_api_grpc::proto::golem::rib::ListConstructorArmPattern {
                                 patterns: patterns
                                     .into_iter()
                                     .map(golem_api_grpc::proto::golem::rib::ArmPattern::from)

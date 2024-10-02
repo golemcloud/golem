@@ -20,12 +20,12 @@ pub use rib_interpreter::*;
 use crate::RibByteCode;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
-
 mod env;
 mod literal;
 mod result;
 mod rib_interpreter;
 mod stack;
+mod tests;
 
 pub async fn interpret(
     rib: &RibByteCode,

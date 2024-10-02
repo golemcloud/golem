@@ -980,10 +980,8 @@ mod internal {
 #[cfg(test)]
 mod interpreter_tests {
     use super::*;
-    use crate::{compiler, Expr, FunctionTypeRegistry, InstructionId, VariableId};
-    use golem_wasm_ast::analysis::{
-        AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32, TypeStr,
-    };
+    use crate::{InstructionId, VariableId};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
 
@@ -1268,11 +1266,19 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
     }
 
-    #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_option_nested() {
-        let mut interpreter = Interpreter::default();
+    mod pattern_match_tests {
+        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
+        use crate::{compiler, Expr, FunctionTypeRegistry, Interpreter};
+        use golem_wasm_ast::analysis::{
+            AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeTuple, TypeU16, TypeU64,
+        };
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-        let expr = r#"
+        #[tokio::test]
+        async fn test_interpreter_for_pattern_match_on_option_nested() {
+            let mut interpreter = Interpreter::default();
+
+            let expr = r#"
            let x = some(some(1u64));
 
            match x {
@@ -1282,19 +1288,19 @@ mod interpreter_tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        let compiled = compiler::compile(&expr, &vec![]).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+            let mut expr = Expr::from_text(expr).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(1));
-    }
+            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(1));
+        }
 
-    #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_tuple() {
-        let mut interpreter = Interpreter::default();
+        #[tokio::test]
+        async fn test_interpreter_for_pattern_match_on_tuple() {
+            let mut interpreter = Interpreter::default();
 
-        let expr = r#"
+            let expr = r#"
            let x: tuple<u64, str, str> = (1, "foo", "bar");
 
            match x {
@@ -1302,22 +1308,22 @@ mod interpreter_tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        let compiled = compiler::compile(&expr, &vec![]).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+            let mut expr = Expr::from_text(expr).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("1 foo bar".to_string())
-        );
-    }
+            assert_eq!(
+                result.get_val().unwrap(),
+                TypeAnnotatedValue::Str("1 foo bar".to_string())
+            );
+        }
 
-    #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_tuple_with_option_some() {
-        let mut interpreter = Interpreter::default();
+        #[tokio::test]
+        async fn test_interpreter_for_pattern_match_on_tuple_with_option_some() {
+            let mut interpreter = Interpreter::default();
 
-        let expr = r#"
+            let expr = r#"
            let x: tuple<u64, option<str>, str> = (1, some("foo"), "bar");
 
            match x {
@@ -1326,23 +1332,23 @@ mod interpreter_tests {
            }
         "#;
 
-        let mut expr = Expr::from_text(expr).unwrap();
-        expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
+            let mut expr = Expr::from_text(expr).unwrap();
+            expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-        let compiled = compiler::compile(&expr, &vec![]).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("1 foo bar".to_string())
-        );
-    }
+            assert_eq!(
+                result.get_val().unwrap(),
+                TypeAnnotatedValue::Str("1 foo bar".to_string())
+            );
+        }
 
-    #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_tuple_with_option_none() {
-        let mut interpreter = Interpreter::default();
+        #[tokio::test]
+        async fn test_interpreter_for_pattern_match_on_tuple_with_option_none() {
+            let mut interpreter = Interpreter::default();
 
-        let expr = r#"
+            let expr = r#"
            let x: tuple<u64, option<str>, str> = (1, none, "bar");
 
            match x {
@@ -1351,26 +1357,29 @@ mod interpreter_tests {
            }
         "#;
 
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &vec![]).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("1 bar".to_string())
-        );
-    }
+            assert_eq!(
+                result.get_val().unwrap(),
+                TypeAnnotatedValue::Str("1 bar".to_string())
+            );
+        }
 
-    #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
-        let mut interpreter = Interpreter::default();
+        #[tokio::test]
+        async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
+            let mut interpreter = Interpreter::default();
 
-        let tuple = internal::get_analysed_type_tuple();
+            let tuple = internal::get_analysed_type_tuple();
 
-        let analysed_exports =
-            internal::get_component_metadata("foo", vec![tuple], AnalysedType::Str(TypeStr));
+            let analysed_exports = internal::get_component_metadata(
+                "foo",
+                vec![tuple],
+                Some(AnalysedType::Str(TypeStr)),
+            );
 
-        let expr = r#"
+            let expr = r#"
 
            let record = { request : { path : { user : "jak" } }, y : "bar" };
            let input = (1, ok(100), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
@@ -1382,29 +1391,29 @@ mod interpreter_tests {
 
         "#;
 
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
-        );
-    }
+            assert_eq!(
+                result.get_val().unwrap(),
+                TypeAnnotatedValue::Str("foo 100 1 bar jak validate prod dev test".to_string())
+            );
+        }
 
-    #[tokio::test]
-    async fn test_interpreter_for_pattern_match_on_tuple_with_wild_pattern() {
-        let mut interpreter = Interpreter::default();
+        #[tokio::test]
+        async fn test_interpreter_for_pattern_match_on_tuple_with_wild_pattern() {
+            let mut interpreter = Interpreter::default();
 
-        let tuple = internal::get_analysed_type_tuple();
+            let tuple = internal::get_analysed_type_tuple();
 
-        let analysed_exports = internal::get_component_metadata(
-            "my-worker-function",
-            vec![tuple],
-            AnalysedType::Str(TypeStr),
-        );
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![tuple],
+                Some(AnalysedType::Str(TypeStr)),
+            );
 
-        let expr = r#"
+            let expr = r#"
 
            let record = { request : { path : { user : "jak" } }, y : "baz" };
            let input = (1, ok(1), "bar", record, process-user("jon"), register-user(1u64), validate, prod, dev, test);
@@ -1415,22 +1424,15 @@ mod interpreter_tests {
            }
         "#;
 
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let result = interpreter.run(compiled.byte_code).await.unwrap();
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
-        );
-    }
-
-    mod pattern_match_tests {
-        use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr};
-        use golem_wasm_ast::analysis::{
-            AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeTuple, TypeU16, TypeU64,
-        };
+            assert_eq!(
+                result.get_val().unwrap(),
+                TypeAnnotatedValue::Str("dev 1 bar jak baz".to_string())
+            );
+        }
 
         #[tokio::test]
         async fn test_record_output_in_pattern_match() {
@@ -1438,14 +1440,15 @@ mod interpreter_tests {
             let output_analysed_type = internal::get_analysed_type_result();
 
             let result_value =
-                internal::type_annotated_value_result(&output_analysed_type, r#"ok(1)"#);
+                internal::get_type_annotated_value(&output_analysed_type, r#"ok(1)"#);
 
-            let mut interpreter = internal::test_executor(&output_analysed_type, &result_value);
+            let mut interpreter =
+                internal::static_test_interpreter(&output_analysed_type, &result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
                 vec![input_analysed_type],
-                output_analysed_type,
+                Some(output_analysed_type),
             );
 
             let expr = r#"
@@ -1462,7 +1465,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = internal::type_annotated_value_result(
+            let expected = internal::get_type_annotated_value(
                 &AnalysedType::Record(TypeRecord {
                     fields: vec![
                         NameTypePair {
@@ -1487,14 +1490,15 @@ mod interpreter_tests {
             let output_analysed_type = internal::get_analysed_type_result();
 
             let result_value =
-                internal::type_annotated_value_result(&output_analysed_type, r#"err("failed")"#);
+                internal::get_type_annotated_value(&output_analysed_type, r#"err("failed")"#);
 
-            let mut interpreter = internal::test_executor(&output_analysed_type, &result_value);
+            let mut interpreter =
+                internal::static_test_interpreter(&output_analysed_type, &result_value);
 
             let analysed_exports = internal::get_component_metadata(
                 "my-worker-function",
                 vec![input_analysed_type],
-                output_analysed_type,
+                Some(output_analysed_type),
             );
 
             let expr = r#"
@@ -1512,7 +1516,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            let expected = internal::type_annotated_value_result(
+            let expected = internal::get_type_annotated_value(
                 &AnalysedType::Tuple(TypeTuple {
                     items: vec![AnalysedType::Str(TypeStr), AnalysedType::Str(TypeStr)],
                 }),
@@ -1582,7 +1586,7 @@ mod interpreter_tests {
                 ],
             });
 
-            let result_value = internal::type_annotated_value_result(
+            let result_value = internal::get_type_annotated_value(
                 &result_type,
                 r#"
           success({order-id: "foo"})
@@ -1593,7 +1597,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_executor(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
@@ -1632,7 +1636,7 @@ mod interpreter_tests {
                 })),
             });
 
-            let result_value = internal::type_annotated_value_result(
+            let result_value = internal::get_type_annotated_value(
                 &result_type,
                 r#"
             [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
@@ -1643,7 +1647,7 @@ mod interpreter_tests {
                 internal::get_shopping_cart_metadata_with_cart_resource_with_parameters();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_executor(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(
@@ -1763,7 +1767,7 @@ mod interpreter_tests {
                 })),
             });
 
-            let result_value = internal::type_annotated_value_result(
+            let result_value = internal::get_type_annotated_value(
                 &result_type,
                 r#"
             [{product-id: "foo", name: "bar", price: 100.0, quantity: 1}, {product-id: "bar", name: "baz", price: 200.0, quantity: 2}]
@@ -1773,7 +1777,7 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_executor(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(
@@ -1833,7 +1837,7 @@ mod interpreter_tests {
                 ],
             });
 
-            let result_value = internal::type_annotated_value_result(
+            let result_value = internal::get_type_annotated_value(
                 &result_type,
                 r#"
           success({order-id: "foo"})
@@ -1843,31 +1847,31 @@ mod interpreter_tests {
             let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
             let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-            let mut rib_executor = internal::test_executor(&result_type, &result_value);
+            let mut rib_executor = internal::static_test_interpreter(&result_type, &result_value);
             let result = rib_executor.run(compiled.byte_code).await.unwrap();
 
             assert_eq!(result.get_val().unwrap(), result_value);
         }
-    }
 
-    #[tokio::test]
-    async fn test_interpreter_with_resource_drop() {
-        let expr = r#"
+        #[tokio::test]
+        async fn test_interpreter_with_resource_drop() {
+            let expr = r#"
            golem:it/api.{cart.drop}();
            "success"
         "#;
-        let expr = Expr::from_text(expr).unwrap();
-        let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
+            let expr = Expr::from_text(expr).unwrap();
+            let component_metadata = internal::get_shopping_cart_metadata_with_cart_raw_resource();
 
-        let compiled = compiler::compile(&expr, &component_metadata).unwrap();
+            let compiled = compiler::compile(&expr, &component_metadata).unwrap();
 
-        let mut rib_interpreter = Interpreter::default();
-        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+            let mut rib_interpreter = Interpreter::default();
+            let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap(),
-            TypeAnnotatedValue::Str("success".to_string())
-        );
+            assert_eq!(
+                result.get_val().unwrap(),
+                TypeAnnotatedValue::Str("success".to_string())
+            );
+        }
     }
 
     mod internal {
@@ -1967,7 +1971,7 @@ mod interpreter_tests {
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,
-            output: AnalysedType,
+            output: Option<AnalysedType>,
         ) -> Vec<AnalysedExport> {
             let analysed_function_parameters = input_types
                 .into_iter()
@@ -1978,13 +1982,20 @@ mod interpreter_tests {
                 })
                 .collect();
 
+            let results = if let Some(output) = output {
+                vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: output,
+                }]
+            } else {
+                // Representing Unit
+                vec![]
+            };
+
             vec![AnalysedExport::Function(AnalysedFunction {
                 name: function_name.to_string(),
                 parameters: analysed_function_parameters,
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: output,
-                }],
+                results,
             })]
         }
 
@@ -2193,14 +2204,14 @@ mod interpreter_tests {
             vec![instance]
         }
 
-        pub(crate) fn type_annotated_value_result(
+        pub(crate) fn get_type_annotated_value(
             analysed_type: &AnalysedType,
             wasm_wave_str: &str,
         ) -> TypeAnnotatedValue {
             golem_wasm_rpc::type_annotated_value_from_str(analysed_type, wasm_wave_str).unwrap()
         }
 
-        pub(crate) fn test_executor(
+        pub(crate) fn static_test_interpreter(
             result_type: &AnalysedType,
             result_value: &TypeAnnotatedValue,
         ) -> Interpreter {

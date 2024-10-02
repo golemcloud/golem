@@ -118,11 +118,11 @@ mod arm_pattern {
 }
 
 mod internal {
-    use combine::attempt;
     use combine::many1;
-    use combine::parser::char::{char, digit, letter};
+    use combine::parser::char::{digit, letter};
     use combine::parser::char::{spaces, string};
     use combine::sep_by;
+    use combine::{attempt, sep_by1};
     use combine::{choice, ParseError};
     use combine::{parser::char::char as char_, Parser};
 
@@ -145,6 +145,8 @@ mod internal {
             attempt(result().map(|expr| ArmPattern::Literal(Box::new(expr)))),
             attempt(custom_arm_pattern_constructor()),
             attempt(tuple_arm_pattern_constructor()),
+            attempt(list_arm_pattern_constructor()),
+            attempt(record_arm_pattern_constructor()),
         ))
     }
 
@@ -201,6 +203,79 @@ mod internal {
             .map(|(_, patterns, _)| ArmPattern::TupleConstructor(patterns))
     }
 
+    fn list_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
+    {
+        (
+            string("[").skip(spaces()),
+            sep_by(arm_pattern().skip(spaces()), char_(',').skip(spaces())),
+            string("]").skip(spaces()),
+        )
+            .map(|(_, patterns, _)| ArmPattern::ListConstructor(patterns))
+    }
+
+    struct KeyArmPattern {
+        key: String,
+        pattern: ArmPattern,
+    }
+
+    fn record_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
+    {
+        (
+            string("{").skip(spaces()),
+            sep_by1(key_arm_pattern().skip(spaces()), char_(',').skip(spaces())),
+            string("}").skip(spaces()),
+        )
+            .map(|(_, patterns, _)| {
+                let patterns: Vec<KeyArmPattern> = patterns;
+                ArmPattern::RecordConstructor(
+                    patterns
+                        .into_iter()
+                        .map(|pattern| (pattern.key, pattern.pattern))
+                        .collect(),
+                )
+            })
+    }
+
+    fn key_arm_pattern<Input>() -> impl Parser<Input, Output = KeyArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
+    {
+        (
+            record_key().skip(spaces()),
+            char_(':').skip(spaces()),
+            arm_pattern(),
+        )
+            .map(|(var, _, arm_pattern)| KeyArmPattern {
+                key: var,
+                pattern: arm_pattern,
+            })
+    }
+
+    fn record_key<Input>() -> impl Parser<Input, Output = String>
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
+    {
+        many1(letter().or(char_('_').or(char_('-'))))
+            .map(|s: Vec<char>| s.into_iter().collect())
+            .message("Invalid identifier")
+    }
+
     fn constructor_type_name<Input>() -> impl Parser<Input, Output = String>
     where
         Input: combine::Stream<Token = char>,
@@ -208,7 +283,7 @@ mod internal {
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
     {
-        many1(letter().or(digit()).or(char_('_')).or(char('-')))
+        many1(letter().or(digit()).or(char_('_')).or(char_('-')))
             .map(|s: Vec<char>| s.into_iter().collect())
             .message("Unable to parse custom constructor name")
     }

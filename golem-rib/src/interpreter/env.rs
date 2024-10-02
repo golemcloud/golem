@@ -83,6 +83,15 @@ impl InterpreterEnv {
         }
     }
 
+    pub fn from(
+        input: HashMap<String, TypeAnnotatedValue>,
+        call_worker_function_async: RibFunctionInvoke,
+    ) -> Self {
+        let mut env = Self::from_input(input);
+        env.call_worker_function_async = call_worker_function_async;
+        env
+    }
+
     pub fn insert(&mut self, key: EnvironmentKey, value: RibInterpreterResult) {
         self.env.insert(key, value);
     }
