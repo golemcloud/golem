@@ -337,7 +337,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to construct list".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -370,7 +370,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to construct tuple".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -638,7 +638,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to construct resource".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -672,7 +672,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to call indexed resource method".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -700,14 +700,14 @@ mod internal {
                 let last_n_elements = interpreter
                     .stack
                     .pop_n(arg_size)
-                    .ok_or("Failed to get values from the stack".to_string())?;
+                    .ok_or("Internal error: Failed to get arguments for static resource method".to_string())?;
 
                 let type_anntoated_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal error: Failed to call static resource method".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -731,14 +731,14 @@ mod internal {
                 let last_n_elements = interpreter
                     .stack
                     .pop_n(arg_size)
-                    .ok_or("Failed to get values from the stack".to_string())?;
+                    .ok_or("Internal Error: Failed to get resource parameters for indexed resource drop".to_string())?;
 
-                let type_anntoated_values = last_n_elements
+                let type_annotated_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to call indexed resource drop".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -746,7 +746,7 @@ mod internal {
                     site,
                     function: ParsedFunctionReference::IndexedResourceDrop {
                         resource,
-                        resource_params: type_anntoated_values
+                        resource_params: type_annotated_values
                             .iter()
                             .map(type_annotated_value_to_string)
                             .collect::<Result<Vec<String>, String>>()?,
@@ -770,19 +770,19 @@ mod internal {
         let function_name = interpreter
             .stack
             .pop_str()
-            .ok_or("Failed to get a function name from the stack".to_string())?;
+            .ok_or("Internal Error: Failed to get a function name".to_string())?;
 
         let last_n_elements = interpreter
             .stack
             .pop_n(argument_size)
-            .ok_or("Failed to get values from the stack".to_string())?;
+            .ok_or("Internal Error: Failed to get arguments for the function call".to_string())?;
 
         let type_anntoated_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
                 interpreter_result
                     .get_val()
-                    .ok_or("Failed to get value from the stack".to_string())
+                    .ok_or(format!("Internal Error: Failed to call function {}", function_name))
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -925,19 +925,19 @@ mod internal {
     ) -> Result<(), String> {
         let last_n_elements = interpreter_stack
             .pop_n(arg_size)
-            .ok_or("Failed to get values from the stack".to_string())?;
+            .ok_or("Internal Error: Failed to get arguments for concatenation".to_string())?;
 
-        let type_anntoated_values = last_n_elements
+        let type_annotated_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
                 interpreter_result
                     .get_val()
-                    .ok_or("Failed to get value from the stack".to_string())
+                    .ok_or("Internal Error: Failed to execute concatenation".to_string())
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
         let mut str = String::new();
-        for value in type_anntoated_values {
+        for value in type_annotated_values {
             let result = value
                 .get_literal()
                 .ok_or("Expected a literal value".to_string())?
